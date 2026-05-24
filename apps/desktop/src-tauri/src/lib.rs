@@ -620,7 +620,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
         }
     };
 
-    let (url, request) = match entry.interface_type {
+    let (display_url, request) = match entry.interface_type {
         InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => {
             let url = join_url(&endpoint, "models");
             let request = apply_auth(client.get(&url), &entry.auth_scheme, &secret);
@@ -633,9 +633,11 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
             (url, request)
         }
         InterfaceType::Gemini => {
-            let url = append_query_param(&join_url(&endpoint, "v1beta/models"), "key", &secret);
-            let request = client.get(&url);
-            (url, request)
+            let url = join_url(&endpoint, "v1beta/models");
+            let display_url = append_query_param(&url, "key", "[redacted]");
+            let request_url = append_query_param(&url, "key", &secret);
+            let request = client.get(&request_url);
+            (display_url, request)
         }
         InterfaceType::Bedrock | InterfaceType::CustomHttp => {
             return ProbeResult {
@@ -662,7 +664,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
                 provider_id: entry.provider_id,
                 interface_type: entry.interface_type,
                 status: Some(status),
-                endpoint: Some(url),
+                endpoint: Some(display_url),
                 model_count: json.as_ref().and_then(model_count),
                 error: None,
             }
@@ -672,7 +674,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
             provider_id: entry.provider_id,
             interface_type: entry.interface_type,
             status: None,
-            endpoint: Some(url),
+            endpoint: Some(display_url),
             model_count: None,
             error: Some(redact_error(&err.to_string(), &secret)),
         },
@@ -855,4 +857,56 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aipass_provider_registry::{ProviderKind, SecretRef};
+
+    #[test]
+    fn gemini_probe_does_not_return_api_key_in_endpoint_or_error() {
+        let secret = "AIzaSy-super-secret-test-key";
+        let result = probe_entry(gemini_summary(), secret.to_string(), 1);
+        let endpoint = result.endpoint.unwrap_or_default();
+
+        assert!(!endpoint.contains(secret));
+        assert!(endpoint.contains("key=[redacted]"));
+        if let Some(error) = result.error {
+            assert!(!error.contains(secret));
+        }
+    }
+
+    fn gemini_summary() -> EntrySummary {
+        let now = time::OffsetDateTime::now_utc();
+        EntrySummary {
+            id: Uuid::new_v4(),
+            title: "Gemini".to_string(),
+            provider_id: Some("gemini".to_string()),
+            provider_kind: ProviderKind::Official,
+            domains: vec!["ai.google.dev".to_string()],
+            favicon_url: None,
+            endpoints: vec![ProviderEndpoint::api("http://127.0.0.1:9")],
+            interface_type: InterfaceType::Gemini,
+            auth_scheme: AuthScheme::GoogleApiKey,
+            masked_secret: "AIza...test".to_string(),
+            fingerprint: "fingerprint".to_string(),
+            secret_refs: vec![SecretRef {
+                id: "primary".to_string(),
+                label: "primary".to_string(),
+                masked: "AIza...test".to_string(),
+                fingerprint: "fingerprint".to_string(),
+            }],
+            default_model: None,
+            quota: None,
+            tags: Vec::new(),
+            environment: "test".to_string(),
+            notes: None,
+            header_names: Vec::new(),
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+            archived_at: None,
+        }
+    }
 }
