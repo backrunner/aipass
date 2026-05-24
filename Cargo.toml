@@ -1,0 +1,41 @@
+[workspace]
+members = [
+  "apps/desktop/src-tauri",
+  "crates/aipass-crypto",
+  "crates/aipass-vault",
+  "crates/aipass-provider-registry",
+  "crates/aipass-config-writers",
+  "crates/aipass-cli",
+  "crates/aipass-sync",
+  "crates/aipass-native-host"
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["AIPass contributors"]
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+argon2 = "0.5.3"
+base64 = "0.22.1"
+chacha20poly1305 = "0.10.1"
+clap = { version = "4.5.51", features = ["derive", "env"] }
+clap_complete = "4.5.61"
+directories = "6.0.0"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+quick-xml = "0.39.4"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+reqwest = { version = "0.13.3", features = ["blocking"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+time = { version = "0.3.44", features = ["formatting", "parsing", "serde", "macros"] }
+toml_edit = "0.23.7"
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
+zeroize = { version = "1.8.2", features = ["derive"] }
