@@ -4,6 +4,7 @@
   import Brand from "../shared/Brand.svelte";
   import Button from "../shared/Button.svelte";
   import PasswordField from "./PasswordField.svelte";
+  import PasswordStrengthMeter from "./PasswordStrengthMeter.svelte";
 
   export let status: VaultStatus;
   export let authMode: AuthMode;
@@ -27,6 +28,14 @@
   $: showCreate = !status.exists;
   $: showRecover = status.exists && authMode === "recover";
   $: showUnlock = status.exists && !showRecover;
+
+  $: createMatches = createPassword.length > 0 && createPassword === createPasswordConfirm;
+  $: createMismatch = createPasswordConfirm.length > 0 && createPassword !== createPasswordConfirm;
+  $: createReady = createMatches;
+
+  $: recoverMatches = recoveryPassword.length > 0 && recoveryPassword === recoveryPasswordConfirm;
+  $: recoverMismatch = recoveryPasswordConfirm.length > 0 && recoveryPassword !== recoveryPasswordConfirm;
+  $: recoverReady = recoveryKeyInput.trim().length > 0 && recoverMatches;
 </script>
 
 <main class="auth-shell">
@@ -41,7 +50,7 @@
         <form class="form" on:submit|preventDefault={() => onCreate()}>
           <div class="copy">
             <h1>Create your vault</h1>
-            <p>Set a master password. Your recovery key will be shown once.</p>
+            <p>Pick a master password you can remember. We'll generate a recovery key shown once after creation.</p>
           </div>
 
           <PasswordField
@@ -50,6 +59,9 @@
             bind:value={createPassword}
             bind:show={showCreatePassword}
           />
+
+          <PasswordStrengthMeter strength={createPasswordStrength} />
+
           <PasswordField
             label="Confirm password"
             autocomplete="new-password"
@@ -58,11 +70,13 @@
             bind:show={showCreatePassword}
           />
 
-          <div class="meta">
-            <span class={`strength ${createPasswordStrength.className}`}>{createPasswordStrength.label}</span>
-          </div>
+          {#if createMismatch}
+            <span class="inline-error">Passwords don't match.</span>
+          {:else if createMatches}
+            <span class="inline-ok">Passwords match.</span>
+          {/if}
 
-          <Button variant="primary" type="submit" block>Create encrypted vault</Button>
+          <Button variant="primary" type="submit" block disabled={!createReady}>Create encrypted vault</Button>
         </form>
       {:else if showRecover}
         <form class="form" on:submit|preventDefault={() => onRecover()}>
@@ -89,6 +103,9 @@
             bind:value={recoveryPassword}
             bind:show={showRecoveryPassword}
           />
+
+          <PasswordStrengthMeter strength={recoveryPasswordStrength} />
+
           <PasswordField
             label="Confirm new password"
             autocomplete="new-password"
@@ -97,12 +114,18 @@
             bind:show={showRecoveryPassword}
           />
 
+          {#if recoverMismatch}
+            <span class="inline-error">Passwords don't match.</span>
+          {:else if recoverMatches}
+            <span class="inline-ok">Passwords match.</span>
+          {/if}
+
           <div class="meta">
-            <span class={`strength ${recoveryPasswordStrength.className}`}>{recoveryPasswordStrength.label}</span>
+            <span></span>
             <button type="button" class="link" on:click={() => onModeChange("unlock")}>Back to unlock</button>
           </div>
 
-          <Button variant="primary" type="submit" block>Recover vault</Button>
+          <Button variant="primary" type="submit" block disabled={!recoverReady}>Recover vault</Button>
         </form>
       {:else if showUnlock}
         <form class="form" on:submit|preventDefault={() => onUnlock()}>
@@ -135,10 +158,12 @@
 <style lang="scss">
   .auth-shell {
     display: grid;
-    min-height: 100vh;
+    flex: 1;
+    min-height: 0;
     place-items: center;
     padding: 24px;
     background: var(--bg);
+    overflow: auto;
   }
 
   .auth-card {
@@ -240,29 +265,18 @@
     }
   }
 
-  .strength {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 8px;
-    border-radius: 999px;
+  .inline-error,
+  .inline-ok {
     font-size: 11px;
     font-weight: 500;
-    background: var(--surface-2);
-    color: var(--text-tertiary);
+    margin-top: -4px;
   }
 
-  .strength.strength-weak {
-    background: var(--danger-soft);
+  .inline-error {
     color: var(--danger);
   }
 
-  .strength.strength-good {
-    background: var(--warning-soft);
-    color: var(--warning);
-  }
-
-  .strength.strength-strong {
-    background: var(--success-soft);
+  .inline-ok {
     color: var(--success);
   }
 </style>

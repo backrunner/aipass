@@ -17,6 +17,7 @@
   import ProviderListPane from "./lib/components/providers/ProviderListPane.svelte";
   import ProviderModal from "./lib/components/providers/ProviderModal.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
+  import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
   import type {
     AuthMode,
     CreateVaultResponse,
@@ -810,77 +811,81 @@
   onAcknowledge={acknowledgeRecoveryKit}
 />
 
-{#if !status.exists || status.locked}
-  <AuthScreen
-    {status}
-    {authMode}
-    {error}
-    bind:password
-    bind:createPassword
-    bind:createPasswordConfirm
-    bind:recoveryKeyInput
-    bind:recoveryPassword
-    bind:recoveryPasswordConfirm
-    bind:showCreatePassword
-    bind:showUnlockPassword
-    bind:showRecoveryPassword
-    {createPasswordStrength}
-    {recoveryPasswordStrength}
-    onModeChange={setAuthMode}
-    onCreate={createVault}
-    onUnlock={unlockVault}
-    onRecover={recoverVault}
-  />
-{:else}
-  <main class="workspace">
-    <Sidebar
-      {showArchived}
-      {providerFilter}
-      providerCounts={counts}
-      {syncState}
-      onFilterChange={setProviderFilter}
-      onArchiveView={setArchiveView}
-      onOpenSettings={() => openSettings("security")}
-      onOpenSync={() => openSettings("sync")}
-      onLock={lockVault}
-    />
+<div class="app-shell">
+  <AppTitleBar />
 
-    <ProviderListPane
-      entries={filtered}
-      selectedId={selected?.id ?? ""}
-      {showArchived}
-      bind:query
-      onSearch={runSearch}
-      onAdd={openAdd}
-      onSelect={selectProvider}
-    />
-
-    <ProviderDetailPane
-      {selected}
-      {showArchived}
-      {copied}
-      {revealedSecrets}
-      bind:newSecretLabel
-      bind:newSecretKey
-      {secretBusy}
-      {probeResult}
-      {probing}
-      {notice}
+  {#if !status.exists || status.locked}
+    <AuthScreen
+      {status}
+      {authMode}
       {error}
-      onCopySecret={copySecret}
-      onProbe={probeSelected}
-      onEdit={openEdit}
-      onRestore={restoreSelected}
-      onDelete={deleteSelected}
-      onArchive={archiveSelected}
-      onRevealSecret={revealSecretByLabel}
-      onCopySecretByLabel={copySecretByLabel}
-      onRemoveSecret={removeSecondarySecret}
-      onAddSecret={addSecondarySecret}
-      onCopyValue={copyValue}
+      bind:password
+      bind:createPassword
+      bind:createPasswordConfirm
+      bind:recoveryKeyInput
+      bind:recoveryPassword
+      bind:recoveryPasswordConfirm
+      bind:showCreatePassword
+      bind:showUnlockPassword
+      bind:showRecoveryPassword
+      {createPasswordStrength}
+      {recoveryPasswordStrength}
+      onModeChange={setAuthMode}
+      onCreate={createVault}
+      onUnlock={unlockVault}
+      onRecover={recoverVault}
     />
-  </main>
-{/if}
+  {:else}
+    <main class="workspace">
+      <Sidebar
+        {showArchived}
+        {providerFilter}
+        providerCounts={counts}
+        {syncState}
+        onFilterChange={setProviderFilter}
+        onArchiveView={setArchiveView}
+        onOpenSettings={() => openSettings("security")}
+        onOpenSync={() => openSettings("sync")}
+        onLock={lockVault}
+      />
+
+      <ProviderListPane
+        entries={filtered}
+        selectedId={selected?.id ?? ""}
+        {showArchived}
+        bind:query
+        onSearch={runSearch}
+        onAdd={openAdd}
+        onSelect={selectProvider}
+      />
+
+      <ProviderDetailPane
+        {selected}
+        {showArchived}
+        {copied}
+        {revealedSecrets}
+        bind:newSecretLabel
+        bind:newSecretKey
+        {secretBusy}
+        {probeResult}
+        {probing}
+        {notice}
+        {error}
+        onCopySecret={copySecret}
+        onProbe={probeSelected}
+        onEdit={openEdit}
+        onRestore={restoreSelected}
+        onDelete={deleteSelected}
+        onArchive={archiveSelected}
+        onRevealSecret={revealSecretByLabel}
+        onCopySecretByLabel={copySecretByLabel}
+        onRemoveSecret={removeSecondarySecret}
+        onAddSecret={addSecondarySecret}
+        onCopyValue={copyValue}
+      />
+    </main>
+  {/if}
+</div>
 
 {#if showSettings && !status.locked}
   <SettingsPanel
@@ -930,10 +935,18 @@
 {/if}
 
 <style lang="scss">
+  .app-shell {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
   .workspace {
+    flex: 1;
+    min-height: 0;
     display: grid;
     grid-template-columns: 224px 360px minmax(0, 1fr);
-    height: 100vh;
     overflow: hidden;
   }
 

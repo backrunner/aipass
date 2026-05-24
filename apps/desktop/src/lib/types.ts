@@ -118,9 +118,14 @@ export type ProbeResult = {
   error?: string;
 };
 
+export type PasswordStrengthLevel = "empty" | "weak" | "fair" | "good" | "strong";
+
 export type PasswordStrength = {
   label: string;
   className: string;
+  level: PasswordStrengthLevel;
+  score: number;
+  hint?: string;
 };
 
 export type MaybePromise<T = void> = T | Promise<T>;

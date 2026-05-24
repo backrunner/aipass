@@ -330,11 +330,11 @@
 
   :global(.settings-drawer) {
     position: fixed;
-    top: 0;
+    top: 36px;
     right: 0;
     z-index: 41;
     width: min(560px, 100%);
-    height: 100vh;
+    height: calc(100vh - 36px);
     background: var(--surface);
     border-left: 1px solid var(--border);
     box-shadow: var(--shadow-drawer);
