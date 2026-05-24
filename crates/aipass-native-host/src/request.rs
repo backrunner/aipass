@@ -157,7 +157,7 @@ fn handle_request_inner(
                     })
                     .unwrap_or(InterfaceType::CustomHttp)
             });
-            let auth_scheme = auth_scheme.unwrap_or_else(|| match interface_type {
+            let auth_scheme = auth_scheme.unwrap_or(match interface_type {
                 InterfaceType::AnthropicMessages => AuthScheme::XApiKey,
                 InterfaceType::Gemini => AuthScheme::GoogleApiKey,
                 InterfaceType::AzureOpenAi => AuthScheme::AzureApiKey,
@@ -178,10 +178,7 @@ fn handle_request_inner(
                 provider_id,
                 domains: vec![domain.clone()],
                 favicon_url: None,
-                endpoints: endpoint
-                    .into_iter()
-                    .map(|url| ProviderEndpoint::api(url))
-                    .collect(),
+                endpoints: endpoint.into_iter().map(ProviderEndpoint::api).collect(),
                 interface_type,
                 auth_scheme,
                 api_key: api_key.expose().to_string(),
