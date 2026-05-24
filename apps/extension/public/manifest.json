@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "AIPass",
+  "version": "1.0.0",
+  "description": "Save and fill AI Provider credentials through the local AIPass vault.",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "serviceWorker.js",
+    "type": "module"
+  },
+  "permissions": ["activeTab", "nativeMessaging", "storage"],
+  "host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

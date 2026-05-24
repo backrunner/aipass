@@ -1,0 +1,30 @@
+{
+  "name": "@aipass/extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "vite build && node ../../scripts/package-extension.mjs",
+    "dev": "vite build --watch",
+    "lint": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json --noEmit",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aipass/schemas": "workspace:*",
+    "@aipass/ui": "workspace:*",
+    "lucide-svelte": "^0.555.0",
+    "svelte": "^5.38.0"
+  },
+  "devDependencies": {
+    "@aipass/tsconfig": "workspace:*",
+    "@sveltejs/vite-plugin-svelte": "^6.1.4",
+    "happy-dom": "^20.0.11",
+    "sass": "^1.100.0",
+    "svelte-check": "^4.3.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^4.0.13"
+  }
+}

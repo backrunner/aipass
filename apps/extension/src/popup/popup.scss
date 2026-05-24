@@ -1,0 +1,270 @@
+$background: #f7f7f4;
+$surface: #fff;
+$border: #d7d9d2;
+$text: #171a18;
+$muted: #66706a;
+$accent: #2d7d6b;
+$accent-soft: #e6f2ed;
+$divider: #eceee8;
+$button-bg: #eef1ed;
+
+:root {
+  color-scheme: light dark;
+  font-family:
+    ui-sans-serif,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: $text;
+  background: $background;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 360px;
+  min-height: 480px;
+  margin: 0;
+  background: $background;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.popup {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+header,
+.match,
+.site,
+.state,
+.draft {
+  border: 1px solid $border;
+  border-radius: 8px;
+  background: $surface;
+}
+
+header {
+  display: grid;
+  grid-template-columns: 34px 1fr 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+}
+
+header button,
+.match button,
+.draft button,
+.primary,
+.ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  background: $button-bg;
+  color: inherit;
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  background: $accent;
+  color: #fff;
+}
+
+header span,
+.site span,
+.site small,
+.match span,
+.state p {
+  color: $muted;
+}
+
+header strong,
+header span,
+.site strong,
+.site span,
+.match strong,
+.match span {
+  display: block;
+}
+
+.site,
+.state,
+.draft {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.site span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+}
+
+.entry-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  background: $accent-soft;
+  color: #216756;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.state {
+  justify-items: start;
+  min-height: 120px;
+}
+
+.draft small,
+.draft span,
+.status {
+  color: $muted;
+}
+
+.draft strong,
+.draft span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  margin: 0;
+  font-size: 13px;
+}
+
+.draft-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.draft-head strong,
+.draft-head small {
+  display: block;
+  min-width: 0;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field span,
+.preview span {
+  color: $muted;
+  font-size: 12px;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid $border;
+  border-radius: 6px;
+  background: $surface;
+  color: inherit;
+  font: inherit;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.preview {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 2px;
+  border-top: 1px solid $divider;
+}
+
+.preview strong,
+.preview code,
+.preview small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.draft-actions {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.icon {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid $border;
+  background: transparent;
+}
+
+.state h1,
+.state p {
+  margin: 0;
+}
+
+.state h1 {
+  font-size: 18px;
+}
+
+.primary {
+  background: $accent;
+  color: white;
+}
+
+.ghost {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid $border;
+  background: transparent;
+  color: $muted;
+  font-size: 12px;
+}

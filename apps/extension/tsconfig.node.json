@@ -1,0 +1,4 @@
+{
+  "extends": "@aipass/tsconfig/base.json",
+  "include": ["src/**/*.ts", "vite.config.ts"]
+}
