@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  desktop:
+    name: Desktop ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+          - os: ubuntu-22.04
+            name: linux
+          - os: windows-latest
+            name: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v1
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          uploadWorkflowArtifacts: true
+          uploadUpdaterJson: false
+          workflowArtifactNamePattern: aipass-desktop-${{ matrix.name }}-[platform]-[arch]-[bundle]
+
+  cli:
+    name: CLI ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+            archive: aipass-cli-macos.tar.gz
+          - os: ubuntu-22.04
+            name: linux
+            archive: aipass-cli-linux.tar.gz
+          - os: windows-latest
+            name: windows
+            archive: aipass-cli-windows.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo build --release -p aipass-cli -p aipass-native-host
+
+      - name: Package CLI artifacts
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/stage
+          cp target/release/aipass artifacts/stage/
+          cp target/release/aipass-native-host artifacts/stage/
+          cp LICENSE NOTICE README.md artifacts/stage/
+          tar -czf "artifacts/${{ matrix.archive }}" -C artifacts/stage .
+
+      - name: Package CLI artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/stage | Out-Null
+          Copy-Item target/release/aipass.exe artifacts/stage/
+          Copy-Item target/release/aipass-native-host.exe artifacts/stage/
+          Copy-Item LICENSE, NOTICE, README.md artifacts/stage/
+          Compress-Archive -Path artifacts/stage/* -DestinationPath "artifacts/${{ matrix.archive }}" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aipass-cli-${{ matrix.name }}
+          path: artifacts/${{ matrix.archive }}
+          if-no-files-found: error
+
+  extension:
+    name: Chrome extension
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @aipass/extension build
+
+      - name: Package Chrome Web Store zip
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cd apps/extension/dist
+          zip -r ../../../artifacts/aipass-chrome-extension.zip .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aipass-chrome-extension
+          path: artifacts/aipass-chrome-extension.zip
+          if-no-files-found: error
+
+  github-release:
+    name: Publish draft release
+    needs:
+      - desktop
+      - cli
+      - extension
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find release-artifacts -type f -print0)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No release artifacts found" >&2
+            exit 1
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+              --draft \
+              --verify-tag \
+              --title "AIPass ${GITHUB_REF_NAME}" \
+              --notes "AIPass release candidate artifacts."
+          fi
