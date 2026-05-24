@@ -1,0 +1,19 @@
+[package]
+name = "aipass-config-writers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+aipass-crypto = { path = "../aipass-crypto" }
+aipass-provider-registry = { path = "../aipass-provider-registry" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+toml_edit.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
