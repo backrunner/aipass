@@ -1,0 +1,27 @@
+[package]
+name = "aipass-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "aipass"
+path = "src/main.rs"
+
+[dependencies]
+aipass-config-writers = { path = "../aipass-config-writers" }
+aipass-crypto = { path = "../aipass-crypto" }
+aipass-native-host = { path = "../aipass-native-host" }
+aipass-provider-registry = { path = "../aipass-provider-registry" }
+aipass-sync = { path = "../aipass-sync" }
+aipass-vault = { path = "../aipass-vault" }
+anyhow.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+directories.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
