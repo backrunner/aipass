@@ -1,0 +1,23 @@
+[package]
+name = "aipass-native-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "aipass-native-host"
+path = "src/main.rs"
+
+[dependencies]
+aipass-crypto = { path = "../aipass-crypto" }
+aipass-provider-registry = { path = "../aipass-provider-registry" }
+aipass-vault = { path = "../aipass-vault" }
+anyhow.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
