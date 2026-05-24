@@ -1,0 +1,220 @@
+:root {
+  color-scheme: light dark;
+
+  --bg: #f7f7f4;
+  --surface: #ffffff;
+  --surface-2: #fbfbf8;
+  --sidebar-bg: #ecede8;
+
+  --text: #171a18;
+  --text-secondary: #4f574f;
+  --text-tertiary: #8b938c;
+
+  --border: #d7d9d2;
+  --border-strong: #b9bcb2;
+  --divider: #ebede7;
+
+  --accent: #2d7d6b;
+  --accent-hover: #246656;
+  --accent-soft: rgba(45, 125, 107, 0.12);
+  --accent-ring: rgba(45, 125, 107, 0.32);
+
+  --kind-official: #2563eb;
+  --kind-official-soft: rgba(37, 99, 235, 0.1);
+  --kind-third: #9a6a1e;
+  --kind-third-soft: rgba(154, 106, 30, 0.1);
+  --kind-self: #6b7280;
+  --kind-self-soft: rgba(107, 114, 128, 0.12);
+  --kind-custom: #7a7f74;
+  --kind-custom-soft: rgba(122, 127, 116, 0.12);
+
+  --danger: #b42318;
+  --danger-soft: rgba(180, 35, 24, 0.08);
+  --success: #18794e;
+  --success-soft: rgba(24, 121, 78, 0.1);
+  --warning: #b25e09;
+  --warning-soft: rgba(178, 94, 9, 0.1);
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+
+  --shadow-pop: 0 4px 16px rgba(15, 17, 16, 0.08);
+  --shadow-modal: 0 24px 64px rgba(15, 17, 16, 0.22);
+  --shadow-drawer: -16px 0 56px rgba(15, 17, 16, 0.16);
+
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-feature-settings: "ss01", "cv11";
+  background: var(--bg);
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+textarea {
+  resize: vertical;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-tertiary {
+  color: var(--text-tertiary);
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111312;
+    --surface: #181b1a;
+    --surface-2: #1c1f1d;
+    --sidebar-bg: #151716;
+
+    --text: #f2f3ee;
+    --text-secondary: #b5beb6;
+    --text-tertiary: #828a83;
+
+    --border: #2d3230;
+    --border-strong: #3f4543;
+    --divider: #232624;
+
+    --accent: #3a9d88;
+    --accent-hover: #4ab199;
+    --accent-soft: rgba(58, 157, 136, 0.18);
+    --accent-ring: rgba(58, 157, 136, 0.4);
+
+    --kind-official: #6c9bff;
+    --kind-official-soft: rgba(108, 155, 255, 0.16);
+    --kind-third: #d0a25e;
+    --kind-third-soft: rgba(208, 162, 94, 0.16);
+    --kind-self: #9aa1a4;
+    --kind-self-soft: rgba(154, 161, 164, 0.16);
+    --kind-custom: #9aa19a;
+    --kind-custom-soft: rgba(154, 161, 154, 0.16);
+
+    --danger: #f1a6a0;
+    --danger-soft: rgba(241, 166, 160, 0.14);
+    --success: #8ad8be;
+    --success-soft: rgba(138, 216, 190, 0.14);
+    --warning: #e2b070;
+    --warning-soft: rgba(226, 176, 112, 0.14);
+
+    --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.36);
+    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.5);
+    --shadow-drawer: -16px 0 56px rgba(0, 0, 0, 0.45);
+  }
+}

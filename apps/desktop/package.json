@@ -1,0 +1,35 @@
+{
+  "name": "@aipass/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "vite build",
+    "bundle": "tauri build --ci",
+    "dev": "tauri dev",
+    "dev:web": "vite --host 127.0.0.1",
+    "lint": "svelte-check --tsconfig ./tsconfig.json",
+    "tauri": "tauri",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@aipass/schemas": "workspace:*",
+    "@aipass/ui": "workspace:*",
+    "@tauri-apps/api": "^2.11.0",
+    "bits-ui": "^2.13.0",
+    "lucide-svelte": "^0.555.0",
+    "svelte": "^5.38.0"
+  },
+  "devDependencies": {
+    "@aipass/tsconfig": "workspace:*",
+    "@sveltejs/vite-plugin-svelte": "^6.1.4",
+    "@tauri-apps/cli": "^2.11.2",
+    "sass": "^1.100.0",
+    "svelte-check": "^4.3.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^4.0.13"
+  }
+}

@@ -1,0 +1,268 @@
+<script lang="ts">
+  import type { AuthMode, MaybePromise, PasswordStrength, VaultStatus } from "../../types";
+  import Banner from "../shared/Banner.svelte";
+  import Brand from "../shared/Brand.svelte";
+  import Button from "../shared/Button.svelte";
+  import PasswordField from "./PasswordField.svelte";
+
+  export let status: VaultStatus;
+  export let authMode: AuthMode;
+  export let error = "";
+  export let password = "";
+  export let createPassword = "";
+  export let createPasswordConfirm = "";
+  export let recoveryKeyInput = "";
+  export let recoveryPassword = "";
+  export let recoveryPasswordConfirm = "";
+  export let showCreatePassword = false;
+  export let showUnlockPassword = false;
+  export let showRecoveryPassword = false;
+  export let createPasswordStrength: PasswordStrength;
+  export let recoveryPasswordStrength: PasswordStrength;
+  export let onModeChange: (mode: AuthMode) => MaybePromise = () => {};
+  export let onCreate: () => MaybePromise = () => {};
+  export let onUnlock: () => MaybePromise = () => {};
+  export let onRecover: () => MaybePromise = () => {};
+
+  $: showCreate = !status.exists;
+  $: showRecover = status.exists && authMode === "recover";
+  $: showUnlock = status.exists && !showRecover;
+</script>
+
+<main class="auth-shell">
+  <div class="auth-card">
+    <div class="auth-accent" aria-hidden="true"></div>
+    <div class="auth-body">
+      <div class="auth-brand">
+        <Brand size="md" />
+      </div>
+
+      {#if showCreate}
+        <form class="form" on:submit|preventDefault={() => onCreate()}>
+          <div class="copy">
+            <h1>Create your vault</h1>
+            <p>Set a master password. Your recovery key will be shown once.</p>
+          </div>
+
+          <PasswordField
+            label="Master password"
+            autocomplete="new-password"
+            bind:value={createPassword}
+            bind:show={showCreatePassword}
+          />
+          <PasswordField
+            label="Confirm password"
+            autocomplete="new-password"
+            withToggle={false}
+            bind:value={createPasswordConfirm}
+            bind:show={showCreatePassword}
+          />
+
+          <div class="meta">
+            <span class={`strength ${createPasswordStrength.className}`}>{createPasswordStrength.label}</span>
+          </div>
+
+          <Button variant="primary" type="submit" block>Create encrypted vault</Button>
+        </form>
+      {:else if showRecover}
+        <form class="form" on:submit|preventDefault={() => onRecover()}>
+          <div class="copy">
+            <h1>Recover vault</h1>
+            <p>Enter your recovery key, then choose a new master password.</p>
+          </div>
+
+          <label class="field">
+            <span class="field-label">Recovery key</span>
+            <input
+              bind:value={recoveryKeyInput}
+              type="text"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="AIPASS-..."
+              class="text-input mono"
+            />
+          </label>
+          <PasswordField
+            label="New password"
+            autocomplete="new-password"
+            bind:value={recoveryPassword}
+            bind:show={showRecoveryPassword}
+          />
+          <PasswordField
+            label="Confirm new password"
+            autocomplete="new-password"
+            withToggle={false}
+            bind:value={recoveryPasswordConfirm}
+            bind:show={showRecoveryPassword}
+          />
+
+          <div class="meta">
+            <span class={`strength ${recoveryPasswordStrength.className}`}>{recoveryPasswordStrength.label}</span>
+            <button type="button" class="link" on:click={() => onModeChange("unlock")}>Back to unlock</button>
+          </div>
+
+          <Button variant="primary" type="submit" block>Recover vault</Button>
+        </form>
+      {:else if showUnlock}
+        <form class="form" on:submit|preventDefault={() => onUnlock()}>
+          <div class="copy">
+            <h1>Unlock vault</h1>
+            <p>Enter the master password for this vault.</p>
+          </div>
+
+          <PasswordField
+            label="Master password"
+            autocomplete="current-password"
+            bind:value={password}
+            bind:show={showUnlockPassword}
+          />
+
+          <div class="meta">
+            <span></span>
+            <button type="button" class="link" on:click={() => onModeChange("recover")}>Forgot password?</button>
+          </div>
+
+          <Button variant="primary" type="submit" block>Unlock</Button>
+        </form>
+      {/if}
+
+      {#if error}<Banner tone="danger">{error}</Banner>{/if}
+    </div>
+  </div>
+</main>
+
+<style lang="scss">
+  .auth-shell {
+    display: grid;
+    min-height: 100vh;
+    place-items: center;
+    padding: 24px;
+    background: var(--bg);
+  }
+
+  .auth-card {
+    width: min(420px, 100%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .auth-accent {
+    height: 3px;
+    background: var(--accent);
+  }
+
+  .auth-body {
+    padding: 28px 28px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .auth-brand {
+    display: flex;
+    justify-content: center;
+  }
+
+  .form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+
+  .copy h1 {
+    font-size: 18px;
+  }
+
+  .copy p {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .field {
+    display: grid;
+    gap: 6px;
+  }
+
+  .field-label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .text-input {
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    outline: 0;
+
+    &:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-ring);
+    }
+  }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 22px;
+  }
+
+  .link {
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 500;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  .strength {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--surface-2);
+    color: var(--text-tertiary);
+  }
+
+  .strength.strength-weak {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+
+  .strength.strength-good {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+
+  .strength.strength-strong {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+</style>
