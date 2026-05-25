@@ -18,6 +18,7 @@ pub use utils::endpoint_url;
 mod tests {
     use super::*;
     use aipass_provider_registry::{AuthScheme, InterfaceType};
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
 
     fn entry(interface_type: InterfaceType, auth_scheme: AuthScheme) -> ToolEntry {
@@ -32,6 +33,11 @@ mod tests {
             default_model: Some("claude-sonnet-4-20250514".to_string()),
             api_key: None,
         }
+    }
+
+    fn codex_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     #[test]
@@ -52,6 +58,7 @@ mod tests {
 
     #[test]
     fn codex_writer_is_idempotent_provider_block() {
+        let _guard = codex_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();
         let entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
         let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
@@ -66,6 +73,7 @@ mod tests {
 
     #[test]
     fn codex_plaintext_writer_writes_auth_json_and_rolls_back() {
+        let _guard = codex_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();
         let target = dir.path().join(".codex").join("config.toml");
         let auth_path = dir.path().join(".codex").join("auth.json");
@@ -90,6 +98,7 @@ mod tests {
 
     #[test]
     fn codex_writer_uses_codex_home_when_directory_exists() {
+        let _guard = codex_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();
         let codex_home = dir.path().join("custom-codex-home");
         std::fs::create_dir_all(&codex_home).unwrap();
