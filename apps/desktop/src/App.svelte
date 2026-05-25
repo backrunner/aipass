@@ -50,6 +50,16 @@
     return invoke<T>(command, args);
   }
 
+  function nextFrame() {
+    return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+
+  async function flushUiBeforeBlockingWork() {
+    await tick();
+    await nextFrame();
+    await nextFrame();
+  }
+
   let status: VaultStatus = { exists: false, locked: true };
   let password = "";
   let createPassword = "";
@@ -177,7 +187,7 @@
       return;
     }
     authBusy = "create";
-    await tick();
+    await flushUiBeforeBlockingWork();
     try {
       const response = await invokeTauri<CreateVaultResponse>("vault_create", {
         request: { password: createPassword }
@@ -185,8 +195,9 @@
       status = { exists: response.exists, locked: response.locked };
       pendingRecoveryKey = response.recoveryKit.recoveryKey;
       password = "";
+      entries = [];
+      selectedId = "";
       setAuthMode("unlock");
-      await loadEntries();
       resetAutoLock();
     } catch (err) {
       error = String(err);
@@ -199,7 +210,7 @@
     if (authBusy) return;
     error = "";
     authBusy = "unlock";
-    await tick();
+    await flushUiBeforeBlockingWork();
     try {
       status = await invokeTauri<VaultStatus>("vault_unlock", { request: { password } });
       password = "";
@@ -226,7 +237,7 @@
       return;
     }
     authBusy = "recover";
-    await tick();
+    await flushUiBeforeBlockingWork();
     try {
       const response = await invokeTauri<CreateVaultResponse>("vault_recover", {
         request: {

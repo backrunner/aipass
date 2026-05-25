@@ -33,6 +33,12 @@
   $: createBusy = busyMode === "create";
   $: unlockBusy = busyMode === "unlock";
   $: recoverBusy = busyMode === "recover";
+  $: busyTitle = createBusy ? "Creating encrypted vault" : unlockBusy ? "Unlocking vault" : "Recovering vault";
+  $: busyDetail = createBusy
+    ? "Deriving your master key and writing the initial vault files. This can take a few seconds on first run."
+    : unlockBusy
+      ? "Verifying your password and decrypting vault metadata."
+      : "Re-wrapping the vault with your new password and generating a fresh recovery key.";
 
   $: createMatches = createPassword.length > 0 && createPassword === createPasswordConfirm;
   $: createMismatch = createPasswordConfirm.length > 0 && createPassword !== createPasswordConfirm;
@@ -172,15 +178,13 @@
       {/if}
 
       {#if busy}
-        <Banner tone="info">
-          {#if createBusy}
-            Creating encrypted vault...
-          {:else if unlockBusy}
-            Unlocking vault...
-          {:else}
-            Recovering vault...
-          {/if}
-        </Banner>
+        <div class="busy-panel" role="status" aria-live="polite">
+          <span class="busy-spinner" aria-hidden="true"></span>
+          <div class="busy-copy">
+            <strong>{busyTitle}...</strong>
+            <span>{busyDetail}</span>
+          </div>
+        </div>
       {/if}
       {#if error}<Banner tone="danger">{error}</Banner>{/if}
     </div>
@@ -217,6 +221,47 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+
+  .busy-panel {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .busy-spinner {
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 999px;
+    animation: spin 0.7s linear infinite;
+  }
+
+  .busy-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .busy-copy strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .auth-brand {
