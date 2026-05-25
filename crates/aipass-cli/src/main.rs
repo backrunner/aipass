@@ -1,7 +1,8 @@
 use aipass_config_writers::{
     apply_plan_encrypted, endpoint_url, find_backup_by_operation, plan_claude_code,
-    plan_claude_code_plaintext, plan_codex, plan_gemini_cli, plan_gemini_cli_plaintext,
-    plan_opencode, plan_opencode_plaintext, rollback_encrypted, ConfigPlan, ToolEntry, ToolId,
+    plan_claude_code_plaintext, plan_codex, plan_codex_plaintext, plan_gemini_cli,
+    plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext, rollback_encrypted,
+    ConfigPlan, ToolEntry, ToolId,
 };
 use aipass_crypto::SecretString;
 use aipass_native_host::native_manifest;
@@ -841,9 +842,7 @@ fn main() -> Result<()> {
                 },
                 ConfigureMode::Env => plan_tool_env_helper(&home, tool.clone(), &entry)?,
                 ConfigureMode::Plaintext => match tool {
-                    ToolArg::Codex => {
-                        anyhow::bail!("codex plaintext mode is not supported; use --mode helper")
-                    }
+                    ToolArg::Codex => plan_codex_plaintext(&home, &entry)?,
                     ToolArg::ClaudeCode => plan_claude_code_plaintext(&home, &entry)?,
                     ToolArg::GeminiCli => plan_gemini_cli_plaintext(&home, &entry)?,
                     ToolArg::OpenCode => plan_opencode_plaintext(&home, &entry)?,
@@ -1323,6 +1322,7 @@ fn plan_tool_env_helper(
         backup_path,
         summary: format!("Configure {tool_name} env helper for {}", entry.title),
         preview: content.clone(),
+        extra_writes: Vec::new(),
     };
     Ok((plan, content))
 }

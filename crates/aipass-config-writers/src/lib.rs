@@ -9,8 +9,8 @@ pub use backup::{
 };
 pub use models::{ApplyResult, ConfigPlan, ConfigWriter, EncryptedBackup, ToolEntry, ToolId};
 pub use plan::{
-    plan_claude_code, plan_claude_code_plaintext, plan_codex, plan_gemini_cli,
-    plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
+    plan_claude_code, plan_claude_code_plaintext, plan_codex, plan_codex_plaintext,
+    plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
 };
 pub use utils::endpoint_url;
 
@@ -58,9 +58,60 @@ mod tests {
         apply_plan(&plan, &content).unwrap();
         let (_plan2, content2) = plan_codex(dir.path(), &entry).unwrap();
         assert!(content2.contains("model_providers"));
-        assert!(content2.contains("[model_providers.aipass_anthropic_prod.auth]"));
-        assert!(content2.contains("command = \"aipass\""));
+        assert!(content2.contains("[model_providers.aipass_anthropic_prod]"));
+        assert!(content2.contains("env_key = \"ANTHROPIC_API_KEY\""));
+        assert!(content2.contains("requires_openai_auth = false"));
         assert!(content2.contains("base_url = \"https://api.anthropic.com/v1\""));
+    }
+
+    #[test]
+    fn codex_plaintext_writer_writes_auth_json_and_rolls_back() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join(".codex").join("config.toml");
+        let auth_path = dir.path().join(".codex").join("auth.json");
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("https://api.openai.com".to_string());
+        entry.default_model = Some("gpt-5.4".to_string());
+        entry.api_key = Some("sk-test-codex".to_string());
+
+        let (plan, content) = plan_codex_plaintext(dir.path(), &entry).unwrap();
+        apply_plan_encrypted(&plan, &content, &[9_u8; aipass_crypto::KEY_LEN]).unwrap();
+
+        let config_text = std::fs::read_to_string(&target).unwrap();
+        let auth_text = std::fs::read_to_string(&auth_path).unwrap();
+        assert!(config_text.contains("requires_openai_auth = true"));
+        assert!(auth_text.contains("OPENAI_API_KEY"));
+        assert!(auth_text.contains("sk-test-codex"));
+
+        rollback_encrypted(&plan.backup_path, &[9_u8; aipass_crypto::KEY_LEN]).unwrap();
+        assert!(!target.exists());
+        assert!(!auth_path.exists());
+    }
+
+    #[test]
+    fn codex_writer_uses_codex_home_when_directory_exists() {
+        let dir = tempdir().unwrap();
+        let codex_home = dir.path().join("custom-codex-home");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let original = std::env::var_os("CODEX_HOME");
+        std::env::set_var("CODEX_HOME", &codex_home);
+
+        let (plan, _content) = plan_codex(
+            dir.path(),
+            &entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer),
+        )
+        .unwrap();
+
+        match original {
+            Some(value) => std::env::set_var("CODEX_HOME", value),
+            None => std::env::remove_var("CODEX_HOME"),
+        }
+
+        assert_eq!(plan.target_path, codex_home.join("config.toml"));
+        assert_eq!(
+            plan.backup_path.parent().unwrap(),
+            codex_home.join(".aipass-backups")
+        );
     }
 
     #[test]
@@ -117,6 +168,7 @@ mod tests {
             backup_path: dir.path().join(".backups").join("config.aipbackup"),
             summary: "test encrypted backup".to_string(),
             preview: "{}".to_string(),
+            extra_writes: Vec::new(),
         };
 
         apply_plan_encrypted(&plan, "{}", &[7_u8; aipass_crypto::KEY_LEN]).unwrap();

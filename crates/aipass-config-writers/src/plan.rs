@@ -1,16 +1,18 @@
-use crate::models::{ConfigPlan, ToolEntry, ToolId};
+use crate::models::{ConfigPlan, PlannedWrite, ToolEntry, ToolId};
 use crate::utils::{
     diff_preview, dotenv_quote, ensure_json_object, ensure_table, new_plan, read_json_object,
-    read_json_value, read_toml, redacted_diff_preview, slug,
+    read_json_value, read_toml, redacted_diff_preview, resolve_codex_dir, slug,
 };
 use aipass_provider_registry::{AuthScheme, InterfaceType};
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::path::Path;
-use toml_edit::{value, Array, Item, Table};
+use toml_edit::{value, Item, Table};
 
 pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
-    let target = home.join(".codex").join("config.toml");
+    ensure_codex_entry(entry)?;
+    let codex_dir = resolve_codex_dir(home);
+    let target = codex_dir.join("config.toml");
     let mut doc = read_toml(&target)?;
     let provider_name = codex_provider_name(entry);
     let mut provider = Table::new();
@@ -19,8 +21,8 @@ pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)
     if let Some(endpoint) = codex_base_url(entry) {
         provider["base_url"] = value(endpoint);
     }
-    provider["wire_api"] = value(codex_wire_api(entry.interface_type.clone()));
-    provider["auth"] = Item::Table(codex_auth_table(entry));
+    provider["wire_api"] = value("responses");
+    provider["requires_openai_auth"] = value(false);
     ensure_table(&mut doc, "model_providers")?[&provider_name] = Item::Table(provider);
     doc["model_provider"] = value(provider_name);
     if let Some(model) = &entry.default_model {
@@ -30,13 +32,64 @@ pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)
     let plan = new_plan(
         ToolId::Codex,
         target,
-        format!("Configure Codex to use {}", entry.title),
+        format!("Configure Codex env-based config to use {}", entry.title),
         diff_preview(&content),
     );
     Ok((plan, content))
 }
 
+pub fn plan_codex_plaintext(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    ensure_codex_entry(entry)?;
+    let api_key = entry
+        .api_key
+        .as_deref()
+        .context("plaintext Codex config requires an API key")?;
+    let codex_dir = resolve_codex_dir(home);
+    let target = codex_dir.join("config.toml");
+    let mut doc = read_toml(&target)?;
+    let provider_name = codex_provider_name(entry);
+    let mut provider = Table::new();
+    provider["name"] = value(entry.title.clone());
+    if let Some(endpoint) = codex_base_url(entry) {
+        provider["base_url"] = value(endpoint);
+    }
+    provider["wire_api"] = value("responses");
+    provider["requires_openai_auth"] = value(true);
+    ensure_table(&mut doc, "model_providers")?[&provider_name] = Item::Table(provider);
+    doc["model_provider"] = value(provider_name.clone());
+    if let Some(model) = &entry.default_model {
+        doc["model"] = value(model.clone());
+    }
+    let content = doc.to_string();
+    let auth_target = codex_dir.join("auth.json");
+    let auth_content = serde_json::to_string_pretty(&serde_json::json!({
+        "OPENAI_API_KEY": api_key
+    }))?;
+    let mut plan = new_plan(
+        ToolId::Codex,
+        target.clone(),
+        format!(
+            "Configure Codex live config (config.toml + auth.json) to use {}",
+            entry.title
+        ),
+        combine_previews([
+            (&target, diff_preview(&content)),
+            (
+                &auth_target,
+                redacted_diff_preview(&auth_content, &[api_key]),
+            ),
+        ]),
+    );
+    plan.extra_writes.push(PlannedWrite {
+        target_path: auth_target,
+        backup_path: sibling_backup_path(&plan.backup_path, "auth"),
+        content: auth_content,
+    });
+    Ok((plan, content))
+}
+
 pub fn plan_claude_code(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    ensure_claude_code_entry(entry)?;
     let target = home.join(".claude").join("settings.json");
     let mut json = read_json_object(&target)?;
     json.insert(
@@ -67,6 +120,7 @@ pub fn plan_claude_code(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, S
 }
 
 pub fn plan_claude_code_plaintext(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    ensure_claude_code_entry(entry)?;
     let target = home.join(".claude").join("settings.json");
     let mut json = read_json_object(&target)?;
     let api_key = entry
@@ -104,6 +158,7 @@ pub fn plan_claude_code_plaintext(home: &Path, entry: &ToolEntry) -> Result<(Con
 }
 
 pub fn plan_gemini_cli(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    ensure_gemini_entry(entry)?;
     let target = home.join(".gemini").join("aipass.env");
     let key = match entry.auth_scheme {
         AuthScheme::GoogleApiKey => "GEMINI_API_KEY",
@@ -132,6 +187,7 @@ pub fn plan_gemini_cli(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, St
 }
 
 pub fn plan_gemini_cli_plaintext(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    ensure_gemini_entry(entry)?;
     let target = home.join(".gemini").join(".env");
     let api_key = entry
         .api_key
@@ -224,19 +280,6 @@ fn codex_provider_name(entry: &ToolEntry) -> String {
     format!("aipass_{}", slug(&entry.title))
 }
 
-fn codex_auth_table(entry: &ToolEntry) -> Table {
-    let mut auth = Table::new();
-    auth["command"] = value("aipass");
-    let mut args = Array::new();
-    args.push("get");
-    args.push(entry.id.to_string());
-    args.push("--field");
-    args.push("api_key");
-    args.push("--reveal");
-    auth["args"] = value(args);
-    auth
-}
-
 fn codex_base_url(entry: &ToolEntry) -> Option<String> {
     let endpoint = entry.endpoint.as_deref()?.trim_end_matches('/');
     if matches!(
@@ -254,16 +297,6 @@ fn codex_base_url(entry: &ToolEntry) -> Option<String> {
         }
     } else {
         Some(endpoint.to_string())
-    }
-}
-
-fn codex_wire_api(interface: InterfaceType) -> &'static str {
-    match interface {
-        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => "responses",
-        InterfaceType::AnthropicMessages => "anthropic",
-        InterfaceType::Gemini => "gemini",
-        InterfaceType::Bedrock => "bedrock",
-        InterfaceType::CustomHttp => "custom",
     }
 }
 
@@ -311,4 +344,52 @@ fn opencode_npm_package(interface: InterfaceType) -> &'static str {
         | InterfaceType::AzureOpenAi
         | InterfaceType::CustomHttp => "@ai-sdk/openai-compatible",
     }
+}
+
+fn ensure_codex_entry(entry: &ToolEntry) -> Result<()> {
+    if !matches!(entry.interface_type, InterfaceType::OpenAiCompatible) {
+        anyhow::bail!("Codex live config requires an OpenAI-compatible provider entry");
+    }
+    if !matches!(entry.auth_scheme, AuthScheme::Bearer) {
+        anyhow::bail!("Codex live config requires bearer-token authentication");
+    }
+    Ok(())
+}
+
+fn ensure_claude_code_entry(entry: &ToolEntry) -> Result<()> {
+    if !matches!(entry.interface_type, InterfaceType::AnthropicMessages) {
+        anyhow::bail!(
+            "Claude Code config requires an Anthropic Messages-compatible provider entry"
+        );
+    }
+    if !matches!(entry.auth_scheme, AuthScheme::XApiKey) {
+        anyhow::bail!("Claude Code config requires x-api-key authentication");
+    }
+    Ok(())
+}
+
+fn ensure_gemini_entry(entry: &ToolEntry) -> Result<()> {
+    if !matches!(entry.interface_type, InterfaceType::Gemini) {
+        anyhow::bail!("Gemini CLI config requires a Gemini-native provider entry");
+    }
+    if !matches!(entry.auth_scheme, AuthScheme::GoogleApiKey) {
+        anyhow::bail!("Gemini CLI config requires a Google API key");
+    }
+    Ok(())
+}
+
+fn combine_previews<const N: usize>(sections: [(&Path, String); N]) -> String {
+    sections
+        .into_iter()
+        .map(|(path, preview)| format!("# {}\n{}", path.display(), preview))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn sibling_backup_path(primary_backup: &Path, suffix: &str) -> std::path::PathBuf {
+    let stem = primary_backup
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("config");
+    primary_backup.with_file_name(format!("{stem}-{suffix}.aipbackup"))
 }

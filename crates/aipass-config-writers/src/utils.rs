@@ -13,6 +13,19 @@ pub fn endpoint_url(endpoints: &[ProviderEndpoint]) -> Option<String> {
     endpoints.iter().find_map(|endpoint| endpoint.url.clone())
 }
 
+pub(crate) fn resolve_codex_dir(home: &Path) -> PathBuf {
+    if let Some(dir) = std::env::var_os("CODEX_HOME") {
+        let path = PathBuf::from(dir);
+        if !path.as_os_str().is_empty()
+            && !path.to_string_lossy().trim().is_empty()
+            && path.is_dir()
+        {
+            return path;
+        }
+    }
+    home.join(".codex")
+}
+
 pub(crate) fn new_plan(
     tool: crate::models::ToolId,
     target_path: PathBuf,
@@ -36,6 +49,7 @@ pub(crate) fn new_plan(
         backup_path,
         summary,
         preview,
+        extra_writes: Vec::new(),
     }
 }
 

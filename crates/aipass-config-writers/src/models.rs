@@ -27,6 +27,13 @@ pub struct ToolEntry {
     pub api_key: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PlannedWrite {
+    pub target_path: PathBuf,
+    pub backup_path: PathBuf,
+    pub content: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigPlan {
     pub operation_id: Uuid,
@@ -35,6 +42,8 @@ pub struct ConfigPlan {
     pub backup_path: PathBuf,
     pub summary: String,
     pub preview: String,
+    #[serde(skip, default)]
+    pub extra_writes: Vec<PlannedWrite>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
