@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 #[derive(Default)]
@@ -300,6 +300,7 @@ async fn vault_create(
     let root = vault_dir(&app)?;
     let password = request.password;
     let task_id = Uuid::new_v4();
+    let app_handle = app.clone();
     let session = state.session.clone();
     let auth_tasks = state.auth_tasks.clone();
     set_auth_task_state(
@@ -314,7 +315,7 @@ async fn vault_create(
             Vault::create(&root, &SecretString::new(password)).map_err(|err| err.to_string())
         })
         .await;
-        finish_vault_create_task(auth_tasks, session, task_id, result);
+        finish_vault_create_task(app_handle, auth_tasks, session, task_id, result);
     });
     Ok(VaultAuthTaskStartResponse { task_id })
 }
@@ -328,6 +329,7 @@ async fn vault_unlock(
     let root = vault_dir(&app)?;
     let password = request.password;
     let task_id = Uuid::new_v4();
+    let app_handle = app.clone();
     let session = state.session.clone();
     let auth_tasks = state.auth_tasks.clone();
     set_auth_task_state(
@@ -342,7 +344,7 @@ async fn vault_unlock(
             Vault::open(&root, &SecretString::new(password)).map_err(|err| err.to_string())
         })
         .await;
-        finish_vault_unlock_task(auth_tasks, session, task_id, result);
+        finish_vault_unlock_task(app_handle, auth_tasks, session, task_id, result);
     });
     Ok(VaultAuthTaskStartResponse { task_id })
 }
@@ -357,6 +359,7 @@ async fn vault_recover(
     let recovery_key = request.recovery_key;
     let new_password = request.new_password;
     let task_id = Uuid::new_v4();
+    let app_handle = app.clone();
     let session = state.session.clone();
     let auth_tasks = state.auth_tasks.clone();
     set_auth_task_state(
@@ -376,7 +379,7 @@ async fn vault_recover(
             .map_err(|err| err.to_string())
         })
         .await;
-        finish_vault_create_task(auth_tasks, session, task_id, result);
+        finish_vault_create_task(app_handle, auth_tasks, session, task_id, result);
     });
     Ok(VaultAuthTaskStartResponse { task_id })
 }
@@ -1136,7 +1139,12 @@ fn auth_task_status_response(
     }
 }
 
+fn emit_auth_task_event(app: &AppHandle, response: &VaultAuthTaskStatusResponse) {
+    let _ = app.emit("vault-auth-finished", response.clone());
+}
+
 fn finish_vault_create_task(
+    app: AppHandle,
     auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
     session: Arc<Mutex<Option<Vault>>>,
     task_id: Uuid,
@@ -1164,9 +1172,15 @@ fn finish_vault_create_task(
         },
     };
     let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
+    if let Ok(tasks) = auth_tasks.lock() {
+        if let Some(snapshot) = tasks.get(&task_id).cloned() {
+            emit_auth_task_event(&app, &auth_task_status_response(task_id, snapshot));
+        }
+    }
 }
 
 fn finish_vault_unlock_task(
+    app: AppHandle,
     auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
     session: Arc<Mutex<Option<Vault>>>,
     task_id: Uuid,
@@ -1194,6 +1208,11 @@ fn finish_vault_unlock_task(
         },
     };
     let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
+    if let Ok(tasks) = auth_tasks.lock() {
+        if let Some(snapshot) = tasks.get(&task_id).cloned() {
+            emit_auth_task_event(&app, &auth_task_status_response(task_id, snapshot));
+        }
+    }
 }
 
 fn take_session_vault(state: &State<'_, AppState>) -> Result<Vault, String> {

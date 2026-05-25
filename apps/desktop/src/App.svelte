@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
   import {
     detectAuthFromProvider,
@@ -8,7 +9,7 @@
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
   import RecoveryKitModal from "./lib/components/auth/RecoveryKitModal.svelte";
@@ -55,26 +56,35 @@
     return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
 
-  function sleep(ms: number) {
-    return new Promise<void>((resolve) => setTimeout(resolve, ms));
-  }
-
   async function flushUiBeforeBlockingWork() {
     await tick();
     await nextFrame();
     await nextFrame();
   }
 
-  async function waitForVaultAuthTask(taskId: string): Promise<VaultAuthTaskStatus> {
-    for (;;) {
-      const status = await invokeTauri<VaultAuthTaskStatus>("vault_auth_status", {
-        request: { taskId }
-      });
-      if (status.phase !== "pending") {
-        return status;
-      }
-      await sleep(120);
+  let unlistenVaultAuth: (() => void) | undefined;
+  const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
+  const finishedVaultAuthTasks = new Map<string, VaultAuthTaskStatus>();
+
+  function settleVaultAuthTask(status: VaultAuthTaskStatus) {
+    const resolve = pendingVaultAuthTasks.get(status.taskId);
+    if (resolve) {
+      pendingVaultAuthTasks.delete(status.taskId);
+      resolve(status);
+      return;
     }
+    finishedVaultAuthTasks.set(status.taskId, status);
+  }
+
+  async function waitForVaultAuthTask(taskId: string): Promise<VaultAuthTaskStatus> {
+    const completed = finishedVaultAuthTasks.get(taskId);
+    if (completed) {
+      finishedVaultAuthTasks.delete(taskId);
+      return completed;
+    }
+    return new Promise<VaultAuthTaskStatus>((resolve) => {
+      pendingVaultAuthTasks.set(taskId, resolve);
+    });
   }
 
   let status: VaultStatus = { exists: false, locked: true };
@@ -169,17 +179,27 @@
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
     activityEvents.forEach((event) => window.addEventListener(event, markActivity, { passive: true }));
     void (async () => {
+      if (hasTauriRuntime()) {
+        unlistenVaultAuth = await listen<VaultAuthTaskStatus>("vault-auth-finished", ({ payload }) => {
+          settleVaultAuthTask(payload);
+        });
+      }
       loadPreferences();
       await refreshStatus();
       if (!status.locked && status.exists) await loadEntries();
       resetAutoLock();
     })();
-    return () => {
-      activityEvents.forEach((event) => window.removeEventListener(event, markActivity));
-      clearTimeout(idleTimer);
-      clearTimeout(clipboardClearTimer);
-      clearTimeout(revealTimer);
-    };
+  });
+
+  onDestroy(() => {
+    unlistenVaultAuth?.();
+    pendingVaultAuthTasks.clear();
+    finishedVaultAuthTasks.clear();
+    const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
+    activityEvents.forEach((event) => window.removeEventListener(event, markActivity));
+    clearTimeout(idleTimer);
+    clearTimeout(clipboardClearTimer);
+    clearTimeout(revealTimer);
   });
 
   async function refreshStatus() {
