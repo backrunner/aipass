@@ -1,3 +1,8 @@
+use aipass_config_writers::{
+    apply_plan_encrypted, plan_claude_code, plan_claude_code_plaintext, plan_codex,
+    plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
+    ApplyResult, ConfigPlan, ToolEntry,
+};
 use aipass_crypto::SecretString;
 use aipass_provider_registry::{
     provider_kind_for_id, AuthScheme, EndpointKind, InterfaceType, ProviderEndpoint, QuotaInfo,
@@ -178,6 +183,55 @@ struct SyncConflictResponse {
     object: SyncObject,
     conflict_summary: Option<EntrySummary>,
     target_summary: Option<EntrySummary>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum ToolConfigTool {
+    Codex,
+    ClaudeCode,
+    GeminiCli,
+    OpenCode,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ToolConfigMode {
+    Helper,
+    Plaintext,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolConfigRequest {
+    tool: ToolConfigTool,
+    id: Uuid,
+    mode: ToolConfigMode,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolConfigPreviewResponse {
+    tool: ToolConfigTool,
+    mode: ToolConfigMode,
+    entry_id: Uuid,
+    entry_title: String,
+    target_path: String,
+    summary: String,
+    preview: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolConfigApplyResponse {
+    tool: ToolConfigTool,
+    mode: ToolConfigMode,
+    entry_id: Uuid,
+    entry_title: String,
+    operation_id: Uuid,
+    target_path: String,
+    backup_path: String,
+    summary: String,
 }
 
 #[tauri::command]
@@ -431,6 +485,38 @@ fn provider_probe(
 }
 
 #[tauri::command]
+fn tool_config_preview(
+    state: State<'_, AppState>,
+    request: ToolConfigRequest,
+) -> Result<ToolConfigPreviewResponse, String> {
+    with_vault(state, |vault| {
+        let (entry, plan, _content) = build_tool_config_plan(vault, &request)?;
+        Ok(ToolConfigPreviewResponse {
+            tool: request.tool,
+            mode: request.mode,
+            entry_id: entry.id,
+            entry_title: entry.title,
+            target_path: plan.target_path.display().to_string(),
+            summary: plan.summary,
+            preview: plan.preview,
+        })
+    })
+}
+
+#[tauri::command]
+fn tool_config_apply(
+    state: State<'_, AppState>,
+    request: ToolConfigRequest,
+) -> Result<ToolConfigApplyResponse, String> {
+    with_vault(state, |vault| {
+        let (entry, plan, content) = build_tool_config_plan(vault, &request)?;
+        let result = apply_plan_encrypted(&plan, &content, &vault.config_backup_key())
+            .map_err(|err| err.to_string())?;
+        Ok(tool_apply_response(request, entry, plan, result))
+    })
+}
+
+#[tauri::command]
 fn vault_export_encrypted(
     state: State<'_, AppState>,
     request: VaultExportRequest,
@@ -567,6 +653,102 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         tags: clean_strings(request.tags),
         environment: non_empty(request.environment).unwrap_or_else(|| "personal".to_string()),
         notes: request.notes.and_then(non_empty),
+    }
+}
+
+fn build_tool_config_plan(
+    vault: &Vault,
+    request: &ToolConfigRequest,
+) -> Result<(EntrySummary, ConfigPlan, String), String> {
+    let entry = vault
+        .get_provider_summary(request.id)
+        .map_err(|err| err.to_string())?;
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| "HOME missing".to_string())?;
+    let mut tool_entry = ToolEntry {
+        id: entry.id,
+        title: entry.title.clone(),
+        provider_id: entry.provider_id.clone(),
+        endpoint: endpoint_url(&entry.endpoints),
+        interface_type: entry.interface_type.clone(),
+        auth_scheme: entry.auth_scheme.clone(),
+        env_key: env_key_for_entry(&entry),
+        default_model: entry.default_model.clone(),
+        api_key: None,
+    };
+    if matches!(request.mode, ToolConfigMode::Plaintext) {
+        tool_entry.api_key = Some(
+            vault
+                .reveal_secret(entry.id)
+                .map_err(|err| err.to_string())?,
+        );
+    }
+    let (plan, content) = match (&request.tool, &request.mode) {
+        (ToolConfigTool::Codex, ToolConfigMode::Helper) => {
+            plan_codex(&home, &tool_entry).map_err(|err| err.to_string())?
+        }
+        (ToolConfigTool::Codex, ToolConfigMode::Plaintext) => {
+            return Err("codex plaintext mode is not supported; use helper mode".to_string());
+        }
+        (ToolConfigTool::ClaudeCode, ToolConfigMode::Helper) => {
+            plan_claude_code(&home, &tool_entry).map_err(|err| err.to_string())?
+        }
+        (ToolConfigTool::ClaudeCode, ToolConfigMode::Plaintext) => {
+            plan_claude_code_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
+        }
+        (ToolConfigTool::GeminiCli, ToolConfigMode::Helper) => {
+            plan_gemini_cli(&home, &tool_entry).map_err(|err| err.to_string())?
+        }
+        (ToolConfigTool::GeminiCli, ToolConfigMode::Plaintext) => {
+            plan_gemini_cli_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
+        }
+        (ToolConfigTool::OpenCode, ToolConfigMode::Helper) => {
+            plan_opencode(&home, &tool_entry).map_err(|err| err.to_string())?
+        }
+        (ToolConfigTool::OpenCode, ToolConfigMode::Plaintext) => {
+            plan_opencode_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
+        }
+    };
+    Ok((entry, plan, content))
+}
+
+fn tool_apply_response(
+    request: ToolConfigRequest,
+    entry: EntrySummary,
+    plan: ConfigPlan,
+    result: ApplyResult,
+) -> ToolConfigApplyResponse {
+    ToolConfigApplyResponse {
+        tool: request.tool,
+        mode: request.mode,
+        entry_id: entry.id,
+        entry_title: entry.title,
+        operation_id: result.operation_id,
+        target_path: result.target_path.display().to_string(),
+        backup_path: result.backup_path.display().to_string(),
+        summary: plan.summary,
+    }
+}
+
+fn env_key_for_entry(item: &EntrySummary) -> String {
+    match item.provider_id.as_deref() {
+        Some("anthropic") => "ANTHROPIC_API_KEY".to_string(),
+        Some("gemini") => "GEMINI_API_KEY".to_string(),
+        Some("openrouter") => "OPENROUTER_API_KEY".to_string(),
+        Some("deepseek") => "DEEPSEEK_API_KEY".to_string(),
+        Some("moonshot") => "MOONSHOT_API_KEY".to_string(),
+        Some("qwen") => "DASHSCOPE_API_KEY".to_string(),
+        Some("zhipu") => "ZHIPUAI_API_KEY".to_string(),
+        Some("volcengine") => "ARK_API_KEY".to_string(),
+        Some("groq") => "GROQ_API_KEY".to_string(),
+        Some("together") => "TOGETHER_API_KEY".to_string(),
+        Some("fireworks") => "FIREWORKS_API_KEY".to_string(),
+        _ => match item.auth_scheme {
+            AuthScheme::GoogleApiKey => "GEMINI_API_KEY".to_string(),
+            AuthScheme::AzureApiKey => "AZURE_OPENAI_API_KEY".to_string(),
+            _ => "AIPASS_API_KEY".to_string(),
+        },
     }
 }
 
@@ -847,6 +1029,8 @@ pub fn run() {
             devices_list,
             device_revoke,
             provider_probe,
+            tool_config_preview,
+            tool_config_apply,
             vault_export_encrypted,
             vault_import_encrypted,
             sync_local,

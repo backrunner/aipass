@@ -17,6 +17,7 @@ path = "src/main.rs"
 tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
+aipass-config-writers = { path = "../../../crates/aipass-config-writers" }
 aipass-crypto = { path = "../../../crates/aipass-crypto" }
 aipass-provider-registry = { path = "../../../crates/aipass-provider-registry" }
 aipass-sync = { path = "../../../crates/aipass-sync" }

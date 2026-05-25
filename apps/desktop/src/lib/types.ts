@@ -10,6 +10,8 @@ import type {
 export type AuthMode = "create" | "unlock" | "recover";
 export type FormMode = "add" | "edit";
 export type SyncMode = "local" | "webdav";
+export type ToolConfigTarget = "codex" | "claude-code" | "gemini-cli" | "opencode";
+export type ToolConfigMode = "helper" | "plaintext";
 
 export type VaultStatus = { exists: boolean; locked: boolean };
 
@@ -116,6 +118,27 @@ export type ProbeResult = {
   endpoint?: string;
   modelCount?: number;
   error?: string;
+};
+
+export type ToolConfigPreview = {
+  tool: ToolConfigTarget;
+  mode: ToolConfigMode;
+  entryId: string;
+  entryTitle: string;
+  targetPath: string;
+  summary: string;
+  preview: string;
+};
+
+export type ToolConfigApplyResult = {
+  tool: ToolConfigTarget;
+  mode: ToolConfigMode;
+  entryId: string;
+  entryTitle: string;
+  operationId: string;
+  targetPath: string;
+  backupPath: string;
+  summary: string;
 };
 
 export type PasswordStrengthLevel = "empty" | "weak" | "fair" | "good" | "strong";

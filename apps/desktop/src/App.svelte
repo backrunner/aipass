@@ -31,6 +31,10 @@
     SyncConflict,
     SyncMode,
     SyncReport,
+    ToolConfigApplyResult,
+    ToolConfigMode,
+    ToolConfigPreview,
+    ToolConfigTarget,
     VaultStatus
   } from "./lib/types";
   import { passwordStrength } from "./lib/utils/auth";
@@ -583,6 +587,32 @@
     }
   }
 
+  async function previewToolConfig(request: {
+    tool: ToolConfigTarget;
+    mode: ToolConfigMode;
+    id: string;
+  }) {
+    error = "";
+    return invokeTauri<ToolConfigPreview>("tool_config_preview", { request });
+  }
+
+  async function applyToolConfig(request: {
+    tool: ToolConfigTarget;
+    mode: ToolConfigMode;
+    id: string;
+  }) {
+    error = "";
+    try {
+      const result = await invokeTauri<ToolConfigApplyResult>("tool_config_apply", { request });
+      notice = `${result.entryTitle} configured for ${result.tool}`;
+      setTimeout(() => (notice = ""), 2200);
+      return result;
+    } catch (err) {
+      error = String(err);
+      throw err;
+    }
+  }
+
   async function exportVault() {
     if (!exportPath.trim() || !exportPassword.trim()) return;
     error = "";
@@ -890,7 +920,9 @@
 {#if showSettings && !status.locked}
   <SettingsPanel
     {syncState}
+    entries={entries.map((entry) => ({ id: entry.id, title: entry.title }))}
     entriesCount={entries.length}
+    selectedEntryId={selected?.id ?? ""}
     initialTab={settingsInitialTab}
     bind:autoLockMinutes
     bind:clipboardClearSeconds
@@ -919,6 +951,8 @@
     onLoadSyncConflicts={loadSyncConflicts}
     onResolveSyncConflict={resolveSyncConflict}
     onRevokeDevice={revokeDevice}
+    onPreviewToolConfig={previewToolConfig}
+    onApplyToolConfig={applyToolConfig}
   />
 {/if}
 

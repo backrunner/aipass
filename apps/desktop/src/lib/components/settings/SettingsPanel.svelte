@@ -1,9 +1,20 @@
 <script lang="ts">
   import { Dialog, Tabs } from "bits-ui";
-  import { Check, Download, RotateCw, Terminal, Trash2, Upload, Wifi, X } from "lucide-svelte";
+  import { Check, Download, Eye, RotateCw, Terminal, Trash2, Upload, Wifi, X } from "lucide-svelte";
 
-  import type { DeviceRecord, MaybePromise, SyncConflict, SyncMode, SyncReport } from "../../types";
+  import type {
+    DeviceRecord,
+    MaybePromise,
+    SyncConflict,
+    SyncMode,
+    SyncReport,
+    ToolConfigApplyResult,
+    ToolConfigMode,
+    ToolConfigPreview,
+    ToolConfigTarget
+  } from "../../types";
   import Badge from "../shared/Badge.svelte";
+  import Banner from "../shared/Banner.svelte";
   import Button from "../shared/Button.svelte";
   import Card from "../shared/Card.svelte";
   import Field from "../shared/Field.svelte";
@@ -11,6 +22,7 @@
 
   export let syncState: SyncReport["status"] = "idle";
   export let entriesCount = 0;
+  export let selectedEntryId = "";
   export let autoLockMinutes = 15;
   export let clipboardClearSeconds = 45;
   export let newPassword = "";
@@ -39,6 +51,91 @@
   export let onLoadSyncConflicts: () => MaybePromise = () => {};
   export let onResolveSyncConflict: (conflict: SyncConflict, action: "accept" | "discard") => MaybePromise = () => {};
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
+  export let onPreviewToolConfig: (request: {
+    tool: ToolConfigTarget;
+    mode: ToolConfigMode;
+    id: string;
+  }) => Promise<ToolConfigPreview> = async () => {
+    throw new Error("Tool preview is unavailable");
+  };
+  export let onApplyToolConfig: (request: {
+    tool: ToolConfigTarget;
+    mode: ToolConfigMode;
+    id: string;
+  }) => Promise<ToolConfigApplyResult> = async () => {
+    throw new Error("Tool apply is unavailable");
+  };
+
+  type ToolEntryOption = {
+    id: string;
+    title: string;
+  };
+
+  export let entries: ToolEntryOption[] = [];
+
+  type ToolDefinition = {
+    id: ToolConfigTarget;
+    name: string;
+    desc: string;
+    note: string;
+    modes: Array<{ value: ToolConfigMode; label: string }>;
+  };
+
+  type ToolState = {
+    entryId: string;
+    mode: ToolConfigMode;
+    busy: boolean;
+    error: string;
+    preview?: ToolConfigPreview;
+    applied?: ToolConfigApplyResult;
+  };
+
+  const toolDefinitions: ToolDefinition[] = [
+    {
+      id: "codex",
+      name: "Codex",
+      desc: "Write ~/.codex/config.toml",
+      note: "Uses native auth.command helper. No plaintext auth.json write.",
+      modes: [{ value: "helper", label: "Helper" }]
+    },
+    {
+      id: "claude-code",
+      name: "Claude Code",
+      desc: "Write ~/.claude/settings.json",
+      note: "Helper uses apiKeyHelper. Plaintext writes ANTHROPIC_API_KEY into settings.json.",
+      modes: [
+        { value: "helper", label: "Helper" },
+        { value: "plaintext", label: "Plaintext" }
+      ]
+    },
+    {
+      id: "gemini-cli",
+      name: "Gemini CLI",
+      desc: "Write Gemini helper or ~/.gemini/.env",
+      note: "Helper keeps secrets out of Gemini config. Plaintext writes the real .env file.",
+      modes: [
+        { value: "helper", label: "Helper" },
+        { value: "plaintext", label: ".env" }
+      ]
+    },
+    {
+      id: "opencode",
+      name: "OpenCode",
+      desc: "Write ~/.config/opencode/opencode.json",
+      note: "Helper uses {env:VAR} references. Plaintext stores the API key in opencode.json.",
+      modes: [
+        { value: "helper", label: "Helper" },
+        { value: "plaintext", label: "Plaintext" }
+      ]
+    }
+  ];
+
+  let toolState: Record<ToolConfigTarget, ToolState> = {
+    codex: { entryId: "", mode: "helper", busy: false, error: "" },
+    "claude-code": { entryId: "", mode: "helper", busy: false, error: "" },
+    "gemini-cli": { entryId: "", mode: "helper", busy: false, error: "" },
+    opencode: { entryId: "", mode: "helper", busy: false, error: "" }
+  };
 
   function conflictTitle(conflict: SyncConflict): string {
     return conflict.conflictSummary?.title ?? conflict.targetSummary?.title ?? conflict.object.objectType;
@@ -52,6 +149,134 @@
   $: exportReady = exportPath.trim().length > 0 && exportPassword.trim().length > 0;
   $: importReady = importPath.trim().length > 0 && importPassword.trim().length > 0;
   $: syncReady = syncMode === "local" ? syncFolder.trim().length > 0 : webdavUrl.trim().length > 0;
+  $: syncToolState(entries, selectedEntryId);
+
+  function syncToolState(entries: ToolEntryOption[], selectedId: string) {
+    const fallbackId = selectedId || entries[0]?.id || "";
+    for (const tool of toolDefinitions) {
+      const current = toolState[tool.id];
+      const nextEntryId = entries.some((entry) => entry.id === current.entryId) ? current.entryId : fallbackId;
+      const nextMode = tool.modes.some((mode) => mode.value === current.mode) ? current.mode : tool.modes[0].value;
+      if (nextEntryId !== current.entryId || nextMode !== current.mode) {
+        toolState = {
+          ...toolState,
+          [tool.id]: {
+            ...current,
+            entryId: nextEntryId,
+            mode: nextMode,
+            preview:
+              current.preview?.entryId === nextEntryId && current.preview?.mode === nextMode
+                ? current.preview
+                : undefined,
+            applied:
+              current.applied?.entryId === nextEntryId && current.applied?.mode === nextMode
+                ? current.applied
+                : undefined
+          }
+        };
+      }
+    }
+  }
+
+  function setToolEntry(tool: ToolConfigTarget, entryId: string) {
+    toolState = {
+      ...toolState,
+      [tool]: {
+        ...toolState[tool],
+        entryId,
+        error: "",
+        preview: undefined,
+        applied: undefined
+      }
+    };
+  }
+
+  function setToolMode(tool: ToolConfigTarget, mode: ToolConfigMode) {
+    toolState = {
+      ...toolState,
+      [tool]: {
+        ...toolState[tool],
+        mode,
+        error: "",
+        preview: undefined,
+        applied: undefined
+      }
+    };
+  }
+
+  async function previewToolConfig(tool: ToolDefinition) {
+    const state = toolState[tool.id];
+    if (!state.entryId) return;
+    toolState = {
+      ...toolState,
+      [tool.id]: { ...state, busy: true, error: "" }
+    };
+    try {
+      const preview = await onPreviewToolConfig({
+        tool: tool.id,
+        mode: state.mode,
+        id: state.entryId
+      });
+      toolState = {
+        ...toolState,
+        [tool.id]: {
+          ...toolState[tool.id],
+          busy: false,
+          error: "",
+          preview
+        }
+      };
+    } catch (err) {
+      toolState = {
+        ...toolState,
+        [tool.id]: {
+          ...toolState[tool.id],
+          busy: false,
+          error: String(err)
+        }
+      };
+    }
+  }
+
+  async function applyToolConfig(tool: ToolDefinition) {
+    const state = toolState[tool.id];
+    if (!state.entryId || !state.preview) return;
+    if (
+      state.mode === "plaintext" &&
+      !confirm(`${tool.name} will store this API key in plaintext at:\n${state.preview.targetPath}\n\nContinue?`)
+    ) {
+      return;
+    }
+    toolState = {
+      ...toolState,
+      [tool.id]: { ...state, busy: true, error: "" }
+    };
+    try {
+      const applied = await onApplyToolConfig({
+        tool: tool.id,
+        mode: state.mode,
+        id: state.entryId
+      });
+      toolState = {
+        ...toolState,
+        [tool.id]: {
+          ...toolState[tool.id],
+          busy: false,
+          error: "",
+          applied
+        }
+      };
+    } catch (err) {
+      toolState = {
+        ...toolState,
+        [tool.id]: {
+          ...toolState[tool.id],
+          busy: false,
+          error: String(err)
+        }
+      };
+    }
+  }
 </script>
 
 <Dialog.Root open={true} onOpenChange={(value) => { if (!value) onClose(); }}>
@@ -273,26 +498,96 @@
           <Tabs.Content value="tools" class="tab-panel">
             <Card title="Integrations">
               <div class="form-rows">
-                <p class="hint">
-                  Configure supported CLIs with <code>aipass configure</code>. Desktop actions for tool setup are not wired yet.
-                </p>
+                <p class="hint">Preview and write supported CLI configs directly from the unlocked vault.</p>
+                {#if entries.length === 0}
+                  <Banner tone="warning">Add at least one provider before configuring CLI integrations.</Banner>
+                {/if}
                 <div class="tool-list">
-                  {#each [
-                    { name: "Codex", desc: "Codex CLI config" },
-                    { name: "Claude Code", desc: "Claude Code config" },
-                    { name: "Gemini CLI", desc: "Gemini CLI config" },
-                    { name: "OpenCode", desc: "OpenCode provider config" },
-                    { name: "Chrome extension", desc: "Browser autofill" }
-                  ] as tool}
-                    <div class="tool-row">
+                  {#each toolDefinitions as tool}
+                    {@const state = toolState[tool.id]}
+                    <div class="tool-row tool-config-row">
                       <div class="tool-icon"><Terminal size={14} /></div>
-                      <div class="tool-meta">
-                        <strong>{tool.name}</strong>
-                        <span class="text-tertiary">{tool.desc}</span>
+                      <div class="tool-content">
+                        <div class="tool-meta">
+                          <div class="tool-meta-head">
+                            <strong>{tool.name}</strong>
+                            <Badge>{state.mode}</Badge>
+                          </div>
+                          <span class="text-tertiary">{tool.desc}</span>
+                        </div>
+                        <div class="tool-controls">
+                          <Field label="Provider">
+                            <select
+                              value={state.entryId}
+                              on:change={(event) => setToolEntry(tool.id, (event.currentTarget as HTMLSelectElement).value)}
+                              disabled={entries.length === 0 || state.busy}
+                            >
+                              {#each entries as entry}
+                                <option value={entry.id}>{entry.title}</option>
+                              {/each}
+                            </select>
+                          </Field>
+                          <div class="tool-mode-field">
+                            <span class="field-label">Mode</span>
+                            {#if tool.modes.length > 1}
+                              <SegmentedControl
+                                ariaLabel={`${tool.name} mode`}
+                                value={state.mode}
+                                options={tool.modes}
+                                onChange={(mode) => setToolMode(tool.id, mode)}
+                              />
+                            {:else}
+                              <Badge>{tool.modes[0].label}</Badge>
+                            {/if}
+                          </div>
+                        </div>
+                        <p class="hint">{tool.note}</p>
+                        <div class="tool-actions">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            on:click={() => previewToolConfig(tool)}
+                            disabled={!state.entryId || state.busy}
+                          >
+                            <Eye size={13} /> Preview
+                          </Button>
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            on:click={() => applyToolConfig(tool)}
+                            disabled={!state.preview || state.busy}
+                          >
+                            <Check size={13} /> Apply
+                          </Button>
+                        </div>
+                        {#if state.error}
+                          <Banner tone="danger">{state.error}</Banner>
+                        {/if}
+                        {#if state.applied}
+                          <Banner tone="success">
+                            Configured {state.applied.entryTitle} at <code>{state.applied.targetPath}</code>
+                          </Banner>
+                        {/if}
+                        {#if state.preview}
+                          <div class="tool-preview">
+                            <div class="tool-preview-meta">
+                              <strong>{state.preview.summary}</strong>
+                              <code>{state.preview.targetPath}</code>
+                            </div>
+                            <pre>{state.preview.preview}</pre>
+                          </div>
+                        {/if}
                       </div>
-                      <Badge>CLI available</Badge>
                     </div>
                   {/each}
+                  <div class="tool-row">
+                    <div class="tool-icon"><Terminal size={14} /></div>
+                    <div class="tool-meta">
+                      <strong>Chrome extension</strong>
+                      <span class="text-tertiary">Browser autofill via Native Messaging</span>
+                    </div>
+                    <Badge>Installed separately</Badge>
+                  </div>
                 </div>
               </div>
             </Card>
@@ -538,6 +833,10 @@
     background: var(--surface);
   }
 
+  .tool-config-row {
+    align-items: flex-start;
+  }
+
   .device-meta,
   .tool-meta {
     flex: 1;
@@ -552,6 +851,80 @@
 
     span {
       font-size: 12px;
+    }
+  }
+
+  .tool-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tool-meta-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .tool-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .tool-mode-field {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+  }
+
+  .field-label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .tool-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .tool-preview {
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--divider);
+
+    pre {
+      margin: 0;
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-secondary);
+    }
+  }
+
+  .tool-preview-meta {
+    display: grid;
+    gap: 4px;
+
+    strong {
+      font-size: 12px;
+    }
+
+    code {
+      overflow-wrap: anywhere;
+      font-size: 11px;
+      color: var(--text-tertiary);
     }
   }
 
@@ -571,5 +944,15 @@
     grid-template-columns: 110px 1fr;
     gap: 10px;
     font-size: 13px;
+  }
+
+  @media (max-width: 640px) {
+    .tool-controls {
+      grid-template-columns: 1fr;
+    }
+
+    .tool-actions {
+      justify-content: stretch;
+    }
   }
 </style>

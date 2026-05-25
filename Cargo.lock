@@ -87,6 +87,7 @@ dependencies = [
 name = "aipass-desktop"
 version = "1.0.0"
 dependencies = [
+ "aipass-config-writers",
  "aipass-crypto",
  "aipass-provider-registry",
  "aipass-sync",
