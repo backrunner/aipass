@@ -9,6 +9,7 @@ authors.workspace = true
 aipass-crypto = { path = "../aipass-crypto" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
 anyhow.workspace = true
+json5.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true

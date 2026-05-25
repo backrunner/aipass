@@ -1,6 +1,7 @@
 use aipass_config_writers::{
-    apply_plan_encrypted, endpoint_url, find_backup_by_operation, plan_claude_code, plan_codex,
-    plan_gemini_cli, rollback_encrypted, ConfigPlan, ToolEntry, ToolId,
+    apply_plan_encrypted, endpoint_url, find_backup_by_operation, plan_claude_code,
+    plan_claude_code_plaintext, plan_codex, plan_gemini_cli, plan_gemini_cli_plaintext,
+    plan_opencode, plan_opencode_plaintext, rollback_encrypted, ConfigPlan, ToolEntry, ToolId,
 };
 use aipass_crypto::SecretString;
 use aipass_native_host::native_manifest;
@@ -312,6 +313,8 @@ enum ToolArg {
     Codex,
     ClaudeCode,
     GeminiCli,
+    #[value(name = "opencode")]
+    OpenCode,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -324,6 +327,7 @@ enum EnvFormat {
 enum ConfigureMode {
     Helper,
     Env,
+    Plaintext,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -813,22 +817,37 @@ fn main() -> Result<()> {
             let home = std::env::var("HOME")
                 .map(PathBuf::from)
                 .context("HOME missing")?;
-            let entry = ToolEntry {
+            let env_key = env_key_for_entry(&item);
+            let mut entry = ToolEntry {
                 id,
                 title: item.title,
                 provider_id: item.provider_id,
                 endpoint: endpoint_url(&item.endpoints),
                 interface_type: item.interface_type,
                 auth_scheme: item.auth_scheme,
-                env_key: env_key_for(tool.clone()),
+                env_key,
+                default_model: item.default_model,
+                api_key: None,
             };
+            if matches!(mode, ConfigureMode::Plaintext) {
+                entry.api_key = Some(vault.reveal_secret(id)?);
+            }
             let (plan, content) = match mode {
                 ConfigureMode::Helper => match tool {
                     ToolArg::Codex => plan_codex(&home, &entry)?,
                     ToolArg::ClaudeCode => plan_claude_code(&home, &entry)?,
                     ToolArg::GeminiCli => plan_gemini_cli(&home, &entry)?,
+                    ToolArg::OpenCode => plan_opencode(&home, &entry)?,
                 },
                 ConfigureMode::Env => plan_tool_env_helper(&home, tool.clone(), &entry)?,
+                ConfigureMode::Plaintext => match tool {
+                    ToolArg::Codex => {
+                        anyhow::bail!("codex plaintext mode is not supported; use --mode helper")
+                    }
+                    ToolArg::ClaudeCode => plan_claude_code_plaintext(&home, &entry)?,
+                    ToolArg::GeminiCli => plan_gemini_cli_plaintext(&home, &entry)?,
+                    ToolArg::OpenCode => plan_opencode_plaintext(&home, &entry)?,
+                },
             };
             if !yes {
                 return output(cli.json, serde_json::to_value(&plan)?, &plan.preview);
@@ -1102,14 +1121,6 @@ fn item_label(field: &str) -> Option<&str> {
         .filter(|label| !label.is_empty())
 }
 
-fn env_key_for(tool: ToolArg) -> String {
-    match tool {
-        ToolArg::Codex => "AIPASS_API_KEY".to_string(),
-        ToolArg::ClaudeCode => "ANTHROPIC_API_KEY".to_string(),
-        ToolArg::GeminiCli => "GEMINI_API_KEY".to_string(),
-    }
-}
-
 fn env_key_for_entry(item: &aipass_vault::EntrySummary) -> String {
     match item.provider_id.as_deref() {
         Some("anthropic") => "ANTHROPIC_API_KEY".to_string(),
@@ -1276,11 +1287,13 @@ fn plan_tool_env_helper(
         ToolArg::Codex => ToolId::Codex,
         ToolArg::ClaudeCode => ToolId::ClaudeCode,
         ToolArg::GeminiCli => ToolId::GeminiCli,
+        ToolArg::OpenCode => ToolId::OpenCode,
     };
     let tool_name = match tool {
         ToolArg::Codex => "codex",
         ToolArg::ClaudeCode => "claude-code",
         ToolArg::GeminiCli => "gemini-cli",
+        ToolArg::OpenCode => "opencode",
     };
     let target = home
         .join(".aipass")

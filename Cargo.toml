@@ -27,6 +27,7 @@ clap_complete = "4.5.61"
 directories = "6.0.0"
 hkdf = "0.12.4"
 hmac = "0.12.1"
+json5 = "0.4.1"
 quick-xml = "0.39.4"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 reqwest = { version = "0.13.3", features = ["blocking"] }

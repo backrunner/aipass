@@ -2,6 +2,7 @@ use crate::models::ConfigPlan;
 use aipass_provider_registry::ProviderEndpoint;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -72,12 +73,33 @@ pub(crate) fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'
 }
 
 pub(crate) fn read_json_object(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
-    if path.exists() {
-        let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
-        Ok(value.as_object().cloned().unwrap_or_default())
-    } else {
-        Ok(serde_json::Map::new())
+    Ok(read_json_value(path)?
+        .as_object()
+        .cloned()
+        .unwrap_or_default())
+}
+
+pub(crate) fn read_json_value(path: &Path) -> Result<Value> {
+    if !path.exists() {
+        return Ok(Value::Object(Map::new()));
     }
+    let content = fs::read_to_string(path)?;
+    Ok(json5::from_str(&content)?)
+}
+
+pub(crate) fn ensure_json_object<'a>(
+    object: &'a mut Map<String, Value>,
+    key: &str,
+) -> Result<&'a mut Map<String, Value>> {
+    let value = object
+        .entry(key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !value.is_object() {
+        *value = Value::Object(Map::new());
+    }
+    value
+        .as_object_mut()
+        .with_context(|| format!("{key} is not a JSON object"))
 }
 
 pub(crate) fn slug(value: &str) -> String {
@@ -103,4 +125,22 @@ pub(crate) fn diff_preview(content: &str) -> String {
         .map(|line| format!("+ {line}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub(crate) fn redacted_diff_preview(content: &str, redactions: &[&str]) -> String {
+    let mut preview = diff_preview(content);
+    for value in redactions {
+        if !value.is_empty() {
+            preview = preview.replace(value, "[redacted]");
+        }
+    }
+    preview
+}
+
+pub(crate) fn dotenv_quote(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    format!("\"{escaped}\"")
 }

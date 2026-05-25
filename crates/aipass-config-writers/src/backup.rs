@@ -98,6 +98,9 @@ pub fn find_backup_by_operation(home: &Path, operation_id: Uuid) -> Result<PathB
         home.join(".codex").join(".aipass-backups"),
         home.join(".claude").join(".aipass-backups"),
         home.join(".gemini").join(".aipass-backups"),
+        home.join(".config")
+            .join("opencode")
+            .join(".aipass-backups"),
         home.join(".aipass").join("tools").join(".aipass-backups"),
     ] {
         if !root.exists() {

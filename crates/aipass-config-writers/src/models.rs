@@ -11,6 +11,7 @@ pub enum ToolId {
     Codex,
     ClaudeCode,
     GeminiCli,
+    OpenCode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,6 +23,8 @@ pub struct ToolEntry {
     pub interface_type: InterfaceType,
     pub auth_scheme: AuthScheme,
     pub env_key: String,
+    pub default_model: Option<String>,
+    pub api_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

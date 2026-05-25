@@ -8,7 +8,10 @@ pub use backup::{
     rollback, rollback_encrypted, rollback_plain,
 };
 pub use models::{ApplyResult, ConfigPlan, ConfigWriter, EncryptedBackup, ToolEntry, ToolId};
-pub use plan::{plan_claude_code, plan_codex, plan_gemini_cli};
+pub use plan::{
+    plan_claude_code, plan_claude_code_plaintext, plan_codex, plan_gemini_cli,
+    plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
+};
 pub use utils::endpoint_url;
 
 #[cfg(test)]
@@ -26,6 +29,8 @@ mod tests {
             interface_type,
             auth_scheme,
             env_key: "ANTHROPIC_API_KEY".to_string(),
+            default_model: Some("claude-sonnet-4-20250514".to_string()),
+            api_key: None,
         }
     }
 
@@ -53,6 +58,46 @@ mod tests {
         apply_plan(&plan, &content).unwrap();
         let (_plan2, content2) = plan_codex(dir.path(), &entry).unwrap();
         assert!(content2.contains("model_providers"));
+        assert!(content2.contains("[model_providers.aipass_anthropic_prod.auth]"));
+        assert!(content2.contains("command = \"aipass\""));
+        assert!(content2.contains("base_url = \"https://api.anthropic.com/v1\""));
+    }
+
+    #[test]
+    fn gemini_plaintext_writer_targets_real_env_file() {
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::Gemini, AuthScheme::GoogleApiKey);
+        entry.endpoint = Some("https://generativelanguage.googleapis.com".to_string());
+        entry.default_model = Some("gemini-2.5-pro".to_string());
+        entry.api_key = Some("AIza-test-key".to_string());
+        let (plan, content) = plan_gemini_cli_plaintext(dir.path(), &entry).unwrap();
+        assert_eq!(plan.tool, ToolId::GeminiCli);
+        assert_eq!(plan.target_path, dir.path().join(".gemini").join(".env"));
+        assert!(content.contains("GEMINI_API_KEY=\"AIza-test-key\""));
+        assert!(content.contains("GOOGLE_GEMINI_BASE_URL="));
+        assert!(content.contains("GEMINI_MODEL=\"gemini-2.5-pro\""));
+        assert!(!plan.preview.contains("AIza-test-key"));
+    }
+
+    #[test]
+    fn opencode_helper_writer_uses_env_reference() {
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.provider_id = Some("openrouter".to_string());
+        entry.env_key = "OPENROUTER_API_KEY".to_string();
+        entry.endpoint = Some("https://openrouter.ai/api/v1".to_string());
+        entry.default_model = Some("openai/gpt-4.1-mini".to_string());
+        let (plan, content) = plan_opencode(dir.path(), &entry).unwrap();
+        assert_eq!(
+            plan.target_path,
+            dir.path()
+                .join(".config")
+                .join("opencode")
+                .join("opencode.json")
+        );
+        assert!(content.contains("\"npm\": \"@ai-sdk/openai-compatible\""));
+        assert!(content.contains("\"apiKey\": \"{env:OPENROUTER_API_KEY}\""));
+        assert!(content.contains("\"model\": \"aipass_anthropic_prod/openai/gpt-4.1-mini\""));
     }
 
     #[test]
