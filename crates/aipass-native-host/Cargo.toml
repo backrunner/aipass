@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 aipass-crypto = { path = "../aipass-crypto" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
+aipass-storage = { path = "../aipass-storage" }
 aipass-vault = { path = "../aipass-vault" }
 anyhow.workspace = true
 directories.workspace = true

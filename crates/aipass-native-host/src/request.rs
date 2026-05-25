@@ -1,6 +1,7 @@
 use crate::config::NativeHostConfig;
 use crate::preview::{detected_secret_preview, DetectedSecretFields};
 use crate::protocol::{validate_extension_id, NativeRequest, NativeResponse};
+use crate::settings::{ignore_origin, is_origin_ignored};
 use aipass_crypto::SecretString;
 use aipass_provider_registry::{match_provider_by_domain, provider_kind_for_id};
 use aipass_provider_registry::{AuthScheme, InterfaceType, ProviderEndpoint};
@@ -60,6 +61,12 @@ fn handle_request_inner(
             "reason": reason,
             "desktopRequired": config.master_password.is_none()
         })),
+        NativeRequest::IsOriginIgnored { origin, .. } => {
+            Ok(json!({ "ignored": is_origin_ignored(&config.vault_dir, &origin)? }))
+        }
+        NativeRequest::IgnoreOrigin { origin, .. } => {
+            Ok(json!({ "ignoredOrigins": ignore_origin(&config.vault_dir, &origin)? }))
+        }
         NativeRequest::ContextLookup { origin, url, .. } => {
             let vault = open_vault(config)?;
             let mut entries = vault.lookup_by_origin(&origin)?;
@@ -198,6 +205,8 @@ fn request_id(request: &NativeRequest) -> Uuid {
     match request {
         NativeRequest::Ping { id, .. }
         | NativeRequest::ContextLookup { id, .. }
+        | NativeRequest::IsOriginIgnored { id, .. }
+        | NativeRequest::IgnoreOrigin { id, .. }
         | NativeRequest::SecretFill { id, .. }
         | NativeRequest::SaveDetected { id, .. }
         | NativeRequest::PreviewDetected { id, .. }
@@ -209,6 +218,8 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
     match request {
         NativeRequest::Ping { extension_id, .. }
         | NativeRequest::ContextLookup { extension_id, .. }
+        | NativeRequest::IsOriginIgnored { extension_id, .. }
+        | NativeRequest::IgnoreOrigin { extension_id, .. }
         | NativeRequest::SecretFill { extension_id, .. }
         | NativeRequest::SaveDetected { extension_id, .. }
         | NativeRequest::PreviewDetected { extension_id, .. }

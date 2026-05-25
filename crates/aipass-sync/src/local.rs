@@ -1,4 +1,5 @@
 use crate::webdav::WebDavClient;
+use aipass_storage::atomic_write_bytes;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -172,10 +173,7 @@ pub fn sync_webdav(vault_root: &Path, client: &impl WebDavClient) -> Result<Sync
             (None, Some(remote)) => {
                 let bytes = client.get(&path)?;
                 let local_path = vault_root.join(&remote.relative_path);
-                if let Some(parent) = local_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(local_path, bytes)?;
+                atomic_write_bytes(&local_path, &bytes)?;
                 downloaded += 1;
             }
             (Some(local), Some(remote)) if local.hash_hex == remote.hash_hex => {}
@@ -194,7 +192,7 @@ pub fn sync_webdav(vault_root: &Path, client: &impl WebDavClient) -> Result<Sync
             }
             (Some(local), Some(_remote)) => {
                 let bytes = client.get(&path)?;
-                fs::write(vault_root.join(&local.relative_path), bytes)?;
+                atomic_write_bytes(vault_root.join(&local.relative_path), &bytes)?;
                 downloaded += 1;
             }
             (None, None) => {}
@@ -430,7 +428,7 @@ fn quarantine_conflict_bytes(
     ));
     fs::create_dir_all(&record_dir)?;
     let payload_path = record_dir.join(name);
-    fs::write(&payload_path, bytes)?;
+    atomic_write_bytes(&payload_path, bytes)?;
     let payload_relative = payload_path
         .strip_prefix(root)
         .context("conflict payload outside root")?
@@ -495,18 +493,15 @@ fn write_checkpoint(root: &Path) -> Result<()> {
         updated_at: OffsetDateTime::now_utc(),
         objects,
     };
-    fs::write(
+    atomic_write_bytes(
         root.join("sync-checkpoint.aipcheckpoint"),
-        serde_json::to_vec_pretty(&checkpoint)?,
+        &serde_json::to_vec_pretty(&checkpoint)?,
     )?;
     Ok(())
 }
 
 fn write_json(path: impl AsRef<Path>, value: &impl Serialize) -> Result<()> {
-    if let Some(parent) = path.as_ref().parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    atomic_write_bytes(path, &serde_json::to_vec_pretty(value)?)?;
     Ok(())
 }
 

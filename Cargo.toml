@@ -2,6 +2,7 @@
 members = [
   "apps/desktop/src-tauri",
   "crates/aipass-crypto",
+  "crates/aipass-storage",
   "crates/aipass-vault",
   "crates/aipass-provider-registry",
   "crates/aipass-config-writers",

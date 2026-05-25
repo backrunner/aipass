@@ -21,6 +21,18 @@ pub enum NativeRequest {
         origin: String,
         url: String,
     },
+    #[serde(rename = "settings.isOriginIgnored")]
+    IsOriginIgnored {
+        id: Uuid,
+        extension_id: Option<String>,
+        origin: String,
+    },
+    #[serde(rename = "settings.ignoreOrigin")]
+    IgnoreOrigin {
+        id: Uuid,
+        extension_id: Option<String>,
+        origin: String,
+    },
     #[serde(rename = "secret.fill")]
     SecretFill {
         id: Uuid,

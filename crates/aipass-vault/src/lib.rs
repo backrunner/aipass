@@ -7,6 +7,7 @@ use aipass_crypto::{
 use aipass_provider_registry::{
     AuthScheme, InterfaceType, ProviderEndpoint, ProviderEntry, ProviderKind, QuotaInfo, SecretRef,
 };
+use aipass_storage::atomic_write_bytes;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1036,10 +1037,7 @@ impl Vault {
                 .decode(file.bytes_b64.as_bytes())
                 .map_err(|_| VaultError::InvalidExport)?;
             let path = root.join(relative_path);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(path, bytes)?;
+            atomic_write_bytes(&path, &bytes)?;
         }
         create_dirs(root)?;
         Ok(())
@@ -1504,11 +1502,8 @@ fn encrypted_paths(root: &Path, ext: &str) -> Result<Vec<PathBuf>, VaultError> {
 }
 
 fn write_json(path: impl AsRef<Path>, value: &impl Serialize) -> Result<(), VaultError> {
-    if let Some(parent) = path.as_ref().parent() {
-        fs::create_dir_all(parent)?;
-    }
     let bytes = serde_json::to_vec_pretty(value)?;
-    fs::write(path, bytes)?;
+    atomic_write_bytes(path, &bytes)?;
     Ok(())
 }
 

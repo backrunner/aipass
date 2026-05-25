@@ -14,6 +14,7 @@ aipass-config-writers = { path = "../aipass-config-writers" }
 aipass-crypto = { path = "../aipass-crypto" }
 aipass-native-host = { path = "../aipass-native-host" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
+aipass-storage = { path = "../aipass-storage" }
 aipass-sync = { path = "../aipass-sync" }
 aipass-vault = { path = "../aipass-vault" }
 anyhow.workspace = true

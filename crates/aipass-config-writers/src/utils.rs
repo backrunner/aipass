@@ -1,5 +1,6 @@
 use crate::models::ConfigPlan;
 use aipass_provider_registry::ProviderEndpoint;
+use aipass_storage::atomic_write_bytes;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -54,7 +55,7 @@ pub(crate) fn new_plan(
 }
 
 pub(crate) fn write_json(path: impl AsRef<Path>, value: &impl Serialize) -> Result<()> {
-    fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    atomic_write_bytes(path, &serde_json::to_vec_pretty(value)?)?;
     Ok(())
 }
 

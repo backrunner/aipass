@@ -1,6 +1,7 @@
 use crate::models::{ApplyResult, ConfigPlan, EncryptedBackup, PlannedWrite};
 use crate::utils::{backup_aad, read_json, resolve_codex_dir, write_json};
 use aipass_crypto::{decrypt_bytes, encrypt_bytes, KEY_LEN};
+use aipass_storage::atomic_write_bytes;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -155,10 +156,10 @@ fn write_encrypted_backups(
 fn write_plain_backups(writes: &[PreparedWrite]) -> Result<()> {
     for write in writes {
         if write.target_existed {
-            fs::copy(&write.target_path, &write.backup_path)
+            atomic_write_bytes(&write.backup_path, &write.original)
                 .with_context(|| format!("backup {}", write.target_path.display()))?;
         } else {
-            fs::write(&write.backup_path, b"")?;
+            atomic_write_bytes(&write.backup_path, b"")?;
         }
     }
     Ok(())
@@ -167,7 +168,7 @@ fn write_plain_backups(writes: &[PreparedWrite]) -> Result<()> {
 fn apply_prepared_writes(operation_id: Uuid, writes: &[PreparedWrite]) -> Result<()> {
     let mut applied = Vec::new();
     for write in writes {
-        if let Err(err) = fs::write(&write.target_path, &write.content) {
+        if let Err(err) = atomic_write_bytes(&write.target_path, &write.content) {
             let _ = restore_applied_writes(&applied);
             return Err(err).with_context(|| {
                 format!(
@@ -193,7 +194,7 @@ fn restore_original_bytes(write: &PreparedWrite) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     if write.target_existed {
-        fs::write(&write.target_path, &write.original)?;
+        atomic_write_bytes(&write.target_path, &write.original)?;
     } else if write.target_path.exists() {
         fs::remove_file(&write.target_path)?;
     }
@@ -208,7 +209,7 @@ fn restore_encrypted_backup_file(backup_path: &Path, backup_key: &[u8; KEY_LEN])
         fs::create_dir_all(parent)?;
     }
     if backup.target_existed {
-        fs::write(&backup.target_path, original)?;
+        atomic_write_bytes(&backup.target_path, &original)?;
     } else if backup.target_path.exists() {
         fs::remove_file(&backup.target_path)?;
     }
@@ -225,7 +226,8 @@ fn restore_plain_backup_file(target_path: &Path, backup_path: &Path) -> Result<(
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(backup_path, target_path)?;
+        let original = fs::read(backup_path)?;
+        atomic_write_bytes(target_path, &original)?;
     }
     Ok(())
 }

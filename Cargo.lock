@@ -35,6 +35,7 @@ dependencies = [
  "aipass-crypto",
  "aipass-native-host",
  "aipass-provider-registry",
+ "aipass-storage",
  "aipass-sync",
  "aipass-vault",
  "anyhow",
@@ -54,6 +55,7 @@ version = "1.0.0"
 dependencies = [
  "aipass-crypto",
  "aipass-provider-registry",
+ "aipass-storage",
  "anyhow",
  "json5",
  "serde",
@@ -90,6 +92,7 @@ dependencies = [
  "aipass-config-writers",
  "aipass-crypto",
  "aipass-provider-registry",
+ "aipass-storage",
  "aipass-sync",
  "aipass-vault",
  "reqwest",
@@ -107,6 +110,7 @@ version = "1.0.0"
 dependencies = [
  "aipass-crypto",
  "aipass-provider-registry",
+ "aipass-storage",
  "aipass-vault",
  "anyhow",
  "directories",
@@ -126,9 +130,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aipass-storage"
+version = "1.0.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "aipass-sync"
 version = "1.0.0"
 dependencies = [
+ "aipass-storage",
  "anyhow",
  "quick-xml",
  "reqwest",
@@ -146,6 +158,7 @@ version = "1.0.0"
 dependencies = [
  "aipass-crypto",
  "aipass-provider-registry",
+ "aipass-storage",
  "anyhow",
  "base64 0.22.1",
  "serde",

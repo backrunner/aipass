@@ -10,6 +10,7 @@ use aipass_provider_registry::{
     match_provider_by_domain, provider_kind_for_id, AuthScheme, InterfaceType, ProviderEndpoint,
     QuotaInfo,
 };
+use aipass_storage::atomic_write_bytes;
 use aipass_sync::{sync_local_folder, sync_webdav, HttpWebDavClient};
 use aipass_vault::{EncryptedVaultExport, ProviderEntryInput, ProviderEntryUpdateInput, Vault};
 use anyhow::{Context, Result};
@@ -417,7 +418,7 @@ fn main() -> Result<()> {
                 if let Some(parent) = export_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                fs::write(&export_path, serde_json::to_vec_pretty(&export)?)?;
+                atomic_write_bytes(&export_path, &serde_json::to_vec_pretty(&export)?)?;
                 output(
                     cli.json,
                     serde_json::json!({ "ok": true, "output": export_path, "vaultId": export.vault_id }),
@@ -493,7 +494,7 @@ fn main() -> Result<()> {
                     fs::create_dir_all(parent)?;
                 }
                 let manifest = native_manifest(&host_path, &origins);
-                fs::write(&install_path, serde_json::to_vec_pretty(&manifest)?)?;
+                atomic_write_bytes(&install_path, &serde_json::to_vec_pretty(&manifest)?)?;
                 install_native_manifest_reference(&browser, &install_path)?;
                 output(
                     cli.json,

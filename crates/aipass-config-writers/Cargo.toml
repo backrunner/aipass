@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 aipass-crypto = { path = "../aipass-crypto" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
+aipass-storage = { path = "../aipass-storage" }
 anyhow.workspace = true
 json5.workspace = true
 serde.workspace = true

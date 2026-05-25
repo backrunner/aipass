@@ -7,6 +7,7 @@ use aipass_crypto::SecretString;
 use aipass_provider_registry::{
     provider_kind_for_id, AuthScheme, EndpointKind, InterfaceType, ProviderEndpoint, QuotaInfo,
 };
+use aipass_storage::atomic_write_bytes;
 use aipass_sync::{
     accept_conflict, discard_conflict, list_conflicts, sync_local_folder, sync_webdav,
     ConflictRecord, HttpWebDavClient, SyncObject, SyncReport,
@@ -20,14 +21,16 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
+
+const AUTH_TASK_RETENTION: Duration = Duration::from_secs(300);
 
 #[derive(Default)]
 struct AppState {
     session: Arc<Mutex<Option<Vault>>>,
-    auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
+    auth_tasks: Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -101,6 +104,12 @@ enum VaultAuthTaskState {
         message: String,
         error: String,
     },
+}
+
+#[derive(Clone, Debug)]
+struct StoredVaultAuthTask {
+    state: VaultAuthTaskState,
+    finished_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -344,6 +353,7 @@ async fn vault_create(
     let app_handle = app.clone();
     let session = state.session.clone();
     let auth_tasks = state.auth_tasks.clone();
+    prune_auth_tasks(&auth_tasks);
     set_auth_task_state(
         &auth_tasks,
         task_id,
@@ -373,6 +383,7 @@ async fn vault_unlock(
     let app_handle = app.clone();
     let session = state.session.clone();
     let auth_tasks = state.auth_tasks.clone();
+    prune_auth_tasks(&auth_tasks);
     set_auth_task_state(
         &auth_tasks,
         task_id,
@@ -403,6 +414,7 @@ async fn vault_recover(
     let app_handle = app.clone();
     let session = state.session.clone();
     let auth_tasks = state.auth_tasks.clone();
+    prune_auth_tasks(&auth_tasks);
     set_auth_task_state(
         &auth_tasks,
         task_id,
@@ -430,6 +442,7 @@ fn vault_auth_status(
     state: State<'_, AppState>,
     request: VaultAuthTaskStatusRequest,
 ) -> Result<VaultAuthTaskStatusResponse, String> {
+    prune_auth_tasks(&state.auth_tasks);
     let task_id = request.task_id;
     let tasks = state
         .auth_tasks
@@ -437,18 +450,9 @@ fn vault_auth_status(
         .map_err(|_| "auth task lock poisoned".to_string())?;
     let snapshot = tasks
         .get(&task_id)
-        .cloned()
+        .map(|task| task.state.clone())
         .ok_or_else(|| format!("auth task {task_id} not found"))?;
-    drop(tasks);
-    let response = auth_task_status_response(task_id, snapshot.clone());
-    if !matches!(snapshot, VaultAuthTaskState::Pending { .. }) {
-        state
-            .auth_tasks
-            .lock()
-            .map_err(|_| "auth task lock poisoned".to_string())?
-            .remove(&task_id);
-    }
-    Ok(response)
+    Ok(auth_task_status_response(task_id, snapshot))
 }
 
 #[tauri::command]
@@ -679,9 +683,9 @@ fn vault_export_encrypted(
         if let Some(parent) = request.output.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
-        fs::write(
+        atomic_write_bytes(
             &request.output,
-            serde_json::to_vec_pretty(&export).map_err(|err| err.to_string())?,
+            &serde_json::to_vec_pretty(&export).map_err(|err| err.to_string())?,
         )
         .map_err(|err| err.to_string())
     })
@@ -1129,15 +1133,35 @@ async fn run_blocking<T: Send + 'static>(
 }
 
 fn set_auth_task_state(
-    auth_tasks: &Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
+    auth_tasks: &Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
     task_id: Uuid,
     task: VaultAuthTaskState,
 ) -> Result<(), String> {
+    let finished_at = if matches!(task, VaultAuthTaskState::Pending { .. }) {
+        None
+    } else {
+        Some(Instant::now())
+    };
     auth_tasks
         .lock()
         .map_err(|_| "auth task lock poisoned".to_string())?
-        .insert(task_id, task);
+        .insert(
+            task_id,
+            StoredVaultAuthTask {
+                state: task,
+                finished_at,
+            },
+        );
     Ok(())
+}
+
+fn prune_auth_tasks(auth_tasks: &Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>) {
+    if let Ok(mut tasks) = auth_tasks.lock() {
+        tasks.retain(|_, task| {
+            task.finished_at
+                .is_none_or(|finished_at| finished_at.elapsed() < AUTH_TASK_RETENTION)
+        });
+    }
 }
 
 fn auth_task_status_response(
@@ -1186,7 +1210,7 @@ fn emit_auth_task_event(app: &AppHandle, response: &VaultAuthTaskStatusResponse)
 
 fn finish_vault_create_task(
     app: AppHandle,
-    auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
+    auth_tasks: Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
     session: Arc<Mutex<Option<Vault>>>,
     task_id: Uuid,
     result: Result<aipass_vault::VaultCreation, String>,
@@ -1213,8 +1237,9 @@ fn finish_vault_create_task(
         },
     };
     let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
+    prune_auth_tasks(&auth_tasks);
     if let Ok(tasks) = auth_tasks.lock() {
-        if let Some(snapshot) = tasks.get(&task_id).cloned() {
+        if let Some(snapshot) = tasks.get(&task_id).map(|task| task.state.clone()) {
             emit_auth_task_event(&app, &auth_task_status_response(task_id, snapshot));
         }
     }
@@ -1222,7 +1247,7 @@ fn finish_vault_create_task(
 
 fn finish_vault_unlock_task(
     app: AppHandle,
-    auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
+    auth_tasks: Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
     session: Arc<Mutex<Option<Vault>>>,
     task_id: Uuid,
     result: Result<Vault, String>,
@@ -1249,8 +1274,9 @@ fn finish_vault_unlock_task(
         },
     };
     let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
+    prune_auth_tasks(&auth_tasks);
     if let Ok(tasks) = auth_tasks.lock() {
-        if let Some(snapshot) = tasks.get(&task_id).cloned() {
+        if let Some(snapshot) = tasks.get(&task_id).map(|task| task.state.clone()) {
             emit_auth_task_event(&app, &auth_task_status_response(task_id, snapshot));
         }
     }
@@ -1321,18 +1347,8 @@ fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
     let bytes = serde_json::to_vec_pretty(value).map_err(|err| err.to_string())?;
-    let temp_path = path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("json")
-    ));
-    fs::write(&temp_path, bytes).map_err(|err| err.to_string())?;
-    fs::rename(&temp_path, path).map_err(|err| err.to_string())
+    atomic_write_bytes(path, &bytes).map_err(|err| err.to_string())
 }
 
 fn vault_dir(app: &AppHandle) -> Result<PathBuf, String> {

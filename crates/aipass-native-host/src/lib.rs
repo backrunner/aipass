@@ -3,6 +3,7 @@ mod manifest;
 mod preview;
 mod protocol;
 mod request;
+mod settings;
 
 pub use config::NativeHostConfig;
 pub use manifest::native_manifest;
@@ -226,5 +227,37 @@ mod tests {
         )
         .unwrap();
         assert!(vault.search("Gateway").unwrap().is_empty());
+    }
+
+    #[test]
+    fn ignored_origins_are_persisted_in_native_host_storage() {
+        let dir = tempdir().unwrap();
+        let config = NativeHostConfig {
+            vault_dir: dir.path().join("vault"),
+            master_password: None,
+            allowed_extension_ids: vec![],
+        };
+
+        let ignored = handle_request_with_config(
+            NativeRequest::IgnoreOrigin {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://console.anthropic.com".to_string(),
+            },
+            &config,
+        );
+        assert!(ignored.ok, "{ignored:?}");
+        assert_eq!(ignored.data["ignoredOrigins"].as_array().unwrap().len(), 1);
+
+        let check = handle_request_with_config(
+            NativeRequest::IsOriginIgnored {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://console.anthropic.com".to_string(),
+            },
+            &config,
+        );
+        assert!(check.ok, "{check:?}");
+        assert_eq!(check.data["ignored"], true);
     }
 }

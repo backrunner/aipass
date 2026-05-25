@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+aipass-storage = { path = "../aipass-storage" }
 anyhow.workspace = true
 quick-xml.workspace = true
 reqwest.workspace = true
