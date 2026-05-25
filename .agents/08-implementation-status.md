@@ -56,7 +56,7 @@
 - Provider probe: `probe <entry-id>`.
 - Encrypted backup/migration: `vault export`, `vault import`.
 - Runtime usage: `env`, `exec`.
-- Tool integration: `configure codex`, `configure claude-code`, `configure gemini-cli`, `rollback`.
+- Tool integration: `configure codex`, `configure claude-code`, `configure gemini-cli`, `configure opencode`, `rollback`.
 - Sync: `sync --dir`, `sync --webdav-url`.
 - Native host: `native-host manifest`, `native-host install`.
 - Shell completions: `completions`.

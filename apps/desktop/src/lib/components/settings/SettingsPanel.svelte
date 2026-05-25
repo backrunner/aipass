@@ -273,12 +273,15 @@
           <Tabs.Content value="tools" class="tab-panel">
             <Card title="Integrations">
               <div class="form-rows">
-                <p class="hint">Configure CLIs and browser extensions to use this vault. Coming soon.</p>
+                <p class="hint">
+                  Configure supported CLIs with <code>aipass configure</code>. Desktop actions for tool setup are not wired yet.
+                </p>
                 <div class="tool-list">
                   {#each [
                     { name: "Codex", desc: "Codex CLI config" },
                     { name: "Claude Code", desc: "Claude Code config" },
                     { name: "Gemini CLI", desc: "Gemini CLI config" },
+                    { name: "OpenCode", desc: "OpenCode provider config" },
                     { name: "Chrome extension", desc: "Browser autofill" }
                   ] as tool}
                     <div class="tool-row">
@@ -287,7 +290,7 @@
                         <strong>{tool.name}</strong>
                         <span class="text-tertiary">{tool.desc}</span>
                       </div>
-                      <Badge>Not configured</Badge>
+                      <Badge>CLI available</Badge>
                     </div>
                   {/each}
                 </div>
