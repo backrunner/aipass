@@ -937,7 +937,12 @@
 {#if showSettings && !status.locked}
   <SettingsPanel
     {syncState}
-    entries={entries.map((entry) => ({ id: entry.id, title: entry.title }))}
+    entries={entries.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      interfaceType: entry.interfaceType,
+      authScheme: entry.authScheme
+    }))}
     entriesCount={entries.length}
     selectedEntryId={selected?.id ?? ""}
     initialTab={settingsInitialTab}

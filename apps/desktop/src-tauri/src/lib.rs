@@ -1,7 +1,7 @@
 use aipass_config_writers::{
     apply_plan_encrypted, plan_claude_code, plan_claude_code_plaintext, plan_codex,
-    plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
-    ApplyResult, ConfigPlan, ToolEntry,
+    plan_codex_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode,
+    plan_opencode_plaintext, ApplyResult, ConfigPlan, ToolEntry,
 };
 use aipass_crypto::SecretString;
 use aipass_provider_registry::{
@@ -713,7 +713,7 @@ fn build_tool_config_plan(
             plan_codex(&home, &tool_entry).map_err(|err| err.to_string())?
         }
         (ToolConfigTool::Codex, ToolConfigMode::Plaintext) => {
-            return Err("codex plaintext mode is not supported; use helper mode".to_string());
+            plan_codex_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
         }
         (ToolConfigTool::ClaudeCode, ToolConfigMode::Helper) => {
             plan_claude_code(&home, &tool_entry).map_err(|err| err.to_string())?

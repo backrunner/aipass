@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { Dialog, Tabs } from "bits-ui";
   import { Check, Download, Eye, RotateCw, Terminal, Trash2, Upload, Wifi, X } from "lucide-svelte";
 
@@ -69,6 +70,8 @@
   type ToolEntryOption = {
     id: string;
     title: string;
+    interfaceType: InterfaceType;
+    authScheme: AuthScheme;
   };
 
   export let entries: ToolEntryOption[] = [];
@@ -94,47 +97,38 @@
     {
       id: "codex",
       name: "Codex",
-      desc: "Write ~/.codex/config.toml",
-      note: "Uses native auth.command helper. No plaintext auth.json write.",
-      modes: [{ value: "helper", label: "Helper" }]
+      desc: "Write ~/.codex/config.toml and ~/.codex/auth.json",
+      note: "Live config switch for OpenAI-compatible bearer-token providers.",
+      modes: [{ value: "plaintext", label: "Live files" }]
     },
     {
       id: "claude-code",
       name: "Claude Code",
       desc: "Write ~/.claude/settings.json",
-      note: "Helper uses apiKeyHelper. Plaintext writes ANTHROPIC_API_KEY into settings.json.",
-      modes: [
-        { value: "helper", label: "Helper" },
-        { value: "plaintext", label: "Plaintext" }
-      ]
+      note: "Live config switch for Anthropic-compatible x-api-key providers.",
+      modes: [{ value: "plaintext", label: "settings.json" }]
     },
     {
       id: "gemini-cli",
       name: "Gemini CLI",
-      desc: "Write Gemini helper or ~/.gemini/.env",
-      note: "Helper keeps secrets out of Gemini config. Plaintext writes the real .env file.",
-      modes: [
-        { value: "helper", label: "Helper" },
-        { value: "plaintext", label: ".env" }
-      ]
+      desc: "Write ~/.gemini/.env",
+      note: "Live config switch for Gemini-native providers with Google API keys.",
+      modes: [{ value: "plaintext", label: ".env" }]
     },
     {
       id: "opencode",
       name: "OpenCode",
       desc: "Write ~/.config/opencode/opencode.json",
-      note: "Helper uses {env:VAR} references. Plaintext stores the API key in opencode.json.",
-      modes: [
-        { value: "helper", label: "Helper" },
-        { value: "plaintext", label: "Plaintext" }
-      ]
+      note: "Live config switch using the matching AI SDK adapter for the selected provider.",
+      modes: [{ value: "plaintext", label: "opencode.json" }]
     }
   ];
 
   let toolState: Record<ToolConfigTarget, ToolState> = {
-    codex: { entryId: "", mode: "helper", busy: false, error: "" },
-    "claude-code": { entryId: "", mode: "helper", busy: false, error: "" },
-    "gemini-cli": { entryId: "", mode: "helper", busy: false, error: "" },
-    opencode: { entryId: "", mode: "helper", busy: false, error: "" }
+    codex: { entryId: "", mode: "plaintext", busy: false, error: "" },
+    "claude-code": { entryId: "", mode: "plaintext", busy: false, error: "" },
+    "gemini-cli": { entryId: "", mode: "plaintext", busy: false, error: "" },
+    opencode: { entryId: "", mode: "plaintext", busy: false, error: "" }
   };
 
   function conflictTitle(conflict: SyncConflict): string {
@@ -151,25 +145,48 @@
   $: syncReady = syncMode === "local" ? syncFolder.trim().length > 0 : webdavUrl.trim().length > 0;
   $: syncToolState(entries, selectedEntryId);
 
+  function supportsTool(tool: ToolConfigTarget, entry: ToolEntryOption): boolean {
+    switch (tool) {
+      case "codex":
+        return entry.interfaceType === "openai_compatible" && entry.authScheme === "bearer";
+      case "claude-code":
+        return entry.interfaceType === "anthropic_messages" && entry.authScheme === "x_api_key";
+      case "gemini-cli":
+        return entry.interfaceType === "gemini" && entry.authScheme === "google_api_key";
+      case "opencode":
+        return true;
+    }
+  }
+
+  function compatibleEntriesForTool(allEntries: ToolEntryOption[], tool: ToolConfigTarget): ToolEntryOption[] {
+    return allEntries.filter((entry) => supportsTool(tool, entry));
+  }
+
+  function compatibleEntriesFor(tool: ToolConfigTarget): ToolEntryOption[] {
+    return compatibleEntriesForTool(entries, tool);
+  }
+
   function syncToolState(entries: ToolEntryOption[], selectedId: string) {
-    const fallbackId = selectedId || entries[0]?.id || "";
     for (const tool of toolDefinitions) {
+      const options = compatibleEntriesForTool(entries, tool.id);
       const current = toolState[tool.id];
+      const fallbackId = options.some((entry) => entry.id === selectedId) ? selectedId : options[0]?.id || "";
       const nextEntryId = entries.some((entry) => entry.id === current.entryId) ? current.entryId : fallbackId;
       const nextMode = tool.modes.some((mode) => mode.value === current.mode) ? current.mode : tool.modes[0].value;
-      if (nextEntryId !== current.entryId || nextMode !== current.mode) {
+      const compatibleEntryId = options.some((entry) => entry.id === nextEntryId) ? nextEntryId : fallbackId;
+      if (compatibleEntryId !== current.entryId || nextMode !== current.mode) {
         toolState = {
           ...toolState,
           [tool.id]: {
             ...current,
-            entryId: nextEntryId,
+            entryId: compatibleEntryId,
             mode: nextMode,
             preview:
-              current.preview?.entryId === nextEntryId && current.preview?.mode === nextMode
+              current.preview?.entryId === compatibleEntryId && current.preview?.mode === nextMode
                 ? current.preview
                 : undefined,
             applied:
-              current.applied?.entryId === nextEntryId && current.applied?.mode === nextMode
+              current.applied?.entryId === compatibleEntryId && current.applied?.mode === nextMode
                 ? current.applied
                 : undefined
           }
@@ -505,6 +522,7 @@
                 <div class="tool-list">
                   {#each toolDefinitions as tool}
                     {@const state = toolState[tool.id]}
+                    {@const options = compatibleEntriesFor(tool.id)}
                     <div class="tool-row tool-config-row">
                       <div class="tool-icon"><Terminal size={14} /></div>
                       <div class="tool-content">
@@ -520,9 +538,9 @@
                             <select
                               value={state.entryId}
                               on:change={(event) => setToolEntry(tool.id, (event.currentTarget as HTMLSelectElement).value)}
-                              disabled={entries.length === 0 || state.busy}
+                              disabled={options.length === 0 || state.busy}
                             >
-                              {#each entries as entry}
+                              {#each options as entry}
                                 <option value={entry.id}>{entry.title}</option>
                               {/each}
                             </select>
@@ -542,12 +560,15 @@
                           </div>
                         </div>
                         <p class="hint">{tool.note}</p>
+                        {#if options.length === 0}
+                          <Banner tone="warning">No compatible providers in this vault for {tool.name}.</Banner>
+                        {/if}
                         <div class="tool-actions">
                           <Button
                             variant="secondary"
                             size="sm"
                             on:click={() => previewToolConfig(tool)}
-                            disabled={!state.entryId || state.busy}
+                            disabled={!state.entryId || state.busy || options.length === 0}
                           >
                             <Eye size={13} /> Preview
                           </Button>
@@ -555,7 +576,7 @@
                             variant="primary"
                             size="sm"
                             on:click={() => applyToolConfig(tool)}
-                            disabled={!state.preview || state.busy}
+                            disabled={!state.preview || state.busy || options.length === 0}
                           >
                             <Check size={13} /> Apply
                           </Button>
