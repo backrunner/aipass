@@ -46,7 +46,9 @@ pub struct KdfParams {
 
 impl KdfParams {
     pub fn interactive() -> Self {
-        Self::with_random_salt(256 * 1024, 4, 1)
+        // Keep interactive vault operations responsive on desktop hardware while
+        // staying comfortably above common Argon2id baseline recommendations.
+        Self::with_random_salt(64 * 1024, 3, 1)
     }
 
     pub fn with_random_salt(memory_kib: u32, iterations: u32, parallelism: u32) -> Self {
