@@ -8,17 +8,19 @@
   export let autocomplete: HTMLInputAttributes["autocomplete"] = "current-password";
   export let placeholder = "";
   export let withToggle = true;
+  export let disabled = false;
 </script>
 
 <label class="field">
   <span class="label">{label}</span>
   <div class="control" class:no-toggle={!withToggle}>
-    <input bind:value type={show ? "text" : "password"} {autocomplete} {placeholder} />
+    <input bind:value type={show ? "text" : "password"} {autocomplete} {placeholder} {disabled} />
     {#if withToggle}
       <button
         type="button"
         class="toggle"
         aria-label={show ? "Hide password" : "Show password"}
+        {disabled}
         on:click={() => (show = !show)}
       >
         {#if show}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
@@ -70,6 +72,11 @@
       &::placeholder {
         color: var(--text-tertiary);
       }
+
+      &:disabled {
+        cursor: not-allowed;
+        opacity: 0.65;
+      }
     }
   }
 
@@ -84,6 +91,11 @@
 
     &:hover {
       color: var(--text);
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
     }
   }
 </style>

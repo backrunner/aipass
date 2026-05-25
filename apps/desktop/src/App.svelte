@@ -8,7 +8,7 @@
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
   import RecoveryKitModal from "./lib/components/auth/RecoveryKitModal.svelte";
@@ -57,6 +57,7 @@
   let showCreatePassword = false;
   let showUnlockPassword = false;
   let authMode: AuthMode = "create";
+  let authBusy: "" | AuthMode = "";
   let pendingRecoveryKey = "";
   let recoveryKeyInput = "";
   let recoveryPassword = "";
@@ -169,11 +170,14 @@
   }
 
   async function createVault() {
+    if (authBusy) return;
     error = "";
     if (createPassword !== createPasswordConfirm) {
       error = "Passwords do not match";
       return;
     }
+    authBusy = "create";
+    await tick();
     try {
       const response = await invokeTauri<CreateVaultResponse>("vault_create", {
         request: { password: createPassword }
@@ -186,11 +190,16 @@
       resetAutoLock();
     } catch (err) {
       error = String(err);
+    } finally {
+      authBusy = "";
     }
   }
 
   async function unlockVault() {
+    if (authBusy) return;
     error = "";
+    authBusy = "unlock";
+    await tick();
     try {
       status = await invokeTauri<VaultStatus>("vault_unlock", { request: { password } });
       password = "";
@@ -200,10 +209,13 @@
       resetAutoLock();
     } catch {
       error = "Unlock failed";
+    } finally {
+      authBusy = "";
     }
   }
 
   async function recoverVault() {
+    if (authBusy) return;
     error = "";
     if (!recoveryKeyInput.trim()) {
       error = "Recovery key required";
@@ -213,6 +225,8 @@
       error = "Passwords do not match";
       return;
     }
+    authBusy = "recover";
+    await tick();
     try {
       const response = await invokeTauri<CreateVaultResponse>("vault_recover", {
         request: {
@@ -228,6 +242,8 @@
       resetAutoLock();
     } catch (err) {
       error = String(err);
+    } finally {
+      authBusy = "";
     }
   }
 
@@ -848,6 +864,7 @@
     <AuthScreen
       {status}
       {authMode}
+      busyMode={authBusy}
       {error}
       bind:password
       bind:createPassword

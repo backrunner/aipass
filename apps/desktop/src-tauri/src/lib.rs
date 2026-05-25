@@ -249,14 +249,17 @@ fn vault_status(app: AppHandle, state: State<'_, AppState>) -> Result<VaultStatu
 }
 
 #[tauri::command]
-fn vault_create(
+async fn vault_create(
     app: AppHandle,
     state: State<'_, AppState>,
     request: CreateVaultRequest,
 ) -> Result<CreateVaultResponse, String> {
     let root = vault_dir(&app)?;
-    let creation = Vault::create(&root, &SecretString::new(request.password))
-        .map_err(|err| err.to_string())?;
+    let password = request.password;
+    let creation = run_blocking(move || {
+        Vault::create(&root, &SecretString::new(password)).map_err(|err| err.to_string())
+    })
+    .await?;
     let recovery_kit = creation.recovery_kit;
     *state
         .session
@@ -270,14 +273,17 @@ fn vault_create(
 }
 
 #[tauri::command]
-fn vault_unlock(
+async fn vault_unlock(
     app: AppHandle,
     state: State<'_, AppState>,
     request: UnlockVaultRequest,
 ) -> Result<VaultStatus, String> {
     let root = vault_dir(&app)?;
-    let vault =
-        Vault::open(&root, &SecretString::new(request.password)).map_err(|err| err.to_string())?;
+    let password = request.password;
+    let vault = run_blocking(move || {
+        Vault::open(&root, &SecretString::new(password)).map_err(|err| err.to_string())
+    })
+    .await?;
     *state
         .session
         .lock()
@@ -289,18 +295,23 @@ fn vault_unlock(
 }
 
 #[tauri::command]
-fn vault_recover(
+async fn vault_recover(
     app: AppHandle,
     state: State<'_, AppState>,
     request: RecoveryVaultRequest,
 ) -> Result<CreateVaultResponse, String> {
     let root = vault_dir(&app)?;
-    let creation = Vault::recover_master_password(
-        &root,
-        &SecretString::new(request.recovery_key),
-        &SecretString::new(request.new_password),
-    )
-    .map_err(|err| err.to_string())?;
+    let recovery_key = request.recovery_key;
+    let new_password = request.new_password;
+    let creation = run_blocking(move || {
+        Vault::recover_master_password(
+            &root,
+            &SecretString::new(recovery_key),
+            &SecretString::new(new_password),
+        )
+        .map_err(|err| err.to_string())
+    })
+    .await?;
     let recovery_kit = creation.recovery_kit;
     *state
         .session
@@ -326,25 +337,38 @@ fn vault_lock(state: State<'_, AppState>) -> Result<VaultStatus, String> {
 }
 
 #[tauri::command]
-fn vault_change_password(
+async fn vault_change_password(
     state: State<'_, AppState>,
     request: ChangePasswordRequest,
 ) -> Result<(), String> {
-    with_vault_mut(state, |vault| {
-        vault
-            .change_master_password(&SecretString::new(request.new_password))
-            .map_err(|err| err.to_string())
+    let vault = take_session_vault(&state)?;
+    let new_password = request.new_password;
+    let (vault, result) = run_blocking(move || {
+        let mut vault = vault;
+        let result = vault
+            .change_master_password(&SecretString::new(new_password))
+            .map_err(|err| err.to_string());
+        Ok((vault, result))
     })
+    .await?;
+    put_session_vault(&state, vault)?;
+    result
 }
 
 #[tauri::command]
-fn vault_rotate(state: State<'_, AppState>) -> Result<(), String> {
-    with_vault_mut(state, |vault| {
-        vault
+async fn vault_rotate(state: State<'_, AppState>) -> Result<(), String> {
+    let vault = take_session_vault(&state)?;
+    let (vault, result) = run_blocking(move || {
+        let mut vault = vault;
+        let result = vault
             .advance_epoch_and_rewrap("desktop.rotate")
             .map(|_| ())
-            .map_err(|err| err.to_string())
+            .map_err(|err| err.to_string());
+        Ok((vault, result))
     })
+    .await?;
+    put_session_vault(&state, vault)?;
+    result
 }
 
 #[tauri::command]
@@ -967,6 +991,31 @@ fn conflict_root(app: &AppHandle, request: &SyncConflictActionRequest) -> Result
             .clone()
             .ok_or_else(|| "sync conflict scope requires a local sync dir".to_string()),
     }
+}
+
+async fn run_blocking<T: Send + 'static>(
+    task: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn take_session_vault(state: &State<'_, AppState>) -> Result<Vault, String> {
+    state
+        .session
+        .lock()
+        .map_err(|_| "session lock poisoned".to_string())?
+        .take()
+        .ok_or_else(|| "vault is locked".to_string())
+}
+
+fn put_session_vault(state: &State<'_, AppState>, vault: Vault) -> Result<(), String> {
+    *state
+        .session
+        .lock()
+        .map_err(|_| "session lock poisoned".to_string())? = Some(vault);
+    Ok(())
 }
 
 fn with_vault<T>(

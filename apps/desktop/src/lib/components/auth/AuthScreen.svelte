@@ -8,6 +8,7 @@
 
   export let status: VaultStatus;
   export let authMode: AuthMode;
+  export let busyMode: "" | AuthMode = "";
   export let error = "";
   export let password = "";
   export let createPassword = "";
@@ -28,6 +29,10 @@
   $: showCreate = !status.exists;
   $: showRecover = status.exists && authMode === "recover";
   $: showUnlock = status.exists && !showRecover;
+  $: busy = busyMode !== "";
+  $: createBusy = busyMode === "create";
+  $: unlockBusy = busyMode === "unlock";
+  $: recoverBusy = busyMode === "recover";
 
   $: createMatches = createPassword.length > 0 && createPassword === createPasswordConfirm;
   $: createMismatch = createPasswordConfirm.length > 0 && createPassword !== createPasswordConfirm;
@@ -58,6 +63,7 @@
             autocomplete="new-password"
             bind:value={createPassword}
             bind:show={showCreatePassword}
+            disabled={busy}
           />
 
           <PasswordStrengthMeter strength={createPasswordStrength} />
@@ -68,6 +74,7 @@
             withToggle={false}
             bind:value={createPasswordConfirm}
             bind:show={showCreatePassword}
+            disabled={busy}
           />
 
           {#if createMismatch}
@@ -76,7 +83,9 @@
             <span class="inline-ok">Passwords match.</span>
           {/if}
 
-          <Button variant="primary" type="submit" block disabled={!createReady}>Create encrypted vault</Button>
+          <Button variant="primary" type="submit" block loading={createBusy} disabled={!createReady || busy}>
+            {createBusy ? "Creating vault..." : "Create encrypted vault"}
+          </Button>
         </form>
       {:else if showRecover}
         <form class="form" on:submit|preventDefault={() => onRecover()}>
@@ -95,6 +104,7 @@
               spellcheck="false"
               placeholder="AIPASS-..."
               class="text-input mono"
+              disabled={busy}
             />
           </label>
           <PasswordField
@@ -102,6 +112,7 @@
             autocomplete="new-password"
             bind:value={recoveryPassword}
             bind:show={showRecoveryPassword}
+            disabled={busy}
           />
 
           <PasswordStrengthMeter strength={recoveryPasswordStrength} />
@@ -112,6 +123,7 @@
             withToggle={false}
             bind:value={recoveryPasswordConfirm}
             bind:show={showRecoveryPassword}
+            disabled={busy}
           />
 
           {#if recoverMismatch}
@@ -122,10 +134,14 @@
 
           <div class="meta">
             <span></span>
-            <button type="button" class="link" on:click={() => onModeChange("unlock")}>Back to unlock</button>
+            <button type="button" class="link" disabled={busy} on:click={() => onModeChange("unlock")}>
+              Back to unlock
+            </button>
           </div>
 
-          <Button variant="primary" type="submit" block disabled={!recoverReady}>Recover vault</Button>
+          <Button variant="primary" type="submit" block loading={recoverBusy} disabled={!recoverReady || busy}>
+            {recoverBusy ? "Recovering..." : "Recover vault"}
+          </Button>
         </form>
       {:else if showUnlock}
         <form class="form" on:submit|preventDefault={() => onUnlock()}>
@@ -139,17 +155,33 @@
             autocomplete="current-password"
             bind:value={password}
             bind:show={showUnlockPassword}
+            disabled={busy}
           />
 
           <div class="meta">
             <span></span>
-            <button type="button" class="link" on:click={() => onModeChange("recover")}>Forgot password?</button>
+            <button type="button" class="link" disabled={busy} on:click={() => onModeChange("recover")}>
+              Forgot password?
+            </button>
           </div>
 
-          <Button variant="primary" type="submit" block>Unlock</Button>
+          <Button variant="primary" type="submit" block loading={unlockBusy} disabled={busy || password.length === 0}>
+            {unlockBusy ? "Unlocking..." : "Unlock"}
+          </Button>
         </form>
       {/if}
 
+      {#if busy}
+        <Banner tone="info">
+          {#if createBusy}
+            Creating encrypted vault...
+          {:else if unlockBusy}
+            Unlocking vault...
+          {:else}
+            Recovering vault...
+          {/if}
+        </Banner>
+      {/if}
       {#if error}<Banner tone="danger">{error}</Banner>{/if}
     </div>
   </div>
@@ -241,6 +273,11 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 3px var(--accent-ring);
     }
+
+    &:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
   }
 
   .meta {
@@ -258,6 +295,11 @@
     background: transparent;
     border: 0;
     padding: 0;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
     cursor: pointer;
 
     &:hover {

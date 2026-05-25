@@ -3,6 +3,7 @@
   export let size: "sm" | "md" = "md";
   export let type: "button" | "submit" | "reset" = "button";
   export let disabled = false;
+  export let loading = false;
   export let block = false;
   let className = "";
   export { className as class };
@@ -10,10 +11,14 @@
 
 <button
   {type}
-  {disabled}
+  disabled={disabled || loading}
+  aria-busy={loading}
   class={`btn btn-${variant} size-${size} ${block ? "block" : ""} ${className}`}
   on:click
 >
+  {#if loading}
+    <span class="spinner" aria-hidden="true"></span>
+  {/if}
   <slot />
 </button>
 
@@ -43,6 +48,21 @@
     &:focus-visible {
       outline: 2px solid var(--accent-ring);
       outline-offset: 1px;
+    }
+  }
+
+  .spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 999px;
+    animation: spin 0.7s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
     }
   }
 
