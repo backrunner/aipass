@@ -17,6 +17,11 @@ export type VaultStatus = { exists: boolean; locked: boolean };
 
 export type RecoveryKit = { recoveryKey: string };
 
+export type AppPreferences = {
+  autoLockMinutes: number;
+  clipboardClearSeconds: number;
+};
+
 export type VaultAuthTaskStartResponse = {
   taskId: string;
 };

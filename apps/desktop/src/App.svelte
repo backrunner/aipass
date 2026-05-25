@@ -20,6 +20,7 @@
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
   import type {
+    AppPreferences,
     AuthMode,
     DeviceRecord,
     Draft,
@@ -184,7 +185,7 @@
           settleVaultAuthTask(payload);
         });
       }
-      loadPreferences();
+      await loadPreferences();
       await refreshStatus();
       if (!status.locked && status.exists) await loadEntries();
       resetAutoLock();
@@ -870,28 +871,31 @@
     }, clipboardClearSeconds * 1000);
   }
 
-  function loadPreferences() {
+  async function loadPreferences() {
     try {
-      const raw = localStorage.getItem("aipass.preferences");
-      if (!raw) return;
-      const prefs = JSON.parse(raw) as { autoLockMinutes?: number; clipboardClearSeconds?: number };
+      const prefs = await invokeTauri<AppPreferences>("preferences_load");
       autoLockMinutes = clampPreference(prefs.autoLockMinutes, 0, 240, autoLockMinutes);
       clipboardClearSeconds = clampPreference(prefs.clipboardClearSeconds, 0, 600, clipboardClearSeconds);
-    } catch {
-      // Ignore malformed local preferences.
+    } catch (err) {
+      error = String(err);
     }
   }
 
-  function savePreferences() {
+  async function savePreferences() {
     autoLockMinutes = clampPreference(autoLockMinutes, 0, 240, 15);
     clipboardClearSeconds = clampPreference(clipboardClearSeconds, 0, 600, 45);
-    localStorage.setItem(
-      "aipass.preferences",
-      JSON.stringify({
-        autoLockMinutes,
-        clipboardClearSeconds
-      })
-    );
+    try {
+      const saved = await invokeTauri<AppPreferences>("preferences_save", {
+        request: {
+          autoLockMinutes,
+          clipboardClearSeconds
+        }
+      });
+      autoLockMinutes = saved.autoLockMinutes;
+      clipboardClearSeconds = saved.clipboardClearSeconds;
+    } catch (err) {
+      error = String(err);
+    }
     resetAutoLock();
   }
 

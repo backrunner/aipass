@@ -37,6 +37,29 @@ struct VaultStatus {
     locked: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppPreferences {
+    auto_lock_minutes: u16,
+    clipboard_clear_seconds: u16,
+}
+
+impl Default for AppPreferences {
+    fn default() -> Self {
+        Self {
+            auto_lock_minutes: 15,
+            clipboard_clear_seconds: 45,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavePreferencesRequest {
+    auto_lock_minutes: u16,
+    clipboard_clear_seconds: u16,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateVaultRequest {
@@ -289,6 +312,24 @@ fn vault_status(app: AppHandle, state: State<'_, AppState>) -> Result<VaultStatu
         exists: root.join("manifest.aipmanifest").exists(),
         locked,
     })
+}
+
+#[tauri::command]
+fn preferences_load(app: AppHandle) -> Result<AppPreferences, String> {
+    load_preferences(&app)
+}
+
+#[tauri::command]
+fn preferences_save(
+    app: AppHandle,
+    request: SavePreferencesRequest,
+) -> Result<AppPreferences, String> {
+    let preferences = AppPreferences {
+        auto_lock_minutes: request.auto_lock_minutes.min(240),
+        clipboard_clear_seconds: request.clipboard_clear_seconds.min(600),
+    };
+    save_preferences(&app, &preferences)?;
+    Ok(preferences)
 }
 
 #[tauri::command]
@@ -1260,6 +1301,40 @@ fn with_vault_mut<T>(
     f(vault)
 }
 
+fn load_preferences(app: &AppHandle) -> Result<AppPreferences, String> {
+    let path = preferences_path(app)?;
+    if !path.exists() {
+        return Ok(AppPreferences::default());
+    }
+    let bytes = fs::read(&path).map_err(|err| err.to_string())?;
+    serde_json::from_slice(&bytes).or_else(|_| Ok(AppPreferences::default()))
+}
+
+fn save_preferences(app: &AppHandle, preferences: &AppPreferences) -> Result<(), String> {
+    let path = preferences_path(app)?;
+    write_json_atomic(&path, preferences)
+}
+
+fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
+    Ok(dir.join("preferences.json"))
+}
+
+fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(value).map_err(|err| err.to_string())?;
+    let temp_path = path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("json")
+    ));
+    fs::write(&temp_path, bytes).map_err(|err| err.to_string())?;
+    fs::rename(&temp_path, path).map_err(|err| err.to_string())
+}
+
 fn vault_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
         .path()
@@ -1273,6 +1348,8 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             vault_status,
+            preferences_load,
+            preferences_save,
             vault_create,
             vault_unlock,
             vault_recover,
