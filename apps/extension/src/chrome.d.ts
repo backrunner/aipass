@@ -22,10 +22,4 @@ declare namespace chrome {
     function query(queryInfo: { active: boolean; currentWindow: boolean }, callback: (tabs: Array<{ id?: number; url?: string }>) => void): void;
     function sendMessage(tabId: number, message: unknown, callback?: (response: unknown) => void): void;
   }
-  namespace storage {
-    const local: {
-      get(keys: string[] | string | Record<string, unknown> | null, callback: (items: Record<string, unknown>) => void): void;
-      set(items: Record<string, unknown>, callback?: () => void): void;
-    };
-  }
 }

@@ -123,6 +123,22 @@ export function lookupContext(url: string, origin: string): Promise<NativeRespon
   });
 }
 
+export function isOriginIgnored(origin: string): Promise<NativeResponse<{ ignored: boolean }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "settings.isOriginIgnored",
+    origin
+  });
+}
+
+export function ignoreOrigin(origin: string): Promise<NativeResponse<{ ignoredOrigins: string[] }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "settings.ignoreOrigin",
+    origin
+  });
+}
+
 export function fillSecret(entryId: string, grantId: string): Promise<NativeResponse<{ secret: string }>> {
   return nativeRequest({
     id: crypto.randomUUID(),

@@ -10,7 +10,7 @@
     "service_worker": "serviceWorker.js",
     "type": "module"
   },
-  "permissions": ["activeTab", "nativeMessaging", "storage"],
+  "permissions": ["activeTab", "nativeMessaging"],
   "host_permissions": [
     "https://*/*",
     "http://localhost/*",

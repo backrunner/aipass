@@ -118,9 +118,9 @@ async function sendDraftIfAllowed() {
 
 function isIgnoredOrigin(origin: string): Promise<boolean> {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ ignoredOrigins: [] }, (items) => {
-      const ignored = Array.isArray(items.ignoredOrigins) ? items.ignoredOrigins : [];
-      resolve(ignored.includes(origin));
+    chrome.runtime.sendMessage({ type: "aipass.isOriginIgnored", origin }, (response) => {
+      const typed = response as { ok?: boolean; data?: { ignored?: boolean } } | undefined;
+      resolve(Boolean(typed?.ok && typed.data?.ignored));
     });
   });
 }

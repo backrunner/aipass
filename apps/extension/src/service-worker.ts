@@ -1,5 +1,7 @@
 import {
   fillSecret,
+  ignoreOrigin,
+  isOriginIgnored,
   lookupContext,
   pingNativeHost,
   previewDetectedSecret,
@@ -29,6 +31,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.lookup" && typed.url && typed.origin) {
     lookupContext(typed.url, typed.origin).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.isOriginIgnored" && typed.origin) {
+    isOriginIgnored(typed.origin).then(sendResponse);
     return true;
   }
 
@@ -94,15 +101,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.ignoreOrigin" && typed.origin) {
-    chrome.storage.local.get({ ignoredOrigins: [] }, (items) => {
-      const ignored = Array.isArray(items.ignoredOrigins) ? items.ignoredOrigins : [];
-      const next = Array.from(new Set([...ignored, typed.origin]));
-      chrome.storage.local.set({ ignoredOrigins: next }, () => {
-        if (pendingDraft?.origin === typed.origin) {
-          clearPendingDraft();
-        }
-        sendResponse({ ok: true, ignoredOrigins: next });
-      });
+    ignoreOrigin(typed.origin).then((response) => {
+      if (response.ok && pendingDraft?.origin === typed.origin) {
+        clearPendingDraft();
+      }
+      sendResponse(response);
     });
     return true;
   }
