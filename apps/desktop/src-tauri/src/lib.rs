@@ -16,16 +16,18 @@ use aipass_vault::{
     RecoveryKit, Vault,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 #[derive(Default)]
 struct AppState {
-    session: Mutex<Option<Vault>>,
+    session: Arc<Mutex<Option<Vault>>>,
+    auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -43,10 +45,51 @@ struct CreateVaultRequest {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CreateVaultResponse {
-    exists: bool,
-    locked: bool,
-    recovery_kit: RecoveryKit,
+struct VaultAuthTaskStartResponse {
+    task_id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultAuthTaskStatusRequest {
+    task_id: Uuid,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VaultAuthTaskPhase {
+    Pending,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Debug)]
+enum VaultAuthTaskState {
+    Pending {
+        message: String,
+    },
+    Succeeded {
+        message: String,
+        exists: bool,
+        locked: bool,
+        recovery_kit: Option<RecoveryKit>,
+    },
+    Failed {
+        message: String,
+        error: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultAuthTaskStatusResponse {
+    task_id: Uuid,
+    phase: VaultAuthTaskPhase,
+    message: String,
+    exists: Option<bool>,
+    locked: Option<bool>,
+    recovery_kit: Option<RecoveryKit>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -253,23 +296,27 @@ async fn vault_create(
     app: AppHandle,
     state: State<'_, AppState>,
     request: CreateVaultRequest,
-) -> Result<CreateVaultResponse, String> {
+) -> Result<VaultAuthTaskStartResponse, String> {
     let root = vault_dir(&app)?;
     let password = request.password;
-    let creation = run_blocking(move || {
-        Vault::create(&root, &SecretString::new(password)).map_err(|err| err.to_string())
-    })
-    .await?;
-    let recovery_kit = creation.recovery_kit;
-    *state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())? = Some(creation.vault);
-    Ok(CreateVaultResponse {
-        exists: true,
-        locked: false,
-        recovery_kit,
-    })
+    let task_id = Uuid::new_v4();
+    let session = state.session.clone();
+    let auth_tasks = state.auth_tasks.clone();
+    set_auth_task_state(
+        &auth_tasks,
+        task_id,
+        VaultAuthTaskState::Pending {
+            message: "Creating encrypted vault".to_string(),
+        },
+    )?;
+    tauri::async_runtime::spawn(async move {
+        let result = run_blocking(move || {
+            Vault::create(&root, &SecretString::new(password)).map_err(|err| err.to_string())
+        })
+        .await;
+        finish_vault_create_task(auth_tasks, session, task_id, result);
+    });
+    Ok(VaultAuthTaskStartResponse { task_id })
 }
 
 #[tauri::command]
@@ -277,21 +324,27 @@ async fn vault_unlock(
     app: AppHandle,
     state: State<'_, AppState>,
     request: UnlockVaultRequest,
-) -> Result<VaultStatus, String> {
+) -> Result<VaultAuthTaskStartResponse, String> {
     let root = vault_dir(&app)?;
     let password = request.password;
-    let vault = run_blocking(move || {
-        Vault::open(&root, &SecretString::new(password)).map_err(|err| err.to_string())
-    })
-    .await?;
-    *state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())? = Some(vault);
-    Ok(VaultStatus {
-        exists: true,
-        locked: false,
-    })
+    let task_id = Uuid::new_v4();
+    let session = state.session.clone();
+    let auth_tasks = state.auth_tasks.clone();
+    set_auth_task_state(
+        &auth_tasks,
+        task_id,
+        VaultAuthTaskState::Pending {
+            message: "Unlocking vault".to_string(),
+        },
+    )?;
+    tauri::async_runtime::spawn(async move {
+        let result = run_blocking(move || {
+            Vault::open(&root, &SecretString::new(password)).map_err(|err| err.to_string())
+        })
+        .await;
+        finish_vault_unlock_task(auth_tasks, session, task_id, result);
+    });
+    Ok(VaultAuthTaskStartResponse { task_id })
 }
 
 #[tauri::command]
@@ -299,29 +352,59 @@ async fn vault_recover(
     app: AppHandle,
     state: State<'_, AppState>,
     request: RecoveryVaultRequest,
-) -> Result<CreateVaultResponse, String> {
+) -> Result<VaultAuthTaskStartResponse, String> {
     let root = vault_dir(&app)?;
     let recovery_key = request.recovery_key;
     let new_password = request.new_password;
-    let creation = run_blocking(move || {
-        Vault::recover_master_password(
-            &root,
-            &SecretString::new(recovery_key),
-            &SecretString::new(new_password),
-        )
-        .map_err(|err| err.to_string())
-    })
-    .await?;
-    let recovery_kit = creation.recovery_kit;
-    *state
-        .session
+    let task_id = Uuid::new_v4();
+    let session = state.session.clone();
+    let auth_tasks = state.auth_tasks.clone();
+    set_auth_task_state(
+        &auth_tasks,
+        task_id,
+        VaultAuthTaskState::Pending {
+            message: "Recovering vault".to_string(),
+        },
+    )?;
+    tauri::async_runtime::spawn(async move {
+        let result = run_blocking(move || {
+            Vault::recover_master_password(
+                &root,
+                &SecretString::new(recovery_key),
+                &SecretString::new(new_password),
+            )
+            .map_err(|err| err.to_string())
+        })
+        .await;
+        finish_vault_create_task(auth_tasks, session, task_id, result);
+    });
+    Ok(VaultAuthTaskStartResponse { task_id })
+}
+
+#[tauri::command]
+fn vault_auth_status(
+    state: State<'_, AppState>,
+    request: VaultAuthTaskStatusRequest,
+) -> Result<VaultAuthTaskStatusResponse, String> {
+    let task_id = request.task_id;
+    let tasks = state
+        .auth_tasks
         .lock()
-        .map_err(|_| "session lock poisoned".to_string())? = Some(creation.vault);
-    Ok(CreateVaultResponse {
-        exists: true,
-        locked: false,
-        recovery_kit,
-    })
+        .map_err(|_| "auth task lock poisoned".to_string())?;
+    let snapshot = tasks
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| format!("auth task {task_id} not found"))?;
+    drop(tasks);
+    let response = auth_task_status_response(task_id, snapshot.clone());
+    if !matches!(snapshot, VaultAuthTaskState::Pending { .. }) {
+        state
+            .auth_tasks
+            .lock()
+            .map_err(|_| "auth task lock poisoned".to_string())?
+            .remove(&task_id);
+    }
+    Ok(response)
 }
 
 #[tauri::command]
@@ -1001,6 +1084,118 @@ async fn run_blocking<T: Send + 'static>(
         .map_err(|err| err.to_string())?
 }
 
+fn set_auth_task_state(
+    auth_tasks: &Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
+    task_id: Uuid,
+    task: VaultAuthTaskState,
+) -> Result<(), String> {
+    auth_tasks
+        .lock()
+        .map_err(|_| "auth task lock poisoned".to_string())?
+        .insert(task_id, task);
+    Ok(())
+}
+
+fn auth_task_status_response(
+    task_id: Uuid,
+    snapshot: VaultAuthTaskState,
+) -> VaultAuthTaskStatusResponse {
+    match snapshot {
+        VaultAuthTaskState::Pending { message } => VaultAuthTaskStatusResponse {
+            task_id,
+            phase: VaultAuthTaskPhase::Pending,
+            message,
+            exists: None,
+            locked: None,
+            recovery_kit: None,
+            error: None,
+        },
+        VaultAuthTaskState::Succeeded {
+            message,
+            exists,
+            locked,
+            recovery_kit,
+        } => VaultAuthTaskStatusResponse {
+            task_id,
+            phase: VaultAuthTaskPhase::Succeeded,
+            message,
+            exists: Some(exists),
+            locked: Some(locked),
+            recovery_kit,
+            error: None,
+        },
+        VaultAuthTaskState::Failed { message, error } => VaultAuthTaskStatusResponse {
+            task_id,
+            phase: VaultAuthTaskPhase::Failed,
+            message,
+            exists: None,
+            locked: None,
+            recovery_kit: None,
+            error: Some(error),
+        },
+    }
+}
+
+fn finish_vault_create_task(
+    auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
+    session: Arc<Mutex<Option<Vault>>>,
+    task_id: Uuid,
+    result: Result<aipass_vault::VaultCreation, String>,
+) {
+    let next_state = match result {
+        Ok(creation) => match session.lock() {
+            Ok(mut guard) => {
+                *guard = Some(creation.vault);
+                VaultAuthTaskState::Succeeded {
+                    message: "Vault is ready".to_string(),
+                    exists: true,
+                    locked: false,
+                    recovery_kit: Some(creation.recovery_kit),
+                }
+            }
+            Err(_) => VaultAuthTaskState::Failed {
+                message: "Failed to update vault session".to_string(),
+                error: "session lock poisoned".to_string(),
+            },
+        },
+        Err(error) => VaultAuthTaskState::Failed {
+            message: "Vault operation failed".to_string(),
+            error,
+        },
+    };
+    let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
+}
+
+fn finish_vault_unlock_task(
+    auth_tasks: Arc<Mutex<HashMap<Uuid, VaultAuthTaskState>>>,
+    session: Arc<Mutex<Option<Vault>>>,
+    task_id: Uuid,
+    result: Result<Vault, String>,
+) {
+    let next_state = match result {
+        Ok(vault) => match session.lock() {
+            Ok(mut guard) => {
+                *guard = Some(vault);
+                VaultAuthTaskState::Succeeded {
+                    message: "Vault unlocked".to_string(),
+                    exists: true,
+                    locked: false,
+                    recovery_kit: None,
+                }
+            }
+            Err(_) => VaultAuthTaskState::Failed {
+                message: "Failed to update vault session".to_string(),
+                error: "session lock poisoned".to_string(),
+            },
+        },
+        Err(error) => VaultAuthTaskState::Failed {
+            message: "Vault operation failed".to_string(),
+            error,
+        },
+    };
+    let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
+}
+
 fn take_session_vault(state: &State<'_, AppState>) -> Result<Vault, String> {
     state
         .session
@@ -1062,6 +1257,7 @@ pub fn run() {
             vault_create,
             vault_unlock,
             vault_recover,
+            vault_auth_status,
             vault_lock,
             vault_change_password,
             vault_rotate,

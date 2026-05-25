@@ -20,7 +20,6 @@
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
   import type {
     AuthMode,
-    CreateVaultResponse,
     DeviceRecord,
     Draft,
     EntrySummary,
@@ -35,6 +34,8 @@
     ToolConfigMode,
     ToolConfigPreview,
     ToolConfigTarget,
+    VaultAuthTaskStartResponse,
+    VaultAuthTaskStatus,
     VaultStatus
   } from "./lib/types";
   import { passwordStrength } from "./lib/utils/auth";
@@ -54,10 +55,26 @@
     return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
 
+  function sleep(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
   async function flushUiBeforeBlockingWork() {
     await tick();
     await nextFrame();
     await nextFrame();
+  }
+
+  async function waitForVaultAuthTask(taskId: string): Promise<VaultAuthTaskStatus> {
+    for (;;) {
+      const status = await invokeTauri<VaultAuthTaskStatus>("vault_auth_status", {
+        request: { taskId }
+      });
+      if (status.phase !== "pending") {
+        return status;
+      }
+      await sleep(120);
+    }
   }
 
   let status: VaultStatus = { exists: false, locked: true };
@@ -189,11 +206,18 @@
     authBusy = "create";
     await flushUiBeforeBlockingWork();
     try {
-      const response = await invokeTauri<CreateVaultResponse>("vault_create", {
+      const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_create", {
         request: { password: createPassword }
       });
-      status = { exists: response.exists, locked: response.locked };
-      pendingRecoveryKey = response.recoveryKit.recoveryKey;
+      const response = await waitForVaultAuthTask(started.taskId);
+      if (response.phase !== "succeeded") {
+        throw new Error(response.error ?? "Vault creation failed");
+      }
+      status = {
+        exists: response.exists ?? true,
+        locked: response.locked ?? false
+      };
+      pendingRecoveryKey = response.recoveryKit?.recoveryKey ?? "";
       password = "";
       entries = [];
       selectedId = "";
@@ -212,14 +236,24 @@
     authBusy = "unlock";
     await flushUiBeforeBlockingWork();
     try {
-      status = await invokeTauri<VaultStatus>("vault_unlock", { request: { password } });
+      const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_unlock", {
+        request: { password }
+      });
+      const response = await waitForVaultAuthTask(started.taskId);
+      if (response.phase !== "succeeded") {
+        throw new Error(response.error ?? "Unlock failed");
+      }
+      status = {
+        exists: response.exists ?? true,
+        locked: response.locked ?? false
+      };
       password = "";
       showUnlockPassword = false;
       setAuthMode("unlock");
       await loadEntries();
       resetAutoLock();
-    } catch {
-      error = "Unlock failed";
+    } catch (err) {
+      error = err instanceof Error ? err.message : "Unlock failed";
     } finally {
       authBusy = "";
     }
@@ -239,14 +273,21 @@
     authBusy = "recover";
     await flushUiBeforeBlockingWork();
     try {
-      const response = await invokeTauri<CreateVaultResponse>("vault_recover", {
+      const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_recover", {
         request: {
           recoveryKey: recoveryKeyInput,
           newPassword: recoveryPassword
         }
       });
-      status = { exists: response.exists, locked: response.locked };
-      pendingRecoveryKey = response.recoveryKit.recoveryKey;
+      const response = await waitForVaultAuthTask(started.taskId);
+      if (response.phase !== "succeeded") {
+        throw new Error(response.error ?? "Vault recovery failed");
+      }
+      status = {
+        exists: response.exists ?? true,
+        locked: response.locked ?? false
+      };
+      pendingRecoveryKey = response.recoveryKit?.recoveryKey ?? "";
       password = "";
       setAuthMode("unlock");
       await loadEntries();

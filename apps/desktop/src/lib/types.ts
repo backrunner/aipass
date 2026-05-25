@@ -17,10 +17,18 @@ export type VaultStatus = { exists: boolean; locked: boolean };
 
 export type RecoveryKit = { recoveryKey: string };
 
-export type CreateVaultResponse = {
-  exists: boolean;
-  locked: boolean;
-  recoveryKit: RecoveryKit;
+export type VaultAuthTaskStartResponse = {
+  taskId: string;
+};
+
+export type VaultAuthTaskStatus = {
+  taskId: string;
+  phase: "pending" | "succeeded" | "failed";
+  message: string;
+  exists?: boolean;
+  locked?: boolean;
+  recoveryKit?: RecoveryKit;
+  error?: string;
 };
 
 export type SyncReport = {
