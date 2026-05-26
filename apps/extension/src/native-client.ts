@@ -114,6 +114,14 @@ export function pingNativeHost(): Promise<NativeResponse<{ protocolVersion: numb
   });
 }
 
+export function openNativeUnlock(): Promise<NativeResponse<{ locked: boolean; exists?: boolean }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "session.unlock",
+    interactive: "native_window"
+  });
+}
+
 export function lookupContext(url: string, origin: string): Promise<NativeResponse<ContextLookupData>> {
   return nativeRequest({
     id: crypto.randomUUID(),

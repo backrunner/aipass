@@ -89,6 +89,7 @@
   }
 
   let status: VaultStatus = { exists: false, locked: true };
+  let windowTarget: "main" | "unlock" | "quick-access" = "main";
   let password = "";
   let createPassword = "";
   let createPasswordConfirm = "";
@@ -116,10 +117,12 @@
   let providerFilter: ProviderFilter = "all";
   let revealedSecrets: Record<string, string> = {};
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
-  let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let clipboardClearTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastSessionTouchAt = 0;
   let autoLockMinutes = 15;
   let clipboardClearSeconds = 45;
+  let lockOnSleep = true;
+  let lockOnScreenLock = true;
   let newPassword = "";
   let syncState: SyncReport["status"] = "idle";
   let syncMode: SyncMode = "local";
@@ -187,8 +190,14 @@
       }
       await loadPreferences();
       await refreshStatus();
+      if (hasTauriRuntime()) {
+        windowTarget =
+          (await invokeTauri<"main" | "unlock" | "quick-access" | null>("window_target")) ?? "main";
+        if (windowTarget === "unlock") {
+          setAuthMode("unlock");
+        }
+      }
       if (!status.locked && status.exists) await loadEntries();
-      resetAutoLock();
     })();
   });
 
@@ -198,7 +207,6 @@
     finishedVaultAuthTasks.clear();
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
     activityEvents.forEach((event) => window.removeEventListener(event, markActivity));
-    clearTimeout(idleTimer);
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
   });
@@ -243,7 +251,6 @@
       entries = [];
       selectedId = "";
       setAuthMode("unlock");
-      resetAutoLock();
     } catch (err) {
       error = String(err);
     } finally {
@@ -272,7 +279,6 @@
       showUnlockPassword = false;
       setAuthMode("unlock");
       await loadEntries();
-      resetAutoLock();
     } catch (err) {
       error = err instanceof Error ? err.message : "Unlock failed";
     } finally {
@@ -312,7 +318,6 @@
       password = "";
       setAuthMode("unlock");
       await loadEntries();
-      resetAutoLock();
     } catch (err) {
       error = String(err);
     } finally {
@@ -366,7 +371,6 @@
     importPassword = "";
     webdavPassword = "";
     setAuthMode("unlock");
-    clearTimeout(idleTimer);
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
   }
@@ -840,15 +844,36 @@
   }
 
   function markActivity() {
-    if (!status.locked) resetAutoLock();
+    if (!status.locked) {
+      void touchSession();
+    }
+  }
+
+  async function touchSession() {
+    const now = Date.now();
+    if (now - lastSessionTouchAt < 30_000) return;
+    lastSessionTouchAt = now;
+    try {
+      const nextStatus = await invokeTauri<VaultStatus>("session_touch");
+      if (nextStatus.locked && !status.locked) {
+        status = nextStatus;
+        entries = [];
+        selectedId = "";
+        revealedSecrets = {};
+        probeResult = undefined;
+        showSettings = false;
+        setAuthMode("unlock");
+      } else {
+        status = nextStatus;
+      }
+    } catch {
+      // Best-effort keepalive for agent idle tracking.
+    }
   }
 
   function resetAutoLock() {
-    clearTimeout(idleTimer);
-    if (status.locked || !status.exists || autoLockMinutes <= 0) return;
-    idleTimer = setTimeout(() => {
-      void lockVault();
-    }, autoLockMinutes * 60 * 1000);
+    lastSessionTouchAt = 0;
+    void touchSession();
   }
 
   function scheduleClipboardClear(secret: string) {
@@ -876,6 +901,8 @@
       const prefs = await invokeTauri<AppPreferences>("preferences_load");
       autoLockMinutes = clampPreference(prefs.autoLockMinutes, 0, 240, autoLockMinutes);
       clipboardClearSeconds = clampPreference(prefs.clipboardClearSeconds, 0, 600, clipboardClearSeconds);
+      lockOnSleep = prefs.lockOnSleep ?? lockOnSleep;
+      lockOnScreenLock = prefs.lockOnScreenLock ?? lockOnScreenLock;
     } catch (err) {
       error = String(err);
     }
@@ -888,15 +915,18 @@
       const saved = await invokeTauri<AppPreferences>("preferences_save", {
         request: {
           autoLockMinutes,
-          clipboardClearSeconds
+          clipboardClearSeconds,
+          lockOnSleep,
+          lockOnScreenLock
         }
       });
       autoLockMinutes = saved.autoLockMinutes;
       clipboardClearSeconds = saved.clipboardClearSeconds;
+      lockOnSleep = saved.lockOnSleep ?? lockOnSleep;
+      lockOnScreenLock = saved.lockOnScreenLock ?? lockOnScreenLock;
     } catch (err) {
       error = String(err);
     }
-    resetAutoLock();
   }
 
   function clampPreference(value: unknown, min: number, max: number, fallback: number): number {
@@ -934,7 +964,10 @@
 />
 
 <div class="app-shell">
-  <AppTitleBar />
+  <AppTitleBar
+    syncState={!status.exists || status.locked ? undefined : syncState}
+    onOpenSync={() => openSettings("sync")}
+  />
 
   {#if !status.exists || status.locked}
     <AuthScreen
@@ -964,11 +997,9 @@
         {showArchived}
         {providerFilter}
         providerCounts={counts}
-        {syncState}
         onFilterChange={setProviderFilter}
         onArchiveView={setArchiveView}
         onOpenSettings={() => openSettings("security")}
-        onOpenSync={() => openSettings("sync")}
         onLock={lockVault}
       />
 
@@ -1024,6 +1055,8 @@
     initialTab={settingsInitialTab}
     bind:autoLockMinutes
     bind:clipboardClearSeconds
+    bind:lockOnSleep
+    bind:lockOnScreenLock
     bind:newPassword
     bind:exportPath
     bind:exportPassword

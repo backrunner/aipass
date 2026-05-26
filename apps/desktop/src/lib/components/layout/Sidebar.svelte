@@ -1,28 +1,20 @@
 <script lang="ts">
   import { Archive, Inbox, Lock, Settings, ShieldCheck, Sparkles, Star, Terminal, Wifi } from "lucide-svelte";
 
-  import type { MaybePromise, ProviderCounts, ProviderFilter, SyncReport } from "../../types";
-  import Brand from "../shared/Brand.svelte";
-  import SyncStatusPill from "../shared/SyncStatusPill.svelte";
+  import type { MaybePromise, ProviderCounts, ProviderFilter } from "../../types";
 
   export let showArchived = false;
   export let providerFilter: ProviderFilter = "all";
   export let providerCounts: ProviderCounts;
-  export let syncState: SyncReport["status"] = "idle";
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
   export let onArchiveView: (value: boolean) => MaybePromise = () => {};
   export let onOpenSettings: () => MaybePromise = () => {};
-  export let onOpenSync: () => MaybePromise = () => {};
   export let onLock: () => MaybePromise = () => {};
 
   $: activeFilter = showArchived ? "__archive" : providerFilter;
 </script>
 
 <aside class="sidebar">
-  <div class="sidebar-top">
-    <Brand size="md" />
-  </div>
-
   <nav class="nav" aria-label="Vault">
     <button
       type="button"
@@ -100,7 +92,6 @@
   </div>
 
   <div class="sidebar-bottom">
-    <SyncStatusPill state={syncState} onClick={() => onOpenSync()} />
     <div class="bottom-actions">
       <button type="button" class="bottom-button" on:click={() => onOpenSettings()}>
         <Settings size={15} />
@@ -124,10 +115,6 @@
     border-right: 1px solid var(--border);
     min-width: 0;
     overflow: hidden;
-  }
-
-  .sidebar-top {
-    padding: 0 4px;
   }
 
   .group {

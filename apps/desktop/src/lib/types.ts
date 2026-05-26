@@ -11,7 +11,7 @@ export type AuthMode = "create" | "unlock" | "recover";
 export type FormMode = "add" | "edit";
 export type SyncMode = "local" | "webdav";
 export type ToolConfigTarget = "codex" | "claude-code" | "gemini-cli" | "opencode";
-export type ToolConfigMode = "helper" | "plaintext";
+export type ToolConfigMode = "helper" | "env" | "plaintext";
 
 export type VaultStatus = { exists: boolean; locked: boolean };
 
@@ -20,6 +20,8 @@ export type RecoveryKit = { recoveryKey: string };
 export type AppPreferences = {
   autoLockMinutes: number;
   clipboardClearSeconds: number;
+  lockOnSleep: boolean;
+  lockOnScreenLock: boolean;
 };
 
 export type VaultAuthTaskStartResponse = {

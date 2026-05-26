@@ -3,9 +3,13 @@
   import { Minus, Square, X } from "lucide-svelte";
   import { onDestroy, onMount } from "svelte";
 
+  import type { MaybePromise, SyncReport } from "../../types";
   import Logo from "./Logo.svelte";
+  import SyncStatusPill from "./SyncStatusPill.svelte";
 
   export let title = "AIPass";
+  export let syncState: SyncReport["status"] | undefined = undefined;
+  export let onOpenSync: () => MaybePromise = () => {};
 
   let isMac = false;
   let isMaximized = false;
@@ -100,6 +104,12 @@
 
   <div class="spacer" data-tauri-drag-region></div>
 
+  {#if syncState}
+    <div class="sync-slot">
+      <SyncStatusPill state={syncState} onClick={() => onOpenSync()} />
+    </div>
+  {/if}
+
   {#if !isMac}
     <div class="win-controls" aria-label="Window controls">
       <button class="win-btn" type="button" aria-label="Minimize" on:click|stopPropagation={minimize}>
@@ -161,6 +171,13 @@
   .spacer {
     flex: 1;
     align-self: stretch;
+  }
+
+  .sync-slot {
+    display: inline-flex;
+    align-items: center;
+    padding-right: 8px;
+    -webkit-app-region: no-drag;
   }
 
   /* macOS traffic-light style */

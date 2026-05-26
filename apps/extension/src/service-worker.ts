@@ -3,6 +3,7 @@ import {
   ignoreOrigin,
   isOriginIgnored,
   lookupContext,
+  openNativeUnlock,
   pingNativeHost,
   previewDetectedSecret,
   saveDetectedSecret,
@@ -31,6 +32,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.lookup" && typed.url && typed.origin) {
     lookupContext(typed.url, typed.origin).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.openUnlock") {
+    openNativeUnlock().then(sendResponse);
     return true;
   }
 

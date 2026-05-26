@@ -1,28 +1,27 @@
-use aipass_config_writers::{
-    apply_plan_encrypted, endpoint_url, find_backup_by_operation, plan_claude_code,
-    plan_claude_code_plaintext, plan_codex, plan_codex_plaintext, plan_gemini_cli,
-    plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext, rollback_encrypted,
-    ConfigPlan, ToolEntry, ToolId,
+use aipass_agent::{default_vault_dir, AgentClient, AgentClientConfig, AgentCommandError};
+use aipass_agent_protocol::{
+    AgentRequest, LockReason, ProbeResult, SecretValue, SessionStatus, ToolConfigApplyResponse,
+    ToolConfigPreviewResponse, ToolConfigRequest, VaultCreateResponse,
 };
-use aipass_crypto::SecretString;
+use aipass_config_writers::endpoint_url;
 use aipass_native_host::native_manifest;
 use aipass_provider_registry::{
     match_provider_by_domain, provider_kind_for_id, AuthScheme, InterfaceType, ProviderEndpoint,
     QuotaInfo,
 };
 use aipass_storage::atomic_write_bytes;
-use aipass_sync::{sync_local_folder, sync_webdav, HttpWebDavClient};
-use aipass_vault::{EncryptedVaultExport, ProviderEntryInput, ProviderEntryUpdateInput, Vault};
+use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
-use directories::ProjectDirs;
+use rpassword::prompt_password;
 use std::fs;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
-use std::time::Duration;
 use uuid::Uuid;
+
+mod dispatch;
 
 #[derive(Parser)]
 #[command(
@@ -59,6 +58,10 @@ enum Command {
     NativeHost {
         #[command(subcommand)]
         command: NativeHostCommand,
+    },
+    Agent {
+        #[command(subcommand)]
+        command: AgentSubcommand,
     },
     Login,
     Lock,
@@ -243,6 +246,14 @@ enum NativeHostCommand {
 }
 
 #[derive(Subcommand)]
+enum AgentSubcommand {
+    Install,
+    Status,
+    Start,
+    Stop,
+}
+
+#[derive(Subcommand)]
 enum VaultCommand {
     Status,
     ChangePassword {
@@ -341,559 +352,91 @@ enum BrowserArg {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Doctor => output(
-            cli.json,
-            serde_json::json!({
-                "ok": true,
-                "vaultDir": vault_dir(cli.vault)?.display().to_string(),
-                "authSource": if cli.password.is_some() { "env_or_flag" } else { "missing" },
-            }),
-            "AIPass doctor ok",
-        ),
-        Command::Completions { shell } => {
-            let mut command = Cli::command();
-            generate(shell, &mut command, "aipass", &mut io::stdout());
-            Ok(())
-        }
-        Command::Vault { command } => match command {
-            VaultCommand::Status => {
-                let dir = vault_dir(cli.vault)?;
-                output(
-                    cli.json,
-                    serde_json::json!({
-                        "exists": dir.join("manifest.aipmanifest").exists(),
-                        "vaultDir": dir,
-                    }),
-                    if dir.join("manifest.aipmanifest").exists() {
-                        "Vault exists"
-                    } else {
-                        "Vault not initialized"
-                    },
-                )
-            }
-            VaultCommand::ChangePassword { new_password } => {
-                let mut vault = open_vault(cli.vault, cli.password)?;
-                vault.change_master_password(&SecretString::new(new_password))?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "ok": true, "epoch": vault.current_epoch() }),
-                    "Master password changed",
-                )
-            }
-            VaultCommand::Rotate { reason } => {
-                let mut vault = open_vault(cli.vault, cli.password)?;
-                let epoch = vault.advance_epoch_and_rewrap(&reason)?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "ok": true, "epoch": epoch }),
-                    "Vault epoch rotated",
-                )
-            }
-            VaultCommand::Devices => {
-                let vault = open_vault(cli.vault, cli.password)?;
-                let devices = vault.list_devices()?;
-                output(
-                    cli.json,
-                    serde_json::to_value(&devices)?,
-                    &format!("{} devices", devices.len()),
-                )
-            }
-            VaultCommand::RevokeDevice { id } => {
-                let mut vault = open_vault(cli.vault, cli.password)?;
-                vault.revoke_device(id)?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "ok": true, "revokedDeviceId": id, "epoch": vault.current_epoch() }),
-                    "Device revoked and vault epoch rotated",
-                )
-            }
-            VaultCommand::Export {
-                output: export_path,
-                export_password,
-            } => {
-                let vault = open_vault(cli.vault, cli.password)?;
-                let export = vault.export_encrypted(&SecretString::new(export_password))?;
-                if let Some(parent) = export_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                atomic_write_bytes(&export_path, &serde_json::to_vec_pretty(&export)?)?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "ok": true, "output": export_path, "vaultId": export.vault_id }),
-                    "Encrypted vault export written",
-                )
-            }
-            VaultCommand::Import {
-                input,
-                export_password,
-            } => {
-                let export: EncryptedVaultExport = serde_json::from_slice(&fs::read(&input)?)?;
-                let dir = vault_dir(cli.vault)?;
-                Vault::import_encrypted(&dir, &SecretString::new(export_password), &export)?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "ok": true, "vaultDir": dir, "vaultId": export.vault_id }),
-                    "Encrypted vault import restored",
-                )
-            }
-        },
-        Command::Secret { command } => match command {
-            SecretCommand::List { id } => {
-                let vault = open_vault(cli.vault, cli.password)?;
-                let entry = find_entry(&vault, id)?;
-                output(
-                    cli.json,
-                    serde_json::to_value(&entry.secret_refs)?,
-                    &format!("{} secrets", entry.secret_refs.len()),
-                )
-            }
-            SecretCommand::Add { id, label, api_key } => {
-                let vault = open_vault(cli.vault, cli.password)?;
-                let secret_id = vault.add_secret(id, label, api_key)?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "ok": true, "id": id, "secretId": secret_id }),
-                    "Secret added",
-                )
-            }
-            SecretCommand::Remove { id, label } => {
-                let vault = open_vault(cli.vault, cli.password)?;
-                vault.remove_secret(id, &label)?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "ok": true, "id": id, "removed": label }),
-                    "Secret removed",
-                )
-            }
-        },
-        Command::NativeHost { command } => match command {
-            NativeHostCommand::Manifest {
-                host_path,
-                extension_id,
-            } => {
-                let host_path = native_host_binary_path(host_path)?;
-                let origins = allowed_origins(&extension_id)?;
-                let manifest = native_manifest(&host_path, &origins);
-                println!("{}", serde_json::to_string_pretty(&manifest)?);
-                Ok(())
-            }
-            NativeHostCommand::Install {
-                host_path,
-                extension_id,
-                output: manifest_output,
-                browser,
-            } => {
-                let host_path = native_host_binary_path(host_path)?;
-                let origins = allowed_origins(&extension_id)?;
-                let install_path = manifest_output.unwrap_or_else(|| {
-                    default_native_manifest_path(&browser).expect("manifest path")
-                });
-                if let Some(parent) = install_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let manifest = native_manifest(&host_path, &origins);
-                atomic_write_bytes(&install_path, &serde_json::to_vec_pretty(&manifest)?)?;
-                install_native_manifest_reference(&browser, &install_path)?;
-                output(
-                    cli.json,
-                    serde_json::json!({
-                        "ok": true,
-                        "browser": browser_name(&browser),
-                        "hostPath": host_path,
-                        "manifestPath": install_path,
-                        "allowedOrigins": origins,
-                    }),
-                    "Native messaging host installed",
-                )
-            }
-        },
-        Command::Login => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            output(
-                cli.json,
-                serde_json::json!({ "ok": true, "vaultId": vault.vault_id(), "epoch": vault.current_epoch() }),
-                "Vault unlocked for this command",
-            )
-        }
-        Command::Lock => output(
-            cli.json,
-            serde_json::json!({ "ok": true, "locked": true }),
-            "No persistent CLI session is active",
-        ),
-        Command::Init { password } => {
-            let password = password
-                .or(cli.password)
-                .context("provide --password or AIPASS_MASTER_PASSWORD")?;
-            let dir = vault_dir(cli.vault)?;
-            let creation = Vault::create(&dir, &SecretString::new(password))?;
-            let recovery_key = creation.recovery_kit.recovery_key;
-            let text = format!(
-                "Vault created\nRecovery key (shown once): {recovery_key}\nStore this key offline; it cannot be shown again."
-            );
-            output(
-                cli.json,
-                serde_json::json!({ "ok": true, "vaultDir": dir, "recoveryKey": recovery_key }),
-                &text,
-            )
-        }
-        Command::Add {
-            title,
-            provider,
-            domain,
-            endpoint,
-            favicon_url,
-            interface,
-            auth,
-            api_key,
-            default_model,
-            header,
-            quota_label,
-            quota_limit,
-            quota_remaining,
-            quota_reset_at,
-            notes,
-            environment,
-            tag,
-        } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let provider_guess = provider.or_else(|| {
-                domain.first().and_then(|domain| {
-                    match_provider_by_domain(domain).map(|provider| provider.id.to_string())
-                })
-            });
-            let endpoints = endpoint
-                .map(ProviderEndpoint::api)
-                .into_iter()
-                .collect::<Vec<_>>();
-            let id = vault.add_provider(ProviderEntryInput {
-                title,
-                provider_kind: provider_kind_for_id(provider_guess.as_deref()),
-                provider_id: provider_guess,
-                domains: domain,
-                favicon_url,
-                endpoints,
-                interface_type: interface.into(),
-                auth_scheme: auth.into(),
-                api_key,
-                default_model,
-                headers: parse_headers(&header)?,
-                quota: quota_from_parts(quota_label, quota_limit, quota_remaining, quota_reset_at),
-                tags: tag,
-                environment,
-                notes,
-            })?;
-            output(
-                cli.json,
-                serde_json::json!({ "id": id }),
-                &format!("Added provider {id}"),
-            )
-        }
-        Command::List {
-            provider,
-            archived,
-            all,
-        } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let mut items = if all {
-                vault
-                    .list_provider_summaries()?
-                    .into_iter()
-                    .chain(vault.list_archived_provider_summaries()?)
-                    .collect::<Vec<_>>()
-            } else if archived {
-                vault.list_archived_provider_summaries()?
-            } else {
-                vault.list_provider_summaries()?
-            };
-            if let Some(provider) = provider {
-                items.retain(|item| item.provider_id.as_deref() == Some(provider.as_str()));
-            }
-            let len = items.len();
-            output(
-                cli.json,
-                serde_json::to_value(&items)?,
-                &format!("{len} providers"),
-            )
-        }
-        Command::Update {
-            id,
-            title,
-            provider,
-            domain,
-            endpoint,
-            favicon_url,
-            interface,
-            auth,
-            api_key,
-            default_model,
-            header,
-            quota_label,
-            quota_limit,
-            quota_remaining,
-            quota_reset_at,
-            notes,
-            environment,
-            tag,
-        } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let existing = find_entry(&vault, id)?;
-            let domains = if domain.is_empty() {
-                existing.domains.clone()
-            } else {
-                domain
-            };
-            let provider_guess = provider.or(existing.provider_id.clone()).or_else(|| {
-                domains.first().and_then(|domain| {
-                    match_provider_by_domain(domain).map(|provider| provider.id.to_string())
-                })
-            });
-            let input = ProviderEntryUpdateInput {
-                title: title.unwrap_or(existing.title),
-                provider_kind: provider_kind_for_id(provider_guess.as_deref()),
-                provider_id: provider_guess,
-                domains,
-                favicon_url: favicon_url.or(existing.favicon_url),
-                endpoints: endpoint
-                    .map(ProviderEndpoint::api)
-                    .map(|endpoint| vec![endpoint])
-                    .unwrap_or(existing.endpoints),
-                interface_type: interface
-                    .map(InterfaceType::from)
-                    .unwrap_or(existing.interface_type),
-                auth_scheme: auth.map(AuthScheme::from).unwrap_or(existing.auth_scheme),
-                api_key,
-                default_model: default_model.or(existing.default_model),
-                headers: if header.is_empty() {
-                    None
-                } else {
-                    Some(parse_headers(&header)?)
-                },
-                quota: quota_from_parts(quota_label, quota_limit, quota_remaining, quota_reset_at)
-                    .or(existing.quota),
-                tags: if tag.is_empty() { existing.tags } else { tag },
-                environment: environment.unwrap_or(existing.environment),
-                notes: notes.or(existing.notes),
-            };
-            vault.update_provider(id, input)?;
-            output(
-                cli.json,
-                serde_json::json!({ "ok": true, "id": id }),
-                "Provider updated",
-            )
-        }
-        Command::Archive { id } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            vault.archive_provider(id)?;
-            output(
-                cli.json,
-                serde_json::json!({ "ok": true, "id": id, "archived": true }),
-                "Provider archived",
-            )
-        }
-        Command::Restore { id } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            vault.restore_provider(id)?;
-            output(
-                cli.json,
-                serde_json::json!({ "ok": true, "id": id, "archived": false }),
-                "Provider restored",
-            )
-        }
-        Command::Delete { id, yes } => {
-            if !yes {
-                anyhow::bail!("permanent delete requires --yes");
-            }
-            let vault = open_vault(cli.vault, cli.password)?;
-            vault.delete_provider_permanently(id)?;
-            output(
-                cli.json,
-                serde_json::json!({ "ok": true, "id": id, "deleted": true }),
-                "Provider permanently deleted",
-            )
-        }
-        Command::Search { query } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let items = vault.search(&query)?;
-            let len = items.len();
-            output(
-                cli.json,
-                serde_json::to_value(&items)?,
-                &format!("{len} matches"),
-            )
-        }
-        Command::Probe {
-            id,
-            timeout_seconds,
-        } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let item = find_entry(&vault, id)?;
-            let secret = vault.reveal_secret(id)?;
-            let result = probe_entry(&item, &secret, timeout_seconds)?;
-            output(
-                cli.json,
-                serde_json::to_value(&result)?,
-                if result.ok {
-                    "Probe succeeded"
-                } else {
-                    "Probe failed"
-                },
-            )
-        }
-        Command::Get { id, reveal, field } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let field = field.unwrap_or_else(|| "api_key".to_string());
-            if reveal && is_secret_field(&field) {
-                let secret = vault.reveal_secret_field(id, secret_label_for_field(&field))?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "id": id, "field": field, "secret": secret }),
-                    &secret,
-                )
-            } else {
-                let item = find_entry(&vault, id)?;
-                let value = field_value(&item, &field)?;
-                output(
-                    cli.json,
-                    serde_json::json!({ "id": id, "field": field, "value": value }),
-                    &value,
-                )
-            }
-        }
-        Command::Copy { id, field } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let value = if is_secret_field(&field) {
-                vault.reveal_secret_field(id, secret_label_for_field(&field))?
-            } else {
-                let item = find_entry(&vault, id)?;
-                field_value(&item, &field)?
-            };
-            copy_to_clipboard(&value)?;
-            output(
-                cli.json,
-                serde_json::json!({ "ok": true, "id": id, "field": field }),
-                "Value copied to clipboard",
-            )
-        }
-        Command::Env { id, format } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let item = find_entry(&vault, id)?;
-            let secret = vault.reveal_secret(id)?;
-            let key = env_key_for_entry(&item);
-            match format {
-                EnvFormat::Json => output(
-                    cli.json || matches!(format, EnvFormat::Json),
-                    serde_json::json!({ key.clone(): secret }),
-                    "",
-                ),
-                EnvFormat::Shell => {
-                    let text = format!("export {}={}", key, shell_quote(&secret));
-                    output(cli.json, serde_json::json!({ "env": text }), &text)
-                }
-            }
-        }
-        Command::Exec { id, command } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let item = find_entry(&vault, id)?;
-            let secret = vault.reveal_secret(id)?;
-            let key = env_key_for_entry(&item);
-            let (program, args) = command
-                .split_first()
-                .context("provide a command after --")?;
-            let status = ProcessCommand::new(program)
-                .args(args)
-                .env(key, secret)
-                .status()
-                .context("failed to run child process")?;
-            std::process::exit(status.code().unwrap_or(1));
-        }
-        Command::Configure {
-            tool,
-            id,
-            mode,
-            yes,
-        } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let item = find_entry(&vault, id)?;
-            let home = std::env::var("HOME")
-                .map(PathBuf::from)
-                .context("HOME missing")?;
-            let env_key = env_key_for_entry(&item);
-            let mut entry = ToolEntry {
-                id,
-                title: item.title,
-                provider_id: item.provider_id,
-                endpoint: endpoint_url(&item.endpoints),
-                interface_type: item.interface_type,
-                auth_scheme: item.auth_scheme,
-                env_key,
-                default_model: item.default_model,
-                api_key: None,
-            };
-            if matches!(mode, ConfigureMode::Plaintext) {
-                entry.api_key = Some(vault.reveal_secret(id)?);
-            }
-            let (plan, content) = match mode {
-                ConfigureMode::Helper => match tool {
-                    ToolArg::Codex => plan_codex(&home, &entry)?,
-                    ToolArg::ClaudeCode => plan_claude_code(&home, &entry)?,
-                    ToolArg::GeminiCli => plan_gemini_cli(&home, &entry)?,
-                    ToolArg::OpenCode => plan_opencode(&home, &entry)?,
-                },
-                ConfigureMode::Env => plan_tool_env_helper(&home, tool.clone(), &entry)?,
-                ConfigureMode::Plaintext => match tool {
-                    ToolArg::Codex => plan_codex_plaintext(&home, &entry)?,
-                    ToolArg::ClaudeCode => plan_claude_code_plaintext(&home, &entry)?,
-                    ToolArg::GeminiCli => plan_gemini_cli_plaintext(&home, &entry)?,
-                    ToolArg::OpenCode => plan_opencode_plaintext(&home, &entry)?,
-                },
-            };
-            if !yes {
-                return output(cli.json, serde_json::to_value(&plan)?, &plan.preview);
-            }
-            let result = apply_plan_encrypted(&plan, &content, &vault.config_backup_key())?;
-            output(
-                cli.json,
-                serde_json::to_value(&result)?,
-                "Configuration applied",
-            )
-        }
-        Command::Rollback { operation_id } => {
-            let vault = open_vault(cli.vault, cli.password)?;
-            let home = std::env::var("HOME")
-                .map(PathBuf::from)
-                .context("HOME missing")?;
-            let backup = find_backup_by_operation(&home, operation_id)?;
-            let result = rollback_encrypted(&backup, &vault.config_backup_key())?;
-            output(cli.json, serde_json::to_value(&result)?, "Rollback applied")
-        }
-        Command::Sync {
-            dir,
-            webdav_url,
-            webdav_username,
-            webdav_password,
-        } => {
-            let vault_root = vault_dir(cli.vault)?;
-            let report = if let Some(url) = webdav_url {
-                let client = HttpWebDavClient::new(&url, webdav_username, webdav_password)?;
-                sync_webdav(&vault_root, &client)?
-            } else {
-                let dir = dir.context("provide --dir for local/iCloud sync or --webdav-url")?;
-                sync_local_folder(&vault_root, &dir)?
-            };
-            output(cli.json, serde_json::to_value(&report)?, "Sync complete")
-        }
-    }
+    dispatch::run(Cli::parse())
 }
 
 fn vault_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path);
     }
-    let dirs =
-        ProjectDirs::from("dev", "aipass", "AIPass").context("cannot determine project dir")?;
-    Ok(dirs.data_dir().join("vault"))
+    default_vault_dir()
+}
+
+struct CliAgent {
+    client: AgentClient,
+    password: Option<String>,
+    interactive: bool,
+}
+
+impl CliAgent {
+    fn from_parts(vault: Option<PathBuf>, password: Option<String>) -> Result<Self> {
+        let config = AgentClientConfig::for_vault(vault_dir(vault)?)?;
+        Ok(Self {
+            client: AgentClient::new(config),
+            password,
+            interactive: std::io::stdin().is_terminal(),
+        })
+    }
+
+    fn ensure_running(&self) -> Result<()> {
+        self.client.ensure_running()
+    }
+
+    fn request<T: serde::de::DeserializeOwned>(&self, request: AgentRequest) -> Result<T> {
+        self.ensure_running()?;
+        match self.client.request::<T>(&request) {
+            Ok(value) => Ok(value),
+            Err(err) if err.is_locked() => {
+                self.unlock_for_request()?;
+                self.client
+                    .request::<T>(&request)
+                    .map_err(agent_error_to_anyhow)
+            }
+            Err(err) => Err(agent_error_to_anyhow(err)),
+        }
+    }
+
+    fn request_no_unlock<T: serde::de::DeserializeOwned>(
+        &self,
+        request: AgentRequest,
+    ) -> Result<T> {
+        self.ensure_running()?;
+        self.client
+            .request::<T>(&request)
+            .map_err(agent_error_to_anyhow)
+    }
+
+    fn unlock_for_request(&self) -> Result<SessionStatus> {
+        let mut password = if let Some(password) = self.password.clone() {
+            password
+        } else if self.interactive {
+            prompt_password("AIPass master password: ").context("failed to read master password")?
+        } else {
+            anyhow::bail!("vault is locked");
+        };
+        let response = self
+            .client
+            .request::<SessionStatus>(&AgentRequest::SessionUnlock {
+                mode: aipass_agent_protocol::SessionUnlockMode::Password {
+                    password: password.as_str().into(),
+                },
+            })
+            .map_err(agent_error_to_anyhow);
+        password.clear();
+        response
+    }
+}
+
+fn agent_error_to_anyhow(err: AgentCommandError) -> anyhow::Error {
+    let message = match err.code {
+        Some(code) => format!(
+            "{}: {}",
+            aipass_agent_protocol::error_code_name(&code),
+            err.message
+        ),
+        None => err.message,
+    };
+    anyhow::anyhow!(message)
 }
 
 fn native_host_binary_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -1040,9 +583,162 @@ fn browser_name(browser: &BrowserArg) -> &'static str {
     }
 }
 
-fn open_vault(path: Option<PathBuf>, password: Option<String>) -> Result<Vault> {
-    let password = password.context("provide AIPASS_MASTER_PASSWORD or --password")?;
-    Vault::open(vault_dir(path)?, &SecretString::new(password)).map_err(Into::into)
+fn manifest_exists(explicit_vault: Option<PathBuf>) -> Result<bool> {
+    Ok(vault_dir(explicit_vault)?
+        .join("manifest.aipmanifest")
+        .exists())
+}
+
+fn install_agent_service(json: bool, explicit_vault: Option<PathBuf>) -> Result<()> {
+    let vault_dir = vault_dir(explicit_vault)?;
+    let agent_binary = agent_binary_path()?;
+    let namespace = aipass_agent::namespace_for_vault_dir(&vault_dir)?;
+    #[cfg(target_os = "linux")]
+    let launch_command = format!(
+        "\"{}\" --vault \"{}\"",
+        agent_binary.display(),
+        vault_dir.display()
+    );
+
+    #[cfg(target_os = "macos")]
+    let install_path = {
+        let home = std::env::var_os("HOME").context("HOME is not set")?;
+        let path = PathBuf::from(home)
+            .join("Library")
+            .join("LaunchAgents")
+            .join(format!("dev.aipass.agent.{namespace}.plist"));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.aipass.agent.{namespace}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+    <string>--vault</string>
+    <string>{}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+</dict>
+</plist>
+"#,
+            xml_escape(&agent_binary.display().to_string()),
+            xml_escape(&vault_dir.display().to_string()),
+        );
+        atomic_write_bytes(&path, plist.as_bytes())?;
+        let _ = ProcessCommand::new("launchctl")
+            .args(["unload", path.to_string_lossy().as_ref()])
+            .status();
+        let status = ProcessCommand::new("launchctl")
+            .args(["load", path.to_string_lossy().as_ref()])
+            .status()
+            .context("failed to load LaunchAgent")?;
+        if !status.success() {
+            anyhow::bail!("launchctl load failed");
+        }
+        path
+    };
+
+    #[cfg(target_os = "linux")]
+    let install_path = {
+        let home = std::env::var_os("HOME").context("HOME is not set")?;
+        let path = PathBuf::from(home)
+            .join(".config")
+            .join("systemd")
+            .join("user")
+            .join(format!("aipass-agent-{namespace}.service"));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let unit = format!(
+            r#"[Unit]
+Description=AIPass Agent ({namespace})
+
+[Service]
+ExecStart={launch_command}
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+"#
+        );
+        atomic_write_bytes(&path, unit.as_bytes())?;
+        let reload = ProcessCommand::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+        if let Ok(status) = reload {
+            if !status.success() {
+                anyhow::bail!("systemctl --user daemon-reload failed");
+            }
+        }
+        let enable = ProcessCommand::new("systemctl")
+            .args([
+                "--user",
+                "enable",
+                "--now",
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .context("invalid service name")?,
+            ])
+            .status();
+        if let Ok(status) = enable {
+            if !status.success() {
+                anyhow::bail!("systemctl --user enable --now failed");
+            }
+        }
+        path
+    };
+
+    #[cfg(target_os = "windows")]
+    let install_path = {
+        let status = aipass_agent::install_windows_service(&agent_binary, &vault_dir)
+            .context("failed to register Windows agent service")?;
+        PathBuf::from(format!(r"SCM\{}", status.service_name))
+    };
+
+    output(
+        json,
+        serde_json::json!({
+            "ok": true,
+            "vaultDir": vault_dir,
+            "agentBinary": agent_binary,
+            "installPath": install_path,
+            "namespace": namespace,
+        }),
+        "Agent service installed",
+    )
+}
+
+fn agent_binary_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("cannot determine current executable")?;
+    let agent_name = if cfg!(target_os = "windows") {
+        "aipass-agent.exe"
+    } else {
+        "aipass-agent"
+    };
+    let sibling = exe.with_file_name(agent_name);
+    if sibling.exists() {
+        return absolute_path(sibling);
+    }
+    absolute_path(PathBuf::from(agent_name))
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn output(json: bool, value: serde_json::Value, text: &str) -> Result<()> {
@@ -1142,192 +838,6 @@ fn env_key_for_entry(item: &aipass_vault::EntrySummary) -> String {
     }
 }
 
-fn find_entry(vault: &Vault, id: Uuid) -> Result<aipass_vault::EntrySummary> {
-    vault
-        .list_provider_summaries()?
-        .into_iter()
-        .chain(vault.list_archived_provider_summaries()?)
-        .find(|item| item.id == id)
-        .context("entry not found")
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProbeResult {
-    ok: bool,
-    provider_id: Option<String>,
-    interface_type: InterfaceType,
-    status: Option<u16>,
-    endpoint: Option<String>,
-    model_count: Option<usize>,
-    error: Option<String>,
-}
-
-fn probe_entry(
-    item: &aipass_vault::EntrySummary,
-    secret: &str,
-    timeout_seconds: u64,
-) -> Result<ProbeResult> {
-    let endpoint = endpoint_url(&item.endpoints);
-    let Some(endpoint) = endpoint.clone() else {
-        return Ok(ProbeResult {
-            ok: false,
-            provider_id: item.provider_id.clone(),
-            interface_type: item.interface_type.clone(),
-            status: None,
-            endpoint,
-            model_count: None,
-            error: Some("endpoint missing".to_string()),
-        });
-    };
-    if matches!(
-        item.interface_type,
-        InterfaceType::Bedrock | InterfaceType::CustomHttp
-    ) {
-        return Ok(ProbeResult {
-            ok: false,
-            provider_id: item.provider_id.clone(),
-            interface_type: item.interface_type.clone(),
-            status: None,
-            endpoint: Some(endpoint),
-            model_count: None,
-            error: Some("probe not available for this interface".to_string()),
-        });
-    }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds.max(1)))
-        .user_agent("AIPass/1.0 provider-probe")
-        .build()?;
-    let (url, request) = match item.interface_type {
-        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => {
-            let url = format!("{}/models", endpoint.trim_end_matches('/'));
-            let mut request = client.get(&url);
-            match item.auth_scheme {
-                AuthScheme::AzureApiKey => request = request.header("api-key", secret),
-                _ => request = request.bearer_auth(secret),
-            }
-            (url, request)
-        }
-        InterfaceType::AnthropicMessages => {
-            let url = format!("{}/v1/models", endpoint.trim_end_matches('/'));
-            let request = client
-                .get(&url)
-                .header("x-api-key", secret)
-                .header("anthropic-version", "2023-06-01");
-            (url, request)
-        }
-        InterfaceType::Gemini => {
-            let url = format!(
-                "{}/v1beta/models?key={}",
-                endpoint.trim_end_matches('/'),
-                secret
-            );
-            let safe_url = format!(
-                "{}/v1beta/models?key=[redacted]",
-                endpoint.trim_end_matches('/')
-            );
-            (safe_url, client.get(&url))
-        }
-        InterfaceType::Bedrock | InterfaceType::CustomHttp => unreachable!(),
-    };
-    match request.send() {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let body = response.text().unwrap_or_default();
-            Ok(ProbeResult {
-                ok: (200..300).contains(&status),
-                provider_id: item.provider_id.clone(),
-                interface_type: item.interface_type.clone(),
-                status: Some(status),
-                endpoint: Some(url),
-                model_count: count_models(&body),
-                error: None,
-            })
-        }
-        Err(err) => Ok(ProbeResult {
-            ok: false,
-            provider_id: item.provider_id.clone(),
-            interface_type: item.interface_type.clone(),
-            status: None,
-            endpoint: Some(url),
-            model_count: None,
-            error: Some(redact_probe_error(&err.to_string())),
-        }),
-    }
-}
-
-fn count_models(body: &str) -> Option<usize> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    value
-        .get("data")
-        .or_else(|| value.get("models"))
-        .and_then(|value| value.as_array())
-        .map(Vec::len)
-}
-
-fn redact_probe_error(value: &str) -> String {
-    if value.contains("sk-")
-        || value.contains("AIza")
-        || value.contains("key=")
-        || value.to_lowercase().contains("authorization")
-        || value.to_lowercase().contains("api-key")
-    {
-        "[redacted]".to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-fn plan_tool_env_helper(
-    home: &std::path::Path,
-    tool: ToolArg,
-    entry: &ToolEntry,
-) -> Result<(ConfigPlan, String)> {
-    let tool_id = match tool {
-        ToolArg::Codex => ToolId::Codex,
-        ToolArg::ClaudeCode => ToolId::ClaudeCode,
-        ToolArg::GeminiCli => ToolId::GeminiCli,
-        ToolArg::OpenCode => ToolId::OpenCode,
-    };
-    let tool_name = match tool {
-        ToolArg::Codex => "codex",
-        ToolArg::ClaudeCode => "claude-code",
-        ToolArg::GeminiCli => "gemini-cli",
-        ToolArg::OpenCode => "opencode",
-    };
-    let target = home
-        .join(".aipass")
-        .join("tools")
-        .join(format!("{tool_name}.env"));
-    let operation_id = Uuid::new_v4();
-    let backup_path = target
-        .parent()
-        .unwrap_or(home)
-        .join(".aipass-backups")
-        .join(format!(
-            "{}-{}.aipbackup",
-            operation_id,
-            time::OffsetDateTime::now_utc().unix_timestamp()
-        ));
-    let mut content = format!(
-        "# Generated by AIPass. This file stores helper references, not plaintext secrets.\n{}=\"$(aipass get {} --field api_key --reveal)\"\n",
-        entry.env_key, entry.id
-    );
-    if let Some(endpoint) = &entry.endpoint {
-        content.push_str(&format!("AIPASS_BASE_URL={}\n", shell_quote(endpoint)));
-    }
-    let plan = ConfigPlan {
-        operation_id,
-        tool: tool_id,
-        target_path: target,
-        backup_path,
-        summary: format!("Configure {tool_name} env helper for {}", entry.title),
-        preview: content.clone(),
-        extra_writes: Vec::new(),
-    };
-    Ok((plan, content))
-}
-
 fn copy_to_clipboard(secret: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let mut child = ProcessCommand::new("pbcopy")
@@ -1386,6 +896,27 @@ impl From<AuthArg> for AuthScheme {
             AuthArg::AzureApiKey => AuthScheme::AzureApiKey,
             AuthArg::AwsProfile => AuthScheme::AwsProfile,
             AuthArg::CustomHeader => AuthScheme::CustomHeader,
+        }
+    }
+}
+
+impl From<ToolArg> for aipass_agent_protocol::ToolConfigTool {
+    fn from(value: ToolArg) -> Self {
+        match value {
+            ToolArg::Codex => Self::Codex,
+            ToolArg::ClaudeCode => Self::ClaudeCode,
+            ToolArg::GeminiCli => Self::GeminiCli,
+            ToolArg::OpenCode => Self::OpenCode,
+        }
+    }
+}
+
+impl From<ConfigureMode> for aipass_agent_protocol::ToolConfigMode {
+    fn from(value: ConfigureMode) -> Self {
+        match value {
+            ConfigureMode::Helper => Self::Helper,
+            ConfigureMode::Env => Self::Env,
+            ConfigureMode::Plaintext => Self::Plaintext,
         }
     }
 }

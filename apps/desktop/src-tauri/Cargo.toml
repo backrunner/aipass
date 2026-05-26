@@ -17,6 +17,8 @@ path = "src/main.rs"
 tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
+aipass-agent = { path = "../../../crates/aipass-agent" }
+aipass-agent-protocol = { path = "../../../crates/aipass-agent-protocol" }
 aipass-config-writers = { path = "../../../crates/aipass-config-writers" }
 aipass-crypto = { path = "../../../crates/aipass-crypto" }
 aipass-provider-registry = { path = "../../../crates/aipass-provider-registry" }
@@ -26,6 +28,6 @@ aipass-vault = { path = "../../../crates/aipass-vault" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2.11.2", features = [] }
+tauri = { version = "2.11.2", features = ["macos-private-api"] }
 time.workspace = true
 uuid.workspace = true

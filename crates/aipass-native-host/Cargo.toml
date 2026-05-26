@@ -10,6 +10,8 @@ name = "aipass-native-host"
 path = "src/main.rs"
 
 [dependencies]
+aipass-agent = { path = "../aipass-agent" }
+aipass-agent-protocol = { path = "../aipass-agent-protocol" }
 aipass-crypto = { path = "../aipass-crypto" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
 aipass-storage = { path = "../aipass-storage" }
@@ -19,6 +21,7 @@ directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

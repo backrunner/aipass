@@ -81,6 +81,7 @@
   let previewLoading = false;
   let statusText = "";
   let copied = "";
+  let unlockBusy = false;
   let lastDraftKey = "";
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let previewRequestId = 0;
@@ -110,6 +111,31 @@
     const draftResponse = await sendToWorker<{ draft: SafeDraft | null }>({ type: "aipass.pendingDraft" });
     pendingDraft = draftResponse?.ok ? draftResponse.data?.draft ?? null : null;
     syncDraftForm();
+  }
+
+  async function openDesktopUnlock() {
+    if (unlockBusy) return;
+    unlockBusy = true;
+    const response = await sendToWorker<{ locked?: boolean }>({ type: "aipass.openUnlock" });
+    unlockBusy = false;
+    if (!response?.ok) {
+      statusText = response?.error ?? "Unable to open the unlock window";
+      return;
+    }
+    statusText = "Finish unlocking in AIPass";
+    void pollForUnlock();
+  }
+
+  async function pollForUnlock() {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await delay(750);
+      const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
+      if (ping?.ok && !ping.data?.locked) {
+        await refresh();
+        statusText = "AIPass unlocked";
+        return;
+      }
+    }
   }
 
   async function useEntry(entry: Entry) {
@@ -324,6 +350,10 @@
       return "";
     }
   }
+
+  function delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
 </script>
 
 <main class="popup">
@@ -346,7 +376,12 @@
     <section class="state">
       <Lock size={22} />
       <h1>AIPass is locked</h1>
-      <p>Unlock the desktop vault before filling or saving provider keys.</p>
+      <p>Unlock in the desktop app to keep using saved keys from the browser.</p>
+      <div class="unlock-actions">
+        <button type="button" on:click={openDesktopUnlock} disabled={unlockBusy}>
+          <Plus size={15} />Open AIPass
+        </button>
+      </div>
     </section>
   {:else}
     <section class="site">

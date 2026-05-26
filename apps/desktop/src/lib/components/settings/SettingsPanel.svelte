@@ -26,6 +26,8 @@
   export let selectedEntryId = "";
   export let autoLockMinutes = 15;
   export let clipboardClearSeconds = 45;
+  export let lockOnSleep = true;
+  export let lockOnScreenLock = true;
   export let newPassword = "";
   export let exportPath = "";
   export let exportPassword = "";
@@ -345,6 +347,12 @@
                     bind:value={clipboardClearSeconds}
                     on:change={() => onSavePreferences()}
                   />
+                </Field>
+                <Field label="Lock on sleep">
+                  <input type="checkbox" bind:checked={lockOnSleep} on:change={() => onSavePreferences()} />
+                </Field>
+                <Field label="Lock on screen lock">
+                  <input type="checkbox" bind:checked={lockOnScreenLock} on:change={() => onSavePreferences()} />
                 </Field>
               </div>
             </Card>

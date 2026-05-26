@@ -3,10 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use uuid::Uuid;
 
+use aipass_agent_protocol::SensitiveString;
 use aipass_provider_registry::{AuthScheme, InterfaceType};
+use zeroize::Zeroize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type")]
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum NativeRequest {
     #[serde(rename = "ping")]
     Ping {
@@ -52,7 +54,7 @@ pub enum NativeRequest {
         provider_id: Option<String>,
         interface_type: Option<InterfaceType>,
         auth_scheme: Option<AuthScheme>,
-        api_key: String,
+        api_key: SensitiveString,
         environment: Option<String>,
         tags: Vec<String>,
     },
@@ -67,7 +69,7 @@ pub enum NativeRequest {
         provider_id: Option<String>,
         interface_type: Option<InterfaceType>,
         auth_scheme: Option<AuthScheme>,
-        api_key: String,
+        api_key: SensitiveString,
         environment: Option<String>,
         tags: Vec<String>,
     },
@@ -76,6 +78,12 @@ pub enum NativeRequest {
         id: Uuid,
         extension_id: Option<String>,
         reason: String,
+    },
+    #[serde(rename = "session.unlock")]
+    SessionUnlock {
+        id: Uuid,
+        extension_id: Option<String>,
+        interactive: Option<String>,
     },
 }
 
@@ -109,14 +117,20 @@ pub fn read_message(mut reader: impl Read) -> Result<NativeRequest> {
     }
     let mut body = vec![0_u8; len];
     reader.read_exact(&mut body)?;
-    Ok(serde_json::from_slice(&body)?)
+    let parsed = serde_json::from_slice(&body);
+    body.zeroize();
+    Ok(parsed?)
 }
 
 pub fn write_message(mut writer: impl Write, response: &NativeResponse) -> Result<()> {
-    let body = serde_json::to_vec(response)?;
-    writer.write_all(&(body.len() as u32).to_le_bytes())?;
-    writer.write_all(&body)?;
-    Ok(())
+    let mut body = serde_json::to_vec(response)?;
+    let result = (|| {
+        writer.write_all(&(body.len() as u32).to_le_bytes())?;
+        writer.write_all(&body)?;
+        Ok(())
+    })();
+    body.zeroize();
+    result
 }
 
 fn normalize_extension_id(value: &str) -> String {

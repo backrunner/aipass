@@ -1,9 +1,7 @@
 mod config;
 mod manifest;
-mod preview;
 mod protocol;
 mod request;
-mod settings;
 
 pub use config::NativeHostConfig;
 pub use manifest::native_manifest;
@@ -15,11 +13,85 @@ pub use request::{handle_request, handle_request_with_config};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aipass_agent::{run_server, AgentClient, AgentClientConfig, ServerOptions};
+    use aipass_agent_protocol::{AgentRequest, SessionStatus, SessionUnlockMode};
     use aipass_crypto::SecretString;
     use aipass_vault::scan_for_plaintext;
     use std::path::PathBuf;
-    use tempfile::tempdir;
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+    use tempfile::{tempdir, TempDir};
     use uuid::Uuid;
+
+    struct RunningAgent {
+        dir: TempDir,
+        password: String,
+        client: AgentClient,
+        handle: Option<JoinHandle<()>>,
+    }
+
+    impl RunningAgent {
+        fn start() -> Self {
+            let dir = tempdir().unwrap();
+            let password = "correct horse battery staple".to_string();
+            aipass_vault::Vault::create(dir.path(), &SecretString::new(&password)).unwrap();
+            let vault_dir = dir.path().to_path_buf();
+            let handle = thread::spawn(move || {
+                run_server(ServerOptions { vault_dir }).unwrap();
+            });
+            let client =
+                AgentClient::new(AgentClientConfig::for_vault(dir.path().to_path_buf()).unwrap());
+            for _ in 0..50 {
+                if client
+                    .request::<SessionStatus>(&AgentRequest::SessionStatus)
+                    .is_ok()
+                {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Self {
+                dir,
+                password,
+                client,
+                handle: Some(handle),
+            }
+        }
+
+        fn config(&self) -> NativeHostConfig {
+            NativeHostConfig {
+                vault_dir: self.dir.path().to_path_buf(),
+                allowed_extension_ids: vec![],
+            }
+        }
+
+        fn config_with_allowed_extension(&self, extension_id: &str) -> NativeHostConfig {
+            NativeHostConfig {
+                vault_dir: self.dir.path().to_path_buf(),
+                allowed_extension_ids: vec![extension_id.to_string()],
+            }
+        }
+
+        fn unlock(&self) {
+            let _: SessionStatus = self
+                .client
+                .request(&AgentRequest::SessionUnlock {
+                    mode: SessionUnlockMode::Password {
+                        password: self.password.as_str().into(),
+                    },
+                })
+                .unwrap();
+        }
+    }
+
+    impl Drop for RunningAgent {
+        fn drop(&mut self) {
+            let _ = self.client.shutdown();
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
 
     #[test]
     fn rejects_unknown_extension() {
@@ -40,15 +112,18 @@ mod tests {
         bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&body);
         let parsed = read_message(bytes.as_slice()).unwrap();
-        let response = handle_request_with_config(
-            parsed,
-            &NativeHostConfig {
-                vault_dir: PathBuf::from("/tmp/missing"),
-                master_password: None,
-                allowed_extension_ids: vec![],
-            },
-        );
-        assert!(response.ok);
+        match parsed {
+            NativeRequest::Ping {
+                id: parsed_id,
+                protocol_version,
+                extension_id,
+            } => {
+                assert_eq!(parsed_id, id);
+                assert_eq!(protocol_version, 1);
+                assert_eq!(extension_id, None);
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
     }
 
     #[test]
@@ -61,7 +136,6 @@ mod tests {
             },
             &NativeHostConfig {
                 vault_dir: PathBuf::from("/tmp/missing"),
-                master_password: None,
                 allowed_extension_ids: vec!["good-extension-id".to_string()],
             },
         );
@@ -71,31 +145,43 @@ mod tests {
 
     #[test]
     fn accepts_native_request_with_allowed_extension_id() {
+        let agent = RunningAgent::start();
         let response = handle_request_with_config(
             NativeRequest::Ping {
                 id: Uuid::new_v4(),
                 protocol_version: 1,
                 extension_id: Some("chrome-extension://good-extension-id/".to_string()),
             },
-            &NativeHostConfig {
-                vault_dir: PathBuf::from("/tmp/missing"),
-                master_password: None,
-                allowed_extension_ids: vec!["good-extension-id".to_string()],
-            },
+            &agent.config_with_allowed_extension("good-extension-id"),
         );
         assert!(response.ok);
+        assert_eq!(response.data["locked"], true);
+    }
+
+    #[test]
+    fn session_unlock_requires_native_window_flow() {
+        let agent = RunningAgent::start();
+        let config = agent.config();
+        let response = handle_request_with_config(
+            NativeRequest::SessionUnlock {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                interactive: None,
+            },
+            &config,
+        );
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_deref(),
+            Some("interactive unlock via desktop window is required")
+        );
     }
 
     #[test]
     fn lookup_and_fill_uses_short_lived_grant() {
-        let dir = tempdir().unwrap();
-        let password = "correct horse battery staple".to_string();
-        aipass_vault::Vault::create(dir.path(), &SecretString::new(&password)).unwrap();
-        let config = NativeHostConfig {
-            vault_dir: dir.path().to_path_buf(),
-            master_password: Some(password),
-            allowed_extension_ids: vec![],
-        };
+        let agent = RunningAgent::start();
+        agent.unlock();
+        let config = agent.config();
         let save = handle_request_with_config(
             NativeRequest::SaveDetected {
                 id: Uuid::new_v4(),
@@ -107,7 +193,7 @@ mod tests {
                 provider_id: Some("anthropic".to_string()),
                 interface_type: Some(aipass_provider_registry::InterfaceType::AnthropicMessages),
                 auth_scheme: Some(aipass_provider_registry::AuthScheme::XApiKey),
-                api_key: "sk-ant-api03-browser-secret".to_string(),
+                api_key: "sk-ant-api03-browser-secret".into(),
                 environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
             },
@@ -140,7 +226,8 @@ mod tests {
         );
         assert!(fill.ok, "{fill:?}");
         assert_eq!(fill.data["secret"], "sk-ant-api03-browser-secret");
-        let matches = scan_for_plaintext(dir.path(), &["sk-ant-api03-browser-secret"]).unwrap();
+        let matches =
+            scan_for_plaintext(agent.dir.path(), &["sk-ant-api03-browser-secret"]).unwrap();
         assert!(
             matches.is_empty(),
             "native host leaked plaintext to {matches:?}"
@@ -149,14 +236,9 @@ mod tests {
 
     #[test]
     fn save_detected_infers_endpoint_interface_and_auth() {
-        let dir = tempdir().unwrap();
-        let password = "correct horse battery staple".to_string();
-        aipass_vault::Vault::create(dir.path(), &SecretString::new(&password)).unwrap();
-        let config = NativeHostConfig {
-            vault_dir: dir.path().to_path_buf(),
-            master_password: Some(password),
-            allowed_extension_ids: vec![],
-        };
+        let agent = RunningAgent::start();
+        agent.unlock();
+        let config = agent.config();
         let save = handle_request_with_config(
             NativeRequest::SaveDetected {
                 id: Uuid::new_v4(),
@@ -168,7 +250,7 @@ mod tests {
                 provider_id: None,
                 interface_type: None,
                 auth_scheme: None,
-                api_key: "sk-gateway-secret-value".to_string(),
+                api_key: "sk-gateway-secret-value".into(),
                 environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
             },
@@ -176,7 +258,7 @@ mod tests {
         );
         assert!(save.ok, "{save:?}");
         let vault = aipass_vault::Vault::open(
-            dir.path(),
+            agent.dir.path(),
             &SecretString::new("correct horse battery staple"),
         )
         .unwrap();
@@ -193,14 +275,9 @@ mod tests {
 
     #[test]
     fn preview_detected_reports_preview_without_persisting() {
-        let dir = tempdir().unwrap();
-        let password = "correct horse battery staple".to_string();
-        aipass_vault::Vault::create(dir.path(), &SecretString::new(&password)).unwrap();
-        let config = NativeHostConfig {
-            vault_dir: dir.path().to_path_buf(),
-            master_password: Some(password),
-            allowed_extension_ids: vec![],
-        };
+        let agent = RunningAgent::start();
+        agent.unlock();
+        let config = agent.config();
         let preview = handle_request_with_config(
             NativeRequest::PreviewDetected {
                 id: Uuid::new_v4(),
@@ -212,7 +289,7 @@ mod tests {
                 provider_id: None,
                 interface_type: None,
                 auth_scheme: None,
-                api_key: "sk-gateway-secret-value".to_string(),
+                api_key: "sk-gateway-secret-value".into(),
                 environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
             },
@@ -222,7 +299,7 @@ mod tests {
         assert_eq!(preview.data["maskedSecret"], "•••• alue");
         assert!(!preview.data["fingerprint"].as_str().unwrap().is_empty());
         let vault = aipass_vault::Vault::open(
-            dir.path(),
+            agent.dir.path(),
             &SecretString::new("correct horse battery staple"),
         )
         .unwrap();
@@ -231,12 +308,8 @@ mod tests {
 
     #[test]
     fn ignored_origins_are_persisted_in_native_host_storage() {
-        let dir = tempdir().unwrap();
-        let config = NativeHostConfig {
-            vault_dir: dir.path().join("vault"),
-            master_password: None,
-            allowed_extension_ids: vec![],
-        };
+        let agent = RunningAgent::start();
+        let config = agent.config();
 
         let ignored = handle_request_with_config(
             NativeRequest::IgnoreOrigin {

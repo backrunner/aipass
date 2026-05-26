@@ -1,31 +1,37 @@
 [package]
-name = "aipass-cli"
+name = "aipass-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "aipass_agent"
+path = "src/lib.rs"
+
 [[bin]]
-name = "aipass"
+name = "aipass-agent"
 path = "src/main.rs"
 
 [dependencies]
-aipass-agent = { path = "../aipass-agent" }
 aipass-agent-protocol = { path = "../aipass-agent-protocol" }
 aipass-config-writers = { path = "../aipass-config-writers" }
 aipass-crypto = { path = "../aipass-crypto" }
-aipass-native-host = { path = "../aipass-native-host" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
 aipass-storage = { path = "../aipass-storage" }
 aipass-sync = { path = "../aipass-sync" }
 aipass-vault = { path = "../aipass-vault" }
 anyhow.workspace = true
 clap.workspace = true
-clap_complete.workspace = true
 directories.workspace = true
+interprocess.workspace = true
 reqwest.workspace = true
-rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 time.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-service.workspace = true

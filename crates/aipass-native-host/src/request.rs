@@ -1,12 +1,13 @@
 use crate::config::NativeHostConfig;
-use crate::preview::{detected_secret_preview, DetectedSecretFields};
 use crate::protocol::{validate_extension_id, NativeRequest, NativeResponse};
-use crate::settings::{ignore_origin, is_origin_ignored};
-use aipass_crypto::SecretString;
-use aipass_provider_registry::{match_provider_by_domain, provider_kind_for_id};
-use aipass_provider_registry::{AuthScheme, InterfaceType, ProviderEndpoint};
-use aipass_vault::{ProviderEntryInput, TtlGrantSummary, Vault};
-use anyhow::{bail, Context, Result};
+use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
+use aipass_agent_protocol::{
+    AgentErrorCode, AgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
+    BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
+    BrowserIgnoredStatus, SaveDetectedResult, SessionStatus, SessionUnlockMode,
+};
+use anyhow::{bail, Result};
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -54,40 +55,73 @@ fn handle_request_inner(
         NativeRequest::Ping {
             protocol_version: 1,
             ..
-        } => Ok(json!({ "protocolVersion": 1, "locked": config.master_password.is_none() })),
+        } => {
+            let status = session_status(config)?;
+            Ok(json!({
+                "protocolVersion": 1,
+                "locked": status.locked,
+                "exists": status.exists,
+            }))
+        }
         NativeRequest::Ping { .. } => bail!("unsupported protocol version"),
-        NativeRequest::UnlockRequest { reason, .. } => Ok(json!({
-            "locked": config.master_password.is_none(),
-            "reason": reason,
-            "desktopRequired": config.master_password.is_none()
-        })),
+        NativeRequest::UnlockRequest { reason, .. } => {
+            let _: SessionStatus = request_agent(
+                config,
+                &AgentRequest::SessionUnlock {
+                    mode: SessionUnlockMode::NativeWindow,
+                },
+            )?;
+            let status = session_status(config)?;
+            Ok(json!({
+                "locked": status.locked,
+                "reason": reason,
+                "desktopRequired": true
+            }))
+        }
+        NativeRequest::SessionUnlock { interactive, .. } => {
+            let status: SessionStatus = if interactive.as_deref() == Some("native_window") {
+                request_agent(
+                    config,
+                    &AgentRequest::SessionUnlock {
+                        mode: SessionUnlockMode::NativeWindow,
+                    },
+                )?
+            } else {
+                bail!("interactive unlock via desktop window is required")
+            };
+            Ok(json!({
+                "locked": status.locked,
+                "exists": status.exists,
+                "policy": status.policy,
+                "vaultNamespace": status.vault_namespace,
+            }))
+        }
         NativeRequest::IsOriginIgnored { origin, .. } => {
-            Ok(json!({ "ignored": is_origin_ignored(&config.vault_dir, &origin)? }))
+            let result: BrowserIgnoredStatus =
+                request_agent(config, &AgentRequest::BrowserIsOriginIgnored { origin })?;
+            Ok(serde_json::to_value(result)?)
         }
         NativeRequest::IgnoreOrigin { origin, .. } => {
-            Ok(json!({ "ignoredOrigins": ignore_origin(&config.vault_dir, &origin)? }))
+            let result: BrowserIgnoreOriginResult =
+                request_agent(config, &AgentRequest::BrowserIgnoreOrigin { origin })?;
+            Ok(serde_json::to_value(result)?)
         }
         NativeRequest::ContextLookup { origin, url, .. } => {
-            let vault = open_vault(config)?;
-            let mut entries = vault.lookup_by_origin(&origin)?;
-            if entries.is_empty() {
-                entries = vault.lookup_by_origin(&url)?;
-            }
-            let grants = entries
-                .iter()
-                .take(5)
-                .map(|entry| {
-                    vault.create_secret_grant(entry.id, "chrome.fill", 120, Some(origin.clone()))
-                })
-                .collect::<Result<Vec<TtlGrantSummary>, _>>()?;
-            Ok(json!({ "entries": entries, "grants": grants }))
+            let result: BrowserContextLookupData =
+                request_agent(config, &AgentRequest::BrowserContextLookup { origin, url })?;
+            Ok(serde_json::to_value(result)?)
         }
         NativeRequest::SecretFill {
             entry_id, grant_id, ..
         } => {
-            let vault = open_vault(config)?;
-            let secret = vault.consume_secret_grant(grant_id)?;
-            Ok(json!({ "entryId": entry_id, "field": "api_key", "secret": secret }))
+            let result: BrowserFillResult = request_agent(
+                config,
+                &AgentRequest::BrowserSecretFill {
+                    entry_id: Some(entry_id),
+                    grant_id,
+                },
+            )?;
+            Ok(serde_json::to_value(result)?)
         }
         NativeRequest::PreviewDetected {
             origin,
@@ -102,25 +136,28 @@ fn handle_request_inner(
             tags,
             ..
         } => {
-            let vault = open_vault(config)?;
-            let fields = DetectedSecretFields {
-                origin,
-                url,
-                title,
-                endpoint,
-                provider_id,
-                interface_type,
-                auth_scheme,
-                api_key,
-                environment,
-                tags,
-            };
-            Ok(serde_json::to_value(detected_secret_preview(
-                &vault, &fields,
-            ))?)
+            let result: BrowserDetectedSecretPreview = request_agent(
+                config,
+                &AgentRequest::BrowserPreviewDetected {
+                    fields: BrowserDetectedSecretFields {
+                        origin,
+                        url,
+                        title,
+                        endpoint,
+                        provider_id,
+                        interface_type,
+                        auth_scheme,
+                        api_key,
+                        environment,
+                        tags,
+                    },
+                },
+            )?;
+            Ok(serde_json::to_value(result)?)
         }
         NativeRequest::SaveDetected {
             origin,
+            url,
             title,
             endpoint,
             provider_id,
@@ -131,72 +168,24 @@ fn handle_request_inner(
             tags,
             ..
         } => {
-            let vault = open_vault(config)?;
-            let domain = crate::preview::host_from_origin(&origin);
-            let provider_guess = provider_id.clone().or_else(|| {
-                match_provider_by_domain(&domain).map(|provider| provider.id.to_string())
-            });
-            let provider_kind = provider_guess
-                .as_deref()
-                .map(|id| provider_kind_for_id(Some(id)))
-                .unwrap_or(aipass_provider_registry::ProviderKind::Unknown);
-            let interface_type = interface_type.unwrap_or_else(|| {
-                endpoint
-                    .as_deref()
-                    .and_then(|endpoint| {
-                        let endpoint = endpoint.to_lowercase();
-                        if endpoint.contains("generativelanguage") || endpoint.contains("gemini") {
-                            Some(InterfaceType::Gemini)
-                        } else if endpoint.contains("anthropic") {
-                            Some(InterfaceType::AnthropicMessages)
-                        } else if endpoint.contains("openai")
-                            || endpoint.contains("/v1")
-                            || endpoint.contains("gateway")
-                            || endpoint.contains("one-api")
-                            || endpoint.contains("new-api")
-                            || endpoint.contains("litellm")
-                            || endpoint.contains("sub2api")
-                        {
-                            Some(InterfaceType::OpenAiCompatible)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(InterfaceType::CustomHttp)
-            });
-            let auth_scheme = auth_scheme.unwrap_or(match interface_type {
-                InterfaceType::AnthropicMessages => AuthScheme::XApiKey,
-                InterfaceType::Gemini => AuthScheme::GoogleApiKey,
-                InterfaceType::AzureOpenAi => AuthScheme::AzureApiKey,
-                InterfaceType::Bedrock => AuthScheme::AwsProfile,
-                InterfaceType::OpenAiCompatible => AuthScheme::Bearer,
-                InterfaceType::CustomHttp => AuthScheme::CustomHeader,
-            });
-            let title = title.unwrap_or_else(|| {
-                provider_guess
-                    .as_deref()
-                    .unwrap_or("browser-provider")
-                    .to_string()
-            });
-            let api_key = SecretString::new(api_key);
-            let entry_id = vault.add_provider(ProviderEntryInput {
-                title,
-                provider_kind,
-                provider_id,
-                domains: vec![domain.clone()],
-                favicon_url: None,
-                endpoints: endpoint.into_iter().map(ProviderEndpoint::api).collect(),
-                interface_type,
-                auth_scheme,
-                api_key: api_key.expose().to_string(),
-                default_model: None,
-                headers: Vec::new(),
-                quota: None,
-                tags,
-                environment: environment.unwrap_or_else(|| "browser".to_string()),
-                notes: Some(format!("Captured from {origin}")),
-            })?;
-            Ok(json!({ "entryId": entry_id }))
+            let result: SaveDetectedResult = request_agent(
+                config,
+                &AgentRequest::BrowserSaveDetected {
+                    fields: BrowserDetectedSecretFields {
+                        origin,
+                        url,
+                        title,
+                        endpoint,
+                        provider_id,
+                        interface_type,
+                        auth_scheme,
+                        api_key,
+                        environment,
+                        tags,
+                    },
+                },
+            )?;
+            Ok(serde_json::to_value(result)?)
         }
     }
 }
@@ -210,7 +199,8 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::SecretFill { id, .. }
         | NativeRequest::SaveDetected { id, .. }
         | NativeRequest::PreviewDetected { id, .. }
-        | NativeRequest::UnlockRequest { id, .. } => *id,
+        | NativeRequest::UnlockRequest { id, .. }
+        | NativeRequest::SessionUnlock { id, .. } => *id,
     }
 }
 
@@ -223,7 +213,8 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::SecretFill { extension_id, .. }
         | NativeRequest::SaveDetected { extension_id, .. }
         | NativeRequest::PreviewDetected { extension_id, .. }
-        | NativeRequest::UnlockRequest { extension_id, .. } => extension_id.as_deref(),
+        | NativeRequest::UnlockRequest { extension_id, .. }
+        | NativeRequest::SessionUnlock { extension_id, .. } => extension_id.as_deref(),
     }
 }
 
@@ -246,13 +237,44 @@ fn response(id: Uuid, ok: bool, error: Option<String>, data: serde_json::Value) 
     }
 }
 
-fn open_vault(config: &NativeHostConfig) -> Result<Vault> {
-    let password = config.master_password.as_ref().context("vault is locked")?;
-    Vault::open(&config.vault_dir, &SecretString::new(password)).map_err(Into::into)
+fn session_status(config: &NativeHostConfig) -> Result<SessionStatus> {
+    request_agent(config, &AgentRequest::SessionStatus)
+}
+
+fn request_agent<T: DeserializeOwned>(
+    config: &NativeHostConfig,
+    request: &AgentRequest,
+) -> Result<T> {
+    let client = AgentClient::new(AgentClientConfig::for_vault(config.vault_dir.clone())?);
+    match client.request::<T>(request) {
+        Ok(value) => Ok(value),
+        Err(err) if matches!(err.code, Some(AgentErrorCode::ServiceUnavailable)) => {
+            client.ensure_running()?;
+            client.request::<T>(request).map_err(agent_error_to_anyhow)
+        }
+        Err(err) => Err(agent_error_to_anyhow(err)),
+    }
+}
+
+fn agent_error_to_anyhow(err: AgentCommandError) -> anyhow::Error {
+    let message = match err.code {
+        Some(code) => format!(
+            "{}: {}",
+            aipass_agent_protocol::error_code_name(&code),
+            err.message
+        ),
+        None => err.message,
+    };
+    anyhow::anyhow!(message)
 }
 
 fn redact_error(value: &str) -> String {
-    if value.contains("sk-") || value.contains("AIza") {
+    if value.contains("sk-")
+        || value.contains("AIza")
+        || value.contains("key=")
+        || value.to_lowercase().contains("authorization")
+        || value.to_lowercase().contains("api-key")
+    {
         "[redacted]".to_string()
     } else {
         value.to_string()

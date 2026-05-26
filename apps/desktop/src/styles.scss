@@ -59,7 +59,6 @@
   font-family: var(--font-sans);
   font-size: 14px;
   font-feature-settings: "ss01", "cv11";
-  background: var(--bg);
   color: var(--text);
 }
 
@@ -73,10 +72,22 @@ body,
   height: 100%;
 }
 
+html,
+body {
+  background: transparent;
+}
+
+#app {
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+}
+
 body {
   margin: 0;
   min-width: 320px;
-  background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;

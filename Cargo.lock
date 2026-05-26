@@ -28,9 +28,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "aipass-agent"
+version = "1.0.0"
+dependencies = [
+ "aipass-agent-protocol",
+ "aipass-config-writers",
+ "aipass-crypto",
+ "aipass-provider-registry",
+ "aipass-storage",
+ "aipass-sync",
+ "aipass-vault",
+ "anyhow",
+ "clap",
+ "directories",
+ "interprocess",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "uuid",
+ "windows-service",
+ "zeroize",
+]
+
+[[package]]
+name = "aipass-agent-protocol"
+version = "1.0.0"
+dependencies = [
+ "aipass-provider-registry",
+ "aipass-sync",
+ "aipass-vault",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "time",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "aipass-cli"
 version = "1.0.0"
 dependencies = [
+ "aipass-agent",
+ "aipass-agent-protocol",
  "aipass-config-writers",
  "aipass-crypto",
  "aipass-native-host",
@@ -43,6 +85,7 @@ dependencies = [
  "clap_complete",
  "directories",
  "reqwest",
+ "rpassword",
  "serde",
  "serde_json",
  "time",
@@ -89,6 +132,8 @@ dependencies = [
 name = "aipass-desktop"
 version = "1.0.0"
 dependencies = [
+ "aipass-agent",
+ "aipass-agent-protocol",
  "aipass-config-writers",
  "aipass-crypto",
  "aipass-provider-registry",
@@ -108,6 +153,8 @@ dependencies = [
 name = "aipass-native-host"
 version = "1.0.0"
 dependencies = [
+ "aipass-agent",
+ "aipass-agent-protocol",
  "aipass-crypto",
  "aipass-provider-registry",
  "aipass-storage",
@@ -118,6 +165,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -996,6 +1044,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "doctest-file"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2db04e74f0a9a93103b50e90b96024c9b2bdca8bce6a632ec71b88736d3d359"
 
 [[package]]
 name = "dom_query"
@@ -1963,6 +2017,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "interprocess"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "069323743400cb7ab06a8fe5c1ed911d36b6919ec531661d034c89083629595b"
+dependencies = [
+ "doctest-file",
+ "libc",
+ "recvmsg",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3065,6 +3132,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
+name = "recvmsg"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3189,6 +3262,27 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rpassword"
+version = "7.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "835a57a69104632d64deb0df2e09a69945cd7a6eab4070fc9b1d7e50cf6c3edc"
+dependencies = [
+ "libc",
+ "rtoolbox",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rtoolbox"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50a0e551c1e27e1731aba276dbeaeac73f53c7cd34d1bda485d02bd1e0f36844"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4926,6 +5020,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5101,6 +5201,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "857224b3b211c6f3616921f081ee54721ee3ad2ace2fac6a6337e032f7b4dcf2"
+dependencies = [
+ "bitflags 2.11.1",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

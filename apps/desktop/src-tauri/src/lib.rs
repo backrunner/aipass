@@ -1,772 +1,81 @@
-use aipass_config_writers::{
-    apply_plan_encrypted, plan_claude_code, plan_claude_code_plaintext, plan_codex,
-    plan_codex_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode,
-    plan_opencode_plaintext, ApplyResult, ConfigPlan, ToolEntry,
-};
-use aipass_crypto::SecretString;
-use aipass_provider_registry::{
-    provider_kind_for_id, AuthScheme, EndpointKind, InterfaceType, ProviderEndpoint, QuotaInfo,
-};
+mod auth_tasks;
+mod commands;
+mod models;
+
+use commands::*;
+
+use crate::auth_tasks::AuthTasks;
+use crate::models::{AppPreferences, ProviderAddRequest, ProviderUpdateRequest};
+use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
+use aipass_agent_protocol::{AgentRequest, LockReason, SessionPolicy, SessionStatus};
+use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
 use aipass_storage::atomic_write_bytes;
-use aipass_sync::{
-    accept_conflict, discard_conflict, list_conflicts, sync_local_folder, sync_webdav,
-    ConflictRecord, HttpWebDavClient, SyncObject, SyncReport,
-};
-use aipass_vault::{
-    DeviceRecord, EncryptedVaultExport, EntrySummary, ProviderEntryInput, ProviderEntryUpdateInput,
-    RecoveryKit, Vault,
-};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
-use uuid::Uuid;
+use tauri::{AppHandle, LogicalSize, Manager, Size};
 
-const AUTH_TASK_RETENTION: Duration = Duration::from_secs(300);
+#[cfg(test)]
+use crate::models::ProbeResult;
+#[cfg(test)]
+use aipass_provider_registry::{AuthScheme, InterfaceType};
+#[cfg(test)]
+use aipass_vault::EntrySummary;
+#[cfg(test)]
+use std::time::Duration;
+#[cfg(test)]
+use uuid::Uuid;
 
 #[derive(Default)]
 struct AppState {
-    session: Arc<Mutex<Option<Vault>>>,
-    auth_tasks: Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
+    auth_tasks: AuthTasks,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct VaultStatus {
-    exists: bool,
-    locked: bool,
+fn agent_client(app: &AppHandle) -> Result<AgentClient, String> {
+    let config = AgentClientConfig::for_vault(vault_dir(app)?).map_err(|err| err.to_string())?;
+    Ok(AgentClient::new(config))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AppPreferences {
-    auto_lock_minutes: u16,
-    clipboard_clear_seconds: u16,
+fn agent_request<T: DeserializeOwned>(app: &AppHandle, request: AgentRequest) -> Result<T, String> {
+    let client = agent_client(app)?;
+    client.ensure_running().map_err(|err| err.to_string())?;
+    client.request(&request).map_err(agent_error_to_string)
 }
 
-impl Default for AppPreferences {
-    fn default() -> Self {
-        Self {
-            auto_lock_minutes: 15,
-            clipboard_clear_seconds: 45,
-        }
+fn agent_request_no_unlock<T: DeserializeOwned>(
+    app: &AppHandle,
+    request: AgentRequest,
+) -> Result<T, String> {
+    let client = agent_client(app)?;
+    client.ensure_running().map_err(|err| err.to_string())?;
+    client.request(&request).map_err(agent_error_to_string)
+}
+
+fn agent_status(app: &AppHandle) -> SessionStatus {
+    agent_request_no_unlock::<SessionStatus>(app, AgentRequest::SessionStatus).unwrap_or(
+        SessionStatus {
+            exists: vault_dir(app)
+                .map(|root| root.join("manifest.aipmanifest").exists())
+                .unwrap_or(false),
+            locked: true,
+            policy: SessionPolicy::default(),
+            last_lock_reason: Some(LockReason::AgentRestart),
+            vault_namespace: None,
+        },
+    )
+}
+
+fn agent_error_to_string(err: AgentCommandError) -> String {
+    match err.code {
+        Some(code) => format!(
+            "{}: {}",
+            aipass_agent_protocol::error_code_name(&code),
+            err.message
+        ),
+        None => err.message,
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SavePreferencesRequest {
-    auto_lock_minutes: u16,
-    clipboard_clear_seconds: u16,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateVaultRequest {
-    password: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct VaultAuthTaskStartResponse {
-    task_id: Uuid,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VaultAuthTaskStatusRequest {
-    task_id: Uuid,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum VaultAuthTaskPhase {
-    Pending,
-    Succeeded,
-    Failed,
-}
-
-#[derive(Clone, Debug)]
-enum VaultAuthTaskState {
-    Pending {
-        message: String,
-    },
-    Succeeded {
-        message: String,
-        exists: bool,
-        locked: bool,
-        recovery_kit: Option<RecoveryKit>,
-    },
-    Failed {
-        message: String,
-        error: String,
-    },
-}
-
-#[derive(Clone, Debug)]
-struct StoredVaultAuthTask {
-    state: VaultAuthTaskState,
-    finished_at: Option<Instant>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct VaultAuthTaskStatusResponse {
-    task_id: Uuid,
-    phase: VaultAuthTaskPhase,
-    message: String,
-    exists: Option<bool>,
-    locked: Option<bool>,
-    recovery_kit: Option<RecoveryKit>,
-    error: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UnlockVaultRequest {
-    password: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RecoveryVaultRequest {
-    recovery_key: String,
-    new_password: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ChangePasswordRequest {
-    new_password: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderAddRequest {
-    title: String,
-    provider_id: Option<String>,
-    #[serde(default)]
-    domain: Vec<String>,
-    endpoint: Option<String>,
-    favicon_url: Option<String>,
-    interface_type: InterfaceType,
-    auth_scheme: AuthScheme,
-    api_key: String,
-    default_model: Option<String>,
-    #[serde(default)]
-    headers: Vec<(String, String)>,
-    quota: Option<QuotaInfo>,
-    environment: String,
-    #[serde(default)]
-    tags: Vec<String>,
-    notes: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProviderUpdateRequest {
-    id: Uuid,
-    title: String,
-    provider_id: Option<String>,
-    #[serde(default)]
-    domain: Vec<String>,
-    endpoint: Option<String>,
-    favicon_url: Option<String>,
-    interface_type: InterfaceType,
-    auth_scheme: AuthScheme,
-    api_key: Option<String>,
-    default_model: Option<String>,
-    headers: Option<Vec<(String, String)>>,
-    quota: Option<QuotaInfo>,
-    environment: String,
-    #[serde(default)]
-    tags: Vec<String>,
-    notes: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProbeResult {
-    ok: bool,
-    provider_id: Option<String>,
-    interface_type: InterfaceType,
-    status: Option<u16>,
-    endpoint: Option<String>,
-    model_count: Option<usize>,
-    error: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VaultExportRequest {
-    output: PathBuf,
-    export_password: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VaultImportRequest {
-    input: PathBuf,
-    export_password: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncLocalRequest {
-    dir: PathBuf,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncWebDavRequest {
-    url: String,
-    username: Option<String>,
-    password: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncConflictsRequest {
-    dir: Option<PathBuf>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum ConflictScope {
-    Vault,
-    Sync,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncConflictActionRequest {
-    scope: ConflictScope,
-    dir: Option<PathBuf>,
-    conflict_path: PathBuf,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncConflictResponse {
-    scope: ConflictScope,
-    origin: String,
-    conflict_path: PathBuf,
-    target_path: PathBuf,
-    object: SyncObject,
-    conflict_summary: Option<EntrySummary>,
-    target_summary: Option<EntrySummary>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum ToolConfigTool {
-    Codex,
-    ClaudeCode,
-    GeminiCli,
-    OpenCode,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum ToolConfigMode {
-    Helper,
-    Plaintext,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ToolConfigRequest {
-    tool: ToolConfigTool,
-    id: Uuid,
-    mode: ToolConfigMode,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ToolConfigPreviewResponse {
-    tool: ToolConfigTool,
-    mode: ToolConfigMode,
-    entry_id: Uuid,
-    entry_title: String,
-    target_path: String,
-    summary: String,
-    preview: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ToolConfigApplyResponse {
-    tool: ToolConfigTool,
-    mode: ToolConfigMode,
-    entry_id: Uuid,
-    entry_title: String,
-    operation_id: Uuid,
-    target_path: String,
-    backup_path: String,
-    summary: String,
-}
-
-#[tauri::command]
-fn vault_status(app: AppHandle, state: State<'_, AppState>) -> Result<VaultStatus, String> {
-    let root = vault_dir(&app)?;
-    let locked = state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())?
-        .is_none();
-    Ok(VaultStatus {
-        exists: root.join("manifest.aipmanifest").exists(),
-        locked,
-    })
-}
-
-#[tauri::command]
-fn preferences_load(app: AppHandle) -> Result<AppPreferences, String> {
-    load_preferences(&app)
-}
-
-#[tauri::command]
-fn preferences_save(
-    app: AppHandle,
-    request: SavePreferencesRequest,
-) -> Result<AppPreferences, String> {
-    let preferences = AppPreferences {
-        auto_lock_minutes: request.auto_lock_minutes.min(240),
-        clipboard_clear_seconds: request.clipboard_clear_seconds.min(600),
-    };
-    save_preferences(&app, &preferences)?;
-    Ok(preferences)
-}
-
-#[tauri::command]
-async fn vault_create(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: CreateVaultRequest,
-) -> Result<VaultAuthTaskStartResponse, String> {
-    let root = vault_dir(&app)?;
-    let password = request.password;
-    let task_id = Uuid::new_v4();
-    let app_handle = app.clone();
-    let session = state.session.clone();
-    let auth_tasks = state.auth_tasks.clone();
-    prune_auth_tasks(&auth_tasks);
-    set_auth_task_state(
-        &auth_tasks,
-        task_id,
-        VaultAuthTaskState::Pending {
-            message: "Creating encrypted vault".to_string(),
-        },
-    )?;
-    tauri::async_runtime::spawn(async move {
-        let result = run_blocking(move || {
-            Vault::create(&root, &SecretString::new(password)).map_err(|err| err.to_string())
-        })
-        .await;
-        finish_vault_create_task(app_handle, auth_tasks, session, task_id, result);
-    });
-    Ok(VaultAuthTaskStartResponse { task_id })
-}
-
-#[tauri::command]
-async fn vault_unlock(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: UnlockVaultRequest,
-) -> Result<VaultAuthTaskStartResponse, String> {
-    let root = vault_dir(&app)?;
-    let password = request.password;
-    let task_id = Uuid::new_v4();
-    let app_handle = app.clone();
-    let session = state.session.clone();
-    let auth_tasks = state.auth_tasks.clone();
-    prune_auth_tasks(&auth_tasks);
-    set_auth_task_state(
-        &auth_tasks,
-        task_id,
-        VaultAuthTaskState::Pending {
-            message: "Unlocking vault".to_string(),
-        },
-    )?;
-    tauri::async_runtime::spawn(async move {
-        let result = run_blocking(move || {
-            Vault::open(&root, &SecretString::new(password)).map_err(|err| err.to_string())
-        })
-        .await;
-        finish_vault_unlock_task(app_handle, auth_tasks, session, task_id, result);
-    });
-    Ok(VaultAuthTaskStartResponse { task_id })
-}
-
-#[tauri::command]
-async fn vault_recover(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: RecoveryVaultRequest,
-) -> Result<VaultAuthTaskStartResponse, String> {
-    let root = vault_dir(&app)?;
-    let recovery_key = request.recovery_key;
-    let new_password = request.new_password;
-    let task_id = Uuid::new_v4();
-    let app_handle = app.clone();
-    let session = state.session.clone();
-    let auth_tasks = state.auth_tasks.clone();
-    prune_auth_tasks(&auth_tasks);
-    set_auth_task_state(
-        &auth_tasks,
-        task_id,
-        VaultAuthTaskState::Pending {
-            message: "Recovering vault".to_string(),
-        },
-    )?;
-    tauri::async_runtime::spawn(async move {
-        let result = run_blocking(move || {
-            Vault::recover_master_password(
-                &root,
-                &SecretString::new(recovery_key),
-                &SecretString::new(new_password),
-            )
-            .map_err(|err| err.to_string())
-        })
-        .await;
-        finish_vault_create_task(app_handle, auth_tasks, session, task_id, result);
-    });
-    Ok(VaultAuthTaskStartResponse { task_id })
-}
-
-#[tauri::command]
-fn vault_auth_status(
-    state: State<'_, AppState>,
-    request: VaultAuthTaskStatusRequest,
-) -> Result<VaultAuthTaskStatusResponse, String> {
-    prune_auth_tasks(&state.auth_tasks);
-    let task_id = request.task_id;
-    let tasks = state
-        .auth_tasks
-        .lock()
-        .map_err(|_| "auth task lock poisoned".to_string())?;
-    let snapshot = tasks
-        .get(&task_id)
-        .map(|task| task.state.clone())
-        .ok_or_else(|| format!("auth task {task_id} not found"))?;
-    Ok(auth_task_status_response(task_id, snapshot))
-}
-
-#[tauri::command]
-fn vault_lock(state: State<'_, AppState>) -> Result<VaultStatus, String> {
-    *state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())? = None;
-    Ok(VaultStatus {
-        exists: true,
-        locked: true,
-    })
-}
-
-#[tauri::command]
-async fn vault_change_password(
-    state: State<'_, AppState>,
-    request: ChangePasswordRequest,
-) -> Result<(), String> {
-    let vault = take_session_vault(&state)?;
-    let new_password = request.new_password;
-    let (vault, result) = run_blocking(move || {
-        let mut vault = vault;
-        let result = vault
-            .change_master_password(&SecretString::new(new_password))
-            .map_err(|err| err.to_string());
-        Ok((vault, result))
-    })
-    .await?;
-    put_session_vault(&state, vault)?;
-    result
-}
-
-#[tauri::command]
-async fn vault_rotate(state: State<'_, AppState>) -> Result<(), String> {
-    let vault = take_session_vault(&state)?;
-    let (vault, result) = run_blocking(move || {
-        let mut vault = vault;
-        let result = vault
-            .advance_epoch_and_rewrap("desktop.rotate")
-            .map(|_| ())
-            .map_err(|err| err.to_string());
-        Ok((vault, result))
-    })
-    .await?;
-    put_session_vault(&state, vault)?;
-    result
-}
-
-#[tauri::command]
-fn entries_list(
-    state: State<'_, AppState>,
-    archived: Option<bool>,
-) -> Result<Vec<EntrySummary>, String> {
-    with_vault(state, |vault| {
-        if archived.unwrap_or(false) {
-            vault
-                .list_archived_provider_summaries()
-                .map_err(|err| err.to_string())
-        } else {
-            vault
-                .list_provider_summaries()
-                .map_err(|err| err.to_string())
-        }
-    })
-}
-
-#[tauri::command]
-fn entries_search(state: State<'_, AppState>, query: String) -> Result<Vec<EntrySummary>, String> {
-    with_vault(state, |vault| {
-        vault.search(&query).map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn provider_add(state: State<'_, AppState>, request: ProviderAddRequest) -> Result<Uuid, String> {
-    with_vault(state, |vault| {
-        vault
-            .add_provider(provider_add_input(request))
-            .map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn provider_update(
-    state: State<'_, AppState>,
-    request: ProviderUpdateRequest,
-) -> Result<(), String> {
-    with_vault(state, |vault| {
-        let id = request.id;
-        vault
-            .update_provider(id, provider_update_input(request))
-            .map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn provider_archive(state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
-    with_vault(state, |vault| {
-        vault.archive_provider(id).map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn provider_restore(state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
-    with_vault(state, |vault| {
-        vault.restore_provider(id).map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn provider_delete(state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
-    with_vault(state, |vault| {
-        vault
-            .delete_provider_permanently(id)
-            .map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn secret_reveal_field(
-    state: State<'_, AppState>,
-    id: Uuid,
-    field: String,
-) -> Result<String, String> {
-    with_vault(state, |vault| {
-        vault
-            .reveal_secret_field(id, &field)
-            .map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn secret_add(
-    state: State<'_, AppState>,
-    id: Uuid,
-    label: String,
-    api_key: String,
-) -> Result<String, String> {
-    with_vault(state, |vault| {
-        vault
-            .add_secret(id, label, api_key)
-            .map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn secret_remove(state: State<'_, AppState>, id: Uuid, label: String) -> Result<(), String> {
-    with_vault(state, |vault| {
-        vault
-            .remove_secret(id, &label)
-            .map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn devices_list(state: State<'_, AppState>) -> Result<Vec<DeviceRecord>, String> {
-    with_vault(state, |vault| {
-        vault.list_devices().map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn device_revoke(state: State<'_, AppState>, id: Uuid) -> Result<(), String> {
-    with_vault_mut(state, |vault| {
-        vault.revoke_device(id).map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn provider_probe(
-    state: State<'_, AppState>,
-    id: Uuid,
-    timeout_seconds: Option<u64>,
-) -> Result<ProbeResult, String> {
-    let (entry, secret) = with_vault(state, |vault| {
-        Ok((
-            vault
-                .get_provider_summary(id)
-                .map_err(|err| err.to_string())?,
-            vault.reveal_secret(id).map_err(|err| err.to_string())?,
-        ))
-    })?;
-    Ok(probe_entry(entry, secret, timeout_seconds.unwrap_or(15)))
-}
-
-#[tauri::command]
-fn tool_config_preview(
-    state: State<'_, AppState>,
-    request: ToolConfigRequest,
-) -> Result<ToolConfigPreviewResponse, String> {
-    with_vault(state, |vault| {
-        let (entry, plan, _content) = build_tool_config_plan(vault, &request)?;
-        Ok(ToolConfigPreviewResponse {
-            tool: request.tool,
-            mode: request.mode,
-            entry_id: entry.id,
-            entry_title: entry.title,
-            target_path: plan.target_path.display().to_string(),
-            summary: plan.summary,
-            preview: plan.preview,
-        })
-    })
-}
-
-#[tauri::command]
-fn tool_config_apply(
-    state: State<'_, AppState>,
-    request: ToolConfigRequest,
-) -> Result<ToolConfigApplyResponse, String> {
-    with_vault(state, |vault| {
-        let (entry, plan, content) = build_tool_config_plan(vault, &request)?;
-        let result = apply_plan_encrypted(&plan, &content, &vault.config_backup_key())
-            .map_err(|err| err.to_string())?;
-        Ok(tool_apply_response(request, entry, plan, result))
-    })
-}
-
-#[tauri::command]
-fn vault_export_encrypted(
-    state: State<'_, AppState>,
-    request: VaultExportRequest,
-) -> Result<(), String> {
-    with_vault(state, |vault| {
-        let export = vault
-            .export_encrypted(&SecretString::new(request.export_password))
-            .map_err(|err| err.to_string())?;
-        if let Some(parent) = request.output.parent() {
-            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        }
-        atomic_write_bytes(
-            &request.output,
-            &serde_json::to_vec_pretty(&export).map_err(|err| err.to_string())?,
-        )
-        .map_err(|err| err.to_string())
-    })
-}
-
-#[tauri::command]
-fn vault_import_encrypted(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: VaultImportRequest,
-) -> Result<(), String> {
-    let root = vault_dir(&app)?;
-    let export: EncryptedVaultExport =
-        serde_json::from_slice(&fs::read(&request.input).map_err(|err| err.to_string())?)
-            .map_err(|err| err.to_string())?;
-    let backup = if root.exists() {
-        let backup = root.with_file_name(format!(
-            "vault-import-backup-{}",
-            time::OffsetDateTime::now_utc().unix_timestamp()
-        ));
-        fs::rename(&root, &backup).map_err(|err| err.to_string())?;
-        Some(backup)
-    } else {
-        None
-    };
-
-    let import_result =
-        Vault::import_encrypted(&root, &SecretString::new(request.export_password), &export)
-            .map_err(|err| err.to_string());
-    if let Err(err) = import_result {
-        if let Some(backup) = backup {
-            let _ = fs::remove_dir_all(&root);
-            let _ = fs::rename(backup, &root);
-        }
-        return Err(err);
-    }
-
-    *state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())? = None;
-    Ok(())
-}
-
-#[tauri::command]
-fn sync_local(app: AppHandle, request: SyncLocalRequest) -> Result<SyncReport, String> {
-    sync_local_folder(&vault_dir(&app)?, &request.dir).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-fn sync_webdav_remote(app: AppHandle, request: SyncWebDavRequest) -> Result<SyncReport, String> {
-    let client = HttpWebDavClient::new(&request.url, request.username, request.password)
-        .map_err(|err| err.to_string())?;
-    sync_webdav(&vault_dir(&app)?, &client).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-fn sync_conflicts(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: SyncConflictsRequest,
-) -> Result<Vec<SyncConflictResponse>, String> {
-    with_vault(state, |vault| {
-        let mut conflicts = conflict_responses(ConflictScope::Vault, &vault_dir(&app)?, vault)?;
-        if let Some(dir) = request.dir {
-            conflicts.extend(conflict_responses(ConflictScope::Sync, &dir, vault)?);
-        }
-        Ok(conflicts)
-    })
-}
-
-#[tauri::command]
-fn sync_accept_conflict(app: AppHandle, request: SyncConflictActionRequest) -> Result<(), String> {
-    let root = conflict_root(&app, &request)?;
-    accept_conflict(&root, &request.conflict_path).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-fn sync_discard_conflict(app: AppHandle, request: SyncConflictActionRequest) -> Result<(), String> {
-    let root = conflict_root(&app, &request)?;
-    discard_conflict(&root, &request.conflict_path).map_err(|err| err.to_string())
 }
 
 fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
@@ -780,7 +89,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         endpoints: endpoints_from(request.endpoint),
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
-        api_key: request.api_key,
+        api_key: request.api_key.into_inner(),
         default_model: request.default_model.and_then(non_empty),
         headers: request.headers,
         quota: request.quota,
@@ -801,109 +110,16 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         endpoints: endpoints_from(request.endpoint),
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
-        api_key: request.api_key.and_then(non_empty),
+        api_key: request
+            .api_key
+            .map(|value| value.into_inner())
+            .and_then(non_empty),
         default_model: request.default_model.and_then(non_empty),
         headers: request.headers,
         quota: request.quota,
         tags: clean_strings(request.tags),
         environment: non_empty(request.environment).unwrap_or_else(|| "personal".to_string()),
         notes: request.notes.and_then(non_empty),
-    }
-}
-
-fn build_tool_config_plan(
-    vault: &Vault,
-    request: &ToolConfigRequest,
-) -> Result<(EntrySummary, ConfigPlan, String), String> {
-    let entry = vault
-        .get_provider_summary(request.id)
-        .map_err(|err| err.to_string())?;
-    let home = std::env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|_| "HOME missing".to_string())?;
-    let mut tool_entry = ToolEntry {
-        id: entry.id,
-        title: entry.title.clone(),
-        provider_id: entry.provider_id.clone(),
-        endpoint: endpoint_url(&entry.endpoints),
-        interface_type: entry.interface_type.clone(),
-        auth_scheme: entry.auth_scheme.clone(),
-        env_key: env_key_for_entry(&entry),
-        default_model: entry.default_model.clone(),
-        api_key: None,
-    };
-    if matches!(request.mode, ToolConfigMode::Plaintext) {
-        tool_entry.api_key = Some(
-            vault
-                .reveal_secret(entry.id)
-                .map_err(|err| err.to_string())?,
-        );
-    }
-    let (plan, content) = match (&request.tool, &request.mode) {
-        (ToolConfigTool::Codex, ToolConfigMode::Helper) => {
-            plan_codex(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-        (ToolConfigTool::Codex, ToolConfigMode::Plaintext) => {
-            plan_codex_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-        (ToolConfigTool::ClaudeCode, ToolConfigMode::Helper) => {
-            plan_claude_code(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-        (ToolConfigTool::ClaudeCode, ToolConfigMode::Plaintext) => {
-            plan_claude_code_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-        (ToolConfigTool::GeminiCli, ToolConfigMode::Helper) => {
-            plan_gemini_cli(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-        (ToolConfigTool::GeminiCli, ToolConfigMode::Plaintext) => {
-            plan_gemini_cli_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-        (ToolConfigTool::OpenCode, ToolConfigMode::Helper) => {
-            plan_opencode(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-        (ToolConfigTool::OpenCode, ToolConfigMode::Plaintext) => {
-            plan_opencode_plaintext(&home, &tool_entry).map_err(|err| err.to_string())?
-        }
-    };
-    Ok((entry, plan, content))
-}
-
-fn tool_apply_response(
-    request: ToolConfigRequest,
-    entry: EntrySummary,
-    plan: ConfigPlan,
-    result: ApplyResult,
-) -> ToolConfigApplyResponse {
-    ToolConfigApplyResponse {
-        tool: request.tool,
-        mode: request.mode,
-        entry_id: entry.id,
-        entry_title: entry.title,
-        operation_id: result.operation_id,
-        target_path: result.target_path.display().to_string(),
-        backup_path: result.backup_path.display().to_string(),
-        summary: plan.summary,
-    }
-}
-
-fn env_key_for_entry(item: &EntrySummary) -> String {
-    match item.provider_id.as_deref() {
-        Some("anthropic") => "ANTHROPIC_API_KEY".to_string(),
-        Some("gemini") => "GEMINI_API_KEY".to_string(),
-        Some("openrouter") => "OPENROUTER_API_KEY".to_string(),
-        Some("deepseek") => "DEEPSEEK_API_KEY".to_string(),
-        Some("moonshot") => "MOONSHOT_API_KEY".to_string(),
-        Some("qwen") => "DASHSCOPE_API_KEY".to_string(),
-        Some("zhipu") => "ZHIPUAI_API_KEY".to_string(),
-        Some("volcengine") => "ARK_API_KEY".to_string(),
-        Some("groq") => "GROQ_API_KEY".to_string(),
-        Some("together") => "TOGETHER_API_KEY".to_string(),
-        Some("fireworks") => "FIREWORKS_API_KEY".to_string(),
-        _ => match item.auth_scheme {
-            AuthScheme::GoogleApiKey => "GEMINI_API_KEY".to_string(),
-            AuthScheme::AzureApiKey => "AZURE_OPENAI_API_KEY".to_string(),
-            _ => "AIPASS_API_KEY".to_string(),
-        },
     }
 }
 
@@ -924,6 +140,7 @@ fn non_empty(value: String) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+#[cfg(test)]
 fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> ProbeResult {
     let endpoint = endpoint_url(&entry.endpoints);
     let Some(endpoint) = endpoint.clone() else {
@@ -1018,6 +235,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
     }
 }
 
+#[cfg(test)]
 fn apply_auth(
     request: reqwest::blocking::RequestBuilder,
     auth_scheme: &AuthScheme,
@@ -1032,14 +250,16 @@ fn apply_auth(
     }
 }
 
+#[cfg(test)]
 fn endpoint_url(endpoints: &[ProviderEndpoint]) -> Option<String> {
     endpoints
         .iter()
-        .find(|endpoint| endpoint.kind == EndpointKind::Api)
+        .find(|endpoint| endpoint.kind == aipass_provider_registry::EndpointKind::Api)
         .and_then(|endpoint| endpoint.url.clone())
         .or_else(|| endpoints.iter().find_map(|endpoint| endpoint.url.clone()))
 }
 
+#[cfg(test)]
 fn join_url(base: &str, suffix: &str) -> String {
     format!(
         "{}/{}",
@@ -1048,11 +268,13 @@ fn join_url(base: &str, suffix: &str) -> String {
     )
 }
 
+#[cfg(test)]
 fn append_query_param(url: &str, key: &str, value: &str) -> String {
     let separator = if url.contains('?') { '&' } else { '?' };
     format!("{url}{separator}{key}={value}")
 }
 
+#[cfg(test)]
 fn model_count(value: &serde_json::Value) -> Option<usize> {
     value
         .get("data")
@@ -1061,66 +283,12 @@ fn model_count(value: &serde_json::Value) -> Option<usize> {
         .map(Vec::len)
 }
 
+#[cfg(test)]
 fn redact_error(value: &str, secret: &str) -> String {
     if secret.is_empty() {
         value.to_string()
     } else {
         value.replace(secret, "[redacted]")
-    }
-}
-
-fn conflict_responses(
-    scope: ConflictScope,
-    root: &Path,
-    vault: &Vault,
-) -> Result<Vec<SyncConflictResponse>, String> {
-    list_conflicts(root)
-        .map_err(|err| err.to_string())?
-        .into_iter()
-        .map(|record| conflict_response(scope.clone(), root, vault, record))
-        .collect()
-}
-
-fn conflict_response(
-    scope: ConflictScope,
-    root: &Path,
-    vault: &Vault,
-    record: ConflictRecord,
-) -> Result<SyncConflictResponse, String> {
-    let conflict_summary = summary_from_conflict_path(vault, root, &record.conflict_path, &record);
-    let target_summary = summary_from_conflict_path(vault, root, &record.target_path, &record);
-    Ok(SyncConflictResponse {
-        scope,
-        origin: record.origin,
-        conflict_path: record.conflict_path,
-        target_path: record.target_path,
-        object: record.object,
-        conflict_summary,
-        target_summary,
-    })
-}
-
-fn summary_from_conflict_path(
-    vault: &Vault,
-    root: &Path,
-    relative_path: &Path,
-    record: &ConflictRecord,
-) -> Option<EntrySummary> {
-    if record.object.object_type != "provider_entry" {
-        return None;
-    }
-    vault
-        .get_provider_summary_from_path(root.join(relative_path))
-        .ok()
-}
-
-fn conflict_root(app: &AppHandle, request: &SyncConflictActionRequest) -> Result<PathBuf, String> {
-    match request.scope {
-        ConflictScope::Vault => vault_dir(app),
-        ConflictScope::Sync => request
-            .dir
-            .clone()
-            .ok_or_else(|| "sync conflict scope requires a local sync dir".to_string()),
     }
 }
 
@@ -1130,201 +298,6 @@ async fn run_blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(task)
         .await
         .map_err(|err| err.to_string())?
-}
-
-fn set_auth_task_state(
-    auth_tasks: &Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
-    task_id: Uuid,
-    task: VaultAuthTaskState,
-) -> Result<(), String> {
-    let finished_at = if matches!(task, VaultAuthTaskState::Pending { .. }) {
-        None
-    } else {
-        Some(Instant::now())
-    };
-    auth_tasks
-        .lock()
-        .map_err(|_| "auth task lock poisoned".to_string())?
-        .insert(
-            task_id,
-            StoredVaultAuthTask {
-                state: task,
-                finished_at,
-            },
-        );
-    Ok(())
-}
-
-fn prune_auth_tasks(auth_tasks: &Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>) {
-    if let Ok(mut tasks) = auth_tasks.lock() {
-        tasks.retain(|_, task| {
-            task.finished_at
-                .is_none_or(|finished_at| finished_at.elapsed() < AUTH_TASK_RETENTION)
-        });
-    }
-}
-
-fn auth_task_status_response(
-    task_id: Uuid,
-    snapshot: VaultAuthTaskState,
-) -> VaultAuthTaskStatusResponse {
-    match snapshot {
-        VaultAuthTaskState::Pending { message } => VaultAuthTaskStatusResponse {
-            task_id,
-            phase: VaultAuthTaskPhase::Pending,
-            message,
-            exists: None,
-            locked: None,
-            recovery_kit: None,
-            error: None,
-        },
-        VaultAuthTaskState::Succeeded {
-            message,
-            exists,
-            locked,
-            recovery_kit,
-        } => VaultAuthTaskStatusResponse {
-            task_id,
-            phase: VaultAuthTaskPhase::Succeeded,
-            message,
-            exists: Some(exists),
-            locked: Some(locked),
-            recovery_kit,
-            error: None,
-        },
-        VaultAuthTaskState::Failed { message, error } => VaultAuthTaskStatusResponse {
-            task_id,
-            phase: VaultAuthTaskPhase::Failed,
-            message,
-            exists: None,
-            locked: None,
-            recovery_kit: None,
-            error: Some(error),
-        },
-    }
-}
-
-fn emit_auth_task_event(app: &AppHandle, response: &VaultAuthTaskStatusResponse) {
-    let _ = app.emit("vault-auth-finished", response.clone());
-}
-
-fn finish_vault_create_task(
-    app: AppHandle,
-    auth_tasks: Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
-    session: Arc<Mutex<Option<Vault>>>,
-    task_id: Uuid,
-    result: Result<aipass_vault::VaultCreation, String>,
-) {
-    let next_state = match result {
-        Ok(creation) => match session.lock() {
-            Ok(mut guard) => {
-                *guard = Some(creation.vault);
-                VaultAuthTaskState::Succeeded {
-                    message: "Vault is ready".to_string(),
-                    exists: true,
-                    locked: false,
-                    recovery_kit: Some(creation.recovery_kit),
-                }
-            }
-            Err(_) => VaultAuthTaskState::Failed {
-                message: "Failed to update vault session".to_string(),
-                error: "session lock poisoned".to_string(),
-            },
-        },
-        Err(error) => VaultAuthTaskState::Failed {
-            message: "Vault operation failed".to_string(),
-            error,
-        },
-    };
-    let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
-    prune_auth_tasks(&auth_tasks);
-    if let Ok(tasks) = auth_tasks.lock() {
-        if let Some(snapshot) = tasks.get(&task_id).map(|task| task.state.clone()) {
-            emit_auth_task_event(&app, &auth_task_status_response(task_id, snapshot));
-        }
-    }
-}
-
-fn finish_vault_unlock_task(
-    app: AppHandle,
-    auth_tasks: Arc<Mutex<HashMap<Uuid, StoredVaultAuthTask>>>,
-    session: Arc<Mutex<Option<Vault>>>,
-    task_id: Uuid,
-    result: Result<Vault, String>,
-) {
-    let next_state = match result {
-        Ok(vault) => match session.lock() {
-            Ok(mut guard) => {
-                *guard = Some(vault);
-                VaultAuthTaskState::Succeeded {
-                    message: "Vault unlocked".to_string(),
-                    exists: true,
-                    locked: false,
-                    recovery_kit: None,
-                }
-            }
-            Err(_) => VaultAuthTaskState::Failed {
-                message: "Failed to update vault session".to_string(),
-                error: "session lock poisoned".to_string(),
-            },
-        },
-        Err(error) => VaultAuthTaskState::Failed {
-            message: "Vault operation failed".to_string(),
-            error,
-        },
-    };
-    let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
-    prune_auth_tasks(&auth_tasks);
-    if let Ok(tasks) = auth_tasks.lock() {
-        if let Some(snapshot) = tasks.get(&task_id).map(|task| task.state.clone()) {
-            emit_auth_task_event(&app, &auth_task_status_response(task_id, snapshot));
-        }
-    }
-}
-
-fn take_session_vault(state: &State<'_, AppState>) -> Result<Vault, String> {
-    state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())?
-        .take()
-        .ok_or_else(|| "vault is locked".to_string())
-}
-
-fn put_session_vault(state: &State<'_, AppState>, vault: Vault) -> Result<(), String> {
-    *state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())? = Some(vault);
-    Ok(())
-}
-
-fn with_vault<T>(
-    state: State<'_, AppState>,
-    f: impl FnOnce(&Vault) -> Result<T, String>,
-) -> Result<T, String> {
-    let guard = state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())?;
-    let vault = guard
-        .as_ref()
-        .ok_or_else(|| "vault is locked".to_string())?;
-    f(vault)
-}
-
-fn with_vault_mut<T>(
-    state: State<'_, AppState>,
-    f: impl FnOnce(&mut Vault) -> Result<T, String>,
-) -> Result<T, String> {
-    let mut guard = state
-        .session
-        .lock()
-        .map_err(|_| "session lock poisoned".to_string())?;
-    let vault = guard
-        .as_mut()
-        .ok_or_else(|| "vault is locked".to_string())?;
-    f(vault)
 }
 
 fn load_preferences(app: &AppHandle) -> Result<AppPreferences, String> {
@@ -1359,11 +332,34 @@ fn vault_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .join("vault"))
 }
 
+fn configure_initial_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let target = std::env::var("AIPASS_WINDOW_TARGET").unwrap_or_else(|_| "main".to_string());
+    let (title, width, height) = match target.as_str() {
+        "unlock" => ("AIPass Unlock", 420.0, 560.0),
+        "quick-access" => ("AIPass Quick Access", 520.0, 640.0),
+        _ => ("AIPass", 1280.0, 820.0),
+    };
+    let _ = window.set_title(title);
+    let _ = window.set_size(Size::Logical(LogicalSize { width, height }));
+    let _ = window.center();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .setup(|app| {
+            configure_initial_window(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            window_target,
             vault_status,
+            session_touch,
             preferences_load,
             preferences_save,
             vault_create,

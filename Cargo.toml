@@ -1,6 +1,8 @@
 [workspace]
 members = [
   "apps/desktop/src-tauri",
+  "crates/aipass-agent",
+  "crates/aipass-agent-protocol",
   "crates/aipass-crypto",
   "crates/aipass-storage",
   "crates/aipass-vault",
@@ -41,3 +43,6 @@ time = { version = "0.3.44", features = ["formatting", "parsing", "serde", "macr
 toml_edit = "0.23.7"
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
+interprocess = "2.2.3"
+rpassword = "7.4.0"
+windows-service = "0.8.1"
