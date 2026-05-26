@@ -1,7 +1,7 @@
 use aipass_agent::{default_vault_dir, AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{
-    AgentRequest, LockReason, ProbeResult, SecretValue, SessionStatus, ToolConfigApplyResponse,
-    ToolConfigPreviewResponse, ToolConfigRequest, VaultCreateResponse,
+    AgentRequest, CloudSyncProvider, LockReason, ProbeResult, SecretValue, SessionStatus,
+    ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest, VaultCreateResponse,
 };
 use aipass_config_writers::endpoint_url;
 use aipass_native_host::native_manifest;
@@ -206,6 +206,10 @@ enum Command {
     Sync {
         #[arg(long)]
         dir: Option<PathBuf>,
+        #[arg(long)]
+        icloud: bool,
+        #[arg(long)]
+        onedrive: bool,
         #[arg(long, env = "AIPASS_WEBDAV_URL")]
         webdav_url: Option<String>,
         #[arg(long, env = "AIPASS_WEBDAV_USERNAME")]

@@ -5,10 +5,11 @@ use crate::auth_tasks::{
 };
 use crate::models::{
     from_agent_sync_conflict_response, from_agent_tool_config_apply,
-    from_agent_tool_config_preview, into_agent_sync_conflict_request,
-    into_agent_tool_config_request, AppPreferences, ChangePasswordRequest, CreateVaultRequest,
-    ProbeResult, ProviderAddRequest, ProviderUpdateRequest, RecoveryVaultRequest,
-    SavePreferencesRequest, SyncConflictActionRequest, SyncConflictResponse, SyncConflictsRequest,
+    from_agent_tool_config_preview, into_agent_cloud_sync_provider,
+    into_agent_sync_conflict_request, into_agent_tool_config_request, AppPreferences,
+    ChangePasswordRequest, CreateVaultRequest, ProbeResult, ProviderAddRequest,
+    ProviderUpdateRequest, RecoveryVaultRequest, SavePreferencesRequest,
+    SyncCloudRequest, SyncConflictActionRequest, SyncConflictResponse, SyncConflictsRequest,
     SyncLocalRequest, SyncWebDavRequest, ToolConfigApplyResponse, ToolConfigPreviewResponse,
     ToolConfigRequest, UnlockVaultRequest, VaultExportRequest, VaultImportRequest, VaultStatus,
 };
@@ -450,6 +451,16 @@ pub(crate) fn sync_local(app: AppHandle, request: SyncLocalRequest) -> Result<Sy
 }
 
 #[tauri::command]
+pub(crate) fn sync_cloud(app: AppHandle, request: SyncCloudRequest) -> Result<SyncReport, String> {
+    agent_request(
+        &app,
+        AgentRequest::SyncCloud {
+            provider: into_agent_cloud_sync_provider(request.provider),
+        },
+    )
+}
+
+#[tauri::command]
 pub(crate) fn sync_webdav_remote(
     app: AppHandle,
     request: SyncWebDavRequest,
@@ -469,8 +480,13 @@ pub(crate) fn sync_conflicts(
     app: AppHandle,
     request: SyncConflictsRequest,
 ) -> Result<Vec<SyncConflictResponse>, String> {
-    let responses: Vec<AgentSyncConflictResponse> =
-        agent_request(&app, AgentRequest::SyncConflicts { dir: request.dir })?;
+    let responses: Vec<AgentSyncConflictResponse> = agent_request(
+        &app,
+        AgentRequest::SyncConflicts {
+            dir: request.dir,
+            provider: request.provider.map(into_agent_cloud_sync_provider),
+        },
+    )?;
     Ok(responses
         .into_iter()
         .map(from_agent_sync_conflict_response)

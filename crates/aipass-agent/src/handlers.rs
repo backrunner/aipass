@@ -1,4 +1,5 @@
 use super::*;
+use crate::paths::cloud_sync_dir;
 
 pub(crate) fn handle_request(state: &Arc<AgentState>, request: AgentRequest) -> AgentResponse {
     if let Err(err) = lock_if_idle(state) {
@@ -236,6 +237,12 @@ fn dispatch_request(
         AgentRequest::SyncLocal { dir } => sync_local_folder(&state.vault_dir, &dir)
             .map(AgentResponse::success)
             .map_err(ServiceError::internal),
+        AgentRequest::SyncCloud { provider } => {
+            let dir = cloud_sync_dir(provider).map_err(ServiceError::internal)?;
+            sync_local_folder(&state.vault_dir, &dir)
+                .map(AgentResponse::success)
+                .map_err(ServiceError::internal)
+        }
         AgentRequest::SyncWebDav {
             url,
             username,
@@ -248,9 +255,13 @@ fn dispatch_request(
                 .map(AgentResponse::success)
                 .map_err(ServiceError::internal)
         }
-        AgentRequest::SyncConflicts { dir } => with_vault(state, true, |vault| {
+        AgentRequest::SyncConflicts { dir, provider } => with_vault(state, true, |vault| {
             let mut conflicts = conflict_responses(ConflictScope::Vault, &state.vault_dir, vault)?;
             if let Some(dir) = dir {
+                conflicts.extend(conflict_responses(ConflictScope::Sync, &dir, vault)?);
+            }
+            if let Some(provider) = provider {
+                let dir = cloud_sync_dir(provider).map_err(ServiceError::internal)?;
                 conflicts.extend(conflict_responses(ConflictScope::Sync, &dir, vault)?);
             }
             Ok(conflicts)

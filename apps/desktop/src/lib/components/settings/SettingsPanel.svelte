@@ -144,7 +144,12 @@
 
   $: exportReady = exportPath.trim().length > 0 && exportPassword.trim().length > 0;
   $: importReady = importPath.trim().length > 0 && importPassword.trim().length > 0;
-  $: syncReady = syncMode === "local" ? syncFolder.trim().length > 0 : webdavUrl.trim().length > 0;
+  $: syncReady =
+    syncMode === "local"
+      ? syncFolder.trim().length > 0
+      : syncMode === "webdav"
+        ? webdavUrl.trim().length > 0
+        : true;
   $: syncToolState(entries, selectedEntryId);
 
   function supportsTool(tool: ToolConfigTarget, entry: ToolEntryOption): boolean {
@@ -390,13 +395,19 @@
                   bind:value={syncMode}
                   options={[
                     { value: "local", label: "Local folder" },
+                    { value: "icloud", label: "iCloud" },
+                    { value: "onedrive", label: "OneDrive" },
                     { value: "webdav", label: "WebDAV" }
                   ]}
                 />
                 {#if syncMode === "local"}
                   <Field label="Folder">
-                    <input bind:value={syncFolder} placeholder="/Users/me/iCloud/AIPass" />
+                    <input bind:value={syncFolder} placeholder="/Users/me/Sync/AIPass" />
                   </Field>
+                {:else if syncMode === "icloud"}
+                  <p class="hint">AIPass will automatically use the device iCloud Drive root and sync with the `AIPass` folder there.</p>
+                {:else if syncMode === "onedrive"}
+                  <p class="hint">AIPass will automatically use the first available OneDrive root on this device and sync with the `AIPass` folder there.</p>
                 {:else}
                   <Field label="URL">
                     <input bind:value={webdavUrl} placeholder="https://cloud.example/dav/AIPass" />

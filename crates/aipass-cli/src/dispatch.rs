@@ -640,10 +640,21 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
         }
         Command::Sync {
             dir,
+            icloud,
+            onedrive,
             webdav_url,
             webdav_username,
             webdav_password,
         } => {
+            let selection_count = usize::from(dir.is_some())
+                + usize::from(icloud)
+                + usize::from(onedrive)
+                + usize::from(webdav_url.is_some());
+            if selection_count > 1 {
+                anyhow::bail!(
+                    "choose exactly one sync target: --dir, --icloud, --onedrive, or --webdav-url"
+                );
+            }
             let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let report: aipass_sync::SyncReport = if let Some(url) = webdav_url {
                 agent.request_no_unlock(AgentRequest::SyncWebDav {
@@ -651,8 +662,17 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     username: webdav_username,
                     password: webdav_password.map(Into::into),
                 })?
+            } else if icloud {
+                agent.request_no_unlock(AgentRequest::SyncCloud {
+                    provider: CloudSyncProvider::ICloud,
+                })?
+            } else if onedrive {
+                agent.request_no_unlock(AgentRequest::SyncCloud {
+                    provider: CloudSyncProvider::OneDrive,
+                })?
             } else {
-                let dir = dir.context("provide --dir for local/iCloud sync or --webdav-url")?;
+                let dir =
+                    dir.context("provide one of --dir, --icloud, --onedrive, or --webdav-url")?;
                 agent.request_no_unlock(AgentRequest::SyncLocal { dir })?
             };
             output(json, serde_json::to_value(&report)?, "Sync complete")

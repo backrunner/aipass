@@ -1,5 +1,6 @@
 use aipass_agent_protocol::{
-    SensitiveString, SyncConflictActionRequest as AgentSyncConflictActionRequest,
+    CloudSyncProvider as AgentCloudSyncProvider, SensitiveString,
+    SyncConflictActionRequest as AgentSyncConflictActionRequest,
     SyncConflictResponse as AgentSyncConflictResponse,
     ToolConfigApplyResponse as AgentToolConfigApplyResponse, ToolConfigMode as AgentToolConfigMode,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
@@ -149,6 +150,20 @@ pub(crate) struct SyncLocalRequest {
     pub(crate) dir: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) enum CloudSyncProvider {
+    #[serde(rename = "icloud")]
+    ICloud,
+    #[serde(rename = "onedrive")]
+    OneDrive,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SyncCloudRequest {
+    pub(crate) provider: CloudSyncProvider,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SyncWebDavRequest {
@@ -161,6 +176,8 @@ pub(crate) struct SyncWebDavRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SyncConflictsRequest {
     pub(crate) dir: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) provider: Option<CloudSyncProvider>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -175,6 +192,8 @@ pub(crate) enum ConflictScope {
 pub(crate) struct SyncConflictActionRequest {
     pub(crate) scope: ConflictScope,
     pub(crate) dir: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) provider: Option<CloudSyncProvider>,
     pub(crate) conflict_path: PathBuf,
 }
 
@@ -312,7 +331,17 @@ pub(crate) fn into_agent_sync_conflict_request(
             ConflictScope::Sync => aipass_agent_protocol::ConflictScope::Sync,
         },
         dir: request.dir,
+        provider: request.provider.map(into_agent_cloud_sync_provider),
         conflict_path: request.conflict_path,
+    }
+}
+
+pub(crate) fn into_agent_cloud_sync_provider(
+    provider: CloudSyncProvider,
+) -> AgentCloudSyncProvider {
+    match provider {
+        CloudSyncProvider::ICloud => AgentCloudSyncProvider::ICloud,
+        CloudSyncProvider::OneDrive => AgentCloudSyncProvider::OneDrive,
     }
 }
 

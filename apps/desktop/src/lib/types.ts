@@ -9,7 +9,7 @@ import type {
 
 export type AuthMode = "create" | "unlock" | "recover";
 export type FormMode = "add" | "edit";
-export type SyncMode = "local" | "webdav";
+export type SyncMode = "local" | "icloud" | "onedrive" | "webdav";
 export type ToolConfigTarget = "codex" | "claude-code" | "gemini-cli" | "opencode";
 export type ToolConfigMode = "helper" | "env" | "plaintext";
 

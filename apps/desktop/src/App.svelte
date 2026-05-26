@@ -63,6 +63,12 @@
     await nextFrame();
   }
 
+  function cloudSyncProviderForMode(mode: SyncMode): "icloud" | "onedrive" | undefined {
+    if (mode === "icloud") return "icloud";
+    if (mode === "onedrive") return "onedrive";
+    return undefined;
+  }
+
   let unlistenVaultAuth: (() => void) | undefined;
   const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
   const finishedVaultAuthTasks = new Map<string, VaultAuthTaskStatus>();
@@ -746,27 +752,32 @@
 
   async function runSync() {
     error = "";
-    const target = syncMode === "webdav" ? webdavUrl.trim() : syncFolder.trim();
-    if (!target) return;
-    const request =
-      syncMode === "webdav"
-        ? {
-            command: "sync_webdav_remote",
-            payload: {
-              url: target,
-              username: webdavUsername.trim() || undefined,
-              password: webdavPassword || undefined
-            }
-          }
-        : {
-            command: "sync_local",
-            payload: {
-              dir: target
-            }
-          };
+    if (syncMode === "webdav" && !webdavUrl.trim()) return;
+    if (syncMode === "local" && !syncFolder.trim()) return;
+
+    const cloudProvider = cloudSyncProviderForMode(syncMode);
+    if (syncMode !== "local" && syncMode !== "webdav" && !cloudProvider) return;
+
     syncState = "syncing";
     try {
-      const report = await invokeTauri<SyncReport>(request.command, { request: request.payload });
+      let report: SyncReport;
+      if (syncMode === "webdav") {
+        report = await invokeTauri<SyncReport>("sync_webdav_remote", {
+          request: {
+            url: webdavUrl.trim(),
+            username: webdavUsername.trim() || undefined,
+            password: webdavPassword || undefined
+          }
+        });
+      } else if (syncMode === "local") {
+        report = await invokeTauri<SyncReport>("sync_local", {
+          request: { dir: syncFolder.trim() }
+        });
+      } else {
+        report = await invokeTauri<SyncReport>("sync_cloud", {
+          request: { provider: cloudProvider }
+        });
+      }
       syncState = report.status;
       notice = `${report.uploaded} up · ${report.downloaded} down · ${report.conflicts} conflicts`;
       await loadEntries();
@@ -781,9 +792,11 @@
     if (status.locked) return;
     conflictsLoading = true;
     try {
+      const provider = cloudSyncProviderForMode(syncMode);
       syncConflicts = await invokeTauri<SyncConflict[]>("sync_conflicts", {
         request: {
-          dir: syncMode === "local" && syncFolder.trim() ? syncFolder.trim() : undefined
+          dir: syncMode === "local" && syncFolder.trim() ? syncFolder.trim() : undefined,
+          provider
         }
       });
     } catch (err) {
@@ -798,13 +811,12 @@
     conflictBusy = key;
     error = "";
     try {
+      const provider = cloudSyncProviderForMode(syncMode);
       await invokeTauri(action === "accept" ? "sync_accept_conflict" : "sync_discard_conflict", {
         request: {
           scope: conflict.scope,
           dir: syncMode === "local" && syncFolder.trim() ? syncFolder.trim() : undefined,
-          webdavUrl: syncMode === "webdav" ? webdavUrl.trim() || undefined : undefined,
-          webdavUsername: syncMode === "webdav" ? webdavUsername.trim() || undefined : undefined,
-          webdavPassword: syncMode === "webdav" ? webdavPassword || undefined : undefined,
+          provider,
           conflictPath: conflict.conflictPath
         }
       });

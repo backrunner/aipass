@@ -116,11 +116,21 @@ pub enum ConflictScope {
     Sync,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CloudSyncProvider {
+    #[serde(rename = "icloud")]
+    ICloud,
+    #[serde(rename = "onedrive")]
+    OneDrive,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncConflictActionRequest {
     pub scope: ConflictScope,
     pub dir: Option<PathBuf>,
+    #[serde(default)]
+    pub provider: Option<CloudSyncProvider>,
     pub conflict_path: PathBuf,
 }
 
@@ -338,6 +348,8 @@ pub enum AgentRequest {
     ToolConfigRollback { operation_id: Uuid },
     #[serde(rename = "sync.local")]
     SyncLocal { dir: PathBuf },
+    #[serde(rename = "sync.cloud")]
+    SyncCloud { provider: CloudSyncProvider },
     #[serde(rename = "sync.webdav")]
     SyncWebDav {
         url: String,
@@ -345,7 +357,11 @@ pub enum AgentRequest {
         password: Option<SensitiveString>,
     },
     #[serde(rename = "sync.conflicts")]
-    SyncConflicts { dir: Option<PathBuf> },
+    SyncConflicts {
+        dir: Option<PathBuf>,
+        #[serde(default)]
+        provider: Option<CloudSyncProvider>,
+    },
     #[serde(rename = "sync.accept_conflict")]
     SyncAcceptConflict { request: SyncConflictActionRequest },
     #[serde(rename = "sync.discard_conflict")]

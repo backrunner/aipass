@@ -387,6 +387,7 @@ pub fn run() {
             vault_export_encrypted,
             vault_import_encrypted,
             sync_local,
+            sync_cloud,
             sync_webdav_remote,
             sync_conflicts,
             sync_accept_conflict,

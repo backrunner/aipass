@@ -1,6 +1,6 @@
 use crate::desktop::open_desktop_window;
 use crate::ipc;
-use crate::paths::{canonical_vault_dir, namespace_for_vault_dir};
+use crate::paths::{canonical_vault_dir, cloud_sync_dir, namespace_for_vault_dir};
 use crate::session::{
     clamp_policy, current_policy, load_policy, lock_if_idle, lock_session, map_vault_error,
     native_host_settings_path, save_policy, session_status, shutdown_requested, touch_session,
@@ -720,12 +720,17 @@ fn summary_from_conflict_path(
 fn conflict_root(vault_dir: &Path, request: &SyncConflictActionRequest) -> ServiceResult<PathBuf> {
     match request.scope {
         ConflictScope::Vault => Ok(vault_dir.to_path_buf()),
-        ConflictScope::Sync => request.dir.clone().ok_or_else(|| {
-            ServiceError::new(
-                AgentErrorCode::ValidationFailed,
-                "sync conflict scope requires a local sync dir",
-            )
-        }),
+        ConflictScope::Sync => {
+            if let Some(provider) = request.provider {
+                return cloud_sync_dir(provider).map_err(ServiceError::internal);
+            }
+            request.dir.clone().ok_or_else(|| {
+                ServiceError::new(
+                    AgentErrorCode::ValidationFailed,
+                    "sync conflict scope requires a local or cloud sync target",
+                )
+            })
+        }
     }
 }
 
