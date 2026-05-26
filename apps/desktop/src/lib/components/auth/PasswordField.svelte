@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Eye, EyeOff } from "lucide-svelte";
+  import { onMount } from "svelte";
   import type { HTMLInputAttributes } from "svelte/elements";
 
   export let label = "";
@@ -9,12 +10,21 @@
   export let placeholder = "";
   export let withToggle = true;
   export let disabled = false;
+  export let autofocus = false;
+
+  let inputEl: HTMLInputElement | undefined;
+
+  onMount(() => {
+    if (autofocus && inputEl && !disabled) {
+      inputEl.focus({ preventScroll: true });
+    }
+  });
 </script>
 
 <label class="field">
   <span class="label">{label}</span>
   <div class="control" class:no-toggle={!withToggle}>
-    <input bind:value type={show ? "text" : "password"} {autocomplete} {placeholder} {disabled} />
+    <input bind:this={inputEl} bind:value type={show ? "text" : "password"} {autocomplete} {placeholder} {disabled} />
     {#if withToggle}
       <button
         type="button"

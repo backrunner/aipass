@@ -595,7 +595,7 @@ fn manifest_exists(explicit_vault: Option<PathBuf>) -> Result<bool> {
 
 fn install_agent_service(json: bool, explicit_vault: Option<PathBuf>) -> Result<()> {
     let vault_dir = vault_dir(explicit_vault)?;
-    let agent_binary = agent_binary_path()?;
+    let agent_binary = aipass_agent::agent_binary_path()?;
     let namespace = aipass_agent::namespace_for_vault_dir(&vault_dir)?;
     #[cfg(target_os = "linux")]
     let launch_command = format!(
@@ -720,20 +720,6 @@ WantedBy=default.target
         }),
         "Agent service installed",
     )
-}
-
-fn agent_binary_path() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("cannot determine current executable")?;
-    let agent_name = if cfg!(target_os = "windows") {
-        "aipass-agent.exe"
-    } else {
-        "aipass-agent"
-    };
-    let sibling = exe.with_file_name(agent_name);
-    if sibling.exists() {
-        return absolute_path(sibling);
-    }
-    absolute_path(PathBuf::from(agent_name))
 }
 
 fn xml_escape(value: &str) -> String {

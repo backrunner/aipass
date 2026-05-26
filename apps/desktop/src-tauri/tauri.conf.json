@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "identifier": "dev.aipass.desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev:web",
+    "beforeDevCommand": "pnpm dev:agent && pnpm dev:web",
     "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"

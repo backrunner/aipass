@@ -8,6 +8,7 @@
     "build": "vite build",
     "bundle": "tauri build --ci",
     "dev": "tauri dev",
+    "dev:agent": "cargo build -p aipass-agent",
     "dev:web": "vite --host 127.0.0.1",
     "lint": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",

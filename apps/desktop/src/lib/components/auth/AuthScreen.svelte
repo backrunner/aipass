@@ -46,10 +46,12 @@
 <main class="auth-shell">
   <div class="auth-card">
     <div class="auth-accent" aria-hidden="true"></div>
-    <div class="auth-body">
-      <div class="auth-brand">
-        <Brand size="md" />
-      </div>
+    <div class="auth-body" class:auth-body--minimal={showUnlock}>
+      {#if !showUnlock}
+        <div class="auth-brand">
+          <Brand size="md" />
+        </div>
+      {/if}
 
       {#if showCreate}
         <form class="form" on:submit|preventDefault={() => onCreate()}>
@@ -145,9 +147,9 @@
         </form>
       {:else if showUnlock}
         <form class="form" on:submit|preventDefault={() => onUnlock()}>
-          <div class="copy">
-            <h1>Unlock vault</h1>
-            <p>Enter the master password for this vault.</p>
+          <div class="copy copy--minimal">
+            <h1>Unlock AIPass</h1>
+            <p>Enter your master password to continue.</p>
           </div>
 
           <PasswordField
@@ -156,18 +158,18 @@
             bind:value={password}
             bind:show={showUnlockPassword}
             disabled={busy}
+            autofocus
           />
-
-          <div class="meta">
-            <span></span>
-            <button type="button" class="link" disabled={busy} on:click={() => onModeChange("recover")}>
-              Forgot password?
-            </button>
-          </div>
 
           <Button variant="primary" type="submit" block loading={unlockBusy} disabled={busy || password.length === 0}>
             {unlockBusy ? "Unlocking..." : "Unlock"}
           </Button>
+
+          <div class="meta meta--center">
+            <button type="button" class="link" disabled={busy} on:click={() => onModeChange("recover")}>
+              Forgot master password?
+            </button>
+          </div>
         </form>
       {/if}
 
@@ -208,6 +210,11 @@
     gap: 20px;
   }
 
+  .auth-body--minimal {
+    padding: 24px 24px 22px;
+    gap: 14px;
+  }
+
   .auth-brand {
     display: flex;
     justify-content: center;
@@ -235,6 +242,22 @@
     color: var(--text-secondary);
     font-size: 13px;
     line-height: 1.5;
+  }
+
+  .copy--minimal {
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .copy--minimal h1 {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+
+  .copy--minimal p {
+    font-size: 12px;
+    color: var(--text-tertiary);
   }
 
   .field {
@@ -275,6 +298,11 @@
     justify-content: space-between;
     gap: 12px;
     min-height: 22px;
+  }
+
+  .meta--center {
+    justify-content: center;
+    margin-top: 2px;
   }
 
   .link {

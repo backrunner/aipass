@@ -2,12 +2,14 @@ pub mod client;
 pub mod desktop;
 pub mod device_secrets;
 pub mod ipc;
+pub mod launcher;
 pub mod paths;
 pub mod server;
 pub mod session;
 pub mod windows_service;
 
 pub use client::{AgentClient, AgentClientConfig, AgentCommandError};
+pub use launcher::{agent_binary_candidates, agent_binary_path};
 pub use paths::{
     agent_service_name, agent_socket_path, canonical_vault_dir, cloud_sync_dir, default_vault_dir,
     namespace_for_vault_dir,

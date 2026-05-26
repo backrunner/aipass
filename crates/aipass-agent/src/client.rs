@@ -1,14 +1,14 @@
 use crate::ipc;
+use crate::launcher;
 use crate::paths::{canonical_vault_dir, default_vault_dir, namespace_for_vault_dir};
 #[cfg(target_os = "windows")]
 use crate::windows_service;
 use aipass_agent_protocol::{
     read_frame, write_frame, AgentErrorCode, AgentRequest, AgentResponse, AuthenticatedAgentRequest,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::de::DeserializeOwned;
 use std::path::PathBuf;
-use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -95,30 +95,51 @@ impl AgentClient {
     }
 
     pub fn ensure_running(&self) -> Result<()> {
-        if self.request_raw(&AgentRequest::SessionStatus).is_ok() {
-            return Ok(());
-        }
+        let initial_connection_error = match self.request_raw(&AgentRequest::SessionStatus) {
+            Ok(_) => return Ok(()),
+            Err(err) => err.to_string(),
+        };
+        #[cfg(target_os = "windows")]
+        let launched_binary: Option<PathBuf> = None;
+        #[cfg(target_os = "windows")]
+        let binary_candidates = launcher::agent_binary_candidates();
         #[cfg(target_os = "windows")]
         {
-            windows_service::start_service(&self.config.vault_dir)
-                .context("failed to start registered Windows agent service")?;
+            if let Err(err) = windows_service::start_service(&self.config.vault_dir) {
+                anyhow::bail!(launcher::windows_service_start_failure_message(
+                    &self.config.vault_dir,
+                    &self.config.namespace,
+                    &initial_connection_error,
+                    &err.to_string(),
+                ));
+            }
         }
         #[cfg(not(target_os = "windows"))]
-        {
-            let binary = agent_binary_path()?;
-            Command::new(binary)
-                .arg("--vault")
-                .arg(&self.config.vault_dir)
-                .spawn()
-                .context("failed to launch agent")?;
-        }
+        let launch = launcher::launch_agent(
+            &self.config.vault_dir,
+            &self.config.namespace,
+            &initial_connection_error,
+        )?;
+        #[cfg(not(target_os = "windows"))]
+        let launched_binary = Some(launch.binary);
+        #[cfg(not(target_os = "windows"))]
+        let binary_candidates = launch.candidates;
+        let mut last_connection_error = None;
         for _ in 0..40 {
-            if self.request_raw(&AgentRequest::SessionStatus).is_ok() {
-                return Ok(());
+            match self.request_raw(&AgentRequest::SessionStatus) {
+                Ok(_) => return Ok(()),
+                Err(err) => last_connection_error = Some(err.to_string()),
             }
             thread::sleep(Duration::from_millis(100));
         }
-        Err(anyhow::anyhow!("agent did not become ready"))
+        Err(anyhow::anyhow!(launcher::agent_ready_timeout_message(
+            &self.config.vault_dir,
+            &self.config.namespace,
+            launched_binary.as_deref(),
+            &binary_candidates,
+            &initial_connection_error,
+            last_connection_error.as_deref(),
+        )))
     }
 
     pub fn shutdown(&self) -> Result<()> {
@@ -152,13 +173,4 @@ fn decode_response<T: DeserializeOwned>(
         });
     }
     serde_json::from_value(response.data).map_err(AgentCommandError::internal)
-}
-
-fn agent_binary_path() -> Result<PathBuf> {
-    let current = std::env::current_exe().context("cannot determine current executable")?;
-    let sibling = crate::windows_service::binary_for_service(&current);
-    if sibling.exists() {
-        return Ok(sibling);
-    }
-    Ok(sibling)
 }

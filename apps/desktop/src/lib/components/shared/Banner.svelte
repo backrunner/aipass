@@ -16,6 +16,8 @@
     border-radius: var(--radius);
     font-size: 12px;
     line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .tone-info {
