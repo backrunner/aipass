@@ -241,14 +241,26 @@ fn dispatch_request(
         AgentRequest::SyncSettingsGet => load_sync_settings(&state.vault_dir)
             .map(|settings| AgentResponse::success(sync_settings_view(&settings)))
             .map_err(ServiceError::internal),
-        AgentRequest::SyncSettingsSet { settings } => with_vault(state, true, |vault| {
+        AgentRequest::SyncSettingsSet { settings } => {
             let current = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
             let updated = apply_sync_settings_update(current, settings);
-            save_sync_settings(&state.vault_dir, vault, &updated)
-                .map_err(ServiceError::internal)?;
-            Ok(sync_settings_view(&updated))
-        })
-        .map(AgentResponse::success),
+            if sync_settings_password_requires_vault(&updated) {
+                return with_vault(state, true, |vault| {
+                    let saved = save_sync_settings(&state.vault_dir, Some(vault), &updated)
+                        .map_err(ServiceError::internal)?;
+                    Ok(sync_settings_view(&saved))
+                })
+                .map(AgentResponse::success);
+            }
+            let saved = match save_sync_settings(&state.vault_dir, None, &updated) {
+                Ok(saved) => saved,
+                Err(_) => with_vault(state, true, |vault| {
+                    save_sync_settings(&state.vault_dir, Some(vault), &updated)
+                        .map_err(ServiceError::internal)
+                })?,
+            };
+            Ok(AgentResponse::success(sync_settings_view(&saved)))
+        }
         AgentRequest::SyncConfigured => {
             let settings = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
             match settings.mode {
@@ -277,26 +289,52 @@ fn dispatch_request(
                         .map(AgentResponse::success)
                         .map_err(ServiceError::internal)
                 }
-                SyncMode::WebDav => with_vault(state, false, |vault| {
+                SyncMode::WebDav => {
                     let url = settings.webdav_url.clone().ok_or_else(|| {
                         ServiceError::new(
                             AgentErrorCode::ValidationFailed,
                             "webdav sync target url is not configured",
                         )
                     })?;
+                    if sync_settings_password_requires_vault(&settings) {
+                        return with_vault(state, false, |vault| {
+                            let password =
+                                sync_settings_password(&state.vault_dir, &settings, vault)
+                                    .map_err(ServiceError::internal)?;
+                            let saved =
+                                save_sync_settings(&state.vault_dir, Some(vault), &settings)
+                                    .map_err(ServiceError::internal)?;
+                            let client = HttpWebDavClient::new(
+                                &url,
+                                saved.webdav_username.clone(),
+                                password.map(|value| value.into_inner()),
+                            )
+                            .map_err(ServiceError::internal)?;
+                            Ok(sync_webdav_report(&state.vault_dir, &client))
+                        })
+                        .map(AgentResponse::success);
+                    }
                     let password =
-                        sync_settings_password(&settings, vault).map_err(ServiceError::internal)?;
-                    save_sync_settings(&state.vault_dir, vault, &settings)
-                        .map_err(ServiceError::internal)?;
+                        sync_settings_password_without_vault(&state.vault_dir, &settings)
+                            .map_err(ServiceError::internal)?;
+                    let saved = match save_sync_settings(&state.vault_dir, None, &settings) {
+                        Ok(saved) => saved,
+                        Err(_) => with_vault(state, false, |vault| {
+                            save_sync_settings(&state.vault_dir, Some(vault), &settings)
+                                .map_err(ServiceError::internal)
+                        })?,
+                    };
                     let client = HttpWebDavClient::new(
                         &url,
-                        settings.webdav_username.clone(),
+                        saved.webdav_username.clone(),
                         password.map(|value| value.into_inner()),
                     )
                     .map_err(ServiceError::internal)?;
-                    Ok(sync_webdav_report(&state.vault_dir, &client))
-                })
-                .map(AgentResponse::success),
+                    Ok(AgentResponse::success(sync_webdav_report(
+                        &state.vault_dir,
+                        &client,
+                    )))
+                }
             }
         }
         AgentRequest::SyncCloud { provider } => {

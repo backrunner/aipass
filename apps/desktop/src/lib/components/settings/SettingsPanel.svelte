@@ -422,7 +422,7 @@
                     <input bind:value={webdavPassword} type="password" autocomplete="current-password" />
                   </Field>
                   {#if hasSavedWebdavPassword}
-                    <p class="hint">A saved WebDAV password exists in the Rust config. Leave the field blank to keep it.</p>
+                    <p class="hint">A saved WebDAV password exists in Rust-managed storage. Leave the field blank to keep it.</p>
                   {/if}
                 {/if}
                 <div class="row-actions">

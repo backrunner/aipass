@@ -1,5 +1,6 @@
 pub mod client;
 pub mod desktop;
+pub mod device_secrets;
 pub mod ipc;
 pub mod paths;
 pub mod server;

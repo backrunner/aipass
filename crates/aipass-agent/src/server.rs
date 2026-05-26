@@ -5,6 +5,7 @@ use crate::session::{
     apply_sync_settings_update, clamp_policy, current_policy, load_policy, load_sync_settings,
     lock_if_idle, lock_session, map_vault_error, native_host_settings_path, save_policy,
     save_sync_settings, session_status, shutdown_requested, sync_settings_password,
+    sync_settings_password_requires_vault, sync_settings_password_without_vault,
     sync_settings_view, touch_session, unlock_with_password, with_vault, with_vault_mut,
     AgentState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
 };

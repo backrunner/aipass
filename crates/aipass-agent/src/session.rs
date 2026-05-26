@@ -1,3 +1,4 @@
+use crate::device_secrets;
 use crate::paths::{canonical_vault_dir, default_vault_dir};
 use aipass_agent_protocol::{
     AgentErrorCode, LockReason, SensitiveString, SessionPolicy, SessionStatus, SyncMode,
@@ -6,7 +7,7 @@ use aipass_agent_protocol::{
 use aipass_crypto::{decrypt_bytes, encrypt_bytes, Ciphertext, SecretString};
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::{RecoveryKit, Vault, VaultError};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,12 +62,15 @@ pub struct PersistedSyncSettings {
     pub webdav_username: Option<String>,
     #[serde(default)]
     pub webdav_password: Option<Ciphertext>,
+    #[serde(default)]
+    pub webdav_password_device: bool,
 }
 
 #[derive(Clone, Debug)]
 pub enum StoredSyncSecret {
     Plaintext(SensitiveString),
     Encrypted(Ciphertext),
+    Device,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -343,7 +347,11 @@ pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
             sync_folder: persisted.sync_folder,
             webdav_url: persisted.webdav_url,
             webdav_username: persisted.webdav_username,
-            webdav_password: persisted.webdav_password.map(StoredSyncSecret::Encrypted),
+            webdav_password: if persisted.webdav_password_device {
+                Some(StoredSyncSecret::Device)
+            } else {
+                persisted.webdav_password.map(StoredSyncSecret::Encrypted)
+            },
         });
     }
 
@@ -377,19 +385,27 @@ pub fn sync_settings_view(settings: &StoredSyncSettings) -> SyncSettings {
 
 pub fn save_sync_settings(
     vault_dir: &Path,
-    vault: &Vault,
+    vault: Option<&Vault>,
     settings: &StoredSyncSettings,
-) -> Result<()> {
+) -> Result<StoredSyncSettings> {
+    let normalized_secret = settings
+        .webdav_password
+        .clone()
+        .map(|secret| persist_sync_secret(vault_dir, vault, secret))
+        .transpose()?;
+    if !matches!(normalized_secret, Some(StoredSyncSecret::Device)) {
+        device_secrets::delete_webdav_password(vault_dir).ok();
+    }
     let persisted = PersistedSyncSettings {
         mode: settings.mode,
         sync_folder: settings.sync_folder.clone(),
         webdav_url: settings.webdav_url.clone(),
         webdav_username: settings.webdav_username.clone(),
-        webdav_password: settings
-            .webdav_password
-            .clone()
-            .map(|secret| encrypt_sync_secret(vault, secret))
-            .transpose()?,
+        webdav_password: match &normalized_secret {
+            Some(StoredSyncSecret::Encrypted(ciphertext)) => Some(ciphertext.clone()),
+            _ => None,
+        },
+        webdav_password_device: matches!(normalized_secret, Some(StoredSyncSecret::Device)),
     };
     let path = sync_settings_path(vault_dir);
     if let Some(parent) = path.parent() {
@@ -397,7 +413,13 @@ pub fn save_sync_settings(
     }
     atomic_write_bytes(&path, &serde_json::to_vec_pretty(&persisted)?)?;
     remove_legacy_sync_settings(vault_dir).ok();
-    Ok(())
+    Ok(StoredSyncSettings {
+        mode: settings.mode,
+        sync_folder: settings.sync_folder.clone(),
+        webdav_url: settings.webdav_url.clone(),
+        webdav_username: settings.webdav_username.clone(),
+        webdav_password: normalized_secret,
+    })
 }
 
 pub fn apply_sync_settings_update(
@@ -420,14 +442,37 @@ pub fn apply_sync_settings_update(
 }
 
 pub fn sync_settings_password(
+    vault_dir: &Path,
     settings: &StoredSyncSettings,
     vault: &Vault,
 ) -> Result<Option<SensitiveString>> {
     settings
         .webdav_password
         .as_ref()
-        .map(|secret| decrypt_sync_secret(vault, secret))
+        .map(|secret| decrypt_sync_secret(vault_dir, vault, secret))
         .transpose()
+}
+
+pub fn sync_settings_password_without_vault(
+    vault_dir: &Path,
+    settings: &StoredSyncSettings,
+) -> Result<Option<SensitiveString>> {
+    match settings.webdav_password.as_ref() {
+        Some(StoredSyncSecret::Plaintext(secret)) => Ok(Some(secret.clone())),
+        Some(StoredSyncSecret::Device) => Ok(Some(
+            device_secrets::get_webdav_password(vault_dir)?
+                .map(SensitiveString::new)
+                .context("webdav password is missing from device secret storage")?,
+        )),
+        _ => Ok(None),
+    }
+}
+
+pub fn sync_settings_password_requires_vault(settings: &StoredSyncSettings) -> bool {
+    matches!(
+        settings.webdav_password,
+        Some(StoredSyncSecret::Encrypted(_))
+    )
 }
 
 pub fn sync_settings_path(vault_dir: &Path) -> PathBuf {
@@ -466,34 +511,82 @@ fn remove_legacy_sync_settings(vault_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn encrypt_sync_secret(vault: &Vault, secret: StoredSyncSecret) -> Result<Ciphertext> {
-    let mut plaintext = match secret {
-        StoredSyncSecret::Plaintext(secret) => secret.into_inner(),
-        StoredSyncSecret::Encrypted(ciphertext) => {
-            return Ok(ciphertext);
+fn persist_sync_secret(
+    vault_dir: &Path,
+    vault: Option<&Vault>,
+    secret: StoredSyncSecret,
+) -> Result<StoredSyncSecret> {
+    match secret {
+        StoredSyncSecret::Plaintext(secret) => {
+            let mut plaintext = secret.into_inner();
+            let stored_in_device =
+                device_secrets::set_webdav_password(vault_dir, &plaintext).unwrap_or(false);
+            if stored_in_device {
+                plaintext.zeroize();
+                return Ok(StoredSyncSecret::Device);
+            }
+            let Some(vault) = vault else {
+                plaintext.zeroize();
+                bail!("vault is locked and device secret storage is unavailable");
+            };
+            let ciphertext = encrypt_sync_plaintext(vault, &plaintext)?;
+            plaintext.zeroize();
+            Ok(StoredSyncSecret::Encrypted(ciphertext))
         }
-    };
-    let ciphertext = encrypt_bytes(
+        StoredSyncSecret::Encrypted(ciphertext) => {
+            let Some(vault) = vault else {
+                return Ok(StoredSyncSecret::Encrypted(ciphertext));
+            };
+            let mut plaintext = decrypt_sync_ciphertext(vault, &ciphertext)?;
+            let stored_in_device =
+                device_secrets::set_webdav_password(vault_dir, &plaintext).unwrap_or(false);
+            plaintext.zeroize();
+            if stored_in_device {
+                Ok(StoredSyncSecret::Device)
+            } else {
+                Ok(StoredSyncSecret::Encrypted(ciphertext))
+            }
+        }
+        StoredSyncSecret::Device => Ok(StoredSyncSecret::Device),
+    }
+}
+
+fn encrypt_sync_plaintext(vault: &Vault, plaintext: &str) -> Result<Ciphertext> {
+    Ok(encrypt_bytes(
         &vault.config_backup_key(),
         b"aipass sync settings webdav password v1",
         plaintext.as_bytes(),
-    )?;
-    plaintext.zeroize();
-    Ok(ciphertext)
+    )?)
 }
 
-fn decrypt_sync_secret(vault: &Vault, secret: &StoredSyncSecret) -> Result<SensitiveString> {
+fn decrypt_sync_secret(
+    vault_dir: &Path,
+    vault: &Vault,
+    secret: &StoredSyncSecret,
+) -> Result<SensitiveString> {
     match secret {
         StoredSyncSecret::Plaintext(secret) => Ok(secret.clone()),
-        StoredSyncSecret::Encrypted(ciphertext) => {
-            let mut bytes = decrypt_bytes(
-                &vault.config_backup_key(),
-                b"aipass sync settings webdav password v1",
-                ciphertext,
-            )?;
-            let plaintext = String::from_utf8(bytes.clone())?;
+        StoredSyncSecret::Device => device_secrets::get_webdav_password(vault_dir)?
+            .map(SensitiveString::new)
+            .context("webdav password is missing from device secret storage"),
+        StoredSyncSecret::Encrypted(ciphertext) => Ok(SensitiveString::new(
+            decrypt_sync_ciphertext(vault, ciphertext)?,
+        )),
+    }
+}
+
+fn decrypt_sync_ciphertext(vault: &Vault, ciphertext: &Ciphertext) -> Result<String> {
+    let mut bytes = decrypt_bytes(
+        &vault.config_backup_key(),
+        b"aipass sync settings webdav password v1",
+        ciphertext,
+    )?;
+    match String::from_utf8(std::mem::take(&mut bytes)) {
+        Ok(plaintext) => Ok(plaintext),
+        Err(err) => {
+            let mut bytes = err.into_bytes();
             bytes.zeroize();
-            Ok(SensitiveString::new(plaintext))
+            bail!("stored webdav password is not valid utf-8")
         }
     }
 }
@@ -568,6 +661,71 @@ pub fn map_vault_error(err: VaultError) -> ServiceError {
         VaultError::Io(err) => ServiceError::internal(err),
         VaultError::Json(err) => ServiceError::internal(err),
         VaultError::Crypto(err) => ServiceError::internal(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn save_sync_settings_persists_device_marker() {
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let settings = StoredSyncSettings {
+            mode: SyncMode::WebDav,
+            sync_folder: None,
+            webdav_url: Some("https://dav.example".to_string()),
+            webdav_username: Some("alice".to_string()),
+            webdav_password: Some(StoredSyncSecret::Device),
+        };
+
+        let saved = save_sync_settings(&vault_dir, None, &settings).expect("save settings");
+        assert!(matches!(
+            saved.webdav_password,
+            Some(StoredSyncSecret::Device)
+        ));
+
+        let persisted: PersistedSyncSettings = serde_json::from_slice(
+            &fs::read(sync_settings_path(&vault_dir)).expect("read settings"),
+        )
+        .expect("decode settings");
+        assert!(persisted.webdav_password.is_none());
+        assert!(persisted.webdav_password_device);
+    }
+
+    #[test]
+    fn load_sync_settings_prefers_device_marker_over_ciphertext() {
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let path = sync_settings_path(&vault_dir);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        let persisted = PersistedSyncSettings {
+            mode: SyncMode::WebDav,
+            sync_folder: Some(PathBuf::from("/tmp/aipass-sync")),
+            webdav_url: Some("https://dav.example".to_string()),
+            webdav_username: Some("alice".to_string()),
+            webdav_password: Some(Ciphertext {
+                aead: "xchacha20poly1305".to_string(),
+                nonce_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+                ciphertext_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            }),
+            webdav_password_device: true,
+        };
+        atomic_write_bytes(
+            &path,
+            &serde_json::to_vec(&persisted).expect("encode settings"),
+        )
+        .expect("write settings");
+
+        let loaded = load_sync_settings(&vault_dir).expect("load settings");
+        assert!(matches!(
+            loaded.webdav_password,
+            Some(StoredSyncSecret::Device)
+        ));
     }
 }
 
