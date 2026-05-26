@@ -1,8 +1,9 @@
 use crate::paths::{canonical_vault_dir, default_vault_dir};
 use aipass_agent_protocol::{
-    AgentErrorCode, LockReason, SensitiveString, SessionPolicy, SessionStatus,
+    AgentErrorCode, LockReason, SensitiveString, SessionPolicy, SessionStatus, SyncMode,
+    SyncSettings, SyncSettingsUpdate,
 };
-use aipass_crypto::SecretString;
+use aipass_crypto::{decrypt_bytes, encrypt_bytes, Ciphertext, SecretString};
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::{RecoveryKit, Vault, VaultError};
 use anyhow::{Context, Result};
@@ -31,6 +32,50 @@ pub struct LegacyDesktopPreferences {
 pub struct NativeHostSettings {
     #[serde(default)]
     pub ignored_origins: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LegacyDesktopSyncSettings {
+    #[serde(default)]
+    pub mode: SyncMode,
+    #[serde(default)]
+    pub sync_folder: Option<PathBuf>,
+    #[serde(default)]
+    pub webdav_url: Option<String>,
+    #[serde(default)]
+    pub webdav_username: Option<String>,
+    #[serde(default)]
+    pub webdav_password: Option<SensitiveString>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedSyncSettings {
+    #[serde(default)]
+    pub mode: SyncMode,
+    #[serde(default)]
+    pub sync_folder: Option<PathBuf>,
+    #[serde(default)]
+    pub webdav_url: Option<String>,
+    #[serde(default)]
+    pub webdav_username: Option<String>,
+    #[serde(default)]
+    pub webdav_password: Option<Ciphertext>,
+}
+
+#[derive(Clone, Debug)]
+pub enum StoredSyncSecret {
+    Plaintext(SensitiveString),
+    Encrypted(Ciphertext),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StoredSyncSettings {
+    pub mode: SyncMode,
+    pub sync_folder: Option<PathBuf>,
+    pub webdav_url: Option<String>,
+    pub webdav_username: Option<String>,
+    pub webdav_password: Option<StoredSyncSecret>,
 }
 
 pub struct SessionInfo {
@@ -289,6 +334,116 @@ pub fn legacy_desktop_preferences_path() -> Result<PathBuf> {
     Ok(dirs.config_dir().join("preferences.json"))
 }
 
+pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
+    let path = sync_settings_path(vault_dir);
+    if path.exists() {
+        let persisted: PersistedSyncSettings = serde_json::from_slice(&fs::read(path)?)?;
+        return Ok(StoredSyncSettings {
+            mode: persisted.mode,
+            sync_folder: persisted.sync_folder,
+            webdav_url: persisted.webdav_url,
+            webdav_username: persisted.webdav_username,
+            webdav_password: persisted.webdav_password.map(StoredSyncSecret::Encrypted),
+        });
+    }
+
+    if canonical_vault_dir(vault_dir)? == canonical_vault_dir(default_vault_dir()?)? {
+        let legacy_path = legacy_desktop_sync_settings_path()?;
+        if legacy_path.exists() {
+            let legacy: LegacyDesktopSyncSettings =
+                serde_json::from_slice(&fs::read(legacy_path)?)?;
+            return Ok(StoredSyncSettings {
+                mode: legacy.mode,
+                sync_folder: legacy.sync_folder,
+                webdav_url: legacy.webdav_url,
+                webdav_username: legacy.webdav_username,
+                webdav_password: legacy.webdav_password.map(StoredSyncSecret::Plaintext),
+            });
+        }
+    }
+
+    Ok(StoredSyncSettings::default())
+}
+
+pub fn sync_settings_view(settings: &StoredSyncSettings) -> SyncSettings {
+    SyncSettings {
+        mode: settings.mode,
+        sync_folder: settings.sync_folder.clone(),
+        webdav_url: settings.webdav_url.clone(),
+        webdav_username: settings.webdav_username.clone(),
+        has_webdav_password: settings.webdav_password.is_some(),
+    }
+}
+
+pub fn save_sync_settings(
+    vault_dir: &Path,
+    vault: &Vault,
+    settings: &StoredSyncSettings,
+) -> Result<()> {
+    let persisted = PersistedSyncSettings {
+        mode: settings.mode,
+        sync_folder: settings.sync_folder.clone(),
+        webdav_url: settings.webdav_url.clone(),
+        webdav_username: settings.webdav_username.clone(),
+        webdav_password: settings
+            .webdav_password
+            .clone()
+            .map(|secret| encrypt_sync_secret(vault, secret))
+            .transpose()?,
+    };
+    let path = sync_settings_path(vault_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    atomic_write_bytes(&path, &serde_json::to_vec_pretty(&persisted)?)?;
+    remove_legacy_sync_settings(vault_dir).ok();
+    Ok(())
+}
+
+pub fn apply_sync_settings_update(
+    current: StoredSyncSettings,
+    update: SyncSettingsUpdate,
+) -> StoredSyncSettings {
+    StoredSyncSettings {
+        mode: update.mode,
+        sync_folder: update.sync_folder,
+        webdav_url: update.webdav_url,
+        webdav_username: update.webdav_username,
+        webdav_password: if update.clear_webdav_password {
+            None
+        } else if let Some(password) = update.webdav_password {
+            Some(StoredSyncSecret::Plaintext(password))
+        } else {
+            current.webdav_password
+        },
+    }
+}
+
+pub fn sync_settings_password(
+    settings: &StoredSyncSettings,
+    vault: &Vault,
+) -> Result<Option<SensitiveString>> {
+    settings
+        .webdav_password
+        .as_ref()
+        .map(|secret| decrypt_sync_secret(vault, secret))
+        .transpose()
+}
+
+pub fn sync_settings_path(vault_dir: &Path) -> PathBuf {
+    vault_dir
+        .parent()
+        .unwrap_or(vault_dir)
+        .join("agent")
+        .join("sync-settings.json")
+}
+
+pub fn legacy_desktop_sync_settings_path() -> Result<PathBuf> {
+    let dirs = directories::ProjectDirs::from("dev", "aipass", "AIPass")
+        .context("cannot determine project dir")?;
+    Ok(dirs.config_dir().join("sync-settings.json"))
+}
+
 pub fn native_host_settings_path(vault_dir: &Path) -> PathBuf {
     vault_dir
         .parent()
@@ -299,6 +454,48 @@ pub fn native_host_settings_path(vault_dir: &Path) -> PathBuf {
 
 pub fn manifest_path(vault_dir: &Path) -> PathBuf {
     vault_dir.join("manifest.aipmanifest")
+}
+
+fn remove_legacy_sync_settings(vault_dir: &Path) -> Result<()> {
+    if canonical_vault_dir(vault_dir)? == canonical_vault_dir(default_vault_dir()?)? {
+        let legacy = legacy_desktop_sync_settings_path()?;
+        if legacy.exists() {
+            fs::remove_file(legacy)?;
+        }
+    }
+    Ok(())
+}
+
+fn encrypt_sync_secret(vault: &Vault, secret: StoredSyncSecret) -> Result<Ciphertext> {
+    let mut plaintext = match secret {
+        StoredSyncSecret::Plaintext(secret) => secret.into_inner(),
+        StoredSyncSecret::Encrypted(ciphertext) => {
+            return Ok(ciphertext);
+        }
+    };
+    let ciphertext = encrypt_bytes(
+        &vault.config_backup_key(),
+        b"aipass sync settings webdav password v1",
+        plaintext.as_bytes(),
+    )?;
+    plaintext.zeroize();
+    Ok(ciphertext)
+}
+
+fn decrypt_sync_secret(vault: &Vault, secret: &StoredSyncSecret) -> Result<SensitiveString> {
+    match secret {
+        StoredSyncSecret::Plaintext(secret) => Ok(secret.clone()),
+        StoredSyncSecret::Encrypted(ciphertext) => {
+            let mut bytes = decrypt_bytes(
+                &vault.config_backup_key(),
+                b"aipass sync settings webdav password v1",
+                ciphertext,
+            )?;
+            let plaintext = String::from_utf8(bytes.clone())?;
+            bytes.zeroize();
+            Ok(SensitiveString::new(plaintext))
+        }
+    }
 }
 
 pub fn with_vault<T>(

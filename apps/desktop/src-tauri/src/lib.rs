@@ -5,13 +5,9 @@ mod models;
 use commands::*;
 
 use crate::auth_tasks::AuthTasks;
-use crate::models::{
-    AppPreferences, ProviderAddRequest, ProviderUpdateRequest, StoredSyncSettings, SyncSettings,
-};
+use crate::models::{AppPreferences, ProviderAddRequest, ProviderUpdateRequest};
 use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
-use aipass_agent_protocol::{
-    AgentRequest, CloudSyncProvider, LockReason, SessionPolicy, SessionStatus,
-};
+use aipass_agent_protocol::{AgentRequest, LockReason, SessionPolicy, SessionStatus};
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
@@ -137,10 +133,6 @@ fn endpoints_from(endpoint: Option<String>) -> Vec<ProviderEndpoint> {
 
 fn clean_strings(values: Vec<String>) -> Vec<String> {
     values.into_iter().filter_map(non_empty).collect()
-}
-
-fn non_empty_path(value: PathBuf) -> Option<PathBuf> {
-    (!value.as_os_str().is_empty()).then_some(value)
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -322,88 +314,9 @@ fn save_preferences(app: &AppHandle, preferences: &AppPreferences) -> Result<(),
     write_json_atomic(&path, preferences)
 }
 
-fn load_sync_settings(app: &AppHandle) -> Result<StoredSyncSettings, String> {
-    let path = sync_settings_path(app)?;
-    if !path.exists() {
-        return Ok(StoredSyncSettings::default());
-    }
-    let bytes = fs::read(&path).map_err(|err| err.to_string())?;
-    serde_json::from_slice(&bytes).or_else(|_| Ok(StoredSyncSettings::default()))
-}
-
-fn save_sync_settings(app: &AppHandle, settings: &StoredSyncSettings) -> Result<(), String> {
-    let path = sync_settings_path(app)?;
-    write_json_atomic(&path, settings)
-}
-
-fn sync_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
-    Ok(dir.join("sync-settings.json"))
-}
-
 fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
     Ok(dir.join("preferences.json"))
-}
-
-fn sync_settings_view(settings: &StoredSyncSettings) -> SyncSettings {
-    SyncSettings {
-        mode: settings.mode,
-        sync_folder: settings.sync_folder.clone(),
-        webdav_url: settings.webdav_url.clone(),
-        webdav_username: settings.webdav_username.clone(),
-        has_webdav_password: settings.webdav_password.is_some(),
-    }
-}
-
-fn sync_report_error(status: aipass_sync::SyncStatus, message: String) -> aipass_sync::SyncReport {
-    aipass_sync::SyncReport {
-        uploaded: 0,
-        downloaded: 0,
-        conflicts: 0,
-        quarantined: 0,
-        status,
-        message: Some(message),
-    }
-}
-
-fn agent_sync_from_settings(
-    app: &AppHandle,
-    settings: StoredSyncSettings,
-) -> Result<aipass_sync::SyncReport, String> {
-    match settings.mode {
-        crate::models::SyncMode::Local => {
-            let dir = settings
-                .sync_folder
-                .ok_or_else(|| "Local sync target is not configured".to_string())?;
-            agent_request(app, AgentRequest::SyncLocal { dir })
-        }
-        crate::models::SyncMode::ICloud => agent_request(
-            app,
-            AgentRequest::SyncCloud {
-                provider: CloudSyncProvider::ICloud,
-            },
-        ),
-        crate::models::SyncMode::OneDrive => agent_request(
-            app,
-            AgentRequest::SyncCloud {
-                provider: CloudSyncProvider::OneDrive,
-            },
-        ),
-        crate::models::SyncMode::WebDav => {
-            let url = settings
-                .webdav_url
-                .ok_or_else(|| "WebDAV sync target URL is not configured".to_string())?;
-            agent_request(
-                app,
-                AgentRequest::SyncWebDav {
-                    url,
-                    username: settings.webdav_username,
-                    password: settings.webdav_password,
-                },
-            )
-        }
-    }
 }
 
 fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {

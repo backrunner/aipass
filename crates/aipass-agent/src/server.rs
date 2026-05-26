@@ -2,10 +2,11 @@ use crate::desktop::open_desktop_window;
 use crate::ipc;
 use crate::paths::{canonical_vault_dir, cloud_sync_dir, namespace_for_vault_dir};
 use crate::session::{
-    clamp_policy, current_policy, load_policy, lock_if_idle, lock_session, map_vault_error,
-    native_host_settings_path, save_policy, session_status, shutdown_requested, touch_session,
-    unlock_with_password, with_vault, with_vault_mut, AgentState, NativeHostSettings, ServiceError,
-    ServiceResult, SessionState,
+    apply_sync_settings_update, clamp_policy, current_policy, load_policy, load_sync_settings,
+    lock_if_idle, lock_session, map_vault_error, native_host_settings_path, save_policy,
+    save_sync_settings, session_status, shutdown_requested, sync_settings_password,
+    sync_settings_view, touch_session, unlock_with_password, with_vault, with_vault_mut,
+    AgentState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
 };
 use aipass_agent_protocol::{
     endpoint_url as protocol_endpoint_url, read_frame, write_frame, AgentErrorCode, AgentRequest,
@@ -13,8 +14,8 @@ use aipass_agent_protocol::{
     BrowserDetectedSecretFields, BrowserDetectedSecretPreview, BrowserFillResult,
     BrowserIgnoreOriginResult, BrowserIgnoredStatus, ConflictScope, LockReason, ProbeResult,
     SaveDetectedResult, SecretValue, SessionUnlockMode, SyncConflictActionRequest,
-    SyncConflictResponse, ToolConfigApplyResponse, ToolConfigMode, ToolConfigPreviewResponse,
-    ToolConfigRequest, ToolConfigTool, VaultCreateResponse,
+    SyncConflictResponse, SyncMode, ToolConfigApplyResponse, ToolConfigMode,
+    ToolConfigPreviewResponse, ToolConfigRequest, ToolConfigTool, VaultCreateResponse,
 };
 use aipass_config_writers::{
     apply_plan_encrypted, plan_claude_code, plan_claude_code_plaintext, plan_codex,
@@ -29,7 +30,7 @@ use aipass_provider_registry::{
 use aipass_storage::atomic_write_bytes;
 use aipass_sync::{
     accept_conflict, classify_webdav_error, discard_conflict, list_conflicts, sync_local_folder,
-    sync_webdav, ConflictRecord, HttpWebDavClient, SyncReport,
+    sync_webdav, ConflictRecord, HttpWebDavClient, SyncReport, WebDavClient,
 };
 use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, TtlGrantSummary, Vault,
@@ -739,4 +740,18 @@ fn home_dir() -> ServiceResult<PathBuf> {
         .map(PathBuf::from)
         .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
         .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "home directory unavailable"))
+}
+
+fn sync_webdav_report(vault_dir: &Path, client: &impl WebDavClient) -> SyncReport {
+    match sync_webdav(vault_dir, client) {
+        Ok(report) => report,
+        Err(err) => SyncReport {
+            uploaded: 0,
+            downloaded: 0,
+            conflicts: 0,
+            quarantined: 0,
+            status: classify_webdav_error(&err),
+            message: Some(err.to_string()),
+        },
+    }
 }

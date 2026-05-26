@@ -1,5 +1,6 @@
 use super::*;
 use crate::paths::cloud_sync_dir;
+use aipass_agent_protocol::CloudSyncProvider;
 
 pub(crate) fn handle_request(state: &Arc<AgentState>, request: AgentRequest) -> AgentResponse {
     if let Err(err) = lock_if_idle(state) {
@@ -237,6 +238,67 @@ fn dispatch_request(
         AgentRequest::SyncLocal { dir } => sync_local_folder(&state.vault_dir, &dir)
             .map(AgentResponse::success)
             .map_err(ServiceError::internal),
+        AgentRequest::SyncSettingsGet => load_sync_settings(&state.vault_dir)
+            .map(|settings| AgentResponse::success(sync_settings_view(&settings)))
+            .map_err(ServiceError::internal),
+        AgentRequest::SyncSettingsSet { settings } => with_vault(state, true, |vault| {
+            let current = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
+            let updated = apply_sync_settings_update(current, settings);
+            save_sync_settings(&state.vault_dir, vault, &updated)
+                .map_err(ServiceError::internal)?;
+            Ok(sync_settings_view(&updated))
+        })
+        .map(AgentResponse::success),
+        AgentRequest::SyncConfigured => {
+            let settings = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
+            match settings.mode {
+                SyncMode::Local => {
+                    let dir = settings.sync_folder.ok_or_else(|| {
+                        ServiceError::new(
+                            AgentErrorCode::ValidationFailed,
+                            "local sync target is not configured",
+                        )
+                    })?;
+                    sync_local_folder(&state.vault_dir, &dir)
+                        .map(AgentResponse::success)
+                        .map_err(ServiceError::internal)
+                }
+                SyncMode::ICloud => {
+                    let dir = cloud_sync_dir(CloudSyncProvider::ICloud)
+                        .map_err(ServiceError::internal)?;
+                    sync_local_folder(&state.vault_dir, &dir)
+                        .map(AgentResponse::success)
+                        .map_err(ServiceError::internal)
+                }
+                SyncMode::OneDrive => {
+                    let dir = cloud_sync_dir(CloudSyncProvider::OneDrive)
+                        .map_err(ServiceError::internal)?;
+                    sync_local_folder(&state.vault_dir, &dir)
+                        .map(AgentResponse::success)
+                        .map_err(ServiceError::internal)
+                }
+                SyncMode::WebDav => with_vault(state, false, |vault| {
+                    let url = settings.webdav_url.clone().ok_or_else(|| {
+                        ServiceError::new(
+                            AgentErrorCode::ValidationFailed,
+                            "webdav sync target url is not configured",
+                        )
+                    })?;
+                    let password =
+                        sync_settings_password(&settings, vault).map_err(ServiceError::internal)?;
+                    save_sync_settings(&state.vault_dir, vault, &settings)
+                        .map_err(ServiceError::internal)?;
+                    let client = HttpWebDavClient::new(
+                        &url,
+                        settings.webdav_username.clone(),
+                        password.map(|value| value.into_inner()),
+                    )
+                    .map_err(ServiceError::internal)?;
+                    Ok(sync_webdav_report(&state.vault_dir, &client))
+                })
+                .map(AgentResponse::success),
+            }
+        }
         AgentRequest::SyncCloud { provider } => {
             let dir = cloud_sync_dir(provider).map_err(ServiceError::internal)?;
             sync_local_folder(&state.vault_dir, &dir)
@@ -251,17 +313,10 @@ fn dispatch_request(
             let client =
                 HttpWebDavClient::new(&url, username, password.map(|value| value.into_inner()))
                     .map_err(ServiceError::internal)?;
-            match sync_webdav(&state.vault_dir, &client) {
-                Ok(report) => Ok(AgentResponse::success(report)),
-                Err(err) => Ok(AgentResponse::success(SyncReport {
-                    uploaded: 0,
-                    downloaded: 0,
-                    conflicts: 0,
-                    quarantined: 0,
-                    status: classify_webdav_error(&err),
-                    message: Some(err.to_string()),
-                })),
-            }
+            Ok(AgentResponse::success(sync_webdav_report(
+                &state.vault_dir,
+                &client,
+            )))
         }
         AgentRequest::SyncConflicts { dir, provider } => with_vault(state, true, |vault| {
             let mut conflicts = conflict_responses(ConflictScope::Vault, &state.vault_dir, vault)?;

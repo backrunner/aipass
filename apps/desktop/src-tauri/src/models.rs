@@ -1,7 +1,8 @@
 use aipass_agent_protocol::{
     CloudSyncProvider as AgentCloudSyncProvider, SensitiveString,
     SyncConflictActionRequest as AgentSyncConflictActionRequest,
-    SyncConflictResponse as AgentSyncConflictResponse,
+    SyncConflictResponse as AgentSyncConflictResponse, SyncMode as AgentSyncMode,
+    SyncSettings as AgentSyncSettings, SyncSettingsUpdate as AgentSyncSettingsUpdate,
     ToolConfigApplyResponse as AgentToolConfigApplyResponse, ToolConfigMode as AgentToolConfigMode,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
     ToolConfigRequest as AgentToolConfigRequest, ToolConfigTool as AgentToolConfigTool,
@@ -63,21 +64,6 @@ pub(crate) struct SyncSettings {
     pub(crate) webdav_username: Option<String>,
     #[serde(default)]
     pub(crate) has_webdav_password: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct StoredSyncSettings {
-    #[serde(default)]
-    pub(crate) mode: SyncMode,
-    #[serde(default)]
-    pub(crate) sync_folder: Option<PathBuf>,
-    #[serde(default)]
-    pub(crate) webdav_url: Option<String>,
-    #[serde(default)]
-    pub(crate) webdav_username: Option<String>,
-    #[serde(default)]
-    pub(crate) webdav_password: Option<SensitiveString>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -397,12 +383,53 @@ pub(crate) fn into_agent_cloud_sync_provider(
     }
 }
 
+pub(crate) fn into_agent_sync_settings_update(
+    request: SaveSyncSettingsRequest,
+) -> AgentSyncSettingsUpdate {
+    AgentSyncSettingsUpdate {
+        mode: into_agent_sync_mode(request.mode),
+        sync_folder: request.sync_folder,
+        webdav_url: request.webdav_url,
+        webdav_username: request.webdav_username,
+        webdav_password: request.webdav_password,
+        clear_webdav_password: request.clear_webdav_password,
+    }
+}
+
+pub(crate) fn from_agent_sync_settings(settings: AgentSyncSettings) -> SyncSettings {
+    SyncSettings {
+        mode: from_agent_sync_mode(settings.mode),
+        sync_folder: settings.sync_folder,
+        webdav_url: settings.webdav_url,
+        webdav_username: settings.webdav_username,
+        has_webdav_password: settings.has_webdav_password,
+    }
+}
+
 fn from_agent_tool(tool: AgentToolConfigTool) -> ToolConfigTool {
     match tool {
         AgentToolConfigTool::Codex => ToolConfigTool::Codex,
         AgentToolConfigTool::ClaudeCode => ToolConfigTool::ClaudeCode,
         AgentToolConfigTool::GeminiCli => ToolConfigTool::GeminiCli,
         AgentToolConfigTool::OpenCode => ToolConfigTool::OpenCode,
+    }
+}
+
+fn into_agent_sync_mode(mode: SyncMode) -> AgentSyncMode {
+    match mode {
+        SyncMode::Local => AgentSyncMode::Local,
+        SyncMode::ICloud => AgentSyncMode::ICloud,
+        SyncMode::OneDrive => AgentSyncMode::OneDrive,
+        SyncMode::WebDav => AgentSyncMode::WebDav,
+    }
+}
+
+fn from_agent_sync_mode(mode: AgentSyncMode) -> SyncMode {
+    match mode {
+        AgentSyncMode::Local => SyncMode::Local,
+        AgentSyncMode::ICloud => SyncMode::ICloud,
+        AgentSyncMode::OneDrive => SyncMode::OneDrive,
+        AgentSyncMode::WebDav => SyncMode::WebDav,
     }
 }
 

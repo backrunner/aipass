@@ -124,6 +124,43 @@ pub enum CloudSyncProvider {
     OneDrive,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMode {
+    #[default]
+    Local,
+    ICloud,
+    OneDrive,
+    WebDav,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSettings {
+    #[serde(default)]
+    pub mode: SyncMode,
+    #[serde(default)]
+    pub sync_folder: Option<PathBuf>,
+    #[serde(default)]
+    pub webdav_url: Option<String>,
+    #[serde(default)]
+    pub webdav_username: Option<String>,
+    #[serde(default)]
+    pub has_webdav_password: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSettingsUpdate {
+    pub mode: SyncMode,
+    pub sync_folder: Option<PathBuf>,
+    pub webdav_url: Option<String>,
+    pub webdav_username: Option<String>,
+    pub webdav_password: Option<SensitiveString>,
+    #[serde(default)]
+    pub clear_webdav_password: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncConflictActionRequest {
@@ -348,6 +385,12 @@ pub enum AgentRequest {
     ToolConfigRollback { operation_id: Uuid },
     #[serde(rename = "sync.local")]
     SyncLocal { dir: PathBuf },
+    #[serde(rename = "sync.settings.get")]
+    SyncSettingsGet,
+    #[serde(rename = "sync.settings.set")]
+    SyncSettingsSet { settings: SyncSettingsUpdate },
+    #[serde(rename = "sync.configured")]
+    SyncConfigured,
     #[serde(rename = "sync.cloud")]
     SyncCloud { provider: CloudSyncProvider },
     #[serde(rename = "sync.webdav")]
