@@ -251,9 +251,17 @@ fn dispatch_request(
             let client =
                 HttpWebDavClient::new(&url, username, password.map(|value| value.into_inner()))
                     .map_err(ServiceError::internal)?;
-            sync_webdav(&state.vault_dir, &client)
-                .map(AgentResponse::success)
-                .map_err(ServiceError::internal)
+            match sync_webdav(&state.vault_dir, &client) {
+                Ok(report) => Ok(AgentResponse::success(report)),
+                Err(err) => Ok(AgentResponse::success(SyncReport {
+                    uploaded: 0,
+                    downloaded: 0,
+                    conflicts: 0,
+                    quarantined: 0,
+                    status: classify_webdav_error(&err),
+                    message: Some(err.to_string()),
+                })),
+            }
         }
         AgentRequest::SyncConflicts { dir, provider } => with_vault(state, true, |vault| {
             let mut conflicts = conflict_responses(ConflictScope::Vault, &state.vault_dir, vault)?;

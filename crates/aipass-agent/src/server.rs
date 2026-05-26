@@ -28,8 +28,8 @@ use aipass_provider_registry::{
 };
 use aipass_storage::atomic_write_bytes;
 use aipass_sync::{
-    accept_conflict, discard_conflict, list_conflicts, sync_local_folder, sync_webdav,
-    ConflictRecord, HttpWebDavClient,
+    accept_conflict, classify_webdav_error, discard_conflict, list_conflicts, sync_local_folder,
+    sync_webdav, ConflictRecord, HttpWebDavClient, SyncReport,
 };
 use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, TtlGrantSummary, Vault,

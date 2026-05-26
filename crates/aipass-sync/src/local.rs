@@ -58,6 +58,8 @@ pub struct SyncReport {
     pub conflicts: usize,
     pub quarantined: usize,
     pub status: SyncStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +140,7 @@ pub fn sync_local_folder(vault_root: &Path, sync_root: &Path) -> Result<SyncRepo
         } else {
             SyncStatus::Idle
         },
+        message: None,
     })
 }
 
@@ -211,6 +214,7 @@ pub fn sync_webdav(vault_root: &Path, client: &impl WebDavClient) -> Result<Sync
         } else {
             SyncStatus::Idle
         },
+        message: None,
     })
 }
 

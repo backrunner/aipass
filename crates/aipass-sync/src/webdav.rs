@@ -1,4 +1,5 @@
-use anyhow::{bail, Context, Result};
+use crate::local::SyncStatus;
+use anyhow::Result;
 use reqwest::blocking::Client;
 use reqwest::header::{ETAG, IF_MATCH};
 use reqwest::{Method, StatusCode};
@@ -20,6 +21,42 @@ pub trait WebDavClient {
     fn put(&self, path: &str, bytes: &[u8], etag: Option<&str>) -> Result<Option<String>>;
     fn delete(&self, path: &str, etag: Option<&str>) -> Result<()>;
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebDavErrorKind {
+    Conflict,
+    AuthFailed,
+    Offline,
+    ServerError,
+    Other,
+}
+
+#[derive(Debug)]
+pub struct WebDavError {
+    kind: WebDavErrorKind,
+    message: String,
+}
+
+impl WebDavError {
+    fn new(kind: WebDavErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn kind(&self) -> WebDavErrorKind {
+        self.kind
+    }
+}
+
+impl std::fmt::Display for WebDavError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for WebDavError {}
 
 #[derive(Clone)]
 pub struct HttpWebDavClient {
@@ -76,14 +113,14 @@ impl HttpWebDavClient {
             let response = self
                 .request(Method::from_bytes(b"MKCOL")?, &current)
                 .send()
-                .with_context(|| format!("MKCOL {current}"))?;
+                .map_err(|err| request_error("MKCOL", &current, err))?;
             match response.status() {
                 StatusCode::CREATED
                 | StatusCode::OK
                 | StatusCode::METHOD_NOT_ALLOWED
                 | StatusCode::CONFLICT => {}
                 status if status.is_success() => {}
-                status => bail!("webdav MKCOL {current} failed with {status}"),
+                status => return Err(status_error("MKCOL", &current, status)),
             }
         }
         Ok(())
@@ -108,12 +145,12 @@ impl WebDavClient for HttpWebDavClient {
             .header("Depth", "1")
             .body(body)
             .send()
-            .with_context(|| format!("PROPFIND {prefix}"))?;
+            .map_err(|err| request_error("PROPFIND", prefix, err))?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(Vec::new());
         }
         if !response.status().is_success() && response.status().as_u16() != 207 {
-            bail!("webdav PROPFIND {prefix} failed with {}", response.status());
+            return Err(status_error("PROPFIND", prefix, response.status()));
         }
         let text = response.text()?;
         parse_propfind_response(&text, prefix)
@@ -123,12 +160,12 @@ impl WebDavClient for HttpWebDavClient {
         let response = self
             .request(Method::GET, path)
             .send()
-            .with_context(|| format!("GET {path}"))?;
+            .map_err(|err| request_error("GET", path, err))?;
         if response.status() == StatusCode::NOT_FOUND {
-            bail!("webdav object not found: {path}");
+            return Err(status_error("GET", path, response.status()));
         }
         if !response.status().is_success() {
-            bail!("webdav GET {path} failed with {}", response.status());
+            return Err(status_error("GET", path, response.status()));
         }
         Ok(response.bytes()?.to_vec())
     }
@@ -141,12 +178,14 @@ impl WebDavClient for HttpWebDavClient {
         if let Some(etag) = etag {
             request = request.header(IF_MATCH, etag);
         }
-        let response = request.send().with_context(|| format!("PUT {path}"))?;
+        let response = request
+            .send()
+            .map_err(|err| request_error("PUT", path, err))?;
         if response.status() == StatusCode::PRECONDITION_FAILED {
-            bail!("webdav PUT conflict for {path}");
+            return Err(status_error("PUT", path, response.status()));
         }
         if !response.status().is_success() {
-            bail!("webdav PUT {path} failed with {}", response.status());
+            return Err(status_error("PUT", path, response.status()));
         }
         Ok(response
             .headers()
@@ -160,12 +199,46 @@ impl WebDavClient for HttpWebDavClient {
         if let Some(etag) = etag {
             request = request.header(IF_MATCH, etag);
         }
-        let response = request.send().with_context(|| format!("DELETE {path}"))?;
+        let response = request
+            .send()
+            .map_err(|err| request_error("DELETE", path, err))?;
         if response.status() != StatusCode::NOT_FOUND && !response.status().is_success() {
-            bail!("webdav DELETE {path} failed with {}", response.status());
+            return Err(status_error("DELETE", path, response.status()));
         }
         Ok(())
     }
+}
+
+pub fn classify_webdav_error(err: &anyhow::Error) -> SyncStatus {
+    if let Some(webdav) = err.downcast_ref::<WebDavError>() {
+        return match webdav.kind() {
+            WebDavErrorKind::Conflict => SyncStatus::Conflict,
+            WebDavErrorKind::AuthFailed => SyncStatus::AuthFailed,
+            WebDavErrorKind::Offline => SyncStatus::Offline,
+            WebDavErrorKind::ServerError => SyncStatus::ServerError,
+            WebDavErrorKind::Other => SyncStatus::Offline,
+        };
+    }
+    SyncStatus::Offline
+}
+
+fn request_error(method: &str, path: &str, err: reqwest::Error) -> anyhow::Error {
+    let kind = if err.is_timeout() || err.is_connect() || err.is_request() {
+        WebDavErrorKind::Offline
+    } else {
+        WebDavErrorKind::Other
+    };
+    WebDavError::new(kind, format!("webdav {method} {path} failed: {err}")).into()
+}
+
+fn status_error(method: &str, path: &str, status: StatusCode) -> anyhow::Error {
+    let kind = match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => WebDavErrorKind::AuthFailed,
+        StatusCode::PRECONDITION_FAILED | StatusCode::CONFLICT => WebDavErrorKind::Conflict,
+        _ if status.is_server_error() => WebDavErrorKind::ServerError,
+        _ => WebDavErrorKind::Other,
+    };
+    WebDavError::new(kind, format!("webdav {method} {path} failed with {status}")).into()
 }
 
 fn encode_relative_path(path: &str) -> String {

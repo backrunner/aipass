@@ -6,7 +6,7 @@ pub use local::{
     list_webdav_sync_files, sync_local_folder, sync_server_visibility_scan, sync_webdav,
     ConflictRecord, SyncCheckpoint, SyncObject, SyncReport, SyncStatus,
 };
-pub use webdav::{HttpWebDavClient, WebDavClient, WebDavEntry};
+pub use webdav::{classify_webdav_error, HttpWebDavClient, WebDavClient, WebDavEntry};
 
 #[cfg(test)]
 mod tests {
