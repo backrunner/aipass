@@ -4,13 +4,17 @@ import type {
   ProviderEntry,
   ProviderKind,
   QuotaInfo,
-  SecretRef
+  SecretRef,
 } from "@aipass/schemas";
 
 export type AuthMode = "create" | "unlock" | "recover";
 export type FormMode = "add" | "edit";
 export type SyncMode = "local" | "icloud" | "onedrive" | "webdav";
-export type ToolConfigTarget = "codex" | "claude-code" | "gemini-cli" | "opencode";
+export type ToolConfigTarget =
+  | "codex"
+  | "claude-code"
+  | "gemini-cli"
+  | "opencode";
 export type ToolConfigMode = "helper" | "env" | "plaintext";
 
 export type VaultStatus = { exists: boolean; locked: boolean };
@@ -22,6 +26,14 @@ export type AppPreferences = {
   clipboardClearSeconds: number;
   lockOnSleep: boolean;
   lockOnScreenLock: boolean;
+};
+
+export type SyncSettings = {
+  mode: SyncMode;
+  syncFolder?: string;
+  webdavUrl?: string;
+  webdavUsername?: string;
+  hasWebdavPassword: boolean;
 };
 
 export type VaultAuthTaskStartResponse = {
@@ -43,7 +55,14 @@ export type SyncReport = {
   downloaded: number;
   conflicts: number;
   quarantined: number;
-  status: "idle" | "syncing" | "conflict" | "offline" | "auth_failed" | "server_error";
+  status:
+    | "idle"
+    | "syncing"
+    | "conflict"
+    | "offline"
+    | "auth_failed"
+    | "server_error";
+  message?: string;
 };
 
 export type Draft = {
@@ -156,7 +175,12 @@ export type ToolConfigApplyResult = {
   summary: string;
 };
 
-export type PasswordStrengthLevel = "empty" | "weak" | "fair" | "good" | "strong";
+export type PasswordStrengthLevel =
+  | "empty"
+  | "weak"
+  | "fair"
+  | "good"
+  | "strong";
 
 export type PasswordStrength = {
   label: string;

@@ -38,6 +38,7 @@
   export let webdavUrl = "";
   export let webdavUsername = "";
   export let webdavPassword = "";
+  export let hasSavedWebdavPassword = false;
   export let syncConflicts: SyncConflict[] = [];
   export let conflictsLoading = false;
   export let conflictBusy = "";
@@ -51,6 +52,8 @@
   export let onExportVault: () => MaybePromise = () => {};
   export let onImportVault: () => MaybePromise = () => {};
   export let onRunSync: () => MaybePromise = () => {};
+  export let onSaveSyncSettings: () => MaybePromise<boolean> = () => true;
+  export let onClearSavedWebdavPassword: () => MaybePromise = () => {};
   export let onLoadSyncConflicts: () => MaybePromise = () => {};
   export let onResolveSyncConflict: (conflict: SyncConflict, action: "accept" | "discard") => MaybePromise = () => {};
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
@@ -418,8 +421,19 @@
                   <Field label="Password">
                     <input bind:value={webdavPassword} type="password" autocomplete="current-password" />
                   </Field>
+                  {#if hasSavedWebdavPassword}
+                    <p class="hint">A saved WebDAV password exists in the Rust config. Leave the field blank to keep it.</p>
+                  {/if}
                 {/if}
                 <div class="row-actions">
+                  <Button variant="secondary" on:click={() => onSaveSyncSettings()}>
+                    Save target
+                  </Button>
+                  {#if syncMode === "webdav" && hasSavedWebdavPassword}
+                    <Button variant="ghost" on:click={() => onClearSavedWebdavPassword()}>
+                      Clear saved password
+                    </Button>
+                  {/if}
                   <Button variant="primary" on:click={() => onRunSync()} disabled={!syncReady}>
                     <Wifi size={14} /> Sync now
                   </Button>

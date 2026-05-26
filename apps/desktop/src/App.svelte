@@ -30,6 +30,7 @@
     ProviderCounts,
     ProviderFilter,
     SyncConflict,
+    SyncSettings,
     SyncMode,
     SyncReport,
     ToolConfigApplyResult,
@@ -136,6 +137,7 @@
   let webdavUrl = "";
   let webdavUsername = "";
   let webdavPassword = "";
+  let hasSavedWebdavPassword = false;
   let draft: Draft = emptyDraft();
   let entries: ProviderEntry[] = [];
   let devices: DeviceRecord[] = [];
@@ -195,6 +197,7 @@
         });
       }
       await loadPreferences();
+      await loadSyncSettings();
       await refreshStatus();
       if (hasTauriRuntime()) {
         windowTarget =
@@ -376,6 +379,7 @@
     exportPassword = "";
     importPassword = "";
     webdavPassword = "";
+    hasSavedWebdavPassword = false;
     setAuthMode("unlock");
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
@@ -621,12 +625,14 @@
 
   async function openSettings(tab: string = "security") {
     settingsInitialTab = tab;
+    await loadSyncSettings();
     showSettings = true;
     await loadDevices();
     await loadSyncConflicts();
   }
 
-  function closeSettings() {
+  async function closeSettings() {
+    if (!(await saveSyncSettings())) return;
     showSettings = false;
   }
 
@@ -754,32 +760,16 @@
     error = "";
     if (syncMode === "webdav" && !webdavUrl.trim()) return;
     if (syncMode === "local" && !syncFolder.trim()) return;
-
-    const cloudProvider = cloudSyncProviderForMode(syncMode);
-    if (syncMode !== "local" && syncMode !== "webdav" && !cloudProvider) return;
+    if (!(await saveSyncSettings())) return;
 
     syncState = "syncing";
     try {
-      let report: SyncReport;
-      if (syncMode === "webdav") {
-        report = await invokeTauri<SyncReport>("sync_webdav_remote", {
-          request: {
-            url: webdavUrl.trim(),
-            username: webdavUsername.trim() || undefined,
-            password: webdavPassword || undefined
-          }
-        });
-      } else if (syncMode === "local") {
-        report = await invokeTauri<SyncReport>("sync_local", {
-          request: { dir: syncFolder.trim() }
-        });
-      } else {
-        report = await invokeTauri<SyncReport>("sync_cloud", {
-          request: { provider: cloudProvider }
-        });
-      }
+      const report = await invokeTauri<SyncReport>("sync_run_configured");
       syncState = report.status;
-      notice = `${report.uploaded} up · ${report.downloaded} down · ${report.conflicts} conflicts`;
+      error = report.message ?? "";
+      notice = report.message
+        ? ""
+        : `${report.uploaded} up · ${report.downloaded} down · ${report.conflicts} conflicts`;
       await loadEntries();
       await loadSyncConflicts();
     } catch (err) {
@@ -906,6 +896,51 @@
       }
       revealedSecrets = {};
     }, clipboardClearSeconds * 1000);
+  }
+
+  async function loadSyncSettings() {
+    try {
+      const settings = await invokeTauri<SyncSettings>("sync_settings_load");
+      syncMode = settings.mode;
+      syncFolder = settings.syncFolder ?? "";
+      webdavUrl = settings.webdavUrl ?? "";
+      webdavUsername = settings.webdavUsername ?? "";
+      webdavPassword = "";
+      hasSavedWebdavPassword = settings.hasWebdavPassword;
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  async function saveSyncSettings(options: { clearWebdavPassword?: boolean } = {}) {
+    try {
+      const settings = await invokeTauri<SyncSettings>("sync_settings_save", {
+        request: {
+          mode: syncMode,
+          syncFolder: syncFolder.trim() || undefined,
+          webdavUrl: webdavUrl.trim() || undefined,
+          webdavUsername: webdavUsername.trim() || undefined,
+          webdavPassword: options.clearWebdavPassword ? undefined : webdavPassword || undefined,
+          clearWebdavPassword: options.clearWebdavPassword ?? false
+        }
+      });
+      syncMode = settings.mode;
+      syncFolder = settings.syncFolder ?? "";
+      webdavUrl = settings.webdavUrl ?? "";
+      webdavUsername = settings.webdavUsername ?? "";
+      webdavPassword = "";
+      hasSavedWebdavPassword = settings.hasWebdavPassword;
+      return true;
+    } catch (err) {
+      error = String(err);
+      return false;
+    }
+  }
+
+  async function clearSavedWebdavPassword() {
+    if (!(await saveSyncSettings({ clearWebdavPassword: true }))) return;
+    notice = "Saved WebDAV password cleared";
+    setTimeout(() => (notice = ""), 1800);
   }
 
   async function loadPreferences() {
@@ -1079,6 +1114,7 @@
     bind:webdavUrl
     bind:webdavUsername
     bind:webdavPassword
+    {hasSavedWebdavPassword}
     {syncConflicts}
     {conflictsLoading}
     {conflictBusy}
@@ -1091,6 +1127,8 @@
     onExportVault={exportVault}
     onImportVault={importVault}
     onRunSync={runSync}
+    onSaveSyncSettings={saveSyncSettings}
+    onClearSavedWebdavPassword={clearSavedWebdavPassword}
     onLoadSyncConflicts={loadSyncConflicts}
     onResolveSyncConflict={resolveSyncConflict}
     onRevokeDevice={revokeDevice}

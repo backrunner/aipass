@@ -8,10 +8,11 @@ use crate::models::{
     from_agent_tool_config_preview, into_agent_cloud_sync_provider,
     into_agent_sync_conflict_request, into_agent_tool_config_request, AppPreferences,
     ChangePasswordRequest, CreateVaultRequest, ProbeResult, ProviderAddRequest,
-    ProviderUpdateRequest, RecoveryVaultRequest, SavePreferencesRequest,
+    ProviderUpdateRequest, RecoveryVaultRequest, SavePreferencesRequest, SaveSyncSettingsRequest,
     SyncCloudRequest, SyncConflictActionRequest, SyncConflictResponse, SyncConflictsRequest,
-    SyncLocalRequest, SyncWebDavRequest, ToolConfigApplyResponse, ToolConfigPreviewResponse,
-    ToolConfigRequest, UnlockVaultRequest, VaultExportRequest, VaultImportRequest, VaultStatus,
+    SyncLocalRequest, SyncSettings, SyncWebDavRequest, ToolConfigApplyResponse,
+    ToolConfigPreviewResponse, ToolConfigRequest, UnlockVaultRequest, VaultExportRequest,
+    VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
     AgentRequest, LockReason, ProbeResult as AgentProbeResult, SecretValue, SensitiveString,
@@ -26,8 +27,10 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::{
-    agent_request, agent_request_no_unlock, agent_status, load_preferences, provider_add_input,
-    provider_update_input, run_blocking, save_preferences, AppState,
+    agent_request, agent_request_no_unlock, agent_status, agent_sync_from_settings,
+    load_preferences, load_sync_settings, non_empty, non_empty_path, provider_add_input,
+    provider_update_input, run_blocking, save_preferences, save_sync_settings, sync_report_error,
+    sync_settings_view, AppState,
 };
 
 #[tauri::command]
@@ -448,6 +451,58 @@ pub(crate) fn vault_import_encrypted(
 #[tauri::command]
 pub(crate) fn sync_local(app: AppHandle, request: SyncLocalRequest) -> Result<SyncReport, String> {
     agent_request(&app, AgentRequest::SyncLocal { dir: request.dir })
+}
+
+#[tauri::command]
+pub(crate) fn sync_settings_load(app: AppHandle) -> Result<SyncSettings, String> {
+    Ok(sync_settings_view(&load_sync_settings(&app)?))
+}
+
+#[tauri::command]
+pub(crate) fn sync_settings_save(
+    app: AppHandle,
+    request: SaveSyncSettingsRequest,
+) -> Result<SyncSettings, String> {
+    let mut current = load_sync_settings(&app)?;
+    current.mode = request.mode;
+    current.sync_folder = request.sync_folder.and_then(non_empty_path);
+    current.webdav_url = request.webdav_url.and_then(non_empty);
+    current.webdav_username = request.webdav_username.and_then(non_empty);
+    if request.clear_webdav_password {
+        current.webdav_password = None;
+    } else if let Some(password) = request.webdav_password {
+        current.webdav_password = Some(password);
+    }
+    save_sync_settings(&app, &current)?;
+    Ok(sync_settings_view(&current))
+}
+
+#[tauri::command]
+pub(crate) fn sync_run_configured(app: AppHandle) -> Result<SyncReport, String> {
+    let settings = load_sync_settings(&app)?;
+    match agent_sync_from_settings(&app, settings) {
+        Ok(report) => Ok(report),
+        Err(err) => {
+            let lower = err.to_ascii_lowercase();
+            let status = if lower.contains("auth_failed:")
+                || lower.contains("permission_denied:")
+                || lower.contains("unauthorized")
+                || lower.contains("forbidden")
+            {
+                aipass_sync::SyncStatus::AuthFailed
+            } else if lower.contains("server error")
+                || lower.contains("server_error:")
+                || lower.contains("bad gateway")
+                || lower.contains("service unavailable")
+                || lower.contains("gateway timeout")
+            {
+                aipass_sync::SyncStatus::ServerError
+            } else {
+                aipass_sync::SyncStatus::Offline
+            };
+            Ok(sync_report_error(status, err))
+        }
+    }
 }
 
 #[tauri::command]

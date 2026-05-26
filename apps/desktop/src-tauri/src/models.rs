@@ -40,6 +40,46 @@ impl Default for AppPreferences {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SyncMode {
+    #[default]
+    Local,
+    ICloud,
+    OneDrive,
+    WebDav,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SyncSettings {
+    #[serde(default)]
+    pub(crate) mode: SyncMode,
+    #[serde(default)]
+    pub(crate) sync_folder: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) webdav_url: Option<String>,
+    #[serde(default)]
+    pub(crate) webdav_username: Option<String>,
+    #[serde(default)]
+    pub(crate) has_webdav_password: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StoredSyncSettings {
+    #[serde(default)]
+    pub(crate) mode: SyncMode,
+    #[serde(default)]
+    pub(crate) sync_folder: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) webdav_url: Option<String>,
+    #[serde(default)]
+    pub(crate) webdav_username: Option<String>,
+    #[serde(default)]
+    pub(crate) webdav_password: Option<SensitiveString>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SavePreferencesRequest {
@@ -162,6 +202,18 @@ pub(crate) enum CloudSyncProvider {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SyncCloudRequest {
     pub(crate) provider: CloudSyncProvider,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SaveSyncSettingsRequest {
+    pub(crate) mode: SyncMode,
+    pub(crate) sync_folder: Option<PathBuf>,
+    pub(crate) webdav_url: Option<String>,
+    pub(crate) webdav_username: Option<String>,
+    pub(crate) webdav_password: Option<SensitiveString>,
+    #[serde(default)]
+    pub(crate) clear_webdav_password: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
