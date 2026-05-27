@@ -37,7 +37,7 @@ This invariant covers:
 - CLI config backups are encrypted with vault-derived backup keys.
 - Vault export/import files are encrypted with a separate export password and must not contain plaintext provider metadata or API keys.
 - Chrome extension storage keeps only safe UI state and ignored-origin preferences; API keys are passed through Native Messaging only for save/fill flows.
-- Native Messaging can validate `AIPASS_ALLOWED_EXTENSION_IDS` in addition to Chrome manifest `allowed_origins`.
+- Native Messaging validates a native-host extension-id allowlist in addition to Chrome manifest `allowed_origins`; managed deployments can override the allowlist with `AIPASS_ALLOWED_EXTENSION_IDS`.
 
 ## Master Password And Recovery
 

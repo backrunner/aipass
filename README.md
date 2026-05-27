@@ -95,7 +95,7 @@ cargo run -p aipass-cli -- native-host manifest --extension-id <chrome-extension
 cargo run -p aipass-cli -- native-host install --extension-id <chrome-extension-id>
 ```
 
-For production, set `AIPASS_ALLOWED_EXTENSION_IDS` for the native host process. The Chrome manifest `allowed_origins` is the first browser-side boundary; native host extension-id validation is the second boundary.
+The installer writes Chrome `allowed_origins` and the native host extension-id allowlist. `AIPASS_ALLOWED_EXTENSION_IDS` can still override that allowlist for managed deployments. The Chrome manifest is the first browser-side boundary; native host extension-id validation is the second boundary.
 
 ## Documentation
 
