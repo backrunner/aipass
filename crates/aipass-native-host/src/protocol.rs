@@ -7,6 +7,8 @@ use aipass_agent_protocol::SensitiveString;
 use aipass_provider_registry::{AuthScheme, InterfaceType};
 use zeroize::Zeroize;
 
+pub const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum NativeRequest {
@@ -112,7 +114,7 @@ pub fn read_message(mut reader: impl Read) -> Result<NativeRequest> {
     let mut len = [0_u8; 4];
     reader.read_exact(&mut len)?;
     let len = u32::from_le_bytes(len) as usize;
-    if len > 1024 * 1024 {
+    if len > MAX_NATIVE_MESSAGE_BYTES {
         bail!("native message too large");
     }
     let mut body = vec![0_u8; len];
@@ -124,6 +126,10 @@ pub fn read_message(mut reader: impl Read) -> Result<NativeRequest> {
 
 pub fn write_message(mut writer: impl Write, response: &NativeResponse) -> Result<()> {
     let mut body = serde_json::to_vec(response)?;
+    if body.len() > MAX_NATIVE_MESSAGE_BYTES {
+        body.zeroize();
+        bail!("native message too large");
+    }
     let result = (|| {
         writer.write_all(&(body.len() as u32).to_le_bytes())?;
         writer.write_all(&body)?;
@@ -140,4 +146,28 @@ fn normalize_extension_id(value: &str) -> String {
         .trim_start_matches("chrome://")
         .trim_end_matches('/')
         .to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_message_rejects_oversized_lengths_before_allocating_body() {
+        let bytes = ((MAX_NATIVE_MESSAGE_BYTES + 1) as u32).to_le_bytes();
+        let err = read_message(bytes.as_slice()).unwrap_err();
+        assert_eq!(err.to_string(), "native message too large");
+    }
+
+    #[test]
+    fn write_message_rejects_oversized_payloads() {
+        let response = NativeResponse {
+            id: Uuid::new_v4(),
+            ok: true,
+            error: None,
+            data: serde_json::json!({ "value": "x".repeat(MAX_NATIVE_MESSAGE_BYTES) }),
+        };
+        let err = write_message(Vec::new(), &response).unwrap_err();
+        assert_eq!(err.to_string(), "native message too large");
+    }
 }

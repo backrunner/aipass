@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub struct SensitiveString(String);
@@ -489,7 +491,7 @@ pub fn read_frame<T: DeserializeOwned>(mut reader: impl Read) -> Result<T> {
     let mut len = [0_u8; 4];
     reader.read_exact(&mut len)?;
     let len = u32::from_le_bytes(len) as usize;
-    if len > 16 * 1024 * 1024 {
+    if len > MAX_FRAME_BYTES {
         bail!("frame too large");
     }
     let mut body = vec![0_u8; len];
@@ -501,6 +503,10 @@ pub fn read_frame<T: DeserializeOwned>(mut reader: impl Read) -> Result<T> {
 
 pub fn write_frame<T: Serialize>(mut writer: impl Write, value: &T) -> Result<()> {
     let mut body = serde_json::to_vec(value)?;
+    if body.len() > MAX_FRAME_BYTES {
+        body.zeroize();
+        bail!("frame too large");
+    }
     let result = (|| {
         writer.write_all(&(body.len() as u32).to_le_bytes())?;
         writer.write_all(&body)?;
@@ -583,4 +589,23 @@ pub fn endpoint_url(endpoints: &[ProviderEndpoint]) -> Option<String> {
         .find(|endpoint| endpoint.kind == aipass_provider_registry::EndpointKind::Api)
         .and_then(|endpoint| endpoint.url.clone())
         .or_else(|| endpoints.iter().find_map(|endpoint| endpoint.url.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_frame_rejects_oversized_lengths_before_allocating_body() {
+        let bytes = ((MAX_FRAME_BYTES + 1) as u32).to_le_bytes();
+        let err = read_frame::<serde_json::Value>(bytes.as_slice()).unwrap_err();
+        assert_eq!(err.to_string(), "frame too large");
+    }
+
+    #[test]
+    fn write_frame_rejects_oversized_payloads() {
+        let payload = "x".repeat(MAX_FRAME_BYTES);
+        let err = write_frame(Vec::new(), &payload).unwrap_err();
+        assert_eq!(err.to_string(), "frame too large");
+    }
 }

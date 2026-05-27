@@ -9,9 +9,11 @@ use interprocess::os::unix::local_socket::ListenerOptionsExt;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use uuid::Uuid;
+
+const MAX_AUTH_TOKEN_BYTES: u64 = 4096;
 
 pub fn connect(vault_dir: impl AsRef<Path>) -> Result<Stream> {
     let namespace = namespace_for_vault_dir(vault_dir)?;
@@ -72,7 +74,11 @@ pub fn load_or_create_auth_token(vault_dir: impl AsRef<Path>) -> Result<Sensitiv
         Uuid::new_v4().simple(),
         Uuid::new_v4().simple()
     ));
-    match OpenOptions::new().write(true).create_new(true).open(&path) {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options.open(&path) {
         Ok(mut file) => {
             #[cfg(unix)]
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
@@ -104,6 +110,10 @@ fn auth_token_path(vault_dir: impl AsRef<Path>) -> Result<std::path::PathBuf> {
 }
 
 fn read_auth_token_at_path(path: &Path) -> Result<SensitiveString> {
+    secure_existing_auth_token(path)?;
+    if fs::metadata(path)?.len() > MAX_AUTH_TOKEN_BYTES {
+        anyhow::bail!("agent auth token is too large");
+    }
     let bytes = fs::read(path)?;
     let mut value = String::from_utf8(bytes)?;
     while value.ends_with(['\n', '\r']) {
@@ -113,4 +123,51 @@ fn read_auth_token_at_path(path: &Path) -> Result<SensitiveString> {
         anyhow::bail!("agent auth token is empty");
     }
     Ok(SensitiveString::new(value))
+}
+
+#[cfg(unix)]
+fn secure_existing_auth_token(path: &Path) -> Result<()> {
+    let metadata = fs::metadata(path)?;
+    if metadata.permissions().mode() & 0o177 != 0 {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn secure_existing_auth_token(_: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn oversized_auth_tokens_are_rejected() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("token");
+        fs::write(&path, "x".repeat((MAX_AUTH_TOKEN_BYTES + 1) as usize)).expect("write token");
+
+        let err = read_auth_token_at_path(&path).unwrap_err();
+        assert_eq!(err.to_string(), "agent auth token is too large");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_auth_token_permissions_are_repaired() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("token");
+        fs::write(&path, "secret").expect("write token");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod token");
+
+        let token = read_auth_token_at_path(&path).expect("read token");
+
+        assert_eq!(token.expose(), "secret");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

@@ -10,13 +10,13 @@ use crate::session::{
     AgentState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
 };
 use aipass_agent_protocol::{
-    endpoint_url as protocol_endpoint_url, read_frame, write_frame, AgentErrorCode, AgentRequest,
-    AgentResponse, AuthenticatedAgentRequest, BrowserContextLookupData,
-    BrowserDetectedSecretFields, BrowserDetectedSecretPreview, BrowserFillResult,
-    BrowserIgnoreOriginResult, BrowserIgnoredStatus, ConflictScope, LockReason, ProbeResult,
-    SaveDetectedResult, SecretValue, SessionUnlockMode, SyncConflictActionRequest,
-    SyncConflictResponse, SyncMode, ToolConfigApplyResponse, ToolConfigMode,
-    ToolConfigPreviewResponse, ToolConfigRequest, ToolConfigTool, VaultCreateResponse,
+    endpoint_url as protocol_endpoint_url, AgentErrorCode, AgentRequest, AgentResponse,
+    AuthenticatedAgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
+    BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
+    BrowserIgnoredStatus, ConflictScope, LockReason, ProbeResult, SaveDetectedResult, SecretValue,
+    SensitiveString, SessionUnlockMode, SyncConflictActionRequest, SyncConflictResponse, SyncMode,
+    ToolConfigApplyResponse, ToolConfigMode, ToolConfigPreviewResponse, ToolConfigRequest,
+    ToolConfigTool, VaultCreateResponse, MAX_FRAME_BYTES,
 };
 use aipass_config_writers::{
     apply_plan_encrypted, plan_claude_code, plan_claude_code_plaintext, plan_codex,
@@ -37,20 +37,25 @@ use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, TtlGrantSummary, Vault,
 };
 use anyhow::{bail, Context, Result};
-use interprocess::local_socket::{prelude::*, ListenerNonblockingMode};
+use interprocess::local_socket::{prelude::*, ListenerNonblockingMode, Stream};
 use reqwest::blocking::RequestBuilder;
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use uuid::Uuid;
+use zeroize::Zeroize;
+
+const MAX_ACTIVE_CONNECTIONS: usize = 32;
+const CONNECTION_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
@@ -91,26 +96,24 @@ fn run_server_with_state(state: Arc<AgentState>) -> Result<()> {
 
     spawn_idle_lock_watcher(state.clone());
 
+    let active_connections = Arc::new(AtomicUsize::new(0));
     loop {
         if shutdown_requested(&state) {
             break;
         }
         match listener.accept() {
-            Ok(mut conn) => {
-                let response = match read_frame::<AuthenticatedAgentRequest>(&mut conn) {
-                    Ok(payload) if payload.auth_token.expose() == state.auth_token.expose() => {
-                        handle_request(&state, payload.request)
-                    }
-                    Ok(_) => AgentResponse::error(
-                        AgentErrorCode::PermissionDenied,
-                        "invalid agent auth token",
-                    ),
-                    Err(err) => {
-                        AgentResponse::error(AgentErrorCode::ValidationFailed, err.to_string())
-                    }
+            Ok(conn) => {
+                let Some(guard) = ConnectionGuard::try_acquire(active_connections.clone()) else {
+                    reject_busy(conn);
+                    continue;
                 };
-                write_frame(&mut conn, &response)?;
-                conn.flush().ok();
+                let state = state.clone();
+                thread::spawn(move || {
+                    let _guard = guard;
+                    if let Err(err) = handle_connection(conn, state) {
+                        eprintln!("agent connection failed: {err}");
+                    }
+                });
             }
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(200));
@@ -125,6 +128,156 @@ fn run_server_with_state(state: Arc<AgentState>) -> Result<()> {
 
     let _ = ipc::clear_auth_token(&state.vault_dir);
     Ok(())
+}
+
+struct ConnectionGuard {
+    active: Arc<AtomicUsize>,
+}
+
+impl ConnectionGuard {
+    fn try_acquire(active: Arc<AtomicUsize>) -> Option<Self> {
+        let mut current = active.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_ACTIVE_CONNECTIONS {
+                return None;
+            }
+            match active.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self { active }),
+                Err(updated) => current = updated,
+            }
+        }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn handle_connection(mut conn: Stream, state: Arc<AgentState>) -> Result<()> {
+    conn.set_nonblocking(true)
+        .context("failed to set agent stream to nonblocking mode")?;
+    let response = match read_frame_with_deadline::<AuthenticatedAgentRequest>(
+        &mut conn,
+        CONNECTION_IO_TIMEOUT,
+    ) {
+        Ok(payload) if auth_tokens_match(&payload.auth_token, &state.auth_token) => {
+            handle_request(&state, payload.request)
+        }
+        Ok(_) => AgentResponse::error(AgentErrorCode::PermissionDenied, "invalid agent auth token"),
+        Err(err) => AgentResponse::error(AgentErrorCode::ValidationFailed, err.to_string()),
+    };
+    write_frame_with_deadline(&mut conn, &response, CONNECTION_IO_TIMEOUT)?;
+    conn.flush().ok();
+    Ok(())
+}
+
+fn reject_busy(mut conn: Stream) {
+    let _ = conn.set_nonblocking(true);
+    let response = AgentResponse::error(AgentErrorCode::ServiceUnavailable, "agent is busy");
+    let _ = write_frame_with_deadline(&mut conn, &response, CONNECTION_IO_TIMEOUT);
+    let _ = conn.flush();
+}
+
+fn read_frame_with_deadline<T: DeserializeOwned>(
+    conn: &mut Stream,
+    timeout: Duration,
+) -> Result<T> {
+    let deadline = Instant::now() + timeout;
+    let mut len = [0_u8; 4];
+    read_exact_with_deadline(conn, &mut len, deadline)?;
+    let len = u32::from_le_bytes(len) as usize;
+    if len > MAX_FRAME_BYTES {
+        bail!("frame too large");
+    }
+    let mut body = vec![0_u8; len];
+    if let Err(err) = read_exact_with_deadline(conn, &mut body, deadline) {
+        body.zeroize();
+        return Err(err);
+    }
+    let parsed = serde_json::from_slice(&body);
+    body.zeroize();
+    Ok(parsed?)
+}
+
+fn write_frame_with_deadline<T: Serialize>(
+    conn: &mut Stream,
+    value: &T,
+    timeout: Duration,
+) -> Result<()> {
+    let mut body = serde_json::to_vec(value)?;
+    if body.len() > MAX_FRAME_BYTES {
+        body.zeroize();
+        bail!("frame too large");
+    }
+    let deadline = Instant::now() + timeout;
+    let len = (body.len() as u32).to_le_bytes();
+    let result = write_all_with_deadline(conn, &len, deadline)
+        .and_then(|_| write_all_with_deadline(conn, &body, deadline));
+    body.zeroize();
+    result
+}
+
+fn read_exact_with_deadline(conn: &mut Stream, buf: &mut [u8], deadline: Instant) -> Result<()> {
+    let mut offset = 0;
+    while offset < buf.len() {
+        match conn.read(&mut buf[offset..]) {
+            Ok(0) => {
+                return Err(std::io::Error::from(ErrorKind::UnexpectedEof).into());
+            }
+            Ok(count) => offset += count,
+            Err(err) if err.kind() == ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == ErrorKind::WouldBlock => wait_for_io(deadline)?,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
+fn write_all_with_deadline(conn: &mut Stream, buf: &[u8], deadline: Instant) -> Result<()> {
+    let mut offset = 0;
+    while offset < buf.len() {
+        match conn.write(&buf[offset..]) {
+            Ok(0) => {
+                return Err(std::io::Error::from(ErrorKind::WriteZero).into());
+            }
+            Ok(count) => offset += count,
+            Err(err) if err.kind() == ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == ErrorKind::WouldBlock => wait_for_io(deadline)?,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
+fn wait_for_io(deadline: Instant) -> Result<()> {
+    let now = Instant::now();
+    if now >= deadline {
+        bail!("agent IPC timed out");
+    }
+    thread::sleep((deadline - now).min(Duration::from_millis(5)));
+    Ok(())
+}
+
+fn auth_tokens_match(left: &SensitiveString, right: &SensitiveString) -> bool {
+    constant_time_eq(left.expose().as_bytes(), right.expose().as_bytes())
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut diff = left.len() ^ right.len();
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        diff |= (left_byte ^ right_byte) as usize;
+    }
+    diff == 0
 }
 
 fn spawn_idle_lock_watcher(state: Arc<AgentState>) {
@@ -754,5 +907,92 @@ fn sync_webdav_report(vault_dir: &Path, client: &impl WebDavClient) -> SyncRepor
             status: classify_webdav_error(&err),
             message: Some(err.to_string()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aipass_agent_protocol::SessionStatus;
+    use aipass_crypto::SecretString;
+    use std::io::Write;
+    use std::time::Instant;
+    use tempfile::tempdir;
+
+    struct RunningAgent {
+        vault_dir: PathBuf,
+        client: crate::AgentClient,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl RunningAgent {
+        fn start() -> Self {
+            let dir = tempdir().expect("tempdir");
+            aipass_vault::Vault::create(
+                dir.path(),
+                &SecretString::new("correct horse battery staple"),
+            )
+            .expect("create vault");
+            let vault_dir = dir.keep();
+            let server_vault_dir = vault_dir.clone();
+            let handle = thread::spawn(move || {
+                run_server(ServerOptions {
+                    vault_dir: server_vault_dir,
+                })
+                .expect("server");
+            });
+            let client = crate::AgentClient::for_vault(vault_dir.clone()).expect("client");
+            for _ in 0..50 {
+                if client
+                    .request::<SessionStatus>(&AgentRequest::SessionStatus)
+                    .is_ok()
+                {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Self {
+                vault_dir,
+                client,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for RunningAgent {
+        fn drop(&mut self) {
+            let _ = self.client.shutdown();
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+            let _ = fs::remove_dir_all(&self.vault_dir);
+        }
+    }
+
+    #[test]
+    fn constant_time_eq_checks_full_input() {
+        assert!(constant_time_eq(b"same", b"same"));
+        assert!(!constant_time_eq(b"same", b"some"));
+        assert!(!constant_time_eq(b"same", b"same-longer"));
+        assert!(!constant_time_eq(b"same-longer", b"same"));
+    }
+
+    #[test]
+    fn incomplete_connection_does_not_block_subsequent_requests() {
+        let agent = RunningAgent::start();
+        let mut stuck = crate::ipc::connect(&agent.vault_dir).expect("connect stuck client");
+        stuck.write_all(&8_u32.to_le_bytes()).expect("write length");
+
+        let started = Instant::now();
+        let status = agent
+            .client
+            .request::<SessionStatus>(&AgentRequest::SessionStatus)
+            .expect("status response");
+
+        assert!(status.exists);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "status request was blocked behind incomplete connection"
+        );
     }
 }

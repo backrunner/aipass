@@ -91,7 +91,7 @@ pub struct SessionInfo {
 
 pub enum SessionState {
     Locked,
-    Unlocked(SessionInfo),
+    Unlocked(Box<SessionInfo>),
 }
 
 pub struct AgentState {
@@ -184,11 +184,11 @@ pub fn unlock_with_password(
         .session
         .lock()
         .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))? =
-        SessionState::Unlocked(SessionInfo {
+        SessionState::Unlocked(Box::new(SessionInfo {
             vault,
             unlocked_at: now,
             last_activity_at: now,
-        });
+        }));
     *state
         .last_lock_reason
         .lock()
@@ -231,11 +231,11 @@ pub fn recover_vault(
 pub fn set_session_vault(state: &Arc<AgentState>, vault: Vault) {
     let now = OffsetDateTime::now_utc();
     if let Ok(mut session) = state.session.lock() {
-        *session = SessionState::Unlocked(SessionInfo {
+        *session = SessionState::Unlocked(Box::new(SessionInfo {
             vault,
             unlocked_at: now,
             last_activity_at: now,
-        });
+        }));
     }
     if let Ok(mut reason) = state.last_lock_reason.lock() {
         *reason = None;
@@ -664,6 +664,10 @@ pub fn map_vault_error(err: VaultError) -> ServiceError {
     }
 }
 
+pub fn shutdown_requested(state: &Arc<AgentState>) -> bool {
+    state.shutdown.load(Ordering::SeqCst)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,8 +731,4 @@ mod tests {
             Some(StoredSyncSecret::Device)
         ));
     }
-}
-
-pub fn shutdown_requested(state: &Arc<AgentState>) -> bool {
-    state.shutdown.load(Ordering::SeqCst)
 }
