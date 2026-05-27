@@ -88,6 +88,8 @@ enum Command {
         api_key: String,
         #[arg(long)]
         default_model: Option<String>,
+        #[arg(long = "model-alias")]
+        model_alias: Vec<String>,
         #[arg(long)]
         header: Vec<String>,
         #[arg(long)]
@@ -133,6 +135,8 @@ enum Command {
         api_key: Option<String>,
         #[arg(long)]
         default_model: Option<String>,
+        #[arg(long = "model-alias")]
+        model_alias: Vec<String>,
         #[arg(long)]
         header: Vec<String>,
         #[arg(long)]
@@ -185,6 +189,11 @@ enum Command {
         id: Uuid,
         #[arg(long, value_enum, default_value = "shell")]
         format: EnvFormat,
+    },
+    Inject {
+        id: Uuid,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
     },
     Exec {
         id: Uuid,
@@ -722,6 +731,185 @@ WantedBy=default.target
     )
 }
 
+fn doctor_report(
+    explicit_vault: Option<PathBuf>,
+    auth_available: bool,
+) -> Result<serde_json::Value> {
+    let dir = vault_dir(explicit_vault)?;
+    let manifest_path = dir.join("manifest.aipmanifest");
+    let vault_exists = manifest_path.exists();
+    let agent_status = AgentClientConfig::for_vault(dir.clone())
+        .ok()
+        .map(AgentClient::new)
+        .and_then(|client| {
+            client
+                .request::<SessionStatus>(&AgentRequest::SessionStatus)
+                .ok()
+        });
+    let native_host_binary = native_host_binary_path(None)?;
+    let native_host_binary_exists = native_host_binary.exists();
+    let native_hosts = native_host_browser_reports();
+    let allowed_extension_ids = allowed_extension_ids_from_env();
+    let configured_extension_ids =
+        aipass_native_host::load_allowed_extension_ids().unwrap_or_default();
+    let effective_extension_ids = if allowed_extension_ids.is_empty() {
+        configured_extension_ids.clone()
+    } else {
+        allowed_extension_ids.clone()
+    };
+    let native_host_installed = native_hosts
+        .as_array()
+        .map(|items| {
+            items.iter().any(|item| {
+                item.get("manifestExists").and_then(|value| value.as_bool()) == Some(true)
+            })
+        })
+        .unwrap_or(false);
+    let checks = serde_json::json!([
+        {
+            "name": "vault_manifest",
+            "ok": vault_exists,
+            "message": if vault_exists { "vault manifest found" } else { "vault is not initialized" }
+        },
+        {
+            "name": "agent",
+            "ok": agent_status.is_some(),
+            "message": if agent_status.is_some() { "agent responded" } else { "agent is not reachable" }
+        },
+        {
+            "name": "native_host_binary",
+            "ok": native_host_binary_exists,
+            "message": if native_host_binary_exists { "native host binary found" } else { "native host binary was not found next to aipass" }
+        },
+        {
+            "name": "native_host_manifest",
+            "ok": native_host_installed,
+            "message": if native_host_installed { "browser manifest installed" } else { "browser native host manifest is not installed" }
+        },
+        {
+            "name": "extension_allowlist",
+            "ok": !effective_extension_ids.is_empty(),
+            "message": if effective_extension_ids.is_empty() { "extension id allowlist is empty" } else { "extension id allowlist configured" }
+        }
+    ]);
+    Ok(serde_json::json!({
+        "ok": checks
+            .as_array()
+            .map(|items| {
+                items.iter().all(|item| {
+                    item.get("ok").and_then(|value| value.as_bool()) == Some(true)
+                })
+            })
+            .unwrap_or(false),
+        "vaultDir": dir,
+        "vaultManifest": manifest_path,
+        "authSource": if auth_available { "env_or_flag" } else { "missing" },
+        "agent": agent_status.map(|status| serde_json::json!({
+            "reachable": true,
+            "exists": status.exists,
+            "locked": status.locked,
+            "lastLockReason": status.last_lock_reason,
+            "vaultNamespace": status.vault_namespace,
+        })).unwrap_or_else(|| serde_json::json!({ "reachable": false })),
+        "nativeHost": {
+            "binaryPath": native_host_binary,
+            "binaryExists": native_host_binary_exists,
+            "settingsPath": aipass_native_host::native_host_settings_path().ok(),
+            "browsers": native_hosts,
+        },
+        "extensionAllowlist": {
+            "env": allowed_extension_ids,
+            "configured": configured_extension_ids,
+            "effective": effective_extension_ids,
+        },
+        "checks": checks,
+    }))
+}
+
+fn native_host_browser_reports() -> serde_json::Value {
+    let browsers = [
+        BrowserArg::Chrome,
+        BrowserArg::Chromium,
+        BrowserArg::Edge,
+        BrowserArg::Brave,
+    ];
+    serde_json::Value::Array(
+        browsers
+            .into_iter()
+            .filter_map(|browser| {
+                let manifest_path = default_native_manifest_path(&browser)?;
+                let manifest_exists = manifest_path.exists();
+                let manifest = fs::read_to_string(&manifest_path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+                let allowed_origins = manifest
+                    .as_ref()
+                    .and_then(|value| value.get("allowed_origins"))
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(ToString::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Some(serde_json::json!({
+                    "browser": browser_name(&browser),
+                    "manifestPath": manifest_path,
+                    "manifestExists": manifest_exists,
+                    "allowedOrigins": allowed_origins,
+                }))
+            })
+            .collect(),
+    )
+}
+
+fn allowed_extension_ids_from_env() -> Vec<String> {
+    std::env::var("AIPASS_ALLOWED_EXTENSION_IDS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn doctor_text(report: &serde_json::Value, ok: bool) -> String {
+    let vault = report
+        .get("vaultDir")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let agent = report
+        .get("agent")
+        .and_then(|value| value.get("reachable"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let native_host_count = report
+        .get("nativeHost")
+        .and_then(|value| value.get("browsers"))
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("manifestExists").and_then(|value| value.as_bool()) == Some(true)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let allowlist_count = report
+        .get("extensionAllowlist")
+        .and_then(|value| value.get("effective"))
+        .and_then(|value| value.as_array())
+        .map(Vec::len)
+        .unwrap_or(0);
+    format!(
+        "AIPass doctor: {}\nVault: {vault}\nAgent: {}\nNative host manifests: {native_host_count}\nExtension allowlist ids: {allowlist_count}",
+        if ok { "ok" } else { "issues found" },
+        if agent { "reachable" } else { "not reachable" }
+    )
+}
+
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -756,6 +944,23 @@ fn parse_headers(values: &[String]) -> Result<Vec<(String, String)>> {
         .collect()
 }
 
+fn parse_model_aliases(values: &[String]) -> Result<Vec<(String, String)>> {
+    values
+        .iter()
+        .map(|value| {
+            let (alias, model) = value
+                .split_once('=')
+                .context("model aliases must use alias=model format")?;
+            let alias = alias.trim();
+            let model = model.trim();
+            if alias.is_empty() || model.is_empty() {
+                anyhow::bail!("model alias and model cannot be empty");
+            }
+            Ok((alias.to_string(), model.to_string()))
+        })
+        .collect()
+}
+
 fn quota_from_parts(
     label: Option<String>,
     limit: Option<String>,
@@ -781,15 +986,104 @@ fn field_value(item: &aipass_vault::EntrySummary, field: &str) -> Result<String>
         "provider_kind" => Ok(format!("{:?}", item.provider_kind)),
         "domain" | "domains" => Ok(item.domains.join(",")),
         "endpoint" | "base_url" => Ok(endpoint_url(&item.endpoints).unwrap_or_default()),
+        "console_url" | "console" => Ok(console_url(&item.endpoints).unwrap_or_default()),
         "interface" => Ok(format!("{:?}", item.interface_type)),
         "auth" => Ok(format!("{:?}", item.auth_scheme)),
         "default_model" => Ok(item.default_model.clone().unwrap_or_default()),
+        "curl" | "curl_snippet" => Ok(curl_snippet_for_entry(item)),
+        "env" | "env_export" => Ok(env_export_for_entry(item)),
+        "config" | "config_snippet" => config_snippet_for_entry(item),
         "environment" => Ok(item.environment.clone()),
         "tags" => Ok(item.tags.join(",")),
         "notes" => Ok(item.notes.clone().unwrap_or_default()),
         "fingerprint" => Ok(item.fingerprint.clone()),
         other => anyhow::bail!("unsupported field: {other}"),
     }
+}
+
+fn console_url(endpoints: &[ProviderEndpoint]) -> Option<String> {
+    endpoints
+        .iter()
+        .find(|endpoint| endpoint.kind == aipass_provider_registry::EndpointKind::Console)
+        .and_then(|endpoint| endpoint.url.clone())
+}
+
+fn curl_snippet_for_entry(item: &aipass_vault::EntrySummary) -> String {
+    let key = env_key_for_entry(item);
+    let endpoint =
+        endpoint_url(&item.endpoints).unwrap_or_else(|| "https://api.example.com".to_string());
+    if matches!(item.interface_type, InterfaceType::Bedrock)
+        || matches!(item.auth_scheme, AuthScheme::AwsProfile)
+    {
+        let region = item
+            .endpoints
+            .iter()
+            .find_map(|endpoint| endpoint.region.as_deref())
+            .unwrap_or("${AWS_REGION:-us-east-1}");
+        return format!(
+            "AWS_PROFILE=${{{key}:-default}} aws bedrock list-foundation-models --region {region}"
+        );
+    }
+    match item.interface_type {
+        InterfaceType::AnthropicMessages => format!(
+            "curl -sS {}/v1/models -H 'x-api-key: ${}' -H 'anthropic-version: 2023-06-01'",
+            endpoint.trim_end_matches('/'),
+            key
+        ),
+        InterfaceType::Gemini => format!(
+            "curl -sS '{}/v1beta/models?key=${}'",
+            endpoint.trim_end_matches('/'),
+            key
+        ),
+        InterfaceType::AzureOpenAi => format!(
+            "curl -sS {}/models -H 'api-key: ${}'",
+            endpoint.trim_end_matches('/'),
+            key
+        ),
+        InterfaceType::OpenAiCompatible | InterfaceType::CustomHttp | InterfaceType::Bedrock => {
+            let auth = auth_header_snippet(&item.auth_scheme, &key);
+            format!("curl -sS {}/models {auth}", endpoint.trim_end_matches('/'))
+        }
+    }
+}
+
+fn auth_header_snippet(auth_scheme: &AuthScheme, key: &str) -> String {
+    match auth_scheme {
+        AuthScheme::Bearer => format!("-H 'Authorization: Bearer ${key}'"),
+        AuthScheme::XApiKey => format!("-H 'x-api-key: ${key}'"),
+        AuthScheme::GoogleApiKey | AuthScheme::AwsProfile => String::new(),
+        AuthScheme::AzureApiKey => format!("-H 'api-key: ${key}'"),
+        AuthScheme::CustomHeader => format!("-H 'Authorization: ${key}'"),
+    }
+}
+
+fn env_export_for_entry(item: &aipass_vault::EntrySummary) -> String {
+    let mut lines = vec![format!(
+        "export {}=\"$(aipass get {} --field api_key --reveal)\"",
+        env_key_for_entry(item),
+        item.id
+    )];
+    if let Some(endpoint) = endpoint_url(&item.endpoints) {
+        lines.push(format!("export AIPASS_BASE_URL={}", shell_quote(&endpoint)));
+    }
+    if let Some(model) = &item.default_model {
+        lines.push(format!("export AIPASS_MODEL={}", shell_quote(model)));
+    }
+    lines.join("\n")
+}
+
+fn config_snippet_for_entry(item: &aipass_vault::EntrySummary) -> Result<String> {
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "provider": item.provider_id,
+        "title": item.title,
+        "interfaceType": item.interface_type,
+        "authScheme": item.auth_scheme,
+        "baseUrl": endpoint_url(&item.endpoints),
+        "consoleUrl": console_url(&item.endpoints),
+        "envKey": env_key_for_entry(item),
+        "defaultModel": item.default_model,
+        "modelAliases": item.model_aliases,
+    }))?)
 }
 
 fn is_secret_field(field: &str) -> bool {
@@ -820,9 +1114,11 @@ fn env_key_for_entry(item: &aipass_vault::EntrySummary) -> String {
         Some("groq") => "GROQ_API_KEY".to_string(),
         Some("together") => "TOGETHER_API_KEY".to_string(),
         Some("fireworks") => "FIREWORKS_API_KEY".to_string(),
+        Some("bedrock") => "AWS_PROFILE".to_string(),
         _ => match item.auth_scheme {
             AuthScheme::GoogleApiKey => "GEMINI_API_KEY".to_string(),
             AuthScheme::AzureApiKey => "AZURE_OPENAI_API_KEY".to_string(),
+            AuthScheme::AwsProfile => "AWS_PROFILE".to_string(),
             _ => "AIPASS_API_KEY".to_string(),
         },
     }

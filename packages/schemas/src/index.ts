@@ -53,6 +53,7 @@ export interface ProviderEntry {
   authScheme: AuthScheme;
   secretRefs: SecretRef[];
   defaultModel?: string;
+  modelAliases?: Array<[string, string]>;
   quota?: QuotaInfo;
   tags: string[];
   environment: string;

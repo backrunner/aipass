@@ -5,15 +5,23 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
     let vault = cli.vault.clone();
     let cli_password = cli.password.clone();
     match cli.command {
-        Command::Doctor => output(
-            json,
-            serde_json::json!({
-                "ok": true,
-                "vaultDir": vault_dir(vault.clone())?.display().to_string(),
-                "authSource": if cli_password.is_some() { "env_or_flag" } else { "missing" },
-            }),
-            "AIPass doctor ok",
-        ),
+        Command::Doctor => {
+            let report = doctor_report(vault.clone(), cli_password.is_some())?;
+            let ok = report
+                .get("checks")
+                .and_then(|value| value.as_array())
+                .map(|checks| {
+                    checks.iter().all(|check| {
+                        check
+                            .get("ok")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            let text = doctor_text(&report, ok);
+            output(json, report, &text)
+        }
         Command::Completions { shell } => {
             let mut command = Cli::command();
             generate(shell, &mut command, "aipass", &mut io::stdout());
@@ -172,6 +180,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 }
                 let manifest = native_manifest(&host_path, &origins);
                 atomic_write_bytes(&install_path, &serde_json::to_vec_pretty(&manifest)?)?;
+                let settings_path = aipass_native_host::save_allowed_extension_ids(&extension_id)?;
                 install_native_manifest_reference(&browser, &install_path)?;
                 output(
                     json,
@@ -180,6 +189,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                         "browser": browser_name(&browser),
                         "hostPath": host_path,
                         "manifestPath": install_path,
+                        "settingsPath": settings_path,
                         "allowedOrigins": origins,
                     }),
                     "Native messaging host installed",
@@ -311,6 +321,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             auth,
             api_key,
             default_model,
+            model_alias,
             header,
             quota_label,
             quota_limit,
@@ -342,6 +353,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     auth_scheme: auth.into(),
                     api_key,
                     default_model,
+                    model_aliases: parse_model_aliases(&model_alias)?,
                     headers: parse_headers(&header)?,
                     quota: quota_from_parts(
                         quota_label,
@@ -402,6 +414,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             auth,
             api_key,
             default_model,
+            model_alias,
             header,
             quota_label,
             quota_limit,
@@ -440,6 +453,11 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 auth_scheme: auth.map(AuthScheme::from).unwrap_or(existing.auth_scheme),
                 api_key,
                 default_model: default_model.or(existing.default_model),
+                model_aliases: if model_alias.is_empty() {
+                    existing.model_aliases
+                } else {
+                    parse_model_aliases(&model_alias)?
+                },
                 headers: if header.is_empty() {
                     None
                 } else {
@@ -587,7 +605,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::Exec { id, command } => {
+        Command::Exec { id, command } | Command::Inject { id, command } => {
             let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let item: aipass_vault::EntrySummary =
                 agent.request(AgentRequest::ProviderGet { id })?;

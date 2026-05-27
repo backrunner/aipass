@@ -8,11 +8,12 @@ use crate::models::{
     from_agent_tool_config_preview, into_agent_cloud_sync_provider,
     into_agent_sync_conflict_request, into_agent_sync_settings_update,
     into_agent_tool_config_request, AppPreferences, ChangePasswordRequest, CreateVaultRequest,
-    ProbeResult, ProviderAddRequest, ProviderUpdateRequest, RecoveryVaultRequest,
-    SavePreferencesRequest, SaveSyncSettingsRequest, SyncCloudRequest, SyncConflictActionRequest,
-    SyncConflictResponse, SyncConflictsRequest, SyncLocalRequest, SyncSettings, SyncWebDavRequest,
-    ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest, UnlockVaultRequest,
-    VaultExportRequest, VaultImportRequest, VaultStatus,
+    NativeHostRepairRequest, NativeHostStatus, ProbeResult, ProviderAddRequest,
+    ProviderUpdateRequest, RecoveryVaultRequest, SavePreferencesRequest, SaveSyncSettingsRequest,
+    SyncCloudRequest, SyncConflictActionRequest, SyncConflictResponse, SyncConflictsRequest,
+    SyncLocalRequest, SyncSettings, SyncWebDavRequest, ToolConfigApplyResponse,
+    ToolConfigPreviewResponse, ToolConfigRequest, UnlockVaultRequest, VaultExportRequest,
+    VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
     AgentRequest, LockReason, ProbeResult as AgentProbeResult, SecretValue, SensitiveString,
@@ -27,8 +28,9 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::{
-    agent_request, agent_request_no_unlock, agent_status, load_preferences, provider_add_input,
-    provider_update_input, run_blocking, save_preferences, AppState,
+    agent_request, agent_request_no_unlock, agent_status, load_preferences,
+    native_host_status_snapshot, provider_add_input, provider_update_input,
+    repair_native_host_manifest, run_blocking, save_preferences, AppState,
 };
 
 #[tauri::command]
@@ -414,6 +416,18 @@ pub(crate) fn tool_config_apply(
         },
     )?;
     Ok(from_agent_tool_config_apply(response))
+}
+
+#[tauri::command]
+pub(crate) fn native_host_status() -> Result<NativeHostStatus, String> {
+    native_host_status_snapshot()
+}
+
+#[tauri::command]
+pub(crate) fn native_host_repair(
+    request: NativeHostRepairRequest,
+) -> Result<NativeHostStatus, String> {
+    repair_native_host_manifest(request.extension_ids)
 }
 
 #[tauri::command]

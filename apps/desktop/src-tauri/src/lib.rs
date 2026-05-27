@@ -5,9 +5,13 @@ mod models;
 use commands::*;
 
 use crate::auth_tasks::AuthTasks;
-use crate::models::{AppPreferences, ProviderAddRequest, ProviderUpdateRequest};
+use crate::models::{AppPreferences, NativeHostStatus, ProviderAddRequest, ProviderUpdateRequest};
 use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{AgentRequest, LockReason, SessionPolicy, SessionStatus};
+use aipass_native_host::{
+    load_allowed_extension_ids, native_host_settings_path, native_manifest,
+    save_allowed_extension_ids,
+};
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
@@ -15,6 +19,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::process::Command as ProcessCommand;
 use tauri::{AppHandle, LogicalSize, Manager, Size};
 
 #[cfg(test)]
@@ -86,11 +92,12 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         provider_id: request.provider_id,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
-        endpoints: endpoints_from(request.endpoint),
+        endpoints: endpoints_from(request.endpoint, request.endpoints),
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
         api_key: request.api_key.into_inner(),
         default_model: request.default_model.and_then(non_empty),
+        model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
         quota: request.quota,
         tags: clean_strings(request.tags),
@@ -107,7 +114,7 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         provider_id: request.provider_id,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
-        endpoints: endpoints_from(request.endpoint),
+        endpoints: endpoints_from(request.endpoint, request.endpoints),
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
         api_key: request
@@ -115,6 +122,7 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
             .map(|value| value.into_inner())
             .and_then(non_empty),
         default_model: request.default_model.and_then(non_empty),
+        model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
         quota: request.quota,
         tags: clean_strings(request.tags),
@@ -123,16 +131,24 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
     }
 }
 
-fn endpoints_from(endpoint: Option<String>) -> Vec<ProviderEndpoint> {
-    endpoint
-        .and_then(non_empty)
-        .map(ProviderEndpoint::api)
+fn endpoints_from(endpoint: Option<String>, endpoints: Vec<String>) -> Vec<ProviderEndpoint> {
+    endpoints
         .into_iter()
+        .chain(endpoint)
+        .filter_map(non_empty)
+        .map(ProviderEndpoint::api)
         .collect()
 }
 
 fn clean_strings(values: Vec<String>) -> Vec<String> {
     values.into_iter().filter_map(non_empty).collect()
+}
+
+fn clean_pairs(values: Vec<(String, String)>) -> Vec<(String, String)> {
+    values
+        .into_iter()
+        .filter_map(|(left, right)| Some((non_empty(left)?, non_empty(right)?)))
+        .collect()
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -319,6 +335,158 @@ fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("preferences.json"))
 }
 
+fn native_host_status_snapshot() -> Result<NativeHostStatus, String> {
+    let host_path = native_host_binary_path()?;
+    let manifest_path = default_chrome_native_manifest_path()?;
+    let allowed_origins = read_manifest_allowed_origins(&manifest_path);
+    let settings_path = native_host_settings_path().map_err(|err| err.to_string())?;
+    let allowed_extension_ids = load_allowed_extension_ids().map_err(|err| err.to_string())?;
+    Ok(NativeHostStatus {
+        browser: "chrome".to_string(),
+        host_exists: host_path.exists(),
+        host_path,
+        manifest_exists: manifest_path.exists(),
+        manifest_path,
+        settings_path,
+        allowed_extension_ids,
+        allowed_origins,
+    })
+}
+
+fn repair_native_host_manifest(extension_ids: Vec<String>) -> Result<NativeHostStatus, String> {
+    let host_path = native_host_binary_path()?;
+    let manifest_path = default_chrome_native_manifest_path()?;
+    let origins = allowed_origins(&extension_ids)?;
+    if let Some(parent) = manifest_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let manifest = native_manifest(&host_path, &origins);
+    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|err| err.to_string())?;
+    atomic_write_bytes(&manifest_path, &bytes).map_err(|err| err.to_string())?;
+    save_allowed_extension_ids(&extension_ids).map_err(|err| err.to_string())?;
+    install_chrome_native_manifest_reference(&manifest_path)?;
+    native_host_status_snapshot()
+}
+
+fn native_host_binary_path() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|err| err.to_string())?;
+    let host_name = if cfg!(target_os = "windows") {
+        "aipass-native-host.exe"
+    } else {
+        "aipass-native-host"
+    };
+    Ok(exe.with_file_name(host_name))
+}
+
+fn default_chrome_native_manifest_path() -> Result<PathBuf, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| "HOME is not set".to_string())?;
+        Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("Google")
+            .join("Chrome")
+            .join("NativeMessagingHosts")
+            .join("dev.aipass.native.json"))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| "HOME is not set".to_string())?;
+        Ok(PathBuf::from(home)
+            .join(".config")
+            .join("google-chrome")
+            .join("NativeMessagingHosts")
+            .join("dev.aipass.native.json"))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let app_data =
+            std::env::var_os("APPDATA").ok_or_else(|| "APPDATA is not set".to_string())?;
+        Ok(PathBuf::from(app_data)
+            .join("AIPass")
+            .join("NativeMessagingHosts")
+            .join("dev.aipass.native.json"))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err("native host repair is not supported on this platform".to_string())
+    }
+}
+
+fn allowed_origins(extension_ids: &[String]) -> Result<Vec<String>, String> {
+    let origins = extension_ids
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if value.starts_with("chrome-extension://") {
+                if value.ends_with('/') {
+                    value.to_string()
+                } else {
+                    format!("{value}/")
+                }
+            } else {
+                format!("chrome-extension://{value}/")
+            }
+        })
+        .collect::<Vec<_>>();
+    if origins.is_empty() {
+        return Err("enter at least one Chrome extension id".to_string());
+    }
+    Ok(origins)
+}
+
+fn read_manifest_allowed_origins(path: &Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| {
+            value
+                .get("allowed_origins")
+                .and_then(|items| items.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(ToString::to_string))
+                        .collect()
+                })
+        })
+        .unwrap_or_default()
+}
+
+fn install_chrome_native_manifest_reference(manifest_path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let status = ProcessCommand::new("reg")
+            .args([
+                "add",
+                r"HKCU\Software\Google\Chrome\NativeMessagingHosts\dev.aipass.native",
+                "/ve",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &manifest_path.display().to_string(),
+                "/f",
+            ])
+            .status()
+            .map_err(|err| err.to_string())?;
+        if !status.success() {
+            return Err("native host registry update failed".to_string());
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = manifest_path;
+    }
+
+    Ok(())
+}
+
 fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|err| err.to_string())?;
     atomic_write_bytes(path, &bytes).map_err(|err| err.to_string())
@@ -384,6 +552,8 @@ pub fn run() {
             provider_probe,
             tool_config_preview,
             tool_config_apply,
+            native_host_status,
+            native_host_repair,
             vault_export_encrypted,
             vault_import_encrypted,
             sync_settings_load,
@@ -439,6 +609,7 @@ mod tests {
                 fingerprint: "fingerprint".to_string(),
             }],
             default_model: None,
+            model_aliases: Vec::new(),
             quota: None,
             tags: Vec::new(),
             environment: "test".to_string(),

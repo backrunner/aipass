@@ -138,6 +138,7 @@ dependencies = [
  "aipass-agent-protocol",
  "aipass-config-writers",
  "aipass-crypto",
+ "aipass-native-host",
  "aipass-provider-registry",
  "aipass-storage",
  "aipass-sync",

@@ -150,6 +150,8 @@ pub struct ProviderEntryInput {
     pub auth_scheme: AuthScheme,
     pub api_key: String,
     pub default_model: Option<String>,
+    #[serde(default)]
+    pub model_aliases: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
     pub tags: Vec<String>,
@@ -170,6 +172,8 @@ pub struct ProviderEntryUpdateInput {
     pub auth_scheme: AuthScheme,
     pub api_key: Option<String>,
     pub default_model: Option<String>,
+    #[serde(default)]
+    pub model_aliases: Vec<(String, String)>,
     pub headers: Option<Vec<(String, String)>>,
     pub quota: Option<QuotaInfo>,
     pub tags: Vec<String>,
@@ -194,6 +198,8 @@ pub struct EntrySummary {
     #[serde(default)]
     pub secret_refs: Vec<SecretRef>,
     pub default_model: Option<String>,
+    #[serde(default)]
+    pub model_aliases: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
     pub tags: Vec<String>,
     pub environment: String,
@@ -602,7 +608,7 @@ impl Vault {
                 fingerprint,
             }],
             default_model: input.default_model,
-            model_aliases: Vec::new(),
+            model_aliases: input.model_aliases,
             headers: input.headers,
             quota: input.quota,
             tags: input.tags,
@@ -725,7 +731,7 @@ impl Vault {
             auth_scheme: input.auth_scheme,
             secret_refs,
             default_model: input.default_model,
-            model_aliases: old.entry.model_aliases,
+            model_aliases: input.model_aliases,
             headers: input.headers.unwrap_or(old.entry.headers),
             quota: input.quota,
             tags: input.tags,
@@ -826,7 +832,7 @@ impl Vault {
 
     pub fn reveal_secret_field(&self, id: Uuid, label_or_id: &str) -> Result<String, VaultError> {
         let path = self.record_path(id);
-        let plaintext = self.decrypt_provider_path(&path)?;
+        let mut plaintext = self.decrypt_provider_path(&path)?;
         let secret_id = if label_or_id == "primary" {
             plaintext
                 .entry
@@ -847,6 +853,8 @@ impl Vault {
             .get(&secret_id)
             .cloned()
             .ok_or(VaultError::RecordNotFound)?;
+        plaintext.entry.last_used_at = Some(OffsetDateTime::now_utc());
+        self.write_provider_record(id, &plaintext)?;
         self.audit("secret.reveal", Some(id), None)?;
         Ok(secret)
     }
@@ -904,7 +912,11 @@ impl Vault {
             self.expire_grant(grant_id)?;
             return Err(VaultError::GrantExpired);
         }
-        self.audit("grant.consume", grant.entry_id, Some(&grant.purpose))?;
+        let grant_entry_id = grant.entry_id;
+        if let Some(entry_id) = grant_entry_id {
+            let _ = self.touch_provider_last_used(entry_id);
+        }
+        self.audit("grant.consume", grant_entry_id, Some(&grant.purpose))?;
         Ok(grant.secret)
     }
 
@@ -1055,6 +1067,13 @@ impl Vault {
             1,
             &serde_json::to_vec(plaintext)?,
         )
+    }
+
+    fn touch_provider_last_used(&self, id: Uuid) -> Result<(), VaultError> {
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        plaintext.entry.last_used_at = Some(OffsetDateTime::now_utc());
+        self.write_provider_record(id, &plaintext)
     }
 
     fn write_device(&self, device: DeviceRecord) -> Result<(), VaultError> {
@@ -1311,6 +1330,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
             .unwrap_or_default(),
         secret_refs: entry.secret_refs.clone(),
         default_model: entry.default_model.clone(),
+        model_aliases: entry.model_aliases.clone(),
         quota: entry.quota.clone(),
         tags: entry.tags.clone(),
         environment: entry.environment.clone(),
@@ -1604,6 +1624,7 @@ mod tests {
             auth_scheme: AuthScheme::XApiKey,
             api_key: secret.to_string(),
             default_model: Some("claude-sonnet-4-5".to_string()),
+            model_aliases: Vec::new(),
             headers: vec![("anthropic-version".to_string(), "2023-06-01".to_string())],
             quota: None,
             tags: vec!["prod".to_string()],
@@ -1631,6 +1652,7 @@ mod tests {
             auth_scheme: AuthScheme::XApiKey,
             api_key: secret.map(ToString::to_string),
             default_model: Some("claude-opus-4-5".to_string()),
+            model_aliases: Vec::new(),
             headers: None,
             quota: Some(QuotaInfo {
                 label: Some("team-monthly".to_string()),

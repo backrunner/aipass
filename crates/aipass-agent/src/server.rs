@@ -388,6 +388,7 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
             auth_scheme: preview.auth_scheme,
             api_key,
             default_model: None,
+            model_aliases: Vec::new(),
             headers: Vec::new(),
             quota: None,
             tags: preview.tags,

@@ -108,11 +108,15 @@ pub(crate) struct ProviderAddRequest {
     #[serde(default)]
     pub(crate) domain: Vec<String>,
     pub(crate) endpoint: Option<String>,
+    #[serde(default)]
+    pub(crate) endpoints: Vec<String>,
     pub(crate) favicon_url: Option<String>,
     pub(crate) interface_type: InterfaceType,
     pub(crate) auth_scheme: AuthScheme,
     pub(crate) api_key: SensitiveString,
     pub(crate) default_model: Option<String>,
+    #[serde(default)]
+    pub(crate) model_aliases: Vec<(String, String)>,
     #[serde(default)]
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) quota: Option<QuotaInfo>,
@@ -131,11 +135,15 @@ pub(crate) struct ProviderUpdateRequest {
     #[serde(default)]
     pub(crate) domain: Vec<String>,
     pub(crate) endpoint: Option<String>,
+    #[serde(default)]
+    pub(crate) endpoints: Vec<String>,
     pub(crate) favicon_url: Option<String>,
     pub(crate) interface_type: InterfaceType,
     pub(crate) auth_scheme: AuthScheme,
     pub(crate) api_key: Option<SensitiveString>,
     pub(crate) default_model: Option<String>,
+    #[serde(default)]
+    pub(crate) model_aliases: Vec<(String, String)>,
     pub(crate) headers: Option<Vec<(String, String)>>,
     pub(crate) quota: Option<QuotaInfo>,
     pub(crate) environment: String,
@@ -295,6 +303,26 @@ pub(crate) struct ToolConfigApplyResponse {
     pub(crate) target_path: String,
     pub(crate) backup_path: String,
     pub(crate) summary: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeHostRepairRequest {
+    #[serde(default)]
+    pub(crate) extension_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeHostStatus {
+    pub(crate) browser: String,
+    pub(crate) host_path: PathBuf,
+    pub(crate) host_exists: bool,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) manifest_exists: bool,
+    pub(crate) settings_path: PathBuf,
+    pub(crate) allowed_extension_ids: Vec<String>,
+    pub(crate) allowed_origins: Vec<String>,
 }
 
 pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> AgentToolConfigRequest {

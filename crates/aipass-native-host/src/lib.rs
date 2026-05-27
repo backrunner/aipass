@@ -3,7 +3,10 @@ mod manifest;
 mod protocol;
 mod request;
 
-pub use config::NativeHostConfig;
+pub use config::{
+    load_allowed_extension_ids, native_host_settings_path, save_allowed_extension_ids,
+    NativeHostConfig, NativeHostSettings,
+};
 pub use manifest::native_manifest;
 pub use protocol::{
     read_message, validate_extension_id, write_message, NativeRequest, NativeResponse,
