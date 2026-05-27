@@ -58,11 +58,11 @@
 
         <div class="modal-body">
           <div class="row two">
-            <Field label="Domain">
+            <Field label="Domains">
               <input
                 bind:value={draft.domain}
                 on:blur={() => onInferDraftFromDomain()}
-                placeholder="console.anthropic.com"
+                placeholder="console.anthropic.com, api.anthropic.com"
                 autocapitalize="off"
                 spellcheck="false"
               />
@@ -102,8 +102,8 @@
 
           {#if showAdvanced}
             <div class="advanced">
-              <Field label="Endpoint">
-                <input bind:value={draft.endpoint} placeholder="https://api.anthropic.com" />
+              <Field label="API endpoints">
+                <input bind:value={draft.endpoint} placeholder="https://api.anthropic.com, https://api.example.com/v1" />
               </Field>
               <div class="row two">
                 <Field label="Interface">
@@ -125,6 +125,9 @@
                   <input bind:value={draft.environment} placeholder="work" />
                 </Field>
               </div>
+              <Field label="Model aliases">
+                <input bind:value={draft.modelAlias} placeholder="fast=claude-haiku-4-5, best=claude-sonnet-4-5" />
+              </Field>
               <div class="row two">
                 <Field label="Tags">
                   <input bind:value={draft.tag} placeholder="prod, team" />

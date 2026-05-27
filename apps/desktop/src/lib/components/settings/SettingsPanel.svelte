@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { Dialog, Tabs } from "bits-ui";
-  import { Check, Download, Eye, RotateCw, Terminal, Trash2, Upload, Wifi, X } from "lucide-svelte";
+  import { Check, Download, Eye, RotateCw, Terminal, Trash2, Upload, Wifi, Wrench, X } from "lucide-svelte";
 
   import type {
     DeviceRecord,
     MaybePromise,
+    NativeHostStatus,
     SyncConflict,
     SyncMode,
     SyncReport,
@@ -44,6 +45,9 @@
   export let conflictBusy = "";
   export let devices: DeviceRecord[] = [];
   export let devicesLoading = false;
+  export let extensionIds = "";
+  export let nativeHostStatus: NativeHostStatus | undefined;
+  export let nativeHostBusy = "";
   export let initialTab: string = "security";
   export let onClose: () => MaybePromise = () => {};
   export let onSavePreferences: () => MaybePromise = () => {};
@@ -57,6 +61,8 @@
   export let onLoadSyncConflicts: () => MaybePromise = () => {};
   export let onResolveSyncConflict: (conflict: SyncConflict, action: "accept" | "discard") => MaybePromise = () => {};
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
+  export let onLoadNativeHostStatus: () => MaybePromise = () => {};
+  export let onRepairNativeHost: () => MaybePromise = () => {};
   export let onPreviewToolConfig: (request: {
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
@@ -103,37 +109,53 @@
       id: "codex",
       name: "Codex",
       desc: "Write ~/.codex/config.toml and ~/.codex/auth.json",
-      note: "Live config switch for OpenAI-compatible bearer-token providers.",
-      modes: [{ value: "plaintext", label: "Live files" }]
+      note: "Uses an env-key based config by default; plaintext auth.json is an explicit fallback.",
+      modes: [
+        { value: "helper", label: "Helper" },
+        { value: "env", label: "Env file" },
+        { value: "plaintext", label: "Plaintext" }
+      ]
     },
     {
       id: "claude-code",
       name: "Claude Code",
       desc: "Write ~/.claude/settings.json",
-      note: "Live config switch for Anthropic-compatible x-api-key providers.",
-      modes: [{ value: "plaintext", label: "settings.json" }]
+      note: "Uses apiKeyHelper by default so the key stays in the vault until Claude Code asks for it.",
+      modes: [
+        { value: "helper", label: "Helper" },
+        { value: "env", label: "Env file" },
+        { value: "plaintext", label: "Plaintext" }
+      ]
     },
     {
       id: "gemini-cli",
       name: "Gemini CLI",
       desc: "Write ~/.gemini/.env",
-      note: "Live config switch for Gemini-native providers with Google API keys.",
-      modes: [{ value: "plaintext", label: ".env" }]
+      note: "Defaults to an AIPass env helper; .env plaintext is available only after confirmation.",
+      modes: [
+        { value: "env", label: "Env file" },
+        { value: "helper", label: "Helper" },
+        { value: "plaintext", label: "Plaintext" }
+      ]
     },
     {
       id: "opencode",
       name: "OpenCode",
       desc: "Write ~/.config/opencode/opencode.json",
-      note: "Live config switch using the matching AI SDK adapter for the selected provider.",
-      modes: [{ value: "plaintext", label: "opencode.json" }]
+      note: "Uses an AI SDK provider config with an env reference by default.",
+      modes: [
+        { value: "helper", label: "Helper" },
+        { value: "env", label: "Env file" },
+        { value: "plaintext", label: "Plaintext" }
+      ]
     }
   ];
 
   let toolState: Record<ToolConfigTarget, ToolState> = {
-    codex: { entryId: "", mode: "plaintext", busy: false, error: "" },
-    "claude-code": { entryId: "", mode: "plaintext", busy: false, error: "" },
-    "gemini-cli": { entryId: "", mode: "plaintext", busy: false, error: "" },
-    opencode: { entryId: "", mode: "plaintext", busy: false, error: "" }
+    codex: { entryId: "", mode: "helper", busy: false, error: "" },
+    "claude-code": { entryId: "", mode: "helper", busy: false, error: "" },
+    "gemini-cli": { entryId: "", mode: "env", busy: false, error: "" },
+    opencode: { entryId: "", mode: "helper", busy: false, error: "" }
   };
 
   function conflictTitle(conflict: SyncConflict): string {
@@ -640,7 +662,41 @@
                       <strong>Chrome extension</strong>
                       <span class="text-tertiary">Browser autofill via Native Messaging</span>
                     </div>
-                    <Badge>Installed separately</Badge>
+                    <Badge tone={nativeHostStatus?.manifestExists ? "success" : "warning"}>
+                      {nativeHostStatus?.manifestExists ? "Manifest installed" : "Needs setup"}
+                    </Badge>
+                  </div>
+                  <div class="native-host-panel">
+                    <Field label="Extension IDs">
+                      <input bind:value={extensionIds} placeholder="Chrome extension id, comma separated" />
+                    </Field>
+                    {#if nativeHostStatus}
+                      <div class="native-host-grid">
+                        <span class="kv-label">Host</span>
+                        <code>{nativeHostStatus.hostPath}</code>
+                        <Badge tone={nativeHostStatus.hostExists ? "success" : "warning"}>
+                          {nativeHostStatus.hostExists ? "found" : "missing"}
+                        </Badge>
+                        <span class="kv-label">Manifest</span>
+                        <code>{nativeHostStatus.manifestPath}</code>
+                        <Badge tone={nativeHostStatus.manifestExists ? "success" : "warning"}>
+                          {nativeHostStatus.manifestExists ? "installed" : "missing"}
+                        </Badge>
+                        <span class="kv-label">Allowlist</span>
+                        <code>{nativeHostStatus.settingsPath}</code>
+                        <Badge tone={nativeHostStatus.allowedExtensionIds.length ? "success" : "warning"}>
+                          {nativeHostStatus.allowedExtensionIds.length ? `${nativeHostStatus.allowedExtensionIds.length} ids` : "empty"}
+                        </Badge>
+                      </div>
+                    {/if}
+                    <div class="row-actions">
+                      <Button variant="secondary" size="sm" disabled={!!nativeHostBusy} on:click={() => onLoadNativeHostStatus()}>
+                        <Eye size={13} /> Check
+                      </Button>
+                      <Button variant="primary" size="sm" disabled={!!nativeHostBusy || !extensionIds.trim()} on:click={() => onRepairNativeHost()}>
+                        <Wrench size={13} /> Repair
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -979,6 +1035,32 @@
       overflow-wrap: anywhere;
       font-size: 11px;
       color: var(--text-tertiary);
+    }
+  }
+
+  .native-host-panel {
+    display: grid;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .native-host-grid {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+
+    code {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-secondary);
+      font-size: 11px;
     }
   }
 

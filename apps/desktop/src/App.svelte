@@ -26,6 +26,7 @@
     Draft,
     EntrySummary,
     FormMode,
+    NativeHostStatus,
     ProbeResult,
     ProviderCounts,
     ProviderFilter,
@@ -155,28 +156,37 @@
   let syncConflicts: SyncConflict[] = [];
   let conflictsLoading = false;
   let conflictBusy = "";
+  let nativeHostStatus: NativeHostStatus | undefined;
+  let nativeHostBusy = "";
+  let extensionIds = "";
   let counts: ProviderCounts = buildProviderCounts([]);
 
-  $: filtered = entries.filter((entry) => {
-    if (providerFilter !== "all" && entry.providerKind !== providerFilter) return false;
-    const haystack = [
-      entry.title,
-      entry.providerId ?? "",
-      entry.interfaceType,
-      entry.authScheme,
-      entry.defaultModel ?? "",
-      entry.environment,
-      entry.notes ?? "",
-      ...entry.domains,
-      ...entry.tags,
-      ...(entry.headerNames ?? []),
-      ...entry.endpoints.map((endpoint) => endpoint.url ?? ""),
-      ...entry.secretRefs.map((secret) => `${secret.masked} ${secret.fingerprint}`)
-    ]
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(query.toLowerCase());
-  });
+  $: filtered = entries
+    .filter((entry) => {
+      if (providerFilter === "recent" && !entry.lastUsedAt) return false;
+      if (providerFilter !== "all" && providerFilter !== "recent" && entry.providerKind !== providerFilter) return false;
+      const haystack = [
+        entry.title,
+        entry.providerId ?? "",
+        entry.interfaceType,
+        entry.authScheme,
+        entry.defaultModel ?? "",
+        entry.environment,
+        entry.notes ?? "",
+        ...entry.domains,
+        ...entry.tags,
+        ...(entry.headerNames ?? []),
+        ...entry.endpoints.map((endpoint) => endpoint.url ?? ""),
+        ...entry.secretRefs.map((secret) => `${secret.masked} ${secret.fingerprint}`)
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query.toLowerCase());
+    })
+    .sort((left, right) => {
+      if (providerFilter !== "recent") return 0;
+      return Date.parse(right.lastUsedAt ?? "") - Date.parse(left.lastUsedAt ?? "");
+    });
   $: selected = filtered.find((entry) => entry.id === selectedId) ?? filtered[0];
   $: counts = buildProviderCounts(entries);
   $: if ((selected?.id ?? "") !== activeDetailId) {
@@ -416,14 +426,15 @@
   }
 
   function inferDraftFromDomain() {
-    const match = matchProviderByDomain(draft.domain);
+    const firstDomain = splitCsv(draft.domain)[0] ?? draft.domain;
+    const match = matchProviderByDomain(firstDomain);
     if (!match) return;
     draft.providerId = match.id;
     draft.title ||= match.displayName;
     draft.endpoint ||= match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
     draft.interfaceType = match.interfaces[0] ?? draft.interfaceType;
     draft.authScheme = match.authSchemes[0] ?? draft.authScheme;
-    draft.faviconUrl ||= draft.domain ? `https://${draft.domain.replace(/^https?:\/\//, "").split("/")[0]}/favicon.ico` : "";
+    draft.faviconUrl ||= firstDomain ? `https://${firstDomain.replace(/^https?:\/\//, "").split("/")[0]}/favicon.ico` : "";
   }
 
   function providerChanged() {
@@ -447,14 +458,15 @@
     formMode = "edit";
     draft = {
       title: entry.title,
-      domain: entry.domains[0] ?? "",
-      endpoint: entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "",
+      domain: entry.domains.join(", "),
+      endpoint: entry.endpoints.map((endpoint) => endpoint.url).filter(Boolean).join(", "),
       faviconUrl: entry.faviconUrl ?? "",
       providerId: entry.providerId ?? "custom_http",
       interfaceType: entry.interfaceType,
       authScheme: entry.authScheme,
       apiKey: "",
       defaultModel: entry.defaultModel ?? "",
+      modelAlias: (entry.modelAliases ?? []).map(([alias, model]) => `${alias}=${model}`).join(", "),
       environment: entry.environment,
       tag: entry.tags.join(", "),
       header: "",
@@ -472,13 +484,14 @@
     const request = {
       title: draft.title || provider?.displayName || "Custom Provider",
       providerId: draft.providerId || provider?.id,
-      domain: draft.domain ? [draft.domain] : [],
-      endpoint: draft.endpoint || undefined,
+      domain: splitCsv(draft.domain),
+      endpoints: splitCsv(draft.endpoint),
       faviconUrl: draft.faviconUrl || undefined,
       interfaceType: draft.interfaceType,
       authScheme: draft.authScheme,
       apiKey: draft.apiKey || undefined,
       defaultModel: draft.defaultModel || undefined,
+      modelAliases: modelAliasPairs(draft.modelAlias),
       headers: headerPairs(draft.header),
       quota: quotaFromDraft(),
       environment: draft.environment || "personal",
@@ -629,6 +642,7 @@
     showSettings = true;
     await loadDevices();
     await loadSyncConflicts();
+    await loadNativeHostStatus();
   }
 
   async function closeSettings() {
@@ -715,6 +729,41 @@
     } catch (err) {
       error = String(err);
       throw err;
+    }
+  }
+
+  async function loadNativeHostStatus() {
+    nativeHostBusy = "status";
+    try {
+      nativeHostStatus = await invokeTauri<NativeHostStatus>("native_host_status");
+      if (!extensionIds.trim()) {
+        const ids = nativeHostStatus.allowedExtensionIds.length
+          ? nativeHostStatus.allowedExtensionIds
+          : nativeHostStatus.allowedOrigins.map((origin) =>
+              origin.replace(/^chrome-extension:\/\//, "").replace(/\/$/, "")
+            );
+        extensionIds = ids.join(", ");
+      }
+    } catch (err) {
+      error = String(err);
+    } finally {
+      nativeHostBusy = "";
+    }
+  }
+
+  async function repairNativeHost() {
+    nativeHostBusy = "repair";
+    error = "";
+    try {
+      nativeHostStatus = await invokeTauri<NativeHostStatus>("native_host_repair", {
+        request: { extensionIds: splitCsv(extensionIds) }
+      });
+      notice = "Native host repaired";
+      setTimeout(() => (notice = ""), 1800);
+    } catch (err) {
+      error = String(err);
+    } finally {
+      nativeHostBusy = "";
     }
   }
 
@@ -833,6 +882,13 @@
       .map((item) => item.split("="))
       .filter(([name, headerValue]) => name && headerValue !== undefined)
       .map(([name, headerValue]) => [name.trim(), headerValue.trim()] as [string, string]);
+  }
+
+  function modelAliasPairs(value: string): Array<[string, string]> {
+    return splitCsv(value)
+      .map((item) => item.split("="))
+      .filter(([alias, model]) => alias && model !== undefined)
+      .map(([alias, model]) => [alias.trim(), model.trim()] as [string, string]);
   }
 
   function quotaFromDraft(): QuotaInfo | undefined {
@@ -1054,9 +1110,11 @@
         entries={filtered}
         selectedId={selected?.id ?? ""}
         {showArchived}
+        {providerFilter}
         bind:query
         onSearch={runSearch}
         onAdd={openAdd}
+        onFilterChange={setProviderFilter}
         onSelect={selectProvider}
       />
 
@@ -1120,6 +1178,9 @@
     {conflictBusy}
     {devices}
     {devicesLoading}
+    bind:extensionIds
+    {nativeHostStatus}
+    {nativeHostBusy}
     onClose={closeSettings}
     onSavePreferences={savePreferences}
     onChangeMasterPassword={changeMasterPassword}
@@ -1134,6 +1195,8 @@
     onRevokeDevice={revokeDevice}
     onPreviewToolConfig={previewToolConfig}
     onApplyToolConfig={applyToolConfig}
+    onLoadNativeHostStatus={loadNativeHostStatus}
+    onRepairNativeHost={repairNativeHost}
   />
 {/if}
 

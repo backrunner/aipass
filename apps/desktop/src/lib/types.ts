@@ -75,6 +75,7 @@ export type Draft = {
   authScheme: AuthScheme;
   apiKey: string;
   defaultModel: string;
+  modelAlias: string;
   environment: string;
   tag: string;
   header: string;
@@ -99,6 +100,7 @@ export type EntrySummary = {
   fingerprint: string;
   secretRefs?: SecretRef[];
   defaultModel?: string;
+  modelAliases?: Array<[string, string]>;
   quota?: QuotaInfo;
   tags: string[];
   environment: string;
@@ -130,7 +132,7 @@ export type SyncConflict = {
   targetSummary?: EntrySummary;
 };
 
-export type ProviderFilter = "all" | ProviderKind;
+export type ProviderFilter = "all" | "recent" | ProviderKind;
 
 export type ProviderCounts = Record<ProviderFilter, number>;
 
@@ -173,6 +175,17 @@ export type ToolConfigApplyResult = {
   targetPath: string;
   backupPath: string;
   summary: string;
+};
+
+export type NativeHostStatus = {
+  browser: string;
+  hostPath: string;
+  hostExists: boolean;
+  manifestPath: string;
+  manifestExists: boolean;
+  settingsPath: string;
+  allowedExtensionIds: string[];
+  allowedOrigins: string[];
 };
 
 export type PasswordStrengthLevel =

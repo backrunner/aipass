@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
+  import { providerKindLabel } from "@aipass/ui";
+  import { DropdownMenu } from "bits-ui";
   import { KeyRound, Plus, Search, SlidersHorizontal } from "lucide-svelte";
 
-  import type { MaybePromise } from "../../types";
+  import type { MaybePromise, ProviderFilter } from "../../types";
   import Button from "../shared/Button.svelte";
   import IconButton from "../shared/IconButton.svelte";
   import ProviderIcon from "../shared/ProviderIcon.svelte";
@@ -10,10 +12,21 @@
   export let entries: ProviderEntry[] = [];
   export let selectedId = "";
   export let showArchived = false;
+  export let providerFilter: ProviderFilter = "all";
   export let query = "";
   export let onSearch: () => MaybePromise = () => {};
   export let onAdd: () => MaybePromise = () => {};
+  export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
   export let onSelect: (id: string) => MaybePromise = () => {};
+
+  const filterOptions: Array<{ value: ProviderFilter; label: string }> = [
+    { value: "all", label: "All Items" },
+    { value: "recent", label: "Recent" },
+    { value: "official", label: providerKindLabel.official },
+    { value: "third_party", label: providerKindLabel.third_party },
+    { value: "self_hosted", label: providerKindLabel.self_hosted },
+    { value: "unknown", label: providerKindLabel.unknown }
+  ];
 
   function maskedSuffix(masked: string): string {
     if (!masked) return "";
@@ -38,9 +51,36 @@
         autocapitalize="off"
       />
     </label>
-    <IconButton label="Filter" disabled>
-      <SlidersHorizontal size={15} />
-    </IconButton>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        {#snippet child({ props })}
+          <button
+            {...props}
+            type="button"
+            class="filter-trigger"
+            class:active-filter={providerFilter !== "all"}
+            aria-label="Filter providers"
+            title="Filter providers"
+            disabled={showArchived}
+          >
+            <SlidersHorizontal size={15} />
+          </button>
+        {/snippet}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content sideOffset={6} align="end" class="filter-menu">
+          {#each filterOptions as option}
+            <DropdownMenu.Item
+              class="filter-item"
+              onSelect={() => onFilterChange(option.value)}
+            >
+              <span>{option.label}</span>
+              {#if providerFilter === option.value}<span class="filter-check">Selected</span>{/if}
+            </DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
     <IconButton label="Add provider" tone="primary" on:click={() => onAdd()}>
       <Plus size={16} />
     </IconButton>
@@ -98,6 +138,60 @@
     gap: 6px;
     padding: 12px;
     border-bottom: 1px solid var(--divider);
+  }
+
+  .filter-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    transition: background-color 80ms ease, color 120ms ease;
+
+    &:hover:not(:disabled),
+    &.active-filter {
+      background: var(--accent-soft);
+      color: var(--text);
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+  }
+
+  :global(.filter-menu) {
+    min-width: 180px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    z-index: 50;
+  }
+
+  :global(.filter-item) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    outline: 0;
+  }
+
+  :global(.filter-item[data-highlighted]) {
+    background: var(--accent-soft);
+  }
+
+  .filter-check {
+    color: var(--text-tertiary);
+    font-size: 11px;
   }
 
   .search {

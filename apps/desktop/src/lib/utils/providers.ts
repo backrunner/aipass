@@ -12,6 +12,7 @@ export const emptyDraft = (): Draft => ({
   authScheme: "x_api_key",
   apiKey: "",
   defaultModel: "",
+  modelAlias: "",
   environment: "work",
   tag: "",
   header: "",
@@ -44,6 +45,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
           }
         ],
     defaultModel: summary.defaultModel,
+    modelAliases: summary.modelAliases,
     quota: summary.quota,
     tags: summary.tags,
     environment: summary.environment,
@@ -59,6 +61,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
 export function providerCounts(entries: ProviderEntry[]): Record<ProviderFilter, number> {
   return {
     all: entries.length,
+    recent: entries.filter((entry) => Boolean(entry.lastUsedAt)).length,
     official: entries.filter((entry) => entry.providerKind === "official").length,
     third_party: entries.filter((entry) => entry.providerKind === "third_party").length,
     self_hosted: entries.filter((entry) => entry.providerKind === "self_hosted").length,

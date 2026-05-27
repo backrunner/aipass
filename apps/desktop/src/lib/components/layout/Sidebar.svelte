@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Archive, Inbox, Lock, Settings, ShieldCheck, Sparkles, Star, Terminal, Wifi } from "lucide-svelte";
+  import { Archive, Inbox, Lock, Settings, ShieldCheck, Sparkles, Terminal, Wifi } from "lucide-svelte";
 
   import type { MaybePromise, ProviderCounts, ProviderFilter } from "../../types";
 
@@ -25,13 +25,14 @@
       <span class="label">All Items</span>
       <span class="count">{providerCounts.all}</span>
     </button>
-    <button type="button" class="muted" disabled>
-      <Star size={15} />
-      <span class="label">Favorites</span>
-    </button>
-    <button type="button" class="muted" disabled>
+    <button
+      type="button"
+      class:active={activeFilter === "recent"}
+      on:click={() => onFilterChange("recent")}
+    >
       <Sparkles size={15} />
       <span class="label">Recent</span>
+      <span class="count">{providerCounts.recent}</span>
     </button>
   </nav>
 
@@ -172,10 +173,6 @@
         border-radius: 1px;
         background: var(--accent);
       }
-    }
-
-    &.muted {
-      color: var(--text-tertiary);
     }
 
     &:disabled {

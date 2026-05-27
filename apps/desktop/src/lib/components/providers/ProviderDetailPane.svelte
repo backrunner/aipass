@@ -60,6 +60,109 @@
   $: hasMetadata = Boolean(
     selected && (selected.tags.length || (selected.headerNames?.length ?? 0) || selected.notes)
   );
+
+  function endpointUrl(entry: ProviderEntry): string {
+    return entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "https://api.example.com";
+  }
+
+  function consoleUrl(entry: ProviderEntry): string {
+    return entry.endpoints.find((endpoint) => endpoint.kind === "console")?.url ?? "";
+  }
+
+  function envKey(entry: ProviderEntry): string {
+    switch (entry.providerId) {
+      case "anthropic":
+        return "ANTHROPIC_API_KEY";
+      case "gemini":
+        return "GEMINI_API_KEY";
+      case "openrouter":
+        return "OPENROUTER_API_KEY";
+      case "deepseek":
+        return "DEEPSEEK_API_KEY";
+      case "moonshot":
+        return "MOONSHOT_API_KEY";
+      case "qwen":
+        return "DASHSCOPE_API_KEY";
+      case "zhipu":
+        return "ZHIPUAI_API_KEY";
+      case "volcengine":
+        return "ARK_API_KEY";
+      case "bedrock":
+        return "AWS_PROFILE";
+      default:
+        return entry.authScheme === "google_api_key"
+          ? "GEMINI_API_KEY"
+          : entry.authScheme === "azure_api_key"
+            ? "AZURE_OPENAI_API_KEY"
+            : entry.authScheme === "aws_profile"
+              ? "AWS_PROFILE"
+              : "AIPASS_API_KEY";
+    }
+  }
+
+  function shellQuote(value: string): string {
+    return `'${value.replaceAll("'", "'\\''")}'`;
+  }
+
+  function curlSnippet(entry: ProviderEntry): string {
+    const endpoint = endpointUrl(entry).replace(/\/$/, "");
+    const key = envKey(entry);
+    if (entry.interfaceType === "bedrock" || entry.authScheme === "aws_profile") {
+      const region = entry.endpoints.find((item) => item.region)?.region ?? "${AWS_REGION:-us-east-1}";
+      return `AWS_PROFILE=\${${key}:-default} aws bedrock list-foundation-models --region ${region}`;
+    }
+    if (entry.interfaceType === "anthropic_messages") {
+      return `curl -sS ${endpoint}/v1/models -H 'x-api-key: $${key}' -H 'anthropic-version: 2023-06-01'`;
+    }
+    if (entry.interfaceType === "gemini") {
+      return `curl -sS '${endpoint}/v1beta/models?key=$${key}'`;
+    }
+    if (entry.interfaceType === "azure_openai") {
+      return `curl -sS ${endpoint}/models -H 'api-key: $${key}'`;
+    }
+    return `curl -sS ${endpoint}/models ${authHeaderSnippet(entry.authScheme, key)}`.trim();
+  }
+
+  function authHeaderSnippet(authScheme: ProviderEntry["authScheme"], key: string): string {
+    switch (authScheme) {
+      case "bearer":
+        return `-H 'Authorization: Bearer $${key}'`;
+      case "x_api_key":
+        return `-H 'x-api-key: $${key}'`;
+      case "azure_api_key":
+        return `-H 'api-key: $${key}'`;
+      case "custom_header":
+        return `-H 'Authorization: $${key}'`;
+      default:
+        return "";
+    }
+  }
+
+  function envSnippet(entry: ProviderEntry): string {
+    const lines = [`export ${envKey(entry)}="$(aipass get ${entry.id} --field api_key --reveal)"`];
+    const endpoint = endpointUrl(entry);
+    if (endpoint) lines.push(`export AIPASS_BASE_URL=${shellQuote(endpoint)}`);
+    if (entry.defaultModel) lines.push(`export AIPASS_MODEL=${shellQuote(entry.defaultModel)}`);
+    return lines.join("\n");
+  }
+
+  function configSnippet(entry: ProviderEntry): string {
+    return JSON.stringify(
+      {
+        provider: entry.providerId,
+        title: entry.title,
+        interfaceType: entry.interfaceType,
+        authScheme: entry.authScheme,
+        baseUrl: endpointUrl(entry),
+        consoleUrl: consoleUrl(entry) || undefined,
+        envKey: envKey(entry),
+        defaultModel: entry.defaultModel,
+        modelAliases: entry.modelAliases
+      },
+      null,
+      2
+    );
+  }
 </script>
 
 {#if selected}
@@ -206,12 +309,33 @@
           <code class="mono kv-value">{selected.defaultModel ?? "Not set"}</code>
           <span></span>
         </div>
+        {#if selected.modelAliases?.length}
+          <div class="kv-row">
+            <span class="kv-label">Model aliases</span>
+            <code class="mono kv-value">{selected.modelAliases.map(([alias, model]) => `${alias} -> ${model}`).join(", ")}</code>
+            <span></span>
+          </div>
+        {/if}
         <div class="kv-row">
           <span class="kv-label">Environment</span>
           <code class="mono kv-value">{selected.environment}</code>
           <span></span>
         </div>
         <svelte:fragment slot="footer">
+          <div class="snippet-actions">
+            <Button variant="secondary" size="sm" on:click={() => onCopyValue("snippet:curl", curlSnippet(selected))}>
+              {#if copied === "snippet:curl"}<Check size={13} />{:else}<Copy size={13} />{/if}
+              curl
+            </Button>
+            <Button variant="secondary" size="sm" on:click={() => onCopyValue("snippet:env", envSnippet(selected))}>
+              {#if copied === "snippet:env"}<Check size={13} />{:else}<Copy size={13} />{/if}
+              env
+            </Button>
+            <Button variant="secondary" size="sm" on:click={() => onCopyValue("snippet:config", configSnippet(selected))}>
+              {#if copied === "snippet:config"}<Check size={13} />{:else}<Copy size={13} />{/if}
+              config
+            </Button>
+          </div>
           {#if probeResult}
             <div class="probe">
               <span class={`probe-status ${probeResult.ok ? "ok" : "fail"}`}>
@@ -515,6 +639,13 @@
         box-shadow: 0 0 0 3px var(--accent-ring);
       }
     }
+  }
+
+  .snippet-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-bottom: 10px;
   }
 
   .probe {
