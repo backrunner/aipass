@@ -23,6 +23,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     entryId?: string;
     grantId?: string;
     draft?: Partial<DetectedSecretDraft> | null;
+    tabId?: number;
   };
 
   if (typed.type === "aipass.ping") {
@@ -32,6 +33,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.lookup" && typed.url && typed.origin) {
     lookupContext(typed.url, typed.origin).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.scanActiveTab" && typeof typed.tabId === "number") {
+    scanActiveTab(typed.tabId).then(sendResponse);
     return true;
   }
 
@@ -147,4 +153,19 @@ function clearPendingDraft() {
   pendingDraftExpiresAt = 0;
   clearTimeout(pendingDraftTimer);
   pendingDraftTimer = undefined;
+}
+
+async function scanActiveTab(tabId: number) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"]
+    });
+    return { ok: true, data: { scanned: true } };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
 }

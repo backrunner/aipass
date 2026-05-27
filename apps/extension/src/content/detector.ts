@@ -55,10 +55,24 @@ function findSecretCandidate(doc: Document): string | undefined {
       if (matched) return value;
     }
   }
-  const text = doc.body?.innerText ?? "";
-  for (const pattern of SECRET_PATTERNS) {
-    const match = text.match(pattern);
-    if (match?.[0]) return match[0];
+  const explicitKeyElements = Array.from(
+    doc.querySelectorAll<HTMLElement>("code, pre, output, [data-api-key], [data-token], [role='textbox']")
+  );
+  for (const element of explicitKeyElements.slice(0, 80)) {
+    const context = [
+      element.getAttribute("aria-label") ?? "",
+      element.getAttribute("data-api-key") ?? "",
+      element.getAttribute("data-token") ?? "",
+      element.closest("section, article, form, div")?.textContent?.slice(0, 400) ?? ""
+    ]
+      .join(" ")
+      .toLowerCase();
+    if (!/(api|key|token|secret|credential)/.test(context)) continue;
+    const value = (element.textContent ?? "").trim();
+    for (const pattern of SECRET_PATTERNS) {
+      const match = value.match(pattern);
+      if (match?.[0]) return match[0];
+    }
   }
   return undefined;
 }
@@ -127,7 +141,8 @@ function isIgnoredOrigin(origin: string): Promise<boolean> {
 
 void sendDraftIfAllowed();
 
-if (typeof chrome !== "undefined" && typeof document !== "undefined") {
+if (typeof chrome !== "undefined" && typeof document !== "undefined" && !listenerAlreadyInstalled()) {
+  markListenerInstalled();
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const typed = message as { type?: string; secret?: string; endpoint?: string };
     if (typed.type !== "aipass.fillSecret" || !typed.secret) return false;
@@ -150,6 +165,14 @@ if (typeof chrome !== "undefined" && typeof document !== "undefined") {
     sendResponse({ ok: true });
     return false;
   });
+}
+
+function listenerAlreadyInstalled(): boolean {
+  return Boolean((window as Window & { __AIPASS_CONTENT_LISTENER__?: boolean }).__AIPASS_CONTENT_LISTENER__);
+}
+
+function markListenerInstalled() {
+  (window as Window & { __AIPASS_CONTENT_LISTENER__?: boolean }).__AIPASS_CONTENT_LISTENER__ = true;
 }
 
 function findFillTarget(doc: Document): HTMLInputElement | HTMLTextAreaElement | undefined {

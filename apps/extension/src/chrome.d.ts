@@ -22,4 +22,7 @@ declare namespace chrome {
     function query(queryInfo: { active: boolean; currentWindow: boolean }, callback: (tabs: Array<{ id?: number; url?: string }>) => void): void;
     function sendMessage(tabId: number, message: unknown, callback?: (response: unknown) => void): void;
   }
+  namespace scripting {
+    function executeScript(details: { target: { tabId: number }; files: string[] }): Promise<unknown[]>;
+  }
 }

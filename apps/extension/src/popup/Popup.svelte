@@ -108,6 +108,10 @@
       entries = lookup?.ok ? lookup.data?.entries ?? [] : [];
       grants = lookup?.ok ? lookup.data?.grants ?? [] : [];
     }
+    if (tabId && currentUrl) {
+      await sendToWorker<{ scanned: boolean }>({ type: "aipass.scanActiveTab", tabId });
+      await delay(120);
+    }
     const draftResponse = await sendToWorker<{ draft: SafeDraft | null }>({ type: "aipass.pendingDraft" });
     pendingDraft = draftResponse?.ok ? draftResponse.data?.draft ?? null : null;
     syncDraftForm();
