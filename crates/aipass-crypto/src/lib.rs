@@ -46,7 +46,7 @@ pub struct KdfParams {
 
 impl KdfParams {
     pub fn interactive() -> Self {
-        Self::with_random_salt(256 * 1024, 4, 1)
+        Self::with_random_salt(64 * 1024, 2, 1)
     }
 
     pub fn with_random_salt(memory_kib: u32, iterations: u32, parallelism: u32) -> Self {

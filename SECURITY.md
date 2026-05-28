@@ -24,7 +24,7 @@ This invariant covers:
 
 ## Implemented Controls
 
-- Master password is processed through Argon2id with stored KDF parameters; new vaults target 256 MiB memory and 4 rounds.
+- Master password is processed through Argon2id with stored KDF parameters; new vaults target 64 MiB memory and 2 rounds for responsive unlocks.
 - Each vault has a random 256-bit root key. The manifest stores a password-wrapped root key and a recovery-wrapped root key, but never the master password or recovery key.
 - Provider records are encrypted as whole record envelopes with XChaCha20-Poly1305.
 - The root key wraps the active epoch key and index key. Record plaintext remains protected by per-record DEKs wrapped by the current epoch key.

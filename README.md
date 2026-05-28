@@ -18,7 +18,7 @@ AIPass encrypts provider records as whole encrypted envelopes. Provider title, d
 
 Core properties:
 
-- Argon2id master-password KDF with per-vault stored parameters; new vaults target 256 MiB memory and 4 rounds.
+- Argon2id master-password KDF with per-vault stored parameters; new vaults target 64 MiB memory and 2 rounds for responsive unlocks.
 - Random 256-bit vault root key wrapped by the password-derived key and by an emergency recovery key.
 - XChaCha20-Poly1305 authenticated encryption with 256-bit symmetric keys. This is the practical post-quantum posture for this local vault; AIPass does not introduce a PQ public-key suite for local password unlock.
 - Per-record random DEK wrapped by the current Vault Epoch Key.
