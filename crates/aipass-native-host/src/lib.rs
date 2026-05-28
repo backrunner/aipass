@@ -238,6 +238,79 @@ mod tests {
     }
 
     #[test]
+    fn save_detected_allows_multiple_keys_for_same_platform() {
+        let agent = RunningAgent::start();
+        agent.unlock();
+        let config = agent.config();
+        for (title, api_key) in [
+            ("OpenRouter Product A", "sk-or-v1-product-a-secret"),
+            ("OpenRouter Product B", "sk-or-v1-product-b-secret"),
+        ] {
+            let save = handle_request_with_config(
+                NativeRequest::SaveDetected {
+                    id: Uuid::new_v4(),
+                    extension_id: None,
+                    origin: "https://openrouter.ai".to_string(),
+                    url: "https://openrouter.ai/settings/keys".to_string(),
+                    title: Some(title.to_string()),
+                    endpoint: Some("https://openrouter.ai/api/v1".to_string()),
+                    provider_id: Some("openrouter".to_string()),
+                    interface_type: Some(aipass_provider_registry::InterfaceType::OpenAiCompatible),
+                    auth_scheme: Some(aipass_provider_registry::AuthScheme::Bearer),
+                    api_key: api_key.into(),
+                    environment: Some("browser".to_string()),
+                    tags: vec!["browser".to_string()],
+                },
+                &config,
+            );
+            assert!(save.ok, "{save:?}");
+        }
+
+        let lookup = handle_request_with_config(
+            NativeRequest::ContextLookup {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://openrouter.ai".to_string(),
+                url: "https://openrouter.ai/settings/keys".to_string(),
+            },
+            &config,
+        );
+        assert!(lookup.ok, "{lookup:?}");
+        let entries = lookup.data["entries"].as_array().unwrap();
+        let grants = lookup.data["grants"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(grants.len(), 2);
+
+        for entry in entries {
+            let entry_id = Uuid::parse_str(entry["id"].as_str().unwrap()).unwrap();
+            let entry_id_string = entry_id.to_string();
+            let grant = grants
+                .iter()
+                .find(|grant| grant["entryId"].as_str() == Some(entry_id_string.as_str()))
+                .expect("grant for saved entry");
+            let grant_id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+            let fill = handle_request_with_config(
+                NativeRequest::SecretFill {
+                    id: Uuid::new_v4(),
+                    extension_id: None,
+                    entry_id,
+                    field_id: "primary".to_string(),
+                    grant_id,
+                },
+                &config,
+            );
+            assert!(fill.ok, "{fill:?}");
+            let title = entry["title"].as_str().unwrap();
+            let secret = fill.data["secret"].as_str().unwrap();
+            if title.ends_with("A") {
+                assert_eq!(secret, "sk-or-v1-product-a-secret");
+            } else {
+                assert_eq!(secret, "sk-or-v1-product-b-secret");
+            }
+        }
+    }
+
+    #[test]
     fn save_detected_infers_endpoint_interface_and_auth() {
         let agent = RunningAgent::start();
         agent.unlock();

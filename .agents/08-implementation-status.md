@@ -66,9 +66,11 @@
 - Native host request wrapper includes `chrome.runtime.id`.
 - Native host supports extension-id allowlist validation from persistent settings or managed env override.
 - Popup supports ping, lookup, no-match search, fill, save detected key, refresh, and ignore site.
-- Content detector supports first-class providers and self-hosted New API, One API, LiteLLM, sub2api hints.
+- Content detector supports first-class providers and self-hosted New API, One API, LiteLLM, sub2api hints, including representative key-page fixtures from those open-source dashboards.
+- Open-source source audit covered New API, One API, LiteLLM, and sub2api key creation/copy flows; official and closed hosted consoles are covered through provider registry domains, host permissions, public key-page conventions, and detector fixtures rather than source review.
+- Replicate is registered as a third-party provider with account token-page detection and `REPLICATE_API_TOKEN` env/snippet support.
 - Ignored origins are persisted through the native host/agent settings path; API keys are not persisted in extension storage.
-- Save detected key uses Native Messaging and vault add flow.
+- Save detected key uses Native Messaging and vault add flow; repeated saves for the same platform/origin create separate lookup entries, while desktop/CLI also support multiple secrets on one provider record.
 - Popup is built with Svelte + SCSS through Vite/Sass.
 
 ## Security Notes
