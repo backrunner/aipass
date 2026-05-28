@@ -4,7 +4,8 @@ use crate::paths::{canonical_vault_dir, default_vault_dir, namespace_for_vault_d
 #[cfg(target_os = "windows")]
 use crate::windows_service;
 use aipass_agent_protocol::{
-    read_frame, write_frame, AgentErrorCode, AgentRequest, AgentResponse, AuthenticatedAgentRequest,
+    read_frame, write_frame, AgentErrorCode, AgentRequest, AgentResponse,
+    AuthenticatedAgentRequest, AGENT_PROTOCOL_VERSION,
 };
 use anyhow::Result;
 use serde::de::DeserializeOwned;
@@ -79,6 +80,7 @@ impl AgentClient {
                 message: err.to_string(),
             })?;
         let payload = AuthenticatedAgentRequest {
+            protocol_version: AGENT_PROTOCOL_VERSION,
             auth_token,
             request: request.clone(),
         };

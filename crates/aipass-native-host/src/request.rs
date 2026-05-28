@@ -1,5 +1,7 @@
 use crate::config::NativeHostConfig;
-use crate::protocol::{validate_extension_id, NativeRequest, NativeResponse};
+use crate::protocol::{
+    validate_extension_id, NativeRequest, NativeResponse, NATIVE_PROTOCOL_VERSION,
+};
 use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{
     AgentErrorCode, AgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
@@ -240,6 +242,7 @@ fn validate_request_extension(request: &NativeRequest, config: &NativeHostConfig
 fn response(id: Uuid, ok: bool, error: Option<String>, data: serde_json::Value) -> NativeResponse {
     NativeResponse {
         id,
+        protocol_version: NATIVE_PROTOCOL_VERSION,
         ok,
         error,
         data,

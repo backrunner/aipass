@@ -10,6 +10,7 @@ pub use config::{
 pub use manifest::native_manifest;
 pub use protocol::{
     read_message, validate_extension_id, write_message, NativeRequest, NativeResponse,
+    NATIVE_PROTOCOL_VERSION,
 };
 pub use request::{handle_request, handle_request_with_config};
 
@@ -127,6 +128,27 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    #[test]
+    fn response_includes_camel_case_protocol_version() {
+        let response = handle_request_with_config(
+            NativeRequest::Ping {
+                id: Uuid::new_v4(),
+                protocol_version: 99,
+                extension_id: None,
+            },
+            &NativeHostConfig {
+                vault_dir: PathBuf::from("/tmp/missing"),
+                allowed_extension_ids: vec![],
+            },
+        );
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value["protocolVersion"],
+            serde_json::json!(NATIVE_PROTOCOL_VERSION)
+        );
+        assert!(value.get("protocol_version").is_none());
     }
 
     #[test]

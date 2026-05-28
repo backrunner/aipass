@@ -4,7 +4,7 @@
   import { Ban, Check, KeyRound, Lock, Plus, RefreshCw, Search, X } from "lucide-svelte";
 
   type Connection = "checking" | "connected" | "locked" | "missing";
-  type NativeResponse<T = unknown> = { ok?: boolean; error?: string; data?: T };
+  type NativeResponse<T = unknown> = { ok?: boolean; protocolVersion?: number; error?: string; data?: T };
   type Entry = {
     id: string;
     title: string;

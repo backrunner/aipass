@@ -12,6 +12,7 @@ use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+pub const AGENT_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -302,6 +303,8 @@ pub enum SessionUnlockMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthenticatedAgentRequest {
+    #[serde(default = "agent_protocol_version")]
+    pub protocol_version: u32,
     pub auth_token: SensitiveString,
     pub request: AgentRequest,
 }
@@ -441,6 +444,7 @@ pub enum AgentRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentResponse {
+    pub protocol_version: u32,
     pub ok: bool,
     #[serde(default)]
     pub code: Option<AgentErrorCode>,
@@ -453,6 +457,7 @@ pub struct AgentResponse {
 impl AgentResponse {
     pub fn success<T: Serialize>(data: T) -> Self {
         Self {
+            protocol_version: AGENT_PROTOCOL_VERSION,
             ok: true,
             code: None,
             message: None,
@@ -466,6 +471,7 @@ impl AgentResponse {
 
     pub fn error(code: AgentErrorCode, message: impl Into<String>) -> Self {
         Self {
+            protocol_version: AGENT_PROTOCOL_VERSION,
             ok: false,
             code: Some(code),
             message: Some(message.into()),
@@ -487,6 +493,10 @@ impl AgentResponse {
         }
         Ok(serde_json::from_value(self.data)?)
     }
+}
+
+fn agent_protocol_version() -> u32 {
+    AGENT_PROTOCOL_VERSION
 }
 
 pub fn read_frame<T: DeserializeOwned>(mut reader: impl Read) -> Result<T> {
@@ -609,5 +619,16 @@ mod tests {
         let payload = "x".repeat(MAX_FRAME_BYTES);
         let err = write_frame(Vec::new(), &payload).unwrap_err();
         assert_eq!(err.to_string(), "frame too large");
+    }
+
+    #[test]
+    fn agent_response_includes_protocol_version() {
+        let response = AgentResponse::empty();
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            value["protocolVersion"],
+            serde_json::json!(AGENT_PROTOCOL_VERSION)
+        );
+        assert!(value.get("protocol_version").is_none());
     }
 }

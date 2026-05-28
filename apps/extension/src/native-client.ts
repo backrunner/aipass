@@ -2,6 +2,7 @@ export const NATIVE_HOST = "dev.aipass.native";
 
 export interface NativeResponse<T = unknown> {
   id: string;
+  protocolVersion?: number;
   ok: boolean;
   error?: string;
   data: T;

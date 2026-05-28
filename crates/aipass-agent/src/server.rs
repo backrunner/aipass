@@ -16,7 +16,7 @@ use aipass_agent_protocol::{
     BrowserIgnoredStatus, ConflictScope, LockReason, ProbeResult, SaveDetectedResult, SecretValue,
     SensitiveString, SessionUnlockMode, SyncConflictActionRequest, SyncConflictResponse, SyncMode,
     ToolConfigApplyResponse, ToolConfigMode, ToolConfigPreviewResponse, ToolConfigRequest,
-    ToolConfigTool, VaultCreateResponse, MAX_FRAME_BYTES,
+    ToolConfigTool, VaultCreateResponse, AGENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 use aipass_config_writers::{
     apply_plan_encrypted, plan_claude_code, plan_claude_code_plaintext, plan_codex,
@@ -167,9 +167,16 @@ fn handle_connection(mut conn: Stream, state: Arc<AgentState>) -> Result<()> {
         &mut conn,
         CONNECTION_IO_TIMEOUT,
     ) {
-        Ok(payload) if auth_tokens_match(&payload.auth_token, &state.auth_token) => {
+        Ok(payload)
+            if payload.protocol_version == AGENT_PROTOCOL_VERSION
+                && auth_tokens_match(&payload.auth_token, &state.auth_token) =>
+        {
             handle_request(&state, payload.request)
         }
+        Ok(payload) if payload.protocol_version != AGENT_PROTOCOL_VERSION => AgentResponse::error(
+            AgentErrorCode::ValidationFailed,
+            "unsupported agent protocol version",
+        ),
         Ok(_) => AgentResponse::error(AgentErrorCode::PermissionDenied, "invalid agent auth token"),
         Err(err) => AgentResponse::error(AgentErrorCode::ValidationFailed, err.to_string()),
     };

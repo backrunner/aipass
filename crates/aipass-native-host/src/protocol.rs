@@ -8,6 +8,7 @@ use aipass_provider_registry::{AuthScheme, InterfaceType};
 use zeroize::Zeroize;
 
 pub const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
+pub const NATIVE_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -97,8 +98,10 @@ pub enum NativeRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct NativeResponse {
     pub id: Uuid,
+    pub protocol_version: u32,
     pub ok: bool,
     pub error: Option<String>,
     pub data: serde_json::Value,
@@ -170,6 +173,7 @@ mod tests {
     fn write_message_rejects_oversized_payloads() {
         let response = NativeResponse {
             id: Uuid::new_v4(),
+            protocol_version: NATIVE_PROTOCOL_VERSION,
             ok: true,
             error: None,
             data: serde_json::json!({ "value": "x".repeat(MAX_NATIVE_MESSAGE_BYTES) }),
