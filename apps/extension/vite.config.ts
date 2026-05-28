@@ -14,7 +14,8 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, "src/popup/index.html"),
         serviceWorker: resolve(__dirname, "src/service-worker.ts"),
-        content: resolve(__dirname, "src/content/detector.ts")
+        content: resolve(__dirname, "src/content/detector.ts"),
+        clipboardBridge: resolve(__dirname, "src/content/clipboard-bridge.ts")
       },
       output: {
         entryFileNames: "[name].js",

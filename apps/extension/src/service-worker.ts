@@ -164,6 +164,15 @@ function clearPendingDraft() {
 
 async function scanActiveTab(tabId: number) {
   try {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["clipboardBridge.js"],
+        world: "MAIN"
+      });
+    } catch {
+      // Main-world injection may be blocked on restricted pages; DOM scanning can still run.
+    }
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ["content.js"]

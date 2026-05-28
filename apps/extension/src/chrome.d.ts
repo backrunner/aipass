@@ -23,6 +23,6 @@ declare namespace chrome {
     function sendMessage(tabId: number, message: unknown, callback?: (response: unknown) => void): void;
   }
   namespace scripting {
-    function executeScript(details: { target: { tabId: number }; files: string[] }): Promise<unknown[]>;
+    function executeScript(details: { target: { tabId: number }; files: string[]; world?: "ISOLATED" | "MAIN" }): Promise<unknown[]>;
   }
 }
