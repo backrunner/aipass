@@ -16,8 +16,8 @@
 | Chrome extension | Implemented | MV3 popup, dynamic content scan, Native Messaging, fill grant, save detected key, ignored origins, least-privilege host permissions |
 | Sync | Implemented | local/iCloud folder sync and WebDAV sync for encrypted object families |
 | Security tests | Implemented | stolen vault, tamper, TTL erasure, epoch ratchet, compromise recovery, sync visibility |
-| Release automation | Implemented | CI runs build gates; release workflow builds desktop, CLI/native-host, and Chrome extension artifacts |
-| Docs | Implemented | README, SECURITY, `.agents` research/requirements/design/architecture/roadmap/status |
+| Release automation | Partially implemented | CI runs build gates; release workflow builds desktop, CLI/native-host, Chrome extension, checksums, and SBOM; signed installer/store validation remains external |
+| Docs | Partially implemented | README, SECURITY, CONTRIBUTING, LICENSE, NOTICE, `.agents` docs exist; final user guide/install/troubleshooting links still need launch validation |
 
 ## 1.0 Release Gate Mapping
 
@@ -32,7 +32,13 @@
 | Extension path | Passed | `pnpm --filter @aipass/extension test`, `pnpm build` |
 | Sync path | Passed | local sync tests, WebDAV tests, CLI sync smoke |
 | Default tool config avoids plaintext keys | Passed | config-writer tests and CLI smoke |
+| Contract version fields | Passed | vault header/envelopes, agent IPC request/response, Native Messaging request/response, Chrome manifest |
+| Release checksums/SBOM | Passed | `scripts/release-metadata.mjs`, `Release` workflow `SHA256SUMS` and CycloneDX JSON generation |
 | Apache-2.0 | Passed | `LICENSE`, package metadata |
+| macOS/Windows signed installer install/upgrade/uninstall/repair | Pending external verification | Requires production signing/notarization/certificate secrets and clean-machine smoke |
+| Chrome Web Store final extension id + allowlist | Pending external verification | Requires store publication id and final native-host allowlist update |
+| Nextcloud real-world WebDAV smoke | Pending external verification | Mock WebDAV tests exist; real Nextcloud validation is a release checklist item |
+| Performance/accessibility/manual UX gate | Pending manual verification | No CI/nightly benchmark or accessibility report is currently committed |
 
 ## Implemented Desktop Details
 
@@ -118,6 +124,7 @@ The repository now has CI and release workflow coverage for the automatable rele
 - The `Release` workflow builds desktop bundles on macOS/Linux/Windows.
 - The `Release` workflow packages standalone CLI and native-host binaries on macOS/Linux/Windows.
 - The `Release` workflow produces `aipass-chrome-extension.zip` for Chrome Web Store submission.
+- The `Release` workflow now generates `SHA256SUMS` and a CycloneDX SBOM from `pnpm-lock.yaml` and `Cargo.lock`.
 
 Credential-bound release tasks still require production account setup outside the repository:
 
@@ -125,3 +132,6 @@ Credential-bound release tasks still require production account setup outside th
 - Provide Windows signing certificate secrets and verify signed install/upgrade/uninstall.
 - Publish with the final Chrome Web Store extension id and install/update the native-host extension allowlist.
 - Run final signed installer smoke tests for native-host repair on macOS and Windows.
+- Run clean-machine install/upgrade/uninstall checks for macOS and Windows.
+- Run a real Nextcloud WebDAV sync smoke test.
+- Capture the final performance/accessibility/UX hardening evidence for P7-R01 and P7-R03.
