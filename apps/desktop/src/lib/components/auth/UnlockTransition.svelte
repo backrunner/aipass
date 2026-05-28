@@ -5,6 +5,22 @@
 
   const dispatch = createEventDispatcher<{ covered: void; done: void }>();
 
+  let coveredFired = false;
+
+  // 45% of 1500ms = 675ms — when the slab reaches translateY(0).
+  const COVERED_AT_MS = 675;
+
+  function onCovered() {
+    if (coveredFired) return;
+    coveredFired = true;
+    dispatch("covered");
+  }
+
+  function onAnimationEnd() {
+    onCovered();
+    dispatch("done");
+  }
+
   onMount(() => {
     const reduced =
       typeof window !== "undefined" &&
@@ -19,18 +35,15 @@
       return;
     }
 
-    const coverTimer = setTimeout(() => dispatch("covered"), 600);
-    const doneTimer = setTimeout(() => dispatch("done"), 1200);
-
+    const coverTimer = setTimeout(onCovered, COVERED_AT_MS);
     return () => {
       clearTimeout(coverTimer);
-      clearTimeout(doneTimer);
     };
   });
 </script>
 
 <div class="veil" class:veil-down={direction === "down"} aria-hidden="true">
-  <div class="block">
+  <div class="block" on:animationend={onAnimationEnd}>
     <svg class="wave" viewBox="0 0 1440 120" preserveAspectRatio="none">
       <path
         class="wave-back"
@@ -62,11 +75,12 @@
     width: 104%;
     height: 100vh;
     transform: translateY(110%);
-    animation: rise 1200ms cubic-bezier(0.5, 0, 0.5, 1) forwards;
+    animation: rise 1500ms forwards;
     will-change: transform;
   }
 
   .veil-down .block {
+    transform: translateY(-110%);
     animation-name: descend;
   }
 
@@ -116,15 +130,21 @@
     );
   }
 
+  /* Rise phase smoothly decelerates to cover, holds briefly, then smoothly
+     accelerates upward. Per-keyframe timing functions avoid kinks at the
+     phase boundaries. */
   @keyframes rise {
     0% {
       transform: translateY(110%);
+      animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
     }
-    48% {
+    45% {
       transform: translateY(0);
+      animation-timing-function: linear;
     }
-    52% {
+    55% {
       transform: translateY(0);
+      animation-timing-function: cubic-bezier(0.64, 0, 0.78, 0);
     }
     100% {
       transform: translateY(-100%);
@@ -134,12 +154,15 @@
   @keyframes descend {
     0% {
       transform: translateY(-110%);
+      animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
     }
-    48% {
+    45% {
       transform: translateY(0);
+      animation-timing-function: linear;
     }
-    52% {
+    55% {
       transform: translateY(0);
+      animation-timing-function: cubic-bezier(0.64, 0, 0.78, 0);
     }
     100% {
       transform: translateY(100%);
