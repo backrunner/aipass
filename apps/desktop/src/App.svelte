@@ -4,6 +4,7 @@
   import {
     detectAuthFromProvider,
     detectInterfaceFromProvider,
+    inferProviderFromEndpoint,
     matchProviderByDomain,
     providerDefinitions,
     type ProviderEntry,
@@ -592,6 +593,16 @@
     draft.faviconUrl ||= firstDomain ? `https://${firstDomain.replace(/^https?:\/\//, "").split("/")[0]}/favicon.ico` : "";
   }
 
+  function inferDraftFromEndpoint() {
+    const firstEndpoint = splitCsv(draft.endpoint)[0] ?? draft.endpoint;
+    const match = inferProviderFromEndpoint(firstEndpoint);
+    if (!match) return;
+    draft.providerId = match.id;
+    draft.title ||= match.displayName;
+    draft.interfaceType = match.interfaces[0] ?? draft.interfaceType;
+    draft.authScheme = match.authSchemes[0] ?? draft.authScheme;
+  }
+
   function providerChanged() {
     const provider = providerDefinitions.find((item) => item.id === draft.providerId);
     if (!provider) return;
@@ -656,6 +667,9 @@
   }
 
   async function saveProvider() {
+    if (formMode === "add" && providerFilter === "all") {
+      inferDraftFromEndpoint();
+    }
     const provider = providerDefinitions.find((item) => item.id === draft.providerId);
     const request = {
       title: draft.title || provider?.displayName || "Custom Provider",
@@ -1464,6 +1478,7 @@
     onSave={saveProvider}
     onClose={closeProviderForm}
     onInferDraftFromDomain={inferDraftFromDomain}
+    onInferDraftFromEndpoint={inferDraftFromEndpoint}
     onProviderChanged={providerChanged}
   />
 {/if}

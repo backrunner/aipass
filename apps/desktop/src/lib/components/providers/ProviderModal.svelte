@@ -13,6 +13,7 @@
   export let onSave: () => MaybePromise = () => {};
   export let onClose: () => MaybePromise = () => {};
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
+  export let onInferDraftFromEndpoint: () => MaybePromise = () => {};
   export let onProviderChanged: () => MaybePromise = () => {};
 
   let dialogOpen = true;
@@ -57,6 +58,7 @@
             {formMode}
             bind:draft
             {onInferDraftFromDomain}
+            {onInferDraftFromEndpoint}
             {onProviderChanged}
           />
 

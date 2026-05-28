@@ -12,6 +12,7 @@
   export let formMode: FormMode = "add";
   export let draft: Draft;
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
+  export let onInferDraftFromEndpoint: () => MaybePromise = () => {};
   export let onProviderChanged: () => MaybePromise = () => {};
 
   type FieldId =
@@ -189,7 +190,11 @@
       {#if isVisible("endpoint")}
         <div class="removable-field">
           <Field label="Endpoint URL">
-            <input bind:value={draft.endpoint} placeholder="https://api.example.com" />
+            <input
+              bind:value={draft.endpoint}
+              on:blur={() => onInferDraftFromEndpoint()}
+              placeholder="https://api.example.com"
+            />
           </Field>
           <button type="button" class="remove-btn" aria-label="Remove endpoint" on:click={() => removeField("endpoint")}>
             <X size={13} />

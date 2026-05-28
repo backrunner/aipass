@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { detectAuthFromProvider, detectInterfaceFromProvider, matchProviderByDomain, maskSecret } from "./index.js";
+import {
+  detectAuthFromProvider,
+  detectInterfaceFromProvider,
+  inferProviderFromEndpoint,
+  matchProviderByDomain,
+  maskSecret
+} from "./index.js";
 
 test("matches first-class non OpenAI providers", () => {
   assert.equal(matchProviderByDomain("https://console.anthropic.com/settings/keys")?.id, "anthropic");
@@ -13,6 +19,13 @@ test("keeps native provider semantics", () => {
   assert.equal(detectAuthFromProvider("gemini"), "google_api_key");
   assert.equal(detectInterfaceFromProvider("replicate"), "custom_http");
   assert.equal(detectAuthFromProvider("replicate"), "bearer");
+});
+
+test("infers providers from endpoint hosts", () => {
+  assert.equal(inferProviderFromEndpoint("https://api.openai.com/v1/models")?.id, "openai");
+  assert.equal(inferProviderFromEndpoint("https://openrouter.ai/api/v1")?.id, "openrouter");
+  assert.equal(inferProviderFromEndpoint("https://team-litellm.example.com/v1")?.id, "litellm");
+  assert.equal(inferProviderFromEndpoint("https://gateway.example.test/v1")?.id, "custom_openai_compatible");
 });
 
 test("masks secrets", () => {

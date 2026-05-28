@@ -329,11 +329,61 @@ export const providerDefinitions: ProviderDefinition[] = [
   }
 ];
 
+function hostFromEndpoint(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    return new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`).hostname.toLowerCase();
+  } catch {
+    return (
+      trimmed
+        .replace(/^https?:\/\//, "")
+        .split("/")[0]
+        ?.split("@")
+        .pop()
+        ?.split(":")[0]
+        ?.toLowerCase() ?? ""
+    );
+  }
+}
+
+function hostMatches(host: string, known: string): boolean {
+  return host === known || host.endsWith(`.${known}`);
+}
+
+function providerById(id: string): ProviderDefinition | undefined {
+  return providerDefinitions.find((provider) => provider.id === id);
+}
+
 export function matchProviderByDomain(domain: string): ProviderDefinition | undefined {
-  const host = domain.replace(/^https?:\/\//, "").split("/")[0]?.toLowerCase() ?? domain;
+  const host = hostFromEndpoint(domain);
   return providerDefinitions.find((provider) =>
-    provider.domains.some((known) => host === known || host.endsWith(`.${known}`))
+    provider.domains.some((known) => hostMatches(host, known))
   );
+}
+
+export function inferProviderFromEndpoint(endpoint: string): ProviderDefinition | undefined {
+  const host = hostFromEndpoint(endpoint);
+  if (!host) return undefined;
+  const domainMatch = matchProviderByDomain(endpoint);
+  if (domainMatch) return domainMatch;
+  const endpointMatch = providerDefinitions.find((provider) =>
+    provider.endpoints.some((knownEndpoint) => {
+      const knownHost = knownEndpoint.url ? hostFromEndpoint(knownEndpoint.url) : "";
+      return Boolean(knownHost && hostMatches(host, knownHost));
+    })
+  );
+  if (endpointMatch) return endpointMatch;
+
+  const normalizedHost = host.replace(/[-_.]/g, "");
+  if (normalizedHost.includes("sub2api")) return providerById("sub2api");
+  if (normalizedHost.includes("litellm")) return providerById("litellm");
+  if (normalizedHost.includes("oneapi")) return providerById("one_api");
+  if (normalizedHost.includes("newapi")) return providerById("new_api");
+
+  const lowerEndpoint = endpoint.toLowerCase();
+  if (/\/v1\b|openai|gateway/.test(lowerEndpoint)) return providerById("custom_openai_compatible");
+  return providerById("custom_http");
 }
 
 export function maskSecret(secret: string): string {
