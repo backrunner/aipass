@@ -11,7 +11,7 @@
 | Monorepo | Implemented | `pnpm-workspace.yaml`, `turbo.json`, Rust workspace |
 | E2EE vault core | Implemented | `aipass-crypto`, `aipass-vault`, `cargo test --workspace` |
 | Provider registry | Implemented | 官方、第三方、自托管、自定义分类统一于 Rust/TS registry |
-| Desktop | Implemented | Tauri + Svelte UI, CRUD/search/recent filters/multi-secret/copy/reveal/snippets/probe/export/import/settings/sync/device revoke/native-host repair |
+| Desktop | Implemented | Tauri + Svelte UI, CRUD/search/provider/env/tag/recent/quota filters/multi-secret/copy/reveal/snippets/probe/export/import/settings/sync/device revoke/native-host repair |
 | CLI | Implemented | add/update/list/search/get/copy/secret/probe/env/exec/inject/configure/rollback/sync/native-host/doctor/vault commands |
 | Chrome extension | Implemented | MV3 popup, dynamic content scan, Native Messaging, fill grant, save detected key, ignored origins, least-privilege host permissions |
 | Sync | Implemented | local/iCloud folder sync and WebDAV sync for encrypted object families |
@@ -38,9 +38,9 @@
 
 - Vault create, unlock, lock.
 - Three-pane 1Password-like workbench.
-- Provider add/edit with domain inference, favicon URL, multiple domains/endpoints, interface, auth, default model, model aliases, headers, quota, tags, environment, and notes.
-- Search by title, provider id, domain, endpoint, model, environment, tag, header name, masked secret, fingerprint, and full API key through HMAC fingerprint matching.
-- Filters for Recent, Official, Third-party, Self-hosted, and Custom.
+- Provider add/edit with domain inference, favicon URL, multiple domains, API endpoints, console URLs, interface, auth, default model, model aliases, headers, quota, tags, environment, and notes.
+- Search by title, provider id, domain, endpoint, console URL, model/default model aliases, quota fields, environment, tag, header name, masked secret, fingerprint, and full API key through HMAC fingerprint matching.
+- Filters for Recent, Official, Third-party, Self-hosted, Custom, environment, tag, low quota, and expiring entries.
 - Multi-secret management for primary/fallback/admin/read-only style keys.
 - Copy/reveal with reveal timeout and best-effort clipboard cleanup.
 - Provider probe from the detail pane for OpenAI-compatible, Anthropic, Gemini, and Azure OpenAI interfaces.
@@ -65,9 +65,9 @@
 
 - Native host request wrapper includes `chrome.runtime.id`.
 - Native host supports extension-id allowlist validation from persistent settings or managed env override.
-- Popup supports ping, lookup, fill, save detected key, refresh, and ignore site.
+- Popup supports ping, lookup, no-match search, fill, save detected key, refresh, and ignore site.
 - Content detector supports first-class providers and self-hosted New API, One API, LiteLLM, sub2api hints.
-- Ignored origins are stored in `chrome.storage.local`; API keys are not persisted there.
+- Ignored origins are persisted through the native host/agent settings path; API keys are not persisted in extension storage.
 - Save detected key uses Native Messaging and vault add flow.
 - Popup is built with Svelte + SCSS through Vite/Sass.
 
