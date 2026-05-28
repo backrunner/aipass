@@ -9,6 +9,7 @@
     "dev": "turbo dev",
     "lint": "turbo lint",
     "licenses:audit": "node scripts/license-audit.mjs",
+    "release:metadata": "node scripts/release-metadata.mjs",
     "test": "turbo test",
     "typecheck": "turbo typecheck",
     "format": "prettier --write ."
