@@ -2,6 +2,8 @@ use super::*;
 use crate::paths::cloud_sync_dir;
 use aipass_agent_protocol::CloudSyncProvider;
 
+const BROWSER_FILL_GRANT_LIMIT: usize = 5;
+
 pub(crate) fn handle_request(state: &Arc<AgentState>, request: AgentRequest) -> AgentResponse {
     if let Err(err) = lock_if_idle(state) {
         return err.response();
@@ -383,15 +385,15 @@ fn dispatch_request(
             if entries.is_empty() {
                 entries = vault.lookup_by_origin(&url).map_err(map_vault_error)?;
             }
-            let grants = entries
-                .iter()
-                .take(5)
-                .map(|entry| {
-                    vault
-                        .create_secret_grant(entry.id, "chrome.fill", 120, Some(origin.clone()))
-                        .map_err(map_vault_error)
-                })
-                .collect::<ServiceResult<Vec<TtlGrantSummary>>>()?;
+            entries.truncate(BROWSER_FILL_GRANT_LIMIT);
+            let grants = create_browser_fill_grants(vault, &entries, &origin)?;
+            Ok(BrowserContextLookupData { entries, grants })
+        })
+        .map(AgentResponse::success),
+        AgentRequest::BrowserEntriesSearch { origin, query } => with_vault(state, true, |vault| {
+            let mut entries = vault.search(&query).map_err(map_vault_error)?;
+            entries.truncate(BROWSER_FILL_GRANT_LIMIT);
+            let grants = create_browser_fill_grants(vault, &entries, &origin)?;
             Ok(BrowserContextLookupData { entries, grants })
         })
         .map(AgentResponse::success),
@@ -446,4 +448,19 @@ fn dispatch_request(
             Ok(AgentResponse::empty())
         }
     }
+}
+
+fn create_browser_fill_grants(
+    vault: &Vault,
+    entries: &[EntrySummary],
+    origin: &str,
+) -> ServiceResult<Vec<TtlGrantSummary>> {
+    entries
+        .iter()
+        .map(|entry| {
+            vault
+                .create_secret_grant(entry.id, "chrome.fill", 120, Some(origin.to_string()))
+                .map_err(map_vault_error)
+        })
+        .collect()
 }

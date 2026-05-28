@@ -131,6 +131,15 @@ export function lookupContext(url: string, origin: string): Promise<NativeRespon
   });
 }
 
+export function searchEntries(query: string, origin: string): Promise<NativeResponse<ContextLookupData>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "entries.search",
+    origin,
+    query
+  });
+}
+
 export function isOriginIgnored(origin: string): Promise<NativeResponse<{ ignored: boolean }>> {
   return nativeRequest({
     id: crypto.randomUUID(),

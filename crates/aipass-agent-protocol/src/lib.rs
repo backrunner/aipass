@@ -413,6 +413,8 @@ pub enum AgentRequest {
     SyncDiscardConflict { request: SyncConflictActionRequest },
     #[serde(rename = "browser.context_lookup")]
     BrowserContextLookup { origin: String, url: String },
+    #[serde(rename = "browser.entries_search")]
+    BrowserEntriesSearch { origin: String, query: String },
     #[serde(rename = "browser.secret_fill")]
     BrowserSecretFill {
         entry_id: Option<Uuid>,

@@ -25,6 +25,13 @@ pub enum NativeRequest {
         origin: String,
         url: String,
     },
+    #[serde(rename = "entries.search")]
+    EntriesSearch {
+        id: Uuid,
+        extension_id: Option<String>,
+        origin: String,
+        query: String,
+    },
     #[serde(rename = "settings.isOriginIgnored")]
     IsOriginIgnored {
         id: Uuid,

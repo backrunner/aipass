@@ -111,6 +111,13 @@ fn handle_request_inner(
                 request_agent(config, &AgentRequest::BrowserContextLookup { origin, url })?;
             Ok(serde_json::to_value(result)?)
         }
+        NativeRequest::EntriesSearch { origin, query, .. } => {
+            let result: BrowserContextLookupData = request_agent(
+                config,
+                &AgentRequest::BrowserEntriesSearch { origin, query },
+            )?;
+            Ok(serde_json::to_value(result)?)
+        }
         NativeRequest::SecretFill {
             entry_id, grant_id, ..
         } => {
@@ -194,6 +201,7 @@ fn request_id(request: &NativeRequest) -> Uuid {
     match request {
         NativeRequest::Ping { id, .. }
         | NativeRequest::ContextLookup { id, .. }
+        | NativeRequest::EntriesSearch { id, .. }
         | NativeRequest::IsOriginIgnored { id, .. }
         | NativeRequest::IgnoreOrigin { id, .. }
         | NativeRequest::SecretFill { id, .. }
@@ -208,6 +216,7 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
     match request {
         NativeRequest::Ping { extension_id, .. }
         | NativeRequest::ContextLookup { extension_id, .. }
+        | NativeRequest::EntriesSearch { extension_id, .. }
         | NativeRequest::IsOriginIgnored { extension_id, .. }
         | NativeRequest::IgnoreOrigin { extension_id, .. }
         | NativeRequest::SecretFill { extension_id, .. }

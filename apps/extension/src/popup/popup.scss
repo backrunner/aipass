@@ -143,6 +143,39 @@ header span,
   min-height: 120px;
 }
 
+.search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  padding-top: 4px;
+
+  input {
+    min-width: 0;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid $border;
+    border-radius: 6px;
+    background: $surface;
+    color: inherit;
+    font: inherit;
+  }
+
+  button {
+    min-height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: $button-bg;
+    color: inherit;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
 .draft small,
 .draft span,
 .status {

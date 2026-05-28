@@ -7,6 +7,7 @@ import {
   pingNativeHost,
   previewDetectedSecret,
   saveDetectedSecret,
+  searchEntries,
   type DetectedSecretDraft
 } from "./native-client";
 
@@ -20,6 +21,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     type?: string;
     url?: string;
     origin?: string;
+    query?: string;
     entryId?: string;
     grantId?: string;
     draft?: Partial<DetectedSecretDraft> | null;
@@ -33,6 +35,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.lookup" && typed.url && typed.origin) {
     lookupContext(typed.url, typed.origin).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.search" && typed.query && typed.origin) {
+    searchEntries(typed.query, typed.origin).then(sendResponse);
     return true;
   }
 

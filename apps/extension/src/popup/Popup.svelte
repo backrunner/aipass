@@ -75,6 +75,10 @@
   let provider = matchProviderByDomain("");
   let entries: Entry[] = [];
   let grants: Grant[] = [];
+  let searchQuery = "";
+  let searchLoading = false;
+  let searchResults: Entry[] = [];
+  let searchGrants: Grant[] = [];
   let pendingDraft: SafeDraft | null = null;
   let draftForm: DraftForm | null = null;
   let draftPreview: DraftPreview | null = null;
@@ -143,7 +147,7 @@
   }
 
   async function useEntry(entry: Entry) {
-    const grant = grants.find((item) => item.entryId === entry.id);
+    const grant = [...grants, ...searchGrants].find((item) => item.entryId === entry.id);
     if (!grant) {
       statusText = "Grant expired. Refresh and try again.";
       return;
@@ -171,6 +175,28 @@
     await navigator.clipboard?.writeText(fill.data.secret);
     copied = entry.id;
     setTimeout(() => (copied = ""), 1400);
+  }
+
+  async function searchSavedEntries() {
+    const query = searchQuery.trim();
+    if (!query || !currentOrigin || searchLoading) return;
+    searchLoading = true;
+    statusText = "";
+    const response = await sendToWorker<LookupData>({
+      type: "aipass.search",
+      origin: currentOrigin,
+      query
+    });
+    searchLoading = false;
+    if (!response?.ok) {
+      statusText = response?.error ?? "Unable to search AIPass";
+      return;
+    }
+    searchResults = response.data?.entries ?? [];
+    searchGrants = response.data?.grants ?? [];
+    if (!searchResults.length) {
+      statusText = "No matching provider found";
+    }
   }
 
   async function savePendingDraft() {
@@ -413,7 +439,28 @@
         <Search size={22} />
         <h1>No saved key</h1>
         <p>Save a provider key in AIPass or create one from this page.</p>
+        <form class="search-form" on:submit|preventDefault={searchSavedEntries}>
+          <input
+            bind:value={searchQuery}
+            placeholder="Search AIPass"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <button type="submit" disabled={!searchQuery.trim() || searchLoading}>
+            {searchLoading ? "Searching" : "Search"}
+          </button>
+        </form>
       </section>
+      {#each searchResults as entry}
+        <section class="match">
+          <div class="entry-mark">{initials(entry.title)}</div>
+          <div>
+            <strong>{entry.title}</strong>
+            <span>{interfaceLabel[entry.interfaceType]} · {authLabel[entry.authScheme]} · {entry.maskedSecret}</span>
+          </div>
+          <button on:click={() => useEntry(entry)}>{#if copied === entry.id}<Check size={16} />{:else}<KeyRound size={16} />{/if}Use</button>
+        </section>
+      {/each}
     {/if}
 
     {#if pendingDraft && draftForm}
