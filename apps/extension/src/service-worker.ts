@@ -11,8 +11,13 @@ import {
   type DetectedSecretDraft
 } from "./native-client";
 
-let pendingDraft: DetectedSecretDraft | null = null;
-let pendingDraftExpiresAt = 0;
+type PendingDraftRecord = {
+  key: string;
+  expiresAt: number;
+  draft: DetectedSecretDraft;
+};
+
+let pendingDrafts: PendingDraftRecord[] = [];
 let pendingDraftTimer: ReturnType<typeof setTimeout> | undefined;
 const PENDING_DRAFT_TTL_MS = 5 * 60 * 1000;
 
@@ -68,10 +73,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, error: "Invalid API key draft" });
       return false;
     }
-    pendingDraft = typed.draft;
-    pendingDraftExpiresAt = Date.now() + PENDING_DRAFT_TTL_MS;
-    clearTimeout(pendingDraftTimer);
-    pendingDraftTimer = setTimeout(clearPendingDraft, PENDING_DRAFT_TTL_MS);
+    enqueuePendingDraft(typed.draft);
     sendResponse({ ok: true, maskedSecret: typed.draft.maskedSecret });
     return false;
   }
@@ -120,9 +122,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.ignoreOrigin" && typed.origin) {
+    const origin = typed.origin;
     ignoreOrigin(typed.origin).then((response) => {
-      if (response.ok && pendingDraft?.origin === typed.origin) {
-        clearPendingDraft();
+      if (response.ok) {
+        removePendingDraftsForOrigin(origin);
       }
       sendResponse(response);
     });
@@ -133,12 +136,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 function getPendingDraft(): DetectedSecretDraft | null {
-  if (!pendingDraft) return null;
-  if (Date.now() >= pendingDraftExpiresAt) {
-    clearPendingDraft();
-    return null;
-  }
-  return pendingDraft;
+  pruneExpiredPendingDrafts();
+  return pendingDrafts[0]?.draft ?? null;
 }
 
 function mergePendingDraft(patch?: Partial<DetectedSecretDraft> | null): DetectedSecretDraft | null {
@@ -156,10 +155,53 @@ function isDetectedSecretDraft(draft: Partial<DetectedSecretDraft>): draft is De
 }
 
 function clearPendingDraft() {
-  pendingDraft = null;
-  pendingDraftExpiresAt = 0;
+  pruneExpiredPendingDrafts();
+  pendingDrafts.shift();
+  schedulePendingDraftCleanup();
+}
+
+function enqueuePendingDraft(draft: DetectedSecretDraft) {
+  const key = pendingDraftKey(draft);
+  const expiresAt = Date.now() + PENDING_DRAFT_TTL_MS;
+  const existing = pendingDrafts.find((item) => item.key === key);
+  if (existing) {
+    existing.draft = draft;
+    existing.expiresAt = expiresAt;
+  } else {
+    pendingDrafts.push({ key, draft, expiresAt });
+  }
+  schedulePendingDraftCleanup();
+}
+
+function removePendingDraftsForOrigin(origin: string) {
+  pruneExpiredPendingDrafts();
+  pendingDrafts = pendingDrafts.filter((item) => item.draft.origin !== origin);
+  schedulePendingDraftCleanup();
+}
+
+function pruneExpiredPendingDrafts() {
+  const now = Date.now();
+  pendingDrafts = pendingDrafts.filter((item) => item.expiresAt > now);
+}
+
+function schedulePendingDraftCleanup() {
   clearTimeout(pendingDraftTimer);
-  pendingDraftTimer = undefined;
+  const nextExpiry = pendingDrafts.reduce<number | undefined>((earliest, item) => {
+    if (earliest === undefined || item.expiresAt < earliest) return item.expiresAt;
+    return earliest;
+  }, undefined);
+  if (nextExpiry === undefined) {
+    pendingDraftTimer = undefined;
+    return;
+  }
+  pendingDraftTimer = setTimeout(() => {
+    pruneExpiredPendingDrafts();
+    schedulePendingDraftCleanup();
+  }, Math.max(0, nextExpiry - Date.now()));
+}
+
+function pendingDraftKey(draft: DetectedSecretDraft): string {
+  return [draft.origin, draft.url, draft.providerId ?? "", draft.endpoint ?? "", draft.apiKey ?? ""].join("|");
 }
 
 async function scanActiveTab(tabId: number) {
