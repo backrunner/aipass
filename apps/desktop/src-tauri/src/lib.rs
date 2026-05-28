@@ -661,6 +661,7 @@ mod tests {
             updated_at: now,
             last_used_at: None,
             archived_at: None,
+            deleted_at: None,
         }
     }
 }

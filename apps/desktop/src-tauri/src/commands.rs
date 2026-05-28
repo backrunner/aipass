@@ -24,6 +24,7 @@ use aipass_agent_protocol::{
 };
 use aipass_sync::SyncReport;
 use aipass_vault::{DeviceRecord, EntrySummary};
+use serde::de::DeserializeOwned;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
@@ -32,6 +33,20 @@ use crate::{
     native_host_status_snapshot, provider_add_input, provider_update_input,
     repair_native_host_manifest, run_blocking, save_preferences, AppState,
 };
+
+async fn agent_request_async<T: DeserializeOwned + Send + 'static>(
+    app: AppHandle,
+    request: AgentRequest,
+) -> Result<T, String> {
+    run_blocking(move || agent_request(&app, request)).await
+}
+
+async fn agent_request_no_unlock_async<T: DeserializeOwned + Send + 'static>(
+    app: AppHandle,
+    request: AgentRequest,
+) -> Result<T, String> {
+    run_blocking(move || agent_request_no_unlock(&app, request)).await
+}
 
 #[tauri::command]
 pub(crate) fn window_target() -> Option<String> {
@@ -42,8 +57,8 @@ pub(crate) fn window_target() -> Option<String> {
 }
 
 #[tauri::command]
-pub(crate) fn vault_status(app: AppHandle) -> Result<VaultStatus, String> {
-    let status = agent_status(&app);
+pub(crate) async fn vault_status(app: AppHandle) -> Result<VaultStatus, String> {
+    let status = run_blocking(move || Ok(agent_status(&app))).await?;
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
@@ -51,8 +66,9 @@ pub(crate) fn vault_status(app: AppHandle) -> Result<VaultStatus, String> {
 }
 
 #[tauri::command]
-pub(crate) fn session_touch(app: AppHandle) -> Result<VaultStatus, String> {
-    let status: SessionStatus = agent_request_no_unlock(&app, AgentRequest::SessionTouch)?;
+pub(crate) async fn session_touch(app: AppHandle) -> Result<VaultStatus, String> {
+    let status: SessionStatus =
+        agent_request_no_unlock_async(app, AgentRequest::SessionTouch).await?;
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
@@ -60,51 +76,57 @@ pub(crate) fn session_touch(app: AppHandle) -> Result<VaultStatus, String> {
 }
 
 #[tauri::command]
-pub(crate) fn preferences_load(app: AppHandle) -> Result<AppPreferences, String> {
-    let local = load_preferences(&app)?;
-    let policy = agent_request_no_unlock::<SessionPolicy>(&app, AgentRequest::SessionPolicyGet)
-        .unwrap_or_default();
-    Ok(AppPreferences {
-        auto_lock_minutes: policy.idle_lock_minutes,
-        clipboard_clear_seconds: local.clipboard_clear_seconds,
-        lock_on_sleep: policy.lock_on_sleep,
-        lock_on_screen_lock: policy.lock_on_screen_lock,
-        theme: local.theme,
+pub(crate) async fn preferences_load(app: AppHandle) -> Result<AppPreferences, String> {
+    run_blocking(move || {
+        let local = load_preferences(&app)?;
+        let policy = agent_request_no_unlock::<SessionPolicy>(&app, AgentRequest::SessionPolicyGet)
+            .unwrap_or_default();
+        Ok(AppPreferences {
+            auto_lock_minutes: policy.idle_lock_minutes,
+            clipboard_clear_seconds: local.clipboard_clear_seconds,
+            lock_on_sleep: policy.lock_on_sleep,
+            lock_on_screen_lock: policy.lock_on_screen_lock,
+            theme: local.theme,
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn preferences_save(
+pub(crate) async fn preferences_save(
     app: AppHandle,
     request: SavePreferencesRequest,
 ) -> Result<AppPreferences, String> {
-    let current_policy =
-        agent_request_no_unlock::<SessionPolicy>(&app, AgentRequest::SessionPolicyGet)
-            .unwrap_or_default();
-    let stored = load_preferences(&app).unwrap_or_default();
-    let preferences = AppPreferences {
-        auto_lock_minutes: request.auto_lock_minutes.min(240),
-        clipboard_clear_seconds: request.clipboard_clear_seconds.min(600),
-        lock_on_sleep: request
-            .lock_on_sleep
-            .unwrap_or(current_policy.lock_on_sleep),
-        lock_on_screen_lock: request
-            .lock_on_screen_lock
-            .unwrap_or(current_policy.lock_on_screen_lock),
-        theme: request.theme.unwrap_or(stored.theme),
-    };
-    save_preferences(&app, &preferences)?;
-    let _: SessionPolicy = agent_request_no_unlock(
-        &app,
-        AgentRequest::SessionPolicySet {
-            policy: SessionPolicy {
-                idle_lock_minutes: preferences.auto_lock_minutes,
-                lock_on_sleep: preferences.lock_on_sleep,
-                lock_on_screen_lock: preferences.lock_on_screen_lock,
+    run_blocking(move || {
+        let current_policy =
+            agent_request_no_unlock::<SessionPolicy>(&app, AgentRequest::SessionPolicyGet)
+                .unwrap_or_default();
+        let stored = load_preferences(&app).unwrap_or_default();
+        let preferences = AppPreferences {
+            auto_lock_minutes: request.auto_lock_minutes.min(240),
+            clipboard_clear_seconds: request.clipboard_clear_seconds.min(600),
+            lock_on_sleep: request
+                .lock_on_sleep
+                .unwrap_or(current_policy.lock_on_sleep),
+            lock_on_screen_lock: request
+                .lock_on_screen_lock
+                .unwrap_or(current_policy.lock_on_screen_lock),
+            theme: request.theme.unwrap_or(stored.theme),
+        };
+        save_preferences(&app, &preferences)?;
+        let _: SessionPolicy = agent_request_no_unlock(
+            &app,
+            AgentRequest::SessionPolicySet {
+                policy: SessionPolicy {
+                    idle_lock_minutes: preferences.auto_lock_minutes,
+                    lock_on_sleep: preferences.lock_on_sleep,
+                    lock_on_screen_lock: preferences.lock_on_screen_lock,
+                },
             },
-        },
-    )?;
-    Ok(preferences)
+        )?;
+        Ok(preferences)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -225,13 +247,14 @@ pub(crate) fn vault_auth_status(
 }
 
 #[tauri::command]
-pub(crate) fn vault_lock(app: AppHandle) -> Result<VaultStatus, String> {
-    let status: SessionStatus = agent_request_no_unlock(
-        &app,
+pub(crate) async fn vault_lock(app: AppHandle) -> Result<VaultStatus, String> {
+    let status: SessionStatus = agent_request_no_unlock_async(
+        app,
         AgentRequest::SessionLock {
             reason: LockReason::Manual,
         },
-    )?;
+    )
+    .await?;
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
@@ -243,166 +266,184 @@ pub(crate) async fn vault_change_password(
     app: AppHandle,
     request: ChangePasswordRequest,
 ) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(
-        &app,
+    let _: serde_json::Value = agent_request_async(
+        app,
         AgentRequest::VaultChangePassword {
             new_password: request.new_password,
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
 #[tauri::command]
 pub(crate) async fn vault_rotate(app: AppHandle) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(
-        &app,
+    let _: serde_json::Value = agent_request_async(
+        app,
         AgentRequest::VaultRotate {
             reason: "desktop.rotate".to_string(),
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn entries_list(
+pub(crate) async fn entries_list(
     app: AppHandle,
     archived: Option<bool>,
 ) -> Result<Vec<EntrySummary>, String> {
-    agent_request(
-        &app,
+    agent_request_async(
+        app,
         AgentRequest::EntriesList {
             archived: archived.unwrap_or(false),
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn entries_search(app: AppHandle, query: String) -> Result<Vec<EntrySummary>, String> {
-    agent_request(&app, AgentRequest::EntriesSearch { query })
+pub(crate) async fn entries_search(
+    app: AppHandle,
+    query: String,
+) -> Result<Vec<EntrySummary>, String> {
+    agent_request_async(app, AgentRequest::EntriesSearch { query }).await
 }
 
 #[tauri::command]
-pub(crate) fn provider_add(app: AppHandle, request: ProviderAddRequest) -> Result<Uuid, String> {
-    agent_request(
-        &app,
+pub(crate) async fn provider_add(
+    app: AppHandle,
+    request: ProviderAddRequest,
+) -> Result<Uuid, String> {
+    agent_request_async(
+        app,
         AgentRequest::ProviderAdd {
             input: provider_add_input(request),
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn provider_update(
+pub(crate) async fn provider_update(
     app: AppHandle,
     request: ProviderUpdateRequest,
 ) -> Result<(), String> {
     let id = request.id;
-    let _: serde_json::Value = agent_request(
-        &app,
+    let _: serde_json::Value = agent_request_async(
+        app,
         AgentRequest::ProviderUpdate {
             id,
             input: provider_update_input(request),
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn provider_archive(app: AppHandle, id: Uuid) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(&app, AgentRequest::ProviderArchive { id })?;
+pub(crate) async fn provider_archive(app: AppHandle, id: Uuid) -> Result<(), String> {
+    let _: serde_json::Value =
+        agent_request_async(app, AgentRequest::ProviderArchive { id }).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn provider_restore(app: AppHandle, id: Uuid) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(&app, AgentRequest::ProviderRestore { id })?;
+pub(crate) async fn provider_restore(app: AppHandle, id: Uuid) -> Result<(), String> {
+    let _: serde_json::Value =
+        agent_request_async(app, AgentRequest::ProviderRestore { id }).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn provider_trash(app: AppHandle, id: Uuid) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(&app, AgentRequest::ProviderTrash { id })?;
+pub(crate) async fn provider_trash(app: AppHandle, id: Uuid) -> Result<(), String> {
+    let _: serde_json::Value = agent_request_async(app, AgentRequest::ProviderTrash { id }).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn provider_delete(app: AppHandle, id: Uuid) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(&app, AgentRequest::ProviderDelete { id })?;
+pub(crate) async fn provider_delete(app: AppHandle, id: Uuid) -> Result<(), String> {
+    let _: serde_json::Value =
+        agent_request_async(app, AgentRequest::ProviderDelete { id }).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn entries_trash_list(app: AppHandle) -> Result<Vec<EntrySummary>, String> {
-    agent_request(&app, AgentRequest::EntriesTrash)
+pub(crate) async fn entries_trash_list(app: AppHandle) -> Result<Vec<EntrySummary>, String> {
+    agent_request_async(app, AgentRequest::EntriesTrash).await
 }
 
 #[tauri::command]
-pub(crate) fn trash_purge_expired(app: AppHandle) -> Result<serde_json::Value, String> {
-    agent_request(&app, AgentRequest::TrashPurgeExpired)
+pub(crate) async fn trash_purge_expired(app: AppHandle) -> Result<serde_json::Value, String> {
+    agent_request_async(app, AgentRequest::TrashPurgeExpired).await
 }
 
 #[tauri::command]
-pub(crate) fn trash_empty(app: AppHandle) -> Result<serde_json::Value, String> {
-    agent_request(&app, AgentRequest::TrashEmpty)
+pub(crate) async fn trash_empty(app: AppHandle) -> Result<serde_json::Value, String> {
+    agent_request_async(app, AgentRequest::TrashEmpty).await
 }
 
 #[tauri::command]
-pub(crate) fn secret_reveal_field(
+pub(crate) async fn secret_reveal_field(
     app: AppHandle,
     id: Uuid,
     field: String,
 ) -> Result<String, String> {
-    let secret: SecretValue = agent_request(&app, AgentRequest::SecretRevealField { id, field })?;
+    let secret: SecretValue =
+        agent_request_async(app, AgentRequest::SecretRevealField { id, field }).await?;
     Ok(secret.secret.into_inner())
 }
 
 #[tauri::command]
-pub(crate) fn secret_add(
+pub(crate) async fn secret_add(
     app: AppHandle,
     id: Uuid,
     label: String,
     api_key: SensitiveString,
 ) -> Result<String, String> {
-    agent_request(
-        &app,
+    agent_request_async(
+        app,
         AgentRequest::SecretAdd {
             id,
             label,
             secret: api_key,
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn secret_remove(app: AppHandle, id: Uuid, label: String) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(&app, AgentRequest::SecretRemove { id, label })?;
+pub(crate) async fn secret_remove(app: AppHandle, id: Uuid, label: String) -> Result<(), String> {
+    let _: serde_json::Value =
+        agent_request_async(app, AgentRequest::SecretRemove { id, label }).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn devices_list(app: AppHandle) -> Result<Vec<DeviceRecord>, String> {
-    agent_request(&app, AgentRequest::DevicesList)
+pub(crate) async fn devices_list(app: AppHandle) -> Result<Vec<DeviceRecord>, String> {
+    agent_request_async(app, AgentRequest::DevicesList).await
 }
 
 #[tauri::command]
-pub(crate) fn device_revoke(app: AppHandle, id: Uuid) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(&app, AgentRequest::DeviceRevoke { id })?;
+pub(crate) async fn device_revoke(app: AppHandle, id: Uuid) -> Result<(), String> {
+    let _: serde_json::Value = agent_request_async(app, AgentRequest::DeviceRevoke { id }).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn provider_probe(
+pub(crate) async fn provider_probe(
     app: AppHandle,
     id: Uuid,
     timeout_seconds: Option<u64>,
 ) -> Result<ProbeResult, String> {
-    let result: AgentProbeResult = agent_request(
-        &app,
+    let result: AgentProbeResult = agent_request_async(
+        app,
         AgentRequest::ProviderProbe {
             id,
             timeout_seconds: timeout_seconds.unwrap_or(15),
         },
-    )?;
+    )
+    .await?;
     Ok(ProbeResult {
         ok: result.ok,
         provider_id: result.provider_id,
@@ -415,142 +456,157 @@ pub(crate) fn provider_probe(
 }
 
 #[tauri::command]
-pub(crate) fn tool_config_preview(
+pub(crate) async fn tool_config_preview(
     app: AppHandle,
     request: ToolConfigRequest,
 ) -> Result<ToolConfigPreviewResponse, String> {
-    let response: AgentToolConfigPreviewResponse = agent_request(
-        &app,
+    let response: AgentToolConfigPreviewResponse = agent_request_async(
+        app,
         AgentRequest::ToolConfigPreview {
             request: into_agent_tool_config_request(request),
         },
-    )?;
+    )
+    .await?;
     Ok(from_agent_tool_config_preview(response))
 }
 
 #[tauri::command]
-pub(crate) fn tool_config_apply(
+pub(crate) async fn tool_config_apply(
     app: AppHandle,
     request: ToolConfigRequest,
 ) -> Result<ToolConfigApplyResponse, String> {
-    let response: AgentToolConfigApplyResponse = agent_request(
-        &app,
+    let response: AgentToolConfigApplyResponse = agent_request_async(
+        app,
         AgentRequest::ToolConfigApply {
             request: into_agent_tool_config_request(request),
         },
-    )?;
+    )
+    .await?;
     Ok(from_agent_tool_config_apply(response))
 }
 
 #[tauri::command]
-pub(crate) fn native_host_status() -> Result<NativeHostStatus, String> {
-    native_host_status_snapshot()
+pub(crate) async fn native_host_status() -> Result<NativeHostStatus, String> {
+    run_blocking(native_host_status_snapshot).await
 }
 
 #[tauri::command]
-pub(crate) fn native_host_repair(
+pub(crate) async fn native_host_repair(
     request: NativeHostRepairRequest,
 ) -> Result<NativeHostStatus, String> {
-    repair_native_host_manifest(request.extension_ids)
+    run_blocking(move || repair_native_host_manifest(request.extension_ids)).await
 }
 
 #[tauri::command]
-pub(crate) fn vault_export_encrypted(
+pub(crate) async fn vault_export_encrypted(
     app: AppHandle,
     request: VaultExportRequest,
 ) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(
-        &app,
+    let _: serde_json::Value = agent_request_async(
+        app,
         AgentRequest::VaultExport {
             output: request.output,
             export_password: request.export_password,
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn vault_import_encrypted(
+pub(crate) async fn vault_import_encrypted(
     app: AppHandle,
     request: VaultImportRequest,
 ) -> Result<(), String> {
-    let _: serde_json::Value = agent_request_no_unlock(
-        &app,
+    let _: serde_json::Value = agent_request_no_unlock_async(
+        app,
         AgentRequest::VaultImport {
             input: request.input,
             export_password: request.export_password,
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn sync_local(app: AppHandle, request: SyncLocalRequest) -> Result<SyncReport, String> {
-    agent_request(&app, AgentRequest::SyncLocal { dir: request.dir })
+pub(crate) async fn sync_local(
+    app: AppHandle,
+    request: SyncLocalRequest,
+) -> Result<SyncReport, String> {
+    agent_request_async(app, AgentRequest::SyncLocal { dir: request.dir }).await
 }
 
 #[tauri::command]
-pub(crate) fn sync_settings_load(app: AppHandle) -> Result<SyncSettings, String> {
-    let settings: AgentSyncSettings = agent_request_no_unlock(&app, AgentRequest::SyncSettingsGet)?;
+pub(crate) async fn sync_settings_load(app: AppHandle) -> Result<SyncSettings, String> {
+    let settings: AgentSyncSettings =
+        agent_request_no_unlock_async(app, AgentRequest::SyncSettingsGet).await?;
     Ok(from_agent_sync_settings(settings))
 }
 
 #[tauri::command]
-pub(crate) fn sync_settings_save(
+pub(crate) async fn sync_settings_save(
     app: AppHandle,
     request: SaveSyncSettingsRequest,
 ) -> Result<SyncSettings, String> {
-    let settings: AgentSyncSettings = agent_request(
-        &app,
+    let settings: AgentSyncSettings = agent_request_async(
+        app,
         AgentRequest::SyncSettingsSet {
             settings: into_agent_sync_settings_update(request),
         },
-    )?;
+    )
+    .await?;
     Ok(from_agent_sync_settings(settings))
 }
 
 #[tauri::command]
-pub(crate) fn sync_run_configured(app: AppHandle) -> Result<SyncReport, String> {
-    agent_request(&app, AgentRequest::SyncConfigured)
+pub(crate) async fn sync_run_configured(app: AppHandle) -> Result<SyncReport, String> {
+    agent_request_async(app, AgentRequest::SyncConfigured).await
 }
 
 #[tauri::command]
-pub(crate) fn sync_cloud(app: AppHandle, request: SyncCloudRequest) -> Result<SyncReport, String> {
-    agent_request(
-        &app,
+pub(crate) async fn sync_cloud(
+    app: AppHandle,
+    request: SyncCloudRequest,
+) -> Result<SyncReport, String> {
+    agent_request_async(
+        app,
         AgentRequest::SyncCloud {
             provider: into_agent_cloud_sync_provider(request.provider),
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn sync_webdav_remote(
+pub(crate) async fn sync_webdav_remote(
     app: AppHandle,
     request: SyncWebDavRequest,
 ) -> Result<SyncReport, String> {
-    agent_request(
-        &app,
+    agent_request_async(
+        app,
         AgentRequest::SyncWebDav {
             url: request.url,
             username: request.username,
             password: request.password,
         },
     )
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn sync_conflicts(
+pub(crate) async fn sync_conflicts(
     app: AppHandle,
     request: SyncConflictsRequest,
 ) -> Result<Vec<SyncConflictResponse>, String> {
-    let responses: Vec<AgentSyncConflictResponse> = agent_request(
-        &app,
+    let responses: Vec<AgentSyncConflictResponse> = agent_request_async(
+        app,
         AgentRequest::SyncConflicts {
             dir: request.dir,
             provider: request.provider.map(into_agent_cloud_sync_provider),
         },
-    )?;
+    )
+    .await?;
     Ok(responses
         .into_iter()
         .map(from_agent_sync_conflict_response)
@@ -558,29 +614,31 @@ pub(crate) fn sync_conflicts(
 }
 
 #[tauri::command]
-pub(crate) fn sync_accept_conflict(
+pub(crate) async fn sync_accept_conflict(
     app: AppHandle,
     request: SyncConflictActionRequest,
 ) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(
-        &app,
+    let _: serde_json::Value = agent_request_async(
+        app,
         AgentRequest::SyncAcceptConflict {
             request: into_agent_sync_conflict_request(request),
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn sync_discard_conflict(
+pub(crate) async fn sync_discard_conflict(
     app: AppHandle,
     request: SyncConflictActionRequest,
 ) -> Result<(), String> {
-    let _: serde_json::Value = agent_request(
-        &app,
+    let _: serde_json::Value = agent_request_async(
+        app,
         AgentRequest::SyncDiscardConflict {
             request: into_agent_sync_conflict_request(request),
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }

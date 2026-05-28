@@ -203,9 +203,13 @@
   let conflictBusy = "";
   let nativeHostStatus: NativeHostStatus | undefined;
   let nativeHostBusy = "";
+  let securityBusy = "";
+  let backupBusy = "";
   let extensionIds = "";
   let counts: ProviderCounts = buildProviderCounts([]);
   let trashCount = 0;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let searchRequestId = 0;
 
   async function refreshTrashCount() {
     if (status.locked) {
@@ -298,6 +302,7 @@
     activityEvents.forEach((event) => window.removeEventListener(event, markActivity));
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
+    clearTimeout(searchTimer);
   });
 
   async function refreshStatus() {
@@ -509,17 +514,28 @@
   }
 
   async function runSearch() {
+    clearTimeout(searchTimer);
+    const requestId = ++searchRequestId;
+    searchTimer = setTimeout(() => {
+      void performSearch(requestId);
+    }, 180);
+  }
+
+  async function performSearch(requestId: number) {
     if (status.locked) return;
     if (showArchived || showTrash || !query.trim()) {
       await loadEntries();
       return;
     }
     const summaries = await invokeTauri<EntrySummary[]>("entries_search", { query });
+    if (requestId !== searchRequestId) return;
     entries = summaries.map(summaryToEntry);
     selectedId ||= entries[0]?.id ?? "";
   }
 
   async function setProviderFilter(value: ProviderFilter) {
+    clearTimeout(searchTimer);
+    searchRequestId++;
     providerFilter = value;
     if (showArchived || showTrash) {
       showArchived = false;
@@ -797,6 +813,8 @@
   }
 
   async function setArchiveView(value: boolean) {
+    clearTimeout(searchTimer);
+    searchRequestId++;
     showArchived = value;
     showTrash = false;
     providerFilter = "all";
@@ -805,6 +823,8 @@
   }
 
   async function setTrashView(value: boolean) {
+    clearTimeout(searchTimer);
+    searchRequestId++;
     showTrash = value;
     showArchived = false;
     providerFilter = "all";
@@ -820,18 +840,24 @@
   }
 
   async function rotateVault() {
-    await invokeTauri("vault_rotate");
-    notice = "Vault epoch rotated";
-    setTimeout(() => (notice = ""), 1800);
+    if (securityBusy) return;
+    securityBusy = "rotate";
+    error = "";
+    try {
+      await invokeTauri("vault_rotate");
+      notice = "Vault epoch rotated";
+      setTimeout(() => (notice = ""), 1800);
+    } catch (err) {
+      error = String(err);
+    } finally {
+      securityBusy = "";
+    }
   }
 
   async function openSettings(tab: string = "security") {
     settingsInitialTab = tab;
-    await loadSyncSettings();
     showSettings = true;
-    await loadDevices();
-    await loadSyncConflicts();
-    await loadNativeHostStatus();
+    void Promise.allSettled([loadSyncSettings(), loadDevices(), loadSyncConflicts(), loadNativeHostStatus()]);
   }
 
   async function closeSettings() {
@@ -860,20 +886,37 @@
   }
 
   async function revokeDevice(id: string) {
-    await invokeTauri("device_revoke", { id });
-    notice = "Device revoked · epoch rotated";
-    await loadDevices();
-    await loadEntries();
-    setTimeout(() => (notice = ""), 1800);
+    if (securityBusy) return;
+    securityBusy = `revoke:${id}`;
+    error = "";
+    try {
+      await invokeTauri("device_revoke", { id });
+      notice = "Device revoked · epoch rotated";
+      await Promise.all([loadDevices(), loadEntries()]);
+      setTimeout(() => (notice = ""), 1800);
+    } catch (err) {
+      error = String(err);
+    } finally {
+      securityBusy = "";
+    }
   }
 
   async function changeMasterPassword() {
     if (!newPassword.trim()) return;
-    await invokeTauri("vault_change_password", { request: { newPassword } });
-    newPassword = "";
-    notice = "Master password changed";
-    resetAutoLock();
-    setTimeout(() => (notice = ""), 1800);
+    if (securityBusy) return;
+    securityBusy = "password";
+    error = "";
+    try {
+      await invokeTauri("vault_change_password", { request: { newPassword } });
+      newPassword = "";
+      notice = "Master password changed";
+      resetAutoLock();
+      setTimeout(() => (notice = ""), 1800);
+    } catch (err) {
+      error = String(err);
+    } finally {
+      securityBusy = "";
+    }
   }
 
   async function probeSelected() {
@@ -958,6 +1001,8 @@
 
   async function exportVault() {
     if (!exportPath.trim() || !exportPassword.trim()) return;
+    if (backupBusy) return;
+    backupBusy = "export";
     error = "";
     try {
       await invokeTauri("vault_export_encrypted", {
@@ -971,11 +1016,15 @@
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       error = String(err);
+    } finally {
+      backupBusy = "";
     }
   }
 
   async function importVault() {
     if (!importPath.trim() || !importPassword.trim()) return;
+    if (backupBusy) return;
+    backupBusy = "import";
     error = "";
     try {
       await invokeTauri("vault_import_encrypted", {
@@ -991,10 +1040,13 @@
       notice = "Encrypted import restored";
     } catch (err) {
       error = String(err);
+    } finally {
+      backupBusy = "";
     }
   }
 
   async function runSync() {
+    if (syncState === "syncing") return;
     error = "";
     if (syncMode === "webdav" && !webdavUrl.trim()) return;
     if (syncMode === "local" && !syncFolder.trim()) return;
@@ -1008,8 +1060,7 @@
       notice = report.message
         ? ""
         : `${report.uploaded} up · ${report.downloaded} down · ${report.conflicts} conflicts`;
-      await loadEntries();
-      await loadSyncConflicts();
+      await Promise.all([loadEntries(), loadSyncConflicts()]);
     } catch (err) {
       syncState = "offline";
       error = String(err);
@@ -1385,6 +1436,9 @@
     {syncConflicts}
     {conflictsLoading}
     {conflictBusy}
+    {securityBusy}
+    {backupBusy}
+    {syncState}
     {devices}
     {devicesLoading}
     onClose={closeSettings}

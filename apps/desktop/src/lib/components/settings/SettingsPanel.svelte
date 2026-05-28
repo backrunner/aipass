@@ -8,6 +8,7 @@
     MaybePromise,
     SyncConflict,
     SyncMode,
+    SyncReport,
     ThemePreference
   } from "../../types";
   import { checkForUpdates, installUpdate, type UpdateCheckResult } from "../../services/updates";
@@ -38,6 +39,9 @@
   export let syncConflicts: SyncConflict[] = [];
   export let conflictsLoading = false;
   export let conflictBusy = "";
+  export let securityBusy = "";
+  export let backupBusy = "";
+  export let syncState: SyncReport["status"] = "idle";
   export let devices: DeviceRecord[] = [];
   export let devicesLoading = false;
   export let initialTab: string = "general";
@@ -65,6 +69,7 @@
       : syncMode === "webdav"
         ? webdavUrl.trim().length > 0
         : true;
+  $: syncBusy = syncState === "syncing";
 
   const themeOptions: Array<{ value: ThemePreference; label: string }> = [
     { value: "system", label: "System" },
@@ -236,8 +241,12 @@
                   <input type="password" bind:value={newPassword} autocomplete="new-password" placeholder="••••••••" />
                 </Field>
                 <div class="row-actions">
-                  <Button variant="secondary" on:click={() => onChangeMasterPassword()} disabled={!newPassword.trim()}>
-                    Change password
+                  <Button
+                    variant="secondary"
+                    on:click={() => onChangeMasterPassword()}
+                    disabled={!newPassword.trim() || !!securityBusy}
+                  >
+                    {securityBusy === "password" ? "Changing…" : "Change password"}
                   </Button>
                 </div>
               </div>
@@ -247,8 +256,8 @@
               <div class="rows">
                 <p class="hint">Re-encrypts all secrets with new keys. Trusted devices need to re-sync afterwards.</p>
                 <div class="row-actions">
-                  <Button variant="secondary" on:click={() => onRotateVault()}>
-                    <RotateCw size={14} /> Rotate
+                  <Button variant="secondary" on:click={() => onRotateVault()} disabled={!!securityBusy}>
+                    <RotateCw size={14} /> {securityBusy === "rotate" ? "Rotating…" : "Rotate"}
                   </Button>
                 </div>
               </div>
@@ -291,12 +300,14 @@
                   {/if}
                 {/if}
                 <div class="row-actions">
-                  <Button variant="secondary" on:click={() => onSaveSyncSettings()}>Save</Button>
+                  <Button variant="secondary" on:click={() => onSaveSyncSettings()} disabled={syncBusy}>
+                    Save
+                  </Button>
                   {#if syncMode === "webdav" && hasSavedWebdavPassword}
-                    <Button variant="ghost" on:click={() => onClearSavedWebdavPassword()}>Clear password</Button>
+                    <Button variant="ghost" on:click={() => onClearSavedWebdavPassword()} disabled={syncBusy}>Clear password</Button>
                   {/if}
-                  <Button variant="primary" on:click={() => onRunSync()} disabled={!syncReady}>
-                    <Wifi size={14} /> Sync now
+                  <Button variant="primary" on:click={() => onRunSync()} disabled={!syncReady || syncBusy}>
+                    <Wifi size={14} /> {syncBusy ? "Syncing…" : "Sync now"}
                   </Button>
                 </div>
               </div>
@@ -304,7 +315,9 @@
 
             <Card title="Conflicts">
               <span slot="actions">
-                <button type="button" class="link" on:click={() => onLoadSyncConflicts()}>Refresh</button>
+                <button type="button" class="link" disabled={conflictsLoading || syncBusy} on:click={() => onLoadSyncConflicts()}>
+                  {conflictsLoading ? "Refreshing…" : "Refresh"}
+                </button>
               </span>
               <div class="rows">
                 {#if conflictsLoading}
@@ -355,8 +368,13 @@
                           </span>
                         </div>
                         {#if device.trusted}
-                          <Button variant="ghost" size="sm" on:click={() => onRevokeDevice(device.id)}>
-                            Revoke
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={!!securityBusy}
+                            on:click={() => onRevokeDevice(device.id)}
+                          >
+                            {securityBusy === `revoke:${device.id}` ? "Revoking…" : "Revoke"}
                           </Button>
                         {:else}
                           <Badge tone="danger">Revoked</Badge>
@@ -379,8 +397,8 @@
                   <input bind:value={exportPassword} type="password" autocomplete="new-password" placeholder="••••••••" />
                 </Field>
                 <div class="row-actions">
-                  <Button variant="secondary" on:click={() => onExportVault()} disabled={!exportReady}>
-                    <Download size={14} /> Export vault
+                  <Button variant="secondary" on:click={() => onExportVault()} disabled={!exportReady || !!backupBusy}>
+                    <Download size={14} /> {backupBusy === "export" ? "Exporting…" : "Export vault"}
                   </Button>
                 </div>
               </div>
@@ -396,8 +414,8 @@
                 </Field>
                 <p class="hint">Importing replaces the current vault and locks it.</p>
                 <div class="row-actions">
-                  <Button variant="secondary" on:click={() => onImportVault()} disabled={!importReady}>
-                    <Upload size={14} /> Import and lock
+                  <Button variant="secondary" on:click={() => onImportVault()} disabled={!importReady || !!backupBusy}>
+                    <Upload size={14} /> {backupBusy === "import" ? "Importing…" : "Import and lock"}
                   </Button>
                 </div>
               </div>
