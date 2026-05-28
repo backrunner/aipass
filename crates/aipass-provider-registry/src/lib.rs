@@ -369,6 +369,23 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
             env_keys: &["GROQ_API_KEY"],
         },
         ProviderDefinition {
+            id: "replicate",
+            display_name: "Replicate",
+            kind: ProviderKind::ThirdParty,
+            domains: &["replicate.com", "api.replicate.com"],
+            interfaces: &[InterfaceType::CustomHttp],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.replicate.com/v1"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://replicate.com/account/api-tokens",
+                ),
+            ],
+            env_keys: &["REPLICATE_API_TOKEN", "REPLICATE_API_KEY"],
+        },
+        ProviderDefinition {
             id: "new_api",
             display_name: "New API",
             kind: ProviderKind::SelfHosted,
@@ -529,6 +546,10 @@ mod tests {
         );
         assert_eq!(
             provider_kind_for_id(Some("openrouter")),
+            ProviderKind::ThirdParty
+        );
+        assert_eq!(
+            provider_kind_for_id(Some("replicate")),
             ProviderKind::ThirdParty
         );
         assert_eq!(

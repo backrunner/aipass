@@ -254,6 +254,19 @@ export const providerDefinitions: ProviderDefinition[] = [
     envKeys: ["GROQ_API_KEY"]
   },
   {
+    id: "replicate",
+    displayName: "Replicate",
+    kind: "third_party",
+    domains: ["replicate.com", "api.replicate.com"],
+    interfaces: ["custom_http"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.replicate.com/v1" },
+      { id: "console", kind: "console", url: "https://replicate.com/account/api-tokens" }
+    ],
+    envKeys: ["REPLICATE_API_TOKEN", "REPLICATE_API_KEY"]
+  },
+  {
     id: "new_api",
     displayName: "New API",
     kind: "self_hosted",

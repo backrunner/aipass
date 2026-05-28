@@ -510,6 +510,8 @@ fn infer_interface_from_endpoint(endpoint: &str) -> Option<InterfaceType> {
         Some(InterfaceType::Gemini)
     } else if endpoint.contains("anthropic") {
         Some(InterfaceType::AnthropicMessages)
+    } else if endpoint.contains("replicate.com") {
+        Some(InterfaceType::CustomHttp)
     } else if endpoint.contains("openai")
         || endpoint.contains("/v1")
         || endpoint.contains("gateway")
@@ -627,6 +629,7 @@ fn env_key_for_entry(item: &EntrySummary) -> String {
         Some("zhipu") => "ZHIPUAI_API_KEY".to_string(),
         Some("volcengine") => "ARK_API_KEY".to_string(),
         Some("groq") => "GROQ_API_KEY".to_string(),
+        Some("replicate") => "REPLICATE_API_TOKEN".to_string(),
         Some("together") => "TOGETHER_API_KEY".to_string(),
         Some("fireworks") => "FIREWORKS_API_KEY".to_string(),
         _ => match item.auth_scheme {

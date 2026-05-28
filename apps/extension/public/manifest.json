@@ -38,6 +38,8 @@
     "https://api.fireworks.ai/*",
     "https://console.groq.com/*",
     "https://api.groq.com/*",
+    "https://replicate.com/*",
+    "https://api.replicate.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ]

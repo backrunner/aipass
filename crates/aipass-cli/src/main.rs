@@ -1147,6 +1147,7 @@ fn env_key_for_entry(item: &aipass_vault::EntrySummary) -> String {
         Some("zhipu") => "ZHIPUAI_API_KEY".to_string(),
         Some("volcengine") => "ARK_API_KEY".to_string(),
         Some("groq") => "GROQ_API_KEY".to_string(),
+        Some("replicate") => "REPLICATE_API_TOKEN".to_string(),
         Some("together") => "TOGETHER_API_KEY".to_string(),
         Some("fireworks") => "FIREWORKS_API_KEY".to_string(),
         Some("bedrock") => "AWS_PROFILE".to_string(),

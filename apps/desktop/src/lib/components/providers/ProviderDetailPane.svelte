@@ -87,6 +87,14 @@
         return "ZHIPUAI_API_KEY";
       case "volcengine":
         return "ARK_API_KEY";
+      case "groq":
+        return "GROQ_API_KEY";
+      case "replicate":
+        return "REPLICATE_API_TOKEN";
+      case "together":
+        return "TOGETHER_API_KEY";
+      case "fireworks":
+        return "FIREWORKS_API_KEY";
       case "bedrock":
         return "AWS_PROFILE";
       default:
@@ -107,6 +115,9 @@
   function curlSnippet(entry: ProviderEntry): string {
     const endpoint = endpointUrl(entry).replace(/\/$/, "");
     const key = envKey(entry);
+    if (entry.providerId === "replicate") {
+      return `curl -sS ${endpoint}/models -H 'Authorization: Bearer $${key}'`;
+    }
     if (entry.interfaceType === "bedrock" || entry.authScheme === "aws_profile") {
       const region = entry.endpoints.find((item) => item.region)?.region ?? "${AWS_REGION:-us-east-1}";
       return `AWS_PROFILE=\${${key}:-default} aws bedrock list-foundation-models --region ${region}`;
