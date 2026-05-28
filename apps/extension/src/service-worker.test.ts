@@ -62,8 +62,7 @@ async function dispatchMessage(message: Record<string, unknown>) {
   const listener = listeners.at(-1);
   assert.ok(listener, "expected service worker listener");
   return await new Promise<unknown>((resolve) => {
-    const result = listener(message, {}, resolve);
-    if (!result) return;
+    listener(message, {}, resolve);
   });
 }
 
