@@ -58,8 +58,12 @@
   export let onResolveSyncConflict: (conflict: SyncConflict, action: "accept" | "discard") => MaybePromise = () => {};
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
 
-  let activeTab = initialTab;
-  $: if (initialTab) activeTab = initialTab;
+  let activeTab = initialTab || "general";
+  let previousInitialTab = initialTab;
+  $: if (initialTab && initialTab !== previousInitialTab) {
+    activeTab = initialTab;
+    previousInitialTab = initialTab;
+  }
 
   $: exportReady = exportPath.trim().length > 0 && exportPassword.trim().length > 0;
   $: importReady = importPath.trim().length > 0 && importPassword.trim().length > 0;

@@ -167,7 +167,7 @@
   let showArchived = false;
   let showTrash = false;
   let showSettings = false;
-  let settingsInitialTab = "security";
+  let settingsInitialTab = "general";
   let providerFilter: ProviderFilter = "all";
   let revealedSecrets: Record<string, string> = {};
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
@@ -868,7 +868,7 @@
     }
   }
 
-  async function openSettings(tab: string = "security") {
+  async function openSettings(tab: string = "general") {
     settingsInitialTab = tab;
     showSettings = true;
     void Promise.allSettled([loadSyncSettings(), loadDevices(), loadSyncConflicts(), loadNativeHostStatus()]);
@@ -1330,7 +1330,7 @@
 <div class="app-shell">
   <AppTitleBar
     showAppMenu={statusReady && status.exists && !status.locked}
-    onOpenSettings={() => openSettings("security")}
+    onOpenSettings={() => openSettings("general")}
     onLock={lockVault}
   />
 
