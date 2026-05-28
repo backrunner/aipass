@@ -13,6 +13,7 @@
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
   import RecoveryKitModal from "./lib/components/auth/RecoveryKitModal.svelte";
+  import UnlockTransition from "./lib/components/auth/UnlockTransition.svelte";
   import Sidebar from "./lib/components/layout/Sidebar.svelte";
   import ProviderDetailPane from "./lib/components/providers/ProviderDetailPane.svelte";
   import ProviderListPane from "./lib/components/providers/ProviderListPane.svelte";
@@ -44,6 +45,7 @@
   } from "./lib/types";
   import { passwordStrength } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
 
   const hasTauriRuntime = () =>
     typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -97,6 +99,47 @@
   }
 
   let status: VaultStatus = { exists: false, locked: true };
+  let statusReady = false;
+  let unlockTransitioning = false;
+  let unlockCovered = false;
+  let lockTransitioning = false;
+  let lockCovered = false;
+  let lockCoveredResolvers: Array<() => void> = [];
+  let lastLockedState: boolean | null = null;
+  $: {
+    if (statusReady) {
+      const wasUnlocked = lastLockedState === false;
+      const nowUnlocked = status.exists && !status.locked;
+      if (lastLockedState !== null && !wasUnlocked && nowUnlocked) {
+        unlockTransitioning = true;
+        unlockCovered = false;
+      }
+      lastLockedState = !nowUnlocked;
+    }
+  }
+  function onUnlockCovered() {
+    unlockCovered = true;
+  }
+  function onUnlockTransitionDone() {
+    unlockTransitioning = false;
+    unlockCovered = false;
+  }
+  function onLockCovered() {
+    lockCovered = true;
+    const resolvers = lockCoveredResolvers;
+    lockCoveredResolvers = [];
+    for (const resolve of resolvers) resolve();
+  }
+  function onLockTransitionDone() {
+    lockTransitioning = false;
+    lockCovered = false;
+  }
+  $: showAuthScreen =
+    statusReady &&
+    (!status.exists || status.locked || (unlockTransitioning && !unlockCovered)) &&
+    !(lockTransitioning && !lockCovered);
+  $: showWorkspace =
+    statusReady && status.exists && !status.locked && !(lockTransitioning && lockCovered);
   let windowTarget: "main" | "unlock" | "quick-access" = "main";
   let password = "";
   let createPassword = "";
@@ -119,7 +162,9 @@
   let selectedId = "";
   let showForm = false;
   let formMode: FormMode = "add";
+  let detailEditMode = false;
   let showArchived = false;
+  let showTrash = false;
   let showSettings = false;
   let settingsInitialTab = "security";
   let providerFilter: ProviderFilter = "all";
@@ -160,6 +205,21 @@
   let nativeHostBusy = "";
   let extensionIds = "";
   let counts: ProviderCounts = buildProviderCounts([]);
+  let trashCount = 0;
+
+  async function refreshTrashCount() {
+    if (status.locked) {
+      trashCount = 0;
+      return;
+    }
+    try {
+      const summaries = await invokeTauri<EntrySummary[]>("entries_trash_list");
+      trashCount = summaries.length;
+    } catch (err) {
+      console.warn("trash count failed", err);
+      trashCount = 0;
+    }
+  }
 
   $: filtered = entries
     .filter((entry) => {
@@ -192,6 +252,12 @@
       return Date.parse(right.lastUsedAt ?? "") - Date.parse(left.lastUsedAt ?? "");
     });
   $: selected = filtered.find((entry) => entry.id === selectedId) ?? filtered[0];
+
+  let lastSelectedId = "";
+  $: if (selected?.id !== lastSelectedId) {
+    lastSelectedId = selected?.id ?? "";
+    detailEditMode = false;
+  }
   $: counts = buildProviderCounts(entries);
   $: if ((selected?.id ?? "") !== activeDetailId) {
     activeDetailId = selected?.id ?? "";
@@ -245,6 +311,8 @@
       }
     } catch (err) {
       error = String(err);
+    } finally {
+      statusReady = true;
     }
   }
 
@@ -372,7 +440,30 @@
   }
 
   async function lockVault() {
-    await invokeTauri("vault_lock");
+    if (lockTransitioning) return;
+
+    // Start the animation immediately so the UI feels responsive.
+    lockTransitioning = true;
+    lockCovered = false;
+
+    // Fire the vault_lock IPC in parallel; don't block the animation on it.
+    const lockPromise = invokeTauri("vault_lock").catch((err) => {
+      error = String(err);
+    });
+
+    // Reset transient UI state behind the cover. Wait for the cover to be in
+    // place so users never see a flash of empty workspace.
+    const waitForCover = new Promise<void>((resolve) => {
+      if (lockCovered) {
+        resolve();
+        return;
+      }
+      lockCoveredResolvers.push(resolve);
+    });
+
+    await waitForCover;
+    await lockPromise;
+
     status = { exists: true, locked: true };
     entries = [];
     selectedId = "";
@@ -399,17 +490,27 @@
     clearTimeout(revealTimer);
   }
 
-  async function loadEntries(archived = showArchived) {
-    const summaries = await invokeTauri<EntrySummary[]>("entries_list", { archived });
+  async function loadEntries(archived = showArchived, trash = showTrash) {
+    let summaries: EntrySummary[];
+    if (trash) {
+      summaries = await invokeTauri<EntrySummary[]>("entries_trash_list");
+    } else {
+      summaries = await invokeTauri<EntrySummary[]>("entries_list", { archived });
+    }
     entries = summaries.map(summaryToEntry);
     if (!entries.some((entry) => entry.id === selectedId)) {
       selectedId = entries[0]?.id ?? "";
+    }
+    if (!trash) {
+      void refreshTrashCount();
+    } else {
+      trashCount = entries.length;
     }
   }
 
   async function runSearch() {
     if (status.locked) return;
-    if (showArchived || !query.trim()) {
+    if (showArchived || showTrash || !query.trim()) {
       await loadEntries();
       return;
     }
@@ -420,9 +521,10 @@
 
   async function setProviderFilter(value: ProviderFilter) {
     providerFilter = value;
-    if (showArchived) {
+    if (showArchived || showTrash) {
       showArchived = false;
-      await loadEntries(false);
+      showTrash = false;
+      await loadEntries(false, false);
     }
     if (!filtered.some((entry) => entry.id === selectedId)) {
       selectedId = filtered[0]?.id ?? "";
@@ -522,7 +624,19 @@
       quotaResetAt: entry.quota?.resetAt ?? "",
       notes: entry.notes ?? ""
     };
-    showForm = true;
+    detailEditMode = true;
+  }
+
+  function cancelDetailEdit() {
+    detailEditMode = false;
+    error = "";
+  }
+
+  async function saveDetailEdit() {
+    await saveProvider();
+    if (!error) {
+      detailEditMode = false;
+    }
   }
 
   async function saveProvider() {
@@ -658,6 +772,12 @@
     await loadEntries();
   }
 
+  async function trashSelected() {
+    if (!selected) return;
+    await invokeTauri("provider_trash", { id: selected.id });
+    await loadEntries();
+  }
+
   async function restoreSelected() {
     if (!selected) return;
     await invokeTauri("provider_restore", { id: selected.id });
@@ -670,11 +790,33 @@
     await loadEntries();
   }
 
+  async function emptyTrash() {
+    if (!confirm("Permanently delete everything in the trash?")) return;
+    await invokeTauri("trash_empty");
+    await loadEntries();
+  }
+
   async function setArchiveView(value: boolean) {
     showArchived = value;
+    showTrash = false;
     providerFilter = "all";
     query = "";
-    await loadEntries(value);
+    await loadEntries(value, false);
+  }
+
+  async function setTrashView(value: boolean) {
+    showTrash = value;
+    showArchived = false;
+    providerFilter = "all";
+    query = "";
+    if (value) {
+      try {
+        await invokeTauri("trash_purge_expired");
+      } catch (err) {
+        console.warn("trash purge expired failed", err);
+      }
+    }
+    await loadEntries(false, value);
   }
 
   async function rotateVault() {
@@ -1053,6 +1195,9 @@
       clipboardClearSeconds = clampPreference(prefs.clipboardClearSeconds, 0, 600, clipboardClearSeconds);
       lockOnSleep = prefs.lockOnSleep ?? lockOnSleep;
       lockOnScreenLock = prefs.lockOnScreenLock ?? lockOnScreenLock;
+      if (isThemePreference(prefs.theme)) {
+        setTheme(prefs.theme);
+      }
     } catch (err) {
       error = String(err);
     }
@@ -1067,13 +1212,17 @@
           autoLockMinutes,
           clipboardClearSeconds,
           lockOnSleep,
-          lockOnScreenLock
+          lockOnScreenLock,
+          theme: $themeStore
         }
       });
       autoLockMinutes = saved.autoLockMinutes;
       clipboardClearSeconds = saved.clipboardClearSeconds;
       lockOnSleep = saved.lockOnSleep ?? lockOnSleep;
       lockOnScreenLock = saved.lockOnScreenLock ?? lockOnScreenLock;
+      if (isThemePreference(saved.theme)) {
+        setTheme(saved.theme);
+      }
     } catch (err) {
       error = String(err);
     }
@@ -1115,42 +1264,49 @@
 
 <div class="app-shell">
   <AppTitleBar
-    syncState={!status.exists || status.locked ? undefined : syncState}
-    onOpenSync={() => openSettings("sync")}
+    showAppMenu={statusReady && status.exists && !status.locked}
+    onOpenSettings={() => openSettings("security")}
+    onLock={lockVault}
   />
 
-  {#if !status.exists || status.locked}
-    <AuthScreen
-      {status}
-      {authMode}
-      busyMode={authBusy}
-      {error}
-      bind:password
-      bind:createPassword
-      bind:createPasswordConfirm
-      bind:recoveryKeyInput
-      bind:recoveryPassword
-      bind:recoveryPasswordConfirm
-      bind:showCreatePassword
-      bind:showUnlockPassword
-      bind:showRecoveryPassword
-      {createPasswordStrength}
-      {recoveryPasswordStrength}
-      onModeChange={setAuthMode}
-      onCreate={createVault}
-      onUnlock={unlockVault}
-      onRecover={recoverVault}
-    />
+  {#if !statusReady}
+    <div class="boot-shell" aria-hidden="true"></div>
   {:else}
+    {#if showAuthScreen}
+      <AuthScreen
+        {status}
+        {authMode}
+        busyMode={authBusy}
+        {error}
+        bind:password
+        bind:createPassword
+        bind:createPasswordConfirm
+        bind:recoveryKeyInput
+        bind:recoveryPassword
+        bind:recoveryPasswordConfirm
+        bind:showCreatePassword
+        bind:showUnlockPassword
+        bind:showRecoveryPassword
+        {createPasswordStrength}
+        {recoveryPasswordStrength}
+        onModeChange={setAuthMode}
+        onCreate={createVault}
+        onUnlock={unlockVault}
+        onRecover={recoverVault}
+      />
+    {/if}
+
+    {#if showWorkspace}
     <main class="workspace">
       <Sidebar
         {showArchived}
+        {showTrash}
         {providerFilter}
         providerCounts={counts}
+        trashCount={trashCount}
         onFilterChange={setProviderFilter}
         onArchiveView={setArchiveView}
-        onOpenSettings={() => openSettings("security")}
-        onLock={lockVault}
+        onTrashView={setTrashView}
       />
 
       <ProviderListPane
@@ -1158,17 +1314,20 @@
         filterEntries={entries}
         selectedId={selected?.id ?? ""}
         {showArchived}
+        {showTrash}
         {providerFilter}
         bind:query
         onSearch={runSearch}
         onAdd={openAdd}
         onFilterChange={setProviderFilter}
+        onEmptyTrash={emptyTrash}
         onSelect={selectProvider}
       />
 
       <ProviderDetailPane
         {selected}
         {showArchived}
+        {showTrash}
         {copied}
         {revealedSecrets}
         bind:newSecretLabel
@@ -1178,33 +1337,35 @@
         {probing}
         {notice}
         {error}
-        onCopySecret={copySecret}
+        editMode={detailEditMode}
+        formMode="edit"
+        bind:draft
         onProbe={probeSelected}
-        onEdit={openEdit}
+        onEditStart={openEdit}
+        onEditCancel={cancelDetailEdit}
+        onEditSave={saveDetailEdit}
         onRestore={restoreSelected}
         onDelete={deleteSelected}
         onArchive={archiveSelected}
+        onTrash={trashSelected}
         onRevealSecret={revealSecretByLabel}
         onCopySecretByLabel={copySecretByLabel}
         onRemoveSecret={removeSecondarySecret}
         onAddSecret={addSecondarySecret}
         onCopyValue={copyValue}
+        onInferDraftFromDomain={inferDraftFromDomain}
+        onProviderChanged={providerChanged}
+        onPreviewToolConfig={previewToolConfig}
+        onApplyToolConfig={applyToolConfig}
       />
     </main>
+    {/if}
   {/if}
 </div>
 
 {#if showSettings && !status.locked}
   <SettingsPanel
-    {syncState}
-    entries={entries.map((entry) => ({
-      id: entry.id,
-      title: entry.title,
-      interfaceType: entry.interfaceType,
-      authScheme: entry.authScheme
-    }))}
     entriesCount={entries.length}
-    selectedEntryId={selected?.id ?? ""}
     initialTab={settingsInitialTab}
     bind:autoLockMinutes
     bind:clipboardClearSeconds
@@ -1226,9 +1387,6 @@
     {conflictBusy}
     {devices}
     {devicesLoading}
-    bind:extensionIds
-    {nativeHostStatus}
-    {nativeHostBusy}
     onClose={closeSettings}
     onSavePreferences={savePreferences}
     onChangeMasterPassword={changeMasterPassword}
@@ -1241,10 +1399,6 @@
     onLoadSyncConflicts={loadSyncConflicts}
     onResolveSyncConflict={resolveSyncConflict}
     onRevokeDevice={revokeDevice}
-    onPreviewToolConfig={previewToolConfig}
-    onApplyToolConfig={applyToolConfig}
-    onLoadNativeHostStatus={loadNativeHostStatus}
-    onRepairNativeHost={repairNativeHost}
   />
 {/if}
 
@@ -1260,25 +1414,72 @@
   />
 {/if}
 
+{#if unlockTransitioning}
+  <UnlockTransition direction="up" on:covered={onUnlockCovered} on:done={onUnlockTransitionDone} />
+{/if}
+
+{#if lockTransitioning}
+  <UnlockTransition direction="down" on:covered={onLockCovered} on:done={onLockTransitionDone} />
+{/if}
+
 <style lang="scss">
   .app-shell {
     height: 100vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
+    background: var(--bg);
+  }
+
+  .app-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(1000px 420px at 10% -8%, color-mix(in oklab, var(--accent) 22%, transparent), transparent 60%),
+      radial-gradient(820px 380px at 100% 110%, color-mix(in oklab, var(--accent) 16%, transparent), transparent 60%),
+      radial-gradient(520px 280px at 60% 50%, color-mix(in oklab, var(--accent) 6%, transparent), transparent 70%);
+    pointer-events: none;
+    opacity: 0.75;
+    z-index: 0;
+  }
+
+  .app-shell > :global(*) {
+    position: relative;
+    z-index: 1;
+  }
+
+  .boot-shell {
+    flex: 1;
+    background: var(--bg);
   }
 
   .workspace {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 224px 360px minmax(0, 1fr);
+    grid-template-columns: 232px 368px minmax(0, 1fr);
+    gap: 8px;
+    padding: 0 8px 8px;
     overflow: hidden;
+    position: relative;
+    background: transparent;
+  }
+
+  .workspace > :global(*) {
+    min-width: 0;
+    min-height: 0;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow:
+      0 1px 0 color-mix(in oklab, var(--surface) 60%, transparent) inset,
+      0 12px 32px rgba(8, 12, 24, 0.05);
   }
 
   @media (max-width: 1100px) {
     .workspace {
-      grid-template-columns: 200px 320px minmax(0, 1fr);
+      grid-template-columns: 208px 332px minmax(0, 1fr);
     }
   }
 

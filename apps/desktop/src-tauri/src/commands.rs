@@ -69,6 +69,7 @@ pub(crate) fn preferences_load(app: AppHandle) -> Result<AppPreferences, String>
         clipboard_clear_seconds: local.clipboard_clear_seconds,
         lock_on_sleep: policy.lock_on_sleep,
         lock_on_screen_lock: policy.lock_on_screen_lock,
+        theme: local.theme,
     })
 }
 
@@ -80,6 +81,7 @@ pub(crate) fn preferences_save(
     let current_policy =
         agent_request_no_unlock::<SessionPolicy>(&app, AgentRequest::SessionPolicyGet)
             .unwrap_or_default();
+    let stored = load_preferences(&app).unwrap_or_default();
     let preferences = AppPreferences {
         auto_lock_minutes: request.auto_lock_minutes.min(240),
         clipboard_clear_seconds: request.clipboard_clear_seconds.min(600),
@@ -89,6 +91,7 @@ pub(crate) fn preferences_save(
         lock_on_screen_lock: request
             .lock_on_screen_lock
             .unwrap_or(current_policy.lock_on_screen_lock),
+        theme: request.theme.unwrap_or(stored.theme),
     };
     save_preferences(&app, &preferences)?;
     let _: SessionPolicy = agent_request_no_unlock(
@@ -317,9 +320,30 @@ pub(crate) fn provider_restore(app: AppHandle, id: Uuid) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub(crate) fn provider_trash(app: AppHandle, id: Uuid) -> Result<(), String> {
+    let _: serde_json::Value = agent_request(&app, AgentRequest::ProviderTrash { id })?;
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) fn provider_delete(app: AppHandle, id: Uuid) -> Result<(), String> {
     let _: serde_json::Value = agent_request(&app, AgentRequest::ProviderDelete { id })?;
     Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn entries_trash_list(app: AppHandle) -> Result<Vec<EntrySummary>, String> {
+    agent_request(&app, AgentRequest::EntriesTrash)
+}
+
+#[tauri::command]
+pub(crate) fn trash_purge_expired(app: AppHandle) -> Result<serde_json::Value, String> {
+    agent_request(&app, AgentRequest::TrashPurgeExpired)
+}
+
+#[tauri::command]
+pub(crate) fn trash_empty(app: AppHandle) -> Result<serde_json::Value, String> {
+    agent_request(&app, AgentRequest::TrashEmpty)
 }
 
 #[tauri::command]

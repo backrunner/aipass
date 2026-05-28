@@ -1,17 +1,18 @@
 <script lang="ts">
-  import { Archive, Inbox, Lock, Settings, ShieldCheck, Sparkles, Terminal, Wifi } from "lucide-svelte";
+  import { Archive, Inbox, ShieldCheck, Sparkles, Terminal, Trash2, Wifi } from "lucide-svelte";
 
   import type { MaybePromise, ProviderCounts, ProviderFilter } from "../../types";
 
   export let showArchived = false;
+  export let showTrash = false;
   export let providerFilter: ProviderFilter = "all";
   export let providerCounts: ProviderCounts;
+  export let trashCount = 0;
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
   export let onArchiveView: (value: boolean) => MaybePromise = () => {};
-  export let onOpenSettings: () => MaybePromise = () => {};
-  export let onLock: () => MaybePromise = () => {};
+  export let onTrashView: (value: boolean) => MaybePromise = () => {};
 
-  $: activeFilter = showArchived ? "__archive" : providerFilter;
+  $: activeFilter = showTrash ? "__trash" : showArchived ? "__archive" : providerFilter;
 </script>
 
 <aside class="sidebar">
@@ -21,8 +22,8 @@
       class:active={activeFilter === "all"}
       on:click={() => onFilterChange("all")}
     >
-      <Inbox size={15} />
-      <span class="label">All Items</span>
+      <Inbox size={16} />
+      <span class="label">All items</span>
       <span class="count">{providerCounts.all}</span>
     </button>
     <button
@@ -30,7 +31,7 @@
       class:active={activeFilter === "recent"}
       on:click={() => onFilterChange("recent")}
     >
-      <Sparkles size={15} />
+      <Sparkles size={16} />
       <span class="label">Recent</span>
       <span class="count">{providerCounts.recent}</span>
     </button>
@@ -44,7 +45,7 @@
         class:active={activeFilter === "official"}
         on:click={() => onFilterChange("official")}
       >
-        <ShieldCheck size={15} class="kind-official-icon" />
+        <ShieldCheck size={16} class="kind-official-icon" />
         <span class="label">Official</span>
         <span class="count">{providerCounts.official}</span>
       </button>
@@ -53,7 +54,7 @@
         class:active={activeFilter === "third_party"}
         on:click={() => onFilterChange("third_party")}
       >
-        <Wifi size={15} />
+        <Wifi size={16} />
         <span class="label">Third-party</span>
         <span class="count">{providerCounts.third_party}</span>
       </button>
@@ -62,7 +63,7 @@
         class:active={activeFilter === "self_hosted"}
         on:click={() => onFilterChange("self_hosted")}
       >
-        <Terminal size={15} />
+        <Terminal size={16} />
         <span class="label">Self-hosted</span>
         <span class="count">{providerCounts.self_hosted}</span>
       </button>
@@ -71,38 +72,35 @@
         class:active={activeFilter === "unknown"}
         on:click={() => onFilterChange("unknown")}
       >
-        <Sparkles size={15} />
+        <Sparkles size={16} />
         <span class="label">Custom</span>
         <span class="count">{providerCounts.unknown}</span>
       </button>
     </nav>
   </div>
 
-  <div class="group">
-    <span class="group-title">Other</span>
-    <nav class="nav" aria-label="Other">
+  <div class="group bottom-group">
+    <nav class="nav" aria-label="Storage">
       <button
         type="button"
         class:active={activeFilter === "__archive"}
         on:click={() => onArchiveView(true)}
       >
-        <Archive size={15} />
+        <Archive size={16} />
         <span class="label">Archive</span>
       </button>
+      <button
+        type="button"
+        class:active={activeFilter === "__trash"}
+        on:click={() => onTrashView(true)}
+      >
+        <Trash2 size={16} />
+        <span class="label">Trash</span>
+        {#if trashCount > 0}
+          <span class="count">{trashCount}</span>
+        {/if}
+      </button>
     </nav>
-  </div>
-
-  <div class="sidebar-bottom">
-    <div class="bottom-actions">
-      <button type="button" class="bottom-button" on:click={() => onOpenSettings()}>
-        <Settings size={15} />
-        <span>Settings</span>
-      </button>
-      <button type="button" class="bottom-button" on:click={() => onLock()}>
-        <Lock size={15} />
-        <span>Lock</span>
-      </button>
-    </div>
   </div>
 </aside>
 
@@ -110,10 +108,12 @@
   .sidebar {
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    padding: 18px 12px 14px;
-    background: var(--sidebar-bg);
-    border-right: 1px solid var(--border);
+    gap: 18px;
+    padding: 16px 10px 14px;
+    background: color-mix(in oklab, var(--sidebar-bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
     min-width: 0;
     overflow: hidden;
   }
@@ -121,31 +121,37 @@
   .group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
+  }
+
+  .bottom-group {
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--divider);
   }
 
   .group-title {
-    padding: 0 10px;
+    padding: 0 12px;
     color: var(--text-tertiary);
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
   }
 
   .nav {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 2px;
   }
 
   .nav button {
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
-    min-height: 30px;
-    padding: 6px 10px;
+    gap: 12px;
+    min-height: 32px;
+    padding: 6px 12px;
     border-radius: var(--radius);
     color: var(--text-secondary);
     font-size: 13px;
@@ -161,17 +167,10 @@
 
     &.active {
       background: var(--accent-soft);
-      color: var(--text);
+      color: var(--accent);
 
-      &::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 6px;
-        bottom: 6px;
-        width: 2px;
-        border-radius: 1px;
-        background: var(--accent);
+      .count {
+        color: var(--accent);
       }
     }
 
@@ -181,9 +180,14 @@
     }
   }
 
+  :global(html[data-theme="dark"]) .nav button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
   @media (prefers-color-scheme: dark) {
-    .nav button:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 0.04);
+    :global(html:not([data-theme])) .nav button:hover:not(:disabled),
+    :global(html[data-theme="system"]) .nav button:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.05);
     }
   }
 
@@ -191,6 +195,7 @@
     color: var(--text-tertiary);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
+    transition: color 120ms ease;
   }
 
   .label {
@@ -199,61 +204,16 @@
     white-space: nowrap;
   }
 
-  .sidebar-bottom {
-    margin-top: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding-top: 12px;
-    border-top: 1px solid var(--divider);
-  }
-
-  .bottom-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-  }
-
-  .bottom-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-height: 30px;
-    padding: 0 10px;
-    border-radius: var(--radius);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 500;
-    transition: background-color 80ms ease, color 120ms ease;
-
-    &:hover {
-      background: rgba(0, 0, 0, 0.05);
-      color: var(--text);
-    }
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .bottom-button:hover {
-      background: rgba(255, 255, 255, 0.05);
-    }
-  }
-
   @media (max-width: 920px) {
     .label,
     .group-title,
-    .count,
-    .bottom-button span {
+    .count {
       display: none;
     }
 
     .nav button {
       grid-template-columns: 1fr;
       justify-items: center;
-    }
-
-    .bottom-actions {
-      grid-template-columns: 1fr;
     }
   }
 

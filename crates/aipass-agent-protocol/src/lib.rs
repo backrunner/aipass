@@ -349,6 +349,8 @@ pub enum AgentRequest {
     },
     #[serde(rename = "entries.list")]
     EntriesList { archived: bool },
+    #[serde(rename = "entries.trash")]
+    EntriesTrash,
     #[serde(rename = "entries.search")]
     EntriesSearch { query: String },
     #[serde(rename = "provider.get")]
@@ -364,8 +366,14 @@ pub enum AgentRequest {
     ProviderArchive { id: Uuid },
     #[serde(rename = "provider.restore")]
     ProviderRestore { id: Uuid },
+    #[serde(rename = "provider.trash")]
+    ProviderTrash { id: Uuid },
     #[serde(rename = "provider.delete")]
     ProviderDelete { id: Uuid },
+    #[serde(rename = "trash.purge_expired")]
+    TrashPurgeExpired,
+    #[serde(rename = "trash.empty")]
+    TrashEmpty,
     #[serde(rename = "secret.reveal_field")]
     SecretRevealField { id: Uuid, field: String },
     #[serde(rename = "secret.add")]

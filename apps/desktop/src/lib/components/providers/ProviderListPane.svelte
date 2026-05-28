@@ -2,22 +2,23 @@
   import type { ProviderEntry } from "@aipass/schemas";
   import { providerKindLabel } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
-  import { KeyRound, Plus, Search, SlidersHorizontal } from "lucide-svelte";
+  import { KeyRound, Plus, Search, SlidersHorizontal, Trash2 } from "lucide-svelte";
 
   import type { MaybePromise, ProviderFilter } from "../../types";
   import Button from "../shared/Button.svelte";
-  import IconButton from "../shared/IconButton.svelte";
   import ProviderIcon from "../shared/ProviderIcon.svelte";
 
   export let entries: ProviderEntry[] = [];
   export let filterEntries: ProviderEntry[] = [];
   export let selectedId = "";
   export let showArchived = false;
+  export let showTrash = false;
   export let providerFilter: ProviderFilter = "all";
   export let query = "";
   export let onSearch: () => MaybePromise = () => {};
   export let onAdd: () => MaybePromise = () => {};
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
+  export let onEmptyTrash: () => MaybePromise = () => {};
   export let onSelect: (id: string) => MaybePromise = () => {};
 
   const baseFilterOptions: Array<{ value: ProviderFilter; label: string }> = [
@@ -53,11 +54,6 @@
     );
   }
 
-  function maskedSuffix(masked: string): string {
-    if (!masked) return "";
-    return masked.length > 14 ? masked.slice(-14) : masked;
-  }
-
   function entrySubtitle(entry: ProviderEntry): string {
     return entry.domains[0] ?? entry.endpoints[0]?.url ?? entry.defaultModel ?? "";
   }
@@ -75,51 +71,80 @@
         spellcheck="false"
         autocapitalize="off"
       />
-    </label>
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger>
-        {#snippet child({ props })}
-          <button
-            {...props}
-            type="button"
-            class="filter-trigger"
-            class:active-filter={providerFilter !== "all"}
-            aria-label="Filter providers"
-            title="Filter providers"
-            disabled={showArchived}
-          >
-            <SlidersHorizontal size={15} />
-          </button>
-        {/snippet}
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content sideOffset={6} align="end" class="filter-menu">
-          {#each filterOptions as option}
-            <DropdownMenu.Item
-              class="filter-item"
-              onSelect={() => onFilterChange(option.value)}
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger>
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              class="filter-trigger"
+              class:active-filter={providerFilter !== "all"}
+              aria-label="Filter providers"
+              title="Filter providers"
+              disabled={showArchived || showTrash}
             >
-              <span>{option.label}</span>
-              {#if providerFilter === option.value}<span class="filter-check">Selected</span>{/if}
-            </DropdownMenu.Item>
-          {/each}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-    <IconButton label="Add provider" tone="primary" on:click={() => onAdd()}>
-      <Plus size={16} />
-    </IconButton>
+              <SlidersHorizontal size={14} />
+            </button>
+          {/snippet}
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content sideOffset={8} align="end" class="filter-menu">
+            {#each filterOptions as option}
+              <DropdownMenu.Item
+                class="filter-item"
+                onSelect={() => onFilterChange(option.value)}
+              >
+                <span>{option.label}</span>
+                {#if providerFilter === option.value}<span class="filter-check">Selected</span>{/if}
+              </DropdownMenu.Item>
+            {/each}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </label>
+    {#if showTrash}
+      <button
+        type="button"
+        class="cta-btn danger"
+        on:click={() => onEmptyTrash()}
+        disabled={entries.length === 0}
+      >
+        <Trash2 size={14} />
+        <span>Empty trash</span>
+      </button>
+    {:else}
+      <button type="button" class="cta-btn primary" on:click={() => onAdd()}>
+        <Plus size={14} />
+        <span>Add</span>
+      </button>
+    {/if}
   </div>
 
   <div class="entries" role="listbox" aria-label="Providers">
     {#if entries.length === 0}
       <div class="empty">
-        <span class="empty-icon"><KeyRound size={22} /></span>
-        <strong>{showArchived ? "Archive is empty" : "No providers yet"}</strong>
-        <span class="empty-meta">
-          {showArchived ? "Archived items will appear here." : "Add an AI provider credential to begin."}
+        <span class="empty-icon">
+          {#if showTrash}<Trash2 size={22} />{:else}<KeyRound size={22} />{/if}
         </span>
-        {#if !showArchived}
+        <strong class="empty-title">
+          {#if showTrash}
+            Trash is empty
+          {:else if showArchived}
+            Archive is empty
+          {:else}
+            No providers yet
+          {/if}
+        </strong>
+        <span class="empty-meta">
+          {#if showTrash}
+            Deleted items appear here for 30 days.
+          {:else if showArchived}
+            Archived items will appear here.
+          {:else}
+            Add an AI provider credential to begin.
+          {/if}
+        </span>
+        {#if !showArchived && !showTrash}
           <Button variant="primary" size="sm" on:click={() => onAdd()}>
             <Plus size={14} /> Add provider
           </Button>
@@ -140,9 +165,6 @@
           <span class="title">{entry.title}</span>
           <span class="subtitle">{entrySubtitle(entry)}</span>
         </div>
-        <div class="entry-aside">
-          <code class="mono masked">{maskedSuffix(entry.secretRefs[0]?.masked ?? "")}</code>
-        </div>
       </button>
     {/each}
   </div>
@@ -153,32 +175,34 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
-    background: var(--surface);
-    border-right: 1px solid var(--border);
+    background: color-mix(in oklab, var(--surface) 86%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
   }
 
   .toolbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 32px 32px;
-    gap: 6px;
-    padding: 12px;
-    border-bottom: 1px solid var(--divider);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 14px 12px 10px;
   }
 
   .filter-trigger {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: var(--radius);
-    color: var(--text-secondary);
+    width: 28px;
+    height: 28px;
+    margin-right: -4px;
+    border-radius: 6px;
+    color: var(--text-tertiary);
     transition: background-color 80ms ease, color 120ms ease;
 
     &:hover:not(:disabled),
     &.active-filter {
       background: var(--accent-soft);
-      color: var(--text);
+      color: var(--accent);
     }
 
     &:disabled {
@@ -187,8 +211,50 @@
     }
   }
 
+  .cta-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 80ms ease, color 120ms ease, transform 120ms ease;
+
+    &:active {
+      transform: scale(0.97);
+    }
+
+    &.primary {
+      background: var(--accent);
+      color: #fff;
+      border: 1px solid var(--accent);
+
+      &:hover {
+        background: var(--accent-hover);
+      }
+    }
+
+    &.danger {
+      background: transparent;
+      color: var(--danger);
+      border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent);
+
+      &:hover:not(:disabled) {
+        background: var(--danger-soft);
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    }
+  }
+
   :global(.filter-menu) {
-    min-width: 180px;
+    min-width: 200px;
     padding: 4px;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -202,7 +268,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 7px 10px;
+    padding: 8px 10px;
     border-radius: var(--radius-sm);
     color: var(--text);
     font-size: 13px;
@@ -224,13 +290,13 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--border);
+    height: 34px;
+    padding: 0 6px 0 12px;
+    border: 1px solid transparent;
     border-radius: var(--radius);
     background: var(--surface-2);
     color: var(--text-secondary);
-    transition: border-color 120ms ease, background-color 120ms ease;
+    transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
 
     &:focus-within {
       border-color: var(--accent);
@@ -239,6 +305,7 @@
     }
 
     input {
+      flex: 1;
       width: 100%;
       min-width: 0;
       border: 0;
@@ -260,38 +327,34 @@
   .entries {
     flex: 1;
     overflow: auto;
-    padding: 6px;
+    padding: 4px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   .entry {
     display: grid;
-    grid-template-columns: 32px minmax(0, 1fr) auto;
+    grid-template-columns: 36px minmax(0, 1fr);
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     width: 100%;
     height: 56px;
-    padding: 6px 10px;
+    padding: 8px 12px;
     border-radius: var(--radius);
     text-align: left;
     position: relative;
     transition: background-color 80ms ease;
 
     &:hover {
-      background: var(--accent-soft);
+      background: var(--surface-2);
     }
 
     &.selected {
       background: var(--accent-soft);
 
-      &::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 8px;
-        bottom: 8px;
-        width: 2px;
-        border-radius: 1px;
-        background: var(--accent);
+      .title {
+        color: var(--accent);
       }
     }
   }
@@ -308,8 +371,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text);
+    transition: color 120ms ease;
   }
 
   .subtitle {
@@ -320,29 +384,18 @@
     color: var(--text-tertiary);
   }
 
-  .entry-aside {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
-  }
-
-  .masked {
-    font-size: 11px;
-    color: var(--text-tertiary);
-  }
-
   .empty {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 48px 16px;
+    gap: 10px;
+    flex: 1;
+    padding: 24px 16px;
     text-align: center;
     color: var(--text-tertiary);
 
-    strong {
+    .empty-title {
       color: var(--text);
       font-weight: 600;
       font-size: 14px;

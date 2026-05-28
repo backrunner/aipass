@@ -213,6 +213,8 @@ pub struct EntrySummary {
     pub last_used_at: Option<OffsetDateTime>,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub archived_at: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub deleted_at: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -618,6 +620,7 @@ impl Vault {
             updated_at: now,
             last_used_at: None,
             archived_at: None,
+            deleted_at: None,
         };
         let mut secrets = BTreeMap::new();
         secrets.insert(secret_id, input.api_key);
@@ -741,6 +744,7 @@ impl Vault {
             updated_at: now,
             last_used_at: old.entry.last_used_at,
             archived_at: old.entry.archived_at,
+            deleted_at: old.entry.deleted_at,
         };
         let mut secrets = old.secrets;
         secrets.insert(secret_id, api_key);
@@ -767,6 +771,9 @@ impl Vault {
         let mut summaries = Vec::new();
         for envelope_path in self.record_paths()? {
             let plaintext = self.decrypt_provider_path(&envelope_path)?;
+            if plaintext.entry.deleted_at.is_some() {
+                continue;
+            }
             if plaintext.entry.archived_at.is_none() {
                 summaries.push(summary_from_plaintext(&plaintext));
             }
@@ -779,11 +786,27 @@ impl Vault {
         let mut summaries = Vec::new();
         for envelope_path in self.record_paths()? {
             let plaintext = self.decrypt_provider_path(&envelope_path)?;
+            if plaintext.entry.deleted_at.is_some() {
+                continue;
+            }
             if plaintext.entry.archived_at.is_some() {
                 summaries.push(summary_from_plaintext(&plaintext));
             }
         }
         summaries.sort_by_key(|entry| entry.title.to_lowercase());
+        Ok(summaries)
+    }
+
+    pub fn list_trash_provider_summaries(&self) -> Result<Vec<EntrySummary>, VaultError> {
+        let mut summaries = Vec::new();
+        for envelope_path in self.record_paths()? {
+            let plaintext = self.decrypt_provider_path(&envelope_path)?;
+            if plaintext.entry.deleted_at.is_some() {
+                summaries.push(summary_from_plaintext(&plaintext));
+            }
+        }
+        summaries.sort_by_key(|entry| entry.deleted_at.unwrap_or(OffsetDateTime::UNIX_EPOCH));
+        summaries.reverse();
         Ok(summaries)
     }
 
@@ -797,7 +820,7 @@ impl Vault {
         let mut matches = Vec::new();
         for envelope_path in self.record_paths()? {
             let plaintext = self.decrypt_provider_path(&envelope_path)?;
-            if plaintext.entry.archived_at.is_some() {
+            if plaintext.entry.deleted_at.is_some() || plaintext.entry.archived_at.is_some() {
                 continue;
             }
             if plaintext_matches_query(&plaintext, &q, candidate_fingerprint.as_deref()) {
@@ -949,10 +972,36 @@ impl Vault {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
         plaintext.entry.archived_at = None;
+        plaintext.entry.deleted_at = None;
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         self.write_provider_record(id, &plaintext)?;
         self.audit("provider.restore", Some(id), None)?;
         Ok(())
+    }
+
+    pub fn trash_provider(&self, id: Uuid) -> Result<(), VaultError> {
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        plaintext.entry.deleted_at = Some(OffsetDateTime::now_utc());
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("provider.trash", Some(id), None)?;
+        Ok(())
+    }
+
+    pub fn purge_expired_trash(&self, ttl: time::Duration) -> Result<usize, VaultError> {
+        let cutoff = OffsetDateTime::now_utc() - ttl;
+        let mut purged = 0;
+        for envelope_path in self.record_paths()? {
+            let plaintext = self.decrypt_provider_path(&envelope_path)?;
+            if let Some(deleted_at) = plaintext.entry.deleted_at {
+                if deleted_at < cutoff {
+                    self.delete_provider_permanently(plaintext.entry.id)?;
+                    purged += 1;
+                }
+            }
+        }
+        Ok(purged)
     }
 
     pub fn delete_provider_permanently(&self, id: Uuid) -> Result<(), VaultError> {
@@ -1340,6 +1389,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
         updated_at: entry.updated_at,
         last_used_at: entry.last_used_at,
         archived_at: entry.archived_at,
+        deleted_at: entry.deleted_at,
     }
 }
 

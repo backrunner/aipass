@@ -1,15 +1,16 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { Minus, Square, X } from "lucide-svelte";
+  import { DropdownMenu } from "bits-ui";
+  import { Lock, Menu, Minus, Settings, Square, X } from "lucide-svelte";
   import { onDestroy, onMount } from "svelte";
 
-  import type { MaybePromise, SyncReport } from "../../types";
+  import type { MaybePromise } from "../../types";
   import Logo from "./Logo.svelte";
-  import SyncStatusPill from "./SyncStatusPill.svelte";
 
   export let title = "AIPass";
-  export let syncState: SyncReport["status"] | undefined = undefined;
-  export let onOpenSync: () => MaybePromise = () => {};
+  export let showAppMenu = true;
+  export let onOpenSettings: () => MaybePromise = () => {};
+  export let onLock: () => MaybePromise = () => {};
 
   let isMac = false;
   let isMaximized = false;
@@ -104,9 +105,34 @@
 
   <div class="spacer" data-tauri-drag-region></div>
 
-  {#if syncState}
-    <div class="sync-slot">
-      <SyncStatusPill state={syncState} onClick={() => onOpenSync()} />
+  {#if showAppMenu}
+    <div class="menu-slot">
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger>
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              class="menu-trigger"
+              aria-label="Menu"
+            >
+              <Menu size={16} />
+            </button>
+          {/snippet}
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content sideOffset={6} align="end" class="titlebar-menu">
+            <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onOpenSettings()}>
+              <Settings size={14} />
+              <span>Settings</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onLock()}>
+              <Lock size={14} />
+              <span>Lock</span>
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
     </div>
   {/if}
 
@@ -127,14 +153,13 @@
 
 <style lang="scss">
   .titlebar {
-    height: 36px;
+    height: 34px;
     flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 0 0 0 12px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--divider);
+    background: transparent;
     user-select: none;
     -webkit-user-select: none;
     position: relative;
@@ -173,11 +198,64 @@
     align-self: stretch;
   }
 
-  .sync-slot {
+  .menu-slot {
     display: inline-flex;
     align-items: center;
     padding-right: 8px;
     -webkit-app-region: no-drag;
+  }
+
+  .menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    transition: background-color 80ms ease, color 120ms ease;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.06);
+      color: var(--text);
+    }
+  }
+
+  :global(html[data-theme="dark"]) .menu-trigger:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :global(html:not([data-theme])) .menu-trigger:hover,
+    :global(html[data-theme="system"]) .menu-trigger:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+  }
+
+  :global(.titlebar-menu) {
+    min-width: 150px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    z-index: 80;
+  }
+
+  :global(.titlebar-menu-item) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    outline: 0;
+  }
+
+  :global(.titlebar-menu-item[data-highlighted]) {
+    background: var(--accent-soft);
   }
 
   /* macOS traffic-light style */
@@ -236,12 +314,12 @@
   .win-controls {
     display: inline-flex;
     align-items: stretch;
-    height: 36px;
+    height: 34px;
   }
 
   .win-btn {
     width: 46px;
-    height: 36px;
+    height: 34px;
     display: inline-flex;
     align-items: center;
     justify-content: center;

@@ -3,6 +3,7 @@
   import Banner from "../shared/Banner.svelte";
   import Brand from "../shared/Brand.svelte";
   import Button from "../shared/Button.svelte";
+  import HeroBackground from "./HeroBackground.svelte";
   import PasswordField from "./PasswordField.svelte";
   import PasswordStrengthMeter from "./PasswordStrengthMeter.svelte";
 
@@ -44,180 +45,169 @@
 </script>
 
 <main class="auth-shell">
-  <div class="auth-card">
-    <div class="auth-accent" aria-hidden="true"></div>
-    <div class="auth-body" class:auth-body--minimal={showUnlock}>
-      {#if !showUnlock}
-        <div class="auth-brand">
-          <Brand size="md" />
-        </div>
-      {/if}
+  <HeroBackground />
 
-      {#if showCreate}
-        <form class="form" on:submit|preventDefault={() => onCreate()}>
-          <div class="copy">
-            <h1>Create your vault</h1>
-            <p>Pick a master password you can remember. We'll generate a recovery key shown once after creation.</p>
-          </div>
-
-          <PasswordField
-            label="Master password"
-            autocomplete="new-password"
-            bind:value={createPassword}
-            bind:show={showCreatePassword}
-            disabled={busy}
-          />
-
-          <PasswordStrengthMeter strength={createPasswordStrength} />
-
-          <PasswordField
-            label="Confirm password"
-            autocomplete="new-password"
-            withToggle={false}
-            bind:value={createPasswordConfirm}
-            bind:show={showCreatePassword}
-            disabled={busy}
-          />
-
-          {#if createMismatch}
-            <span class="inline-error">Passwords don't match.</span>
-          {:else if createMatches}
-            <span class="inline-ok">Passwords match.</span>
-          {/if}
-
-          <Button variant="primary" type="submit" block loading={createBusy} disabled={!createReady || busy}>
-            {createBusy ? "Creating vault..." : "Create encrypted vault"}
-          </Button>
-        </form>
-      {:else if showRecover}
-        <form class="form" on:submit|preventDefault={() => onRecover()}>
-          <div class="copy">
-            <h1>Recover vault</h1>
-            <p>Enter your recovery key, then choose a new master password.</p>
-          </div>
-
-          <label class="field">
-            <span class="field-label">Recovery key</span>
-            <input
-              bind:value={recoveryKeyInput}
-              type="text"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              placeholder="AIPASS-..."
-              class="text-input mono"
-              disabled={busy}
-            />
-          </label>
-          <PasswordField
-            label="New password"
-            autocomplete="new-password"
-            bind:value={recoveryPassword}
-            bind:show={showRecoveryPassword}
-            disabled={busy}
-          />
-
-          <PasswordStrengthMeter strength={recoveryPasswordStrength} />
-
-          <PasswordField
-            label="Confirm new password"
-            autocomplete="new-password"
-            withToggle={false}
-            bind:value={recoveryPasswordConfirm}
-            bind:show={showRecoveryPassword}
-            disabled={busy}
-          />
-
-          {#if recoverMismatch}
-            <span class="inline-error">Passwords don't match.</span>
-          {:else if recoverMatches}
-            <span class="inline-ok">Passwords match.</span>
-          {/if}
-
-          <div class="meta">
-            <span></span>
-            <button type="button" class="link" disabled={busy} on:click={() => onModeChange("unlock")}>
-              Back to unlock
-            </button>
-          </div>
-
-          <Button variant="primary" type="submit" block loading={recoverBusy} disabled={!recoverReady || busy}>
-            {recoverBusy ? "Recovering..." : "Recover vault"}
-          </Button>
-        </form>
-      {:else if showUnlock}
-        <form class="form" on:submit|preventDefault={() => onUnlock()}>
-          <div class="copy copy--minimal">
-            <h1>Unlock AIPass</h1>
-            <p>Enter your master password to continue.</p>
-          </div>
-
-          <PasswordField
-            label="Master password"
-            autocomplete="current-password"
-            bind:value={password}
-            bind:show={showUnlockPassword}
-            disabled={busy}
-            autofocus
-          />
-
-          <Button variant="primary" type="submit" block loading={unlockBusy} disabled={busy || password.length === 0}>
-            {unlockBusy ? "Unlocking..." : "Unlock"}
-          </Button>
-
-          <div class="meta meta--center">
-            <button type="button" class="link" disabled={busy} on:click={() => onModeChange("recover")}>
-              Forgot master password?
-            </button>
-          </div>
-        </form>
-      {/if}
-
-      {#if error}<Banner tone="danger">{error}</Banner>{/if}
+  <div class="auth-card" role="dialog" aria-label="AIPass authentication">
+    <div class="auth-brand">
+      <Brand size="md" />
     </div>
+
+    {#if showCreate}
+      <form class="form" on:submit|preventDefault={() => onCreate()}>
+        <div class="copy">
+          <h1>Create your vault</h1>
+          <p>Pick a master password you'll remember. We'll generate a recovery key shown once after creation.</p>
+        </div>
+
+        <PasswordField
+          label="Master password"
+          autocomplete="new-password"
+          bind:value={createPassword}
+          bind:show={showCreatePassword}
+          disabled={busy}
+        />
+
+        <PasswordStrengthMeter strength={createPasswordStrength} />
+
+        <PasswordField
+          label="Confirm password"
+          autocomplete="new-password"
+          withToggle={false}
+          bind:value={createPasswordConfirm}
+          bind:show={showCreatePassword}
+          disabled={busy}
+        />
+
+        {#if createMismatch}
+          <span class="inline-error">Passwords don't match.</span>
+        {:else if createMatches}
+          <span class="inline-ok">Passwords match.</span>
+        {/if}
+
+        <Button variant="primary" type="submit" block loading={createBusy} disabled={!createReady || busy}>
+          {createBusy ? "Creating vault…" : "Create encrypted vault"}
+        </Button>
+      </form>
+    {:else if showRecover}
+      <form class="form" on:submit|preventDefault={() => onRecover()}>
+        <div class="copy">
+          <h1>Recover vault</h1>
+          <p>Enter your recovery key, then choose a new master password.</p>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Recovery key</span>
+          <input
+            bind:value={recoveryKeyInput}
+            type="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            placeholder="AIPASS-..."
+            class="text-input mono"
+            disabled={busy}
+          />
+        </label>
+        <PasswordField
+          label="New password"
+          autocomplete="new-password"
+          bind:value={recoveryPassword}
+          bind:show={showRecoveryPassword}
+          disabled={busy}
+        />
+
+        <PasswordStrengthMeter strength={recoveryPasswordStrength} />
+
+        <PasswordField
+          label="Confirm new password"
+          autocomplete="new-password"
+          withToggle={false}
+          bind:value={recoveryPasswordConfirm}
+          bind:show={showRecoveryPassword}
+          disabled={busy}
+        />
+
+        {#if recoverMismatch}
+          <span class="inline-error">Passwords don't match.</span>
+        {:else if recoverMatches}
+          <span class="inline-ok">Passwords match.</span>
+        {/if}
+
+        <Button variant="primary" type="submit" block loading={recoverBusy} disabled={!recoverReady || busy}>
+          {recoverBusy ? "Recovering…" : "Recover vault"}
+        </Button>
+
+        <div class="meta">
+          <button type="button" class="link" disabled={busy} on:click={() => onModeChange("unlock")}>
+            Back to unlock
+          </button>
+        </div>
+      </form>
+    {:else if showUnlock}
+      <form class="form" on:submit|preventDefault={() => onUnlock()}>
+        <div class="copy">
+          <h1>Welcome back</h1>
+          <p>Enter your master password to unlock the vault.</p>
+        </div>
+
+        <PasswordField
+          label="Master password"
+          autocomplete="current-password"
+          bind:value={password}
+          bind:show={showUnlockPassword}
+          disabled={busy}
+          autofocus
+        />
+
+        <Button variant="primary" type="submit" block loading={unlockBusy} disabled={busy || password.length === 0}>
+          {unlockBusy ? "Unlocking…" : "Unlock"}
+        </Button>
+
+        <div class="meta">
+          <button type="button" class="link" disabled={busy} on:click={() => onModeChange("recover")}>
+            Forgot master password?
+          </button>
+        </div>
+      </form>
+    {/if}
+
+    {#if error}<Banner tone="danger">{error}</Banner>{/if}
   </div>
 </main>
 
 <style lang="scss">
   .auth-shell {
-    display: grid;
+    position: relative;
     flex: 1;
     min-height: 0;
-    place-items: center;
-    padding: 24px;
-    background: var(--bg);
-    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    overflow: hidden;
   }
 
   .auth-card {
+    position: relative;
+    z-index: 1;
     width: min(420px, 100%);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    box-shadow: var(--shadow-pop);
-  }
-
-  .auth-accent {
-    height: 3px;
-    background: var(--accent);
-  }
-
-  .auth-body {
-    padding: 28px 28px 24px;
+    padding: 28px;
     display: flex;
     flex-direction: column;
     gap: 20px;
-  }
-
-  .auth-body--minimal {
-    padding: 24px 24px 22px;
-    gap: 14px;
+    background: color-mix(in oklab, var(--surface) 88%, transparent);
+    border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+    border-radius: 14px;
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    box-shadow:
+      0 20px 60px rgba(15, 17, 16, 0.25),
+      0 1px 0 rgba(255, 255, 255, 0.06) inset;
   }
 
   .auth-brand {
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
   }
 
   .form {
@@ -229,35 +219,22 @@
   .copy {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    text-align: center;
+    gap: 6px;
+    text-align: left;
     margin-bottom: 4px;
   }
 
   .copy h1 {
-    font-size: 18px;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text);
   }
 
   .copy p {
     color: var(--text-secondary);
     font-size: 13px;
     line-height: 1.5;
-  }
-
-  .copy--minimal {
-    gap: 6px;
-    margin-bottom: 8px;
-  }
-
-  .copy--minimal h1 {
-    font-size: 17px;
-    font-weight: 600;
-    letter-spacing: -0.005em;
-  }
-
-  .copy--minimal p {
-    font-size: 12px;
-    color: var(--text-tertiary);
   }
 
   .field {
@@ -280,6 +257,7 @@
     color: var(--text);
     font-size: 13px;
     outline: 0;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
 
     &:focus {
       border-color: var(--accent);
@@ -295,14 +273,10 @@
   .meta {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     gap: 12px;
     min-height: 22px;
-  }
-
-  .meta--center {
-    justify-content: center;
-    margin-top: 2px;
+    margin-top: 4px;
   }
 
   .link {
@@ -311,16 +285,18 @@
     font-weight: 500;
     background: transparent;
     border: 0;
-    padding: 0;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color 80ms ease;
 
     &:disabled {
       opacity: 0.5;
       cursor: not-allowed;
     }
-    cursor: pointer;
 
-    &:hover {
-      text-decoration: underline;
+    &:hover:not(:disabled) {
+      background: var(--accent-soft);
     }
   }
 

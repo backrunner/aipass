@@ -1,8 +1,10 @@
 mod auth_tasks;
 mod commands;
 mod models;
+mod updates;
 
 use commands::*;
+use updates::{check_for_updates, install_update};
 
 use crate::auth_tasks::AuthTasks;
 use crate::models::{AppPreferences, NativeHostStatus, ProviderAddRequest, ProviderUpdateRequest};
@@ -538,6 +540,7 @@ fn configure_initial_window(app: &AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
         .setup(|app| {
             configure_initial_window(app.handle());
@@ -562,7 +565,11 @@ pub fn run() {
             provider_update,
             provider_archive,
             provider_restore,
+            provider_trash,
             provider_delete,
+            entries_trash_list,
+            trash_purge_expired,
+            trash_empty,
             secret_reveal_field,
             secret_add,
             secret_remove,
@@ -583,7 +590,9 @@ pub fn run() {
             sync_webdav_remote,
             sync_conflicts,
             sync_accept_conflict,
-            sync_discard_conflict
+            sync_discard_conflict,
+            check_for_updates,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

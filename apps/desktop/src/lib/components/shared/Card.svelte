@@ -39,16 +39,16 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 10px 14px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--divider);
   }
 
   .card-title {
-    color: var(--text-tertiary);
-    font-size: 11px;
+    color: var(--text);
+    font-size: 13px;
     font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .card-actions {
@@ -66,6 +66,6 @@
   .card-footer {
     border-top: 1px solid var(--divider);
     background: var(--surface-2);
-    padding: 8px 14px;
+    padding: 10px 16px;
   }
 </style>

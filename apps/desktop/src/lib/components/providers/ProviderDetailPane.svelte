@@ -12,22 +12,38 @@
     MoreHorizontal,
     Pencil,
     Plus,
+    Terminal,
     Trash2,
     Undo2,
     Wifi
   } from "lucide-svelte";
 
-  import type { MaybePromise, ProbeResult } from "../../types";
+  import type {
+    Draft,
+    FormMode,
+    MaybePromise,
+    ProbeResult,
+    ToolConfigApplyResult,
+    ToolConfigMode,
+    ToolConfigPreview,
+    ToolConfigTarget
+  } from "../../types";
+  import {
+    compatibleToolsFor,
+    type IntegrationToolDefinition
+  } from "../../utils/integrations";
+  import { detectLang, highlightPreview } from "../../utils/highlight";
   import Badge from "../shared/Badge.svelte";
   import Banner from "../shared/Banner.svelte";
   import Button from "../shared/Button.svelte";
   import Card from "../shared/Card.svelte";
   import IconButton from "../shared/IconButton.svelte";
   import ProviderIcon from "../shared/ProviderIcon.svelte";
-  import SecretField from "../shared/SecretField.svelte";
+  import ProviderFormFields from "./ProviderFormFields.svelte";
 
   export let selected: ProviderEntry | undefined;
   export let showArchived = false;
+  export let showTrash = false;
   export let copied = "";
   export let revealedSecrets: Record<string, string> = {};
   export let newSecretLabel = "fallback";
@@ -37,146 +53,156 @@
   export let probing = false;
   export let notice = "";
   export let error = "";
-  export let onCopySecret: () => MaybePromise = () => {};
+  export let editMode = false;
+  export let formMode: FormMode = "edit";
+  export let draft: Draft;
   export let onProbe: () => MaybePromise = () => {};
-  export let onEdit: (entry: ProviderEntry) => MaybePromise = () => {};
+  export let onEditStart: (entry: ProviderEntry) => MaybePromise = () => {};
+  export let onEditCancel: () => MaybePromise = () => {};
+  export let onEditSave: () => MaybePromise = () => {};
   export let onRestore: () => MaybePromise = () => {};
   export let onDelete: () => MaybePromise = () => {};
   export let onArchive: () => MaybePromise = () => {};
+  export let onTrash: () => MaybePromise = () => {};
   export let onRevealSecret: (label: string) => MaybePromise = () => {};
   export let onCopySecretByLabel: (label: string) => MaybePromise = () => {};
   export let onRemoveSecret: (label: string) => MaybePromise = () => {};
   export let onAddSecret: () => MaybePromise = () => {};
   export let onCopyValue: (label: string, value: string) => MaybePromise = () => {};
+  export let onInferDraftFromDomain: () => MaybePromise = () => {};
+  export let onProviderChanged: () => MaybePromise = () => {};
+  export let onPreviewToolConfig: (request: {
+    tool: ToolConfigTarget;
+    mode: ToolConfigMode;
+    id: string;
+  }) => Promise<ToolConfigPreview> = async () => {
+    throw new Error("Tool preview is unavailable");
+  };
+  export let onApplyToolConfig: (request: {
+    tool: ToolConfigTarget;
+    mode: ToolConfigMode;
+    id: string;
+  }) => Promise<ToolConfigApplyResult> = async () => {
+    throw new Error("Tool apply is unavailable");
+  };
 
   let showAddSecret = false;
 
   $: primaryLabel = selected?.secretRefs[0]?.label ?? "primary";
-  $: copyPrimaryLabel = `secret:${primaryLabel}`;
   $: hasQuota = Boolean(
     selected?.quota &&
       (selected.quota.label || selected.quota.limit || selected.quota.remaining || selected.quota.resetAt)
   );
-  $: hasMetadata = Boolean(
-    selected && (selected.tags.length || (selected.headerNames?.length ?? 0) || selected.notes)
-  );
+  $: integrationTools = selected
+    ? compatibleToolsFor({
+        id: selected.id,
+        title: selected.title,
+        interfaceType: selected.interfaceType,
+        authScheme: selected.authScheme
+      })
+    : [];
 
-  function endpointUrl(entry: ProviderEntry): string {
-    return entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "https://api.example.com";
+  type IntegrationState = {
+    busy: boolean;
+    error: string;
+    preview?: ToolConfigPreview;
+    applied?: ToolConfigApplyResult;
+  };
+
+  const initialIntegrationState = (): Record<ToolConfigTarget, IntegrationState> => ({
+    codex: { busy: false, error: "" },
+    "claude-code": { busy: false, error: "" },
+    "gemini-cli": { busy: false, error: "" },
+    opencode: { busy: false, error: "" }
+  });
+
+  let integrationState: Record<ToolConfigTarget, IntegrationState> = initialIntegrationState();
+
+  $: if (selected?.id) {
+    integrationState = initialIntegrationState();
   }
 
-  function consoleUrl(entry: ProviderEntry): string {
+  async function previewIntegration(tool: IntegrationToolDefinition) {
+    if (!selected) return;
+    const state = integrationState[tool.id];
+    integrationState = {
+      ...integrationState,
+      [tool.id]: { ...state, busy: true, error: "" }
+    };
+    try {
+      const preview = await onPreviewToolConfig({ tool: tool.id, mode: tool.defaultMode, id: selected.id });
+      integrationState = {
+        ...integrationState,
+        [tool.id]: { ...integrationState[tool.id], busy: false, preview }
+      };
+    } catch (err) {
+      integrationState = {
+        ...integrationState,
+        [tool.id]: { ...integrationState[tool.id], busy: false, error: String(err) }
+      };
+    }
+  }
+
+  async function applyIntegration(tool: IntegrationToolDefinition) {
+    if (!selected) return;
+    const state = integrationState[tool.id];
+    if (!state.preview) {
+      await previewIntegration(tool);
+      return;
+    }
+    integrationState = {
+      ...integrationState,
+      [tool.id]: { ...state, busy: true, error: "" }
+    };
+    try {
+      const applied = await onApplyToolConfig({ tool: tool.id, mode: tool.defaultMode, id: selected.id });
+      integrationState = {
+        ...integrationState,
+        [tool.id]: { ...integrationState[tool.id], busy: false, applied }
+      };
+    } catch (err) {
+      integrationState = {
+        ...integrationState,
+        [tool.id]: { ...integrationState[tool.id], busy: false, error: String(err) }
+      };
+    }
+  }
+
+  function fullyMasked(): string {
+    return "•".repeat(16);
+  }
+
+  function trashDaysRemaining(deletedAt: string | undefined): number | undefined {
+    if (!deletedAt) return undefined;
+    const deletedTs = Date.parse(deletedAt);
+    if (Number.isNaN(deletedTs)) return undefined;
+    const expiresAt = deletedTs + 30 * 24 * 60 * 60 * 1000;
+    const remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));
+    return remaining;
+  }
+
+  function endpointDisplay(entry: ProviderEntry): string {
+    const apiEndpoint = entry.endpoints.find((endpoint) => endpoint.kind === "api");
+    return apiEndpoint?.url ?? entry.endpoints[0]?.url ?? "";
+  }
+
+  function consoleDisplay(entry: ProviderEntry): string {
     return entry.endpoints.find((endpoint) => endpoint.kind === "console")?.url ?? "";
   }
 
-  function envKey(entry: ProviderEntry): string {
-    switch (entry.providerId) {
-      case "anthropic":
-        return "ANTHROPIC_API_KEY";
-      case "gemini":
-        return "GEMINI_API_KEY";
-      case "openrouter":
-        return "OPENROUTER_API_KEY";
-      case "deepseek":
-        return "DEEPSEEK_API_KEY";
-      case "moonshot":
-        return "MOONSHOT_API_KEY";
-      case "qwen":
-        return "DASHSCOPE_API_KEY";
-      case "zhipu":
-        return "ZHIPUAI_API_KEY";
-      case "volcengine":
-        return "ARK_API_KEY";
-      case "groq":
-        return "GROQ_API_KEY";
-      case "replicate":
-        return "REPLICATE_API_TOKEN";
-      case "together":
-        return "TOGETHER_API_KEY";
-      case "fireworks":
-        return "FIREWORKS_API_KEY";
-      case "bedrock":
-        return "AWS_PROFILE";
-      default:
-        return entry.authScheme === "google_api_key"
-          ? "GEMINI_API_KEY"
-          : entry.authScheme === "azure_api_key"
-            ? "AZURE_OPENAI_API_KEY"
-            : entry.authScheme === "aws_profile"
-              ? "AWS_PROFILE"
-              : "AIPASS_API_KEY";
-    }
+  function startEdit() {
+    if (selected) onEditStart(selected);
   }
 
-  function shellQuote(value: string): string {
-    return `'${value.replaceAll("'", "'\\''")}'`;
-  }
-
-  function curlSnippet(entry: ProviderEntry): string {
-    const endpoint = endpointUrl(entry).replace(/\/$/, "");
-    const key = envKey(entry);
-    if (entry.providerId === "replicate") {
-      return `curl -sS ${endpoint}/models -H 'Authorization: Bearer $${key}'`;
-    }
-    if (entry.interfaceType === "bedrock" || entry.authScheme === "aws_profile") {
-      const region = entry.endpoints.find((item) => item.region)?.region ?? "${AWS_REGION:-us-east-1}";
-      return `AWS_PROFILE=\${${key}:-default} aws bedrock list-foundation-models --region ${region}`;
-    }
-    if (entry.interfaceType === "anthropic_messages") {
-      return `curl -sS ${endpoint}/v1/models -H 'x-api-key: $${key}' -H 'anthropic-version: 2023-06-01'`;
-    }
-    if (entry.interfaceType === "gemini") {
-      return `curl -sS '${endpoint}/v1beta/models?key=$${key}'`;
-    }
-    if (entry.interfaceType === "azure_openai") {
-      return `curl -sS ${endpoint}/models -H 'api-key: $${key}'`;
-    }
-    return `curl -sS ${endpoint}/models ${authHeaderSnippet(entry.authScheme, key)}`.trim();
-  }
-
-  function authHeaderSnippet(authScheme: ProviderEntry["authScheme"], key: string): string {
-    switch (authScheme) {
-      case "bearer":
-        return `-H 'Authorization: Bearer $${key}'`;
-      case "x_api_key":
-        return `-H 'x-api-key: $${key}'`;
-      case "azure_api_key":
-        return `-H 'api-key: $${key}'`;
-      case "custom_header":
-        return `-H 'Authorization: $${key}'`;
-      default:
-        return "";
-    }
-  }
-
-  function envSnippet(entry: ProviderEntry): string {
-    const lines = [`export ${envKey(entry)}="$(aipass get ${entry.id} --field api_key --reveal)"`];
-    const endpoint = endpointUrl(entry);
-    if (endpoint) lines.push(`export AIPASS_BASE_URL=${shellQuote(endpoint)}`);
-    if (entry.defaultModel) lines.push(`export AIPASS_MODEL=${shellQuote(entry.defaultModel)}`);
-    return lines.join("\n");
-  }
-
-  function configSnippet(entry: ProviderEntry): string {
-    return JSON.stringify(
-      {
-        provider: entry.providerId,
-        title: entry.title,
-        interfaceType: entry.interfaceType,
-        authScheme: entry.authScheme,
-        baseUrl: endpointUrl(entry),
-        consoleUrl: consoleUrl(entry) || undefined,
-        envKey: envKey(entry),
-        defaultModel: entry.defaultModel,
-        modelAliases: entry.modelAliases
-      },
-      null,
-      2
-    );
+  function cancelEdit() {
+    showAddSecret = false;
+    newSecretKey = "";
+    onEditCancel();
   }
 </script>
 
 {#if selected}
+  {#key selected.id}
   <section class="detail">
     <header class="detail-header">
       <div class="identity">
@@ -186,231 +212,326 @@
           <div class="meta">
             <Badge tone={providerKindTone[selected.providerKind]}>{providerKindLabel[selected.providerKind]}</Badge>
             <Badge>{interfaceLabel[selected.interfaceType]}</Badge>
-            <Badge>{authLabel[selected.authScheme]}</Badge>
+            {#if selected.environment}
+              <Badge>{selected.environment}</Badge>
+            {/if}
           </div>
         </div>
       </div>
 
       <div class="actions">
-        {#if showArchived}
-          <Button variant="primary" on:click={() => onRestore()}>
+        {#if editMode}
+          <Button variant="ghost" on:click={cancelEdit}>Cancel</Button>
+          <Button variant="primary" on:click={() => onEditSave()}>Save changes</Button>
+        {:else if showTrash}
+          <Button variant="ghost" on:click={() => onRestore()}>
             <Undo2 size={14} /> Restore
           </Button>
-        {:else}
-          <Button variant="primary" on:click={() => onCopySecret()}>
-            {#if copied === copyPrimaryLabel}<Check size={14} />{:else}<Copy size={14} />{/if}
-            {copied === copyPrimaryLabel ? "Copied" : "Copy key"}
+          <Button variant="primary" on:click={() => onDelete()}>
+            <Trash2 size={14} /> Delete forever
           </Button>
-        {/if}
+        {:else if showArchived}
+          <Button variant="ghost" on:click={() => onRestore()}>
+            <Undo2 size={14} /> Restore
+          </Button>
+          <Button variant="primary" on:click={() => onTrash()}>
+            <Trash2 size={14} /> Move to trash
+          </Button>
+        {:else}
+          <Button variant="primary" on:click={startEdit}>
+            <Pencil size={14} /> Edit
+          </Button>
 
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger>
-            {#snippet child({ props })}
-              <button class="more-trigger" {...props} aria-label="More actions" type="button">
-                <MoreHorizontal size={16} />
-              </button>
-            {/snippet}
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content sideOffset={6} align="end" class="dropdown-content">
-              <DropdownMenu.Item
-                class="dropdown-item"
-                onSelect={() => onRevealSecret(primaryLabel)}
-              >
-                {#if revealedSecrets[primaryLabel]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-                <span>{revealedSecrets[primaryLabel] ? "Hide key" : "Reveal key"}</span>
-              </DropdownMenu.Item>
-              <DropdownMenu.Item class="dropdown-item" onSelect={() => onProbe()} disabled={probing}>
-                <Wifi size={14} />
-                <span>{probing ? "Probing…" : "Probe endpoint"}</span>
-              </DropdownMenu.Item>
-              <DropdownMenu.Item class="dropdown-item" onSelect={() => onEdit(selected)}>
-                <Pencil size={14} />
-                <span>Edit provider</span>
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator class="dropdown-separator" />
-              {#if showArchived}
-                <DropdownMenu.Item class="dropdown-item danger" onSelect={() => onDelete()}>
-                  <Trash2 size={14} />
-                  <span>Delete forever</span>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              {#snippet child({ props })}
+                <button class="more-trigger" {...props} aria-label="More actions" type="button">
+                  <MoreHorizontal size={16} />
+                </button>
+              {/snippet}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content sideOffset={6} align="end" class="dropdown-content">
+                <DropdownMenu.Item class="dropdown-item" onSelect={() => onProbe()} disabled={probing}>
+                  <Wifi size={14} />
+                  <span>{probing ? "Probing…" : "Probe endpoint"}</span>
                 </DropdownMenu.Item>
-              {:else}
+                <DropdownMenu.Separator class="dropdown-separator" />
                 <DropdownMenu.Item class="dropdown-item" onSelect={() => onArchive()}>
                   <Archive size={14} />
                   <span>Archive</span>
                 </DropdownMenu.Item>
-              {/if}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+                <DropdownMenu.Item class="dropdown-item danger" onSelect={() => onTrash()}>
+                  <Trash2 size={14} />
+                  <span>Move to trash</span>
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        {/if}
       </div>
     </header>
 
     <div class="detail-body">
       {#if notice}<Banner tone="success">{notice}</Banner>{/if}
       {#if error}<Banner tone="danger">{error}</Banner>{/if}
-
-      <Card title="Secrets">
-        <span slot="actions">{selected.secretRefs.length} {selected.secretRefs.length === 1 ? "key" : "keys"}</span>
-        {#each selected.secretRefs as secret}
-          <SecretField
-            label={secret.label}
-            masked={secret.masked}
-            revealedValue={revealedSecrets[secret.label] ?? ""}
-            canRemove={selected.secretRefs.length > 1}
-            busy={secretBusy === secret.label}
-            copied={copied === `secret:${secret.label}`}
-            onReveal={() => onRevealSecret(secret.label)}
-            onCopy={() => onCopySecretByLabel(secret.label)}
-            onRemove={() => onRemoveSecret(secret.label)}
-          />
-        {/each}
-        <div slot="footer" class="secret-footer">
-          {#if showAddSecret}
-            <div class="inline-form">
-              <input
-                bind:value={newSecretLabel}
-                aria-label="Secret label"
-                placeholder="fallback"
-              />
-              <input
-                bind:value={newSecretKey}
-                aria-label="Secret value"
-                type="password"
-                placeholder="API key"
-              />
-              <Button variant="secondary" size="sm" disabled={secretBusy === "add"} on:click={() => onAddSecret()}>
-                Save
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                on:click={() => {
-                  showAddSecret = false;
-                  newSecretKey = "";
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          {:else}
-            <button type="button" class="link" on:click={() => (showAddSecret = true)}>
-              <Plus size={13} /> Add secret
-            </button>
-          {/if}
-        </div>
-      </Card>
-
-      <Card title="Endpoint & Interface">
-        {#each selected.endpoints as endpoint}
-          <div class="kv-row">
-            <span class="kv-label">{endpoint.kind}</span>
-            <code class="mono kv-value">{endpoint.url ?? endpoint.region ?? "Not set"}</code>
-            {#if endpoint.url}
-              <IconButton size="sm" label={`Copy ${endpoint.kind} URL`} on:click={() => onCopyValue("endpoint", endpoint.url ?? "")}>
-                {#if copied === "endpoint"}<Check size={14} />{:else}<Copy size={14} />{/if}
-              </IconButton>
-            {:else}
-              <span></span>
-            {/if}
-          </div>
-        {/each}
-        <div class="kv-row">
-          <span class="kv-label">Default model</span>
-          <code class="mono kv-value">{selected.defaultModel ?? "Not set"}</code>
-          <span></span>
-        </div>
-        {#if selected.modelAliases?.length}
-          <div class="kv-row">
-            <span class="kv-label">Model aliases</span>
-            <code class="mono kv-value">{selected.modelAliases.map(([alias, model]) => `${alias} -> ${model}`).join(", ")}</code>
-            <span></span>
-          </div>
+      {#if showTrash && selected.deletedAt}
+        {@const days = trashDaysRemaining(selected.deletedAt)}
+        {#if days !== undefined}
+          <Banner tone="warning">
+            {days === 0 ? "Will be deleted soon." : `Permanently deletes in ${days} ${days === 1 ? "day" : "days"}.`}
+          </Banner>
         {/if}
-        <div class="kv-row">
-          <span class="kv-label">Environment</span>
-          <code class="mono kv-value">{selected.environment}</code>
-          <span></span>
-        </div>
-        <svelte:fragment slot="footer">
-          <div class="snippet-actions">
-            <Button variant="secondary" size="sm" on:click={() => onCopyValue("snippet:curl", curlSnippet(selected))}>
-              {#if copied === "snippet:curl"}<Check size={13} />{:else}<Copy size={13} />{/if}
-              curl
-            </Button>
-            <Button variant="secondary" size="sm" on:click={() => onCopyValue("snippet:env", envSnippet(selected))}>
-              {#if copied === "snippet:env"}<Check size={13} />{:else}<Copy size={13} />{/if}
-              env
-            </Button>
-            <Button variant="secondary" size="sm" on:click={() => onCopyValue("snippet:config", configSnippet(selected))}>
-              {#if copied === "snippet:config"}<Check size={13} />{:else}<Copy size={13} />{/if}
-              config
-            </Button>
-          </div>
-          {#if probeResult}
-            <div class="probe">
-              <span class={`probe-status ${probeResult.ok ? "ok" : "fail"}`}>
-                <span class="dot"></span>
-                {probeResult.ok ? "Healthy" : "Check failed"}
-              </span>
-              <span class="probe-meta">
-                {probeResult.status ?? "n/a"} · {interfaceLabel[probeResult.interfaceType]}
-                {#if probeResult.modelCount !== undefined} · {probeResult.modelCount} models{/if}
-              </span>
-              {#if probeResult.error}<span class="probe-error">{probeResult.error}</span>{/if}
-            </div>
-          {/if}
-        </svelte:fragment>
-      </Card>
-
-      {#if hasQuota}
-        <Card title="Quota">
-          <div class="kv-row">
-            <span class="kv-label">{selected.quota?.label ?? "Quota"}</span>
-            <span class="kv-value">
-              <strong class="tabular">{selected.quota?.remaining ?? "—"}</strong>
-              <span class="text-tertiary"> / {selected.quota?.limit ?? "—"}</span>
-            </span>
-            <span></span>
-          </div>
-          {#if selected.quota?.resetAt}
-            <div class="kv-row">
-              <span class="kv-label">Resets at</span>
-              <code class="mono kv-value">{selected.quota.resetAt}</code>
-              <span></span>
-            </div>
-          {/if}
-        </Card>
       {/if}
 
-      {#if hasMetadata}
-        <Card title="Metadata">
-          {#if selected.tags.length}
-            <div class="meta-row">
-              <span class="kv-label">Tags</span>
-              <div class="chips">
-                {#each selected.tags as tag}<span class="chip">{tag}</span>{/each}
-              </div>
+      {#if editMode}
+        <ProviderFormFields
+          {formMode}
+          bind:draft
+          {onInferDraftFromDomain}
+          {onProviderChanged}
+        />
+
+        {#if selected.secretRefs.length > 1 || showAddSecret}
+          <section class="form-section">
+            <h3 class="section-title">Additional keys</h3>
+            <div class="section-fields">
+              {#each selected.secretRefs.slice(1) as secret}
+                <div class="key-row">
+                  <span class="key-row-label">{secret.label}</span>
+                  <code class="key-row-value mono">{revealedSecrets[secret.label] || fullyMasked()}</code>
+                  <button
+                    type="button"
+                    class="key-row-remove"
+                    aria-label="Remove key"
+                    on:click={() => onRemoveSecret(secret.label)}
+                    disabled={secretBusy === secret.label}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              {/each}
+              {#if showAddSecret}
+                <div class="add-secret-row">
+                  <input
+                    bind:value={newSecretLabel}
+                    aria-label="Secret label"
+                    placeholder="fallback"
+                  />
+                  <input
+                    bind:value={newSecretKey}
+                    aria-label="Secret value"
+                    type="password"
+                    placeholder="API key"
+                  />
+                  <Button variant="secondary" size="sm" disabled={secretBusy === "add"} on:click={() => onAddSecret()}>
+                    Save
+                  </Button>
+                  <Button variant="ghost" size="sm" on:click={() => { showAddSecret = false; newSecretKey = ""; }}>
+                    <Trash2 size={13} />
+                  </Button>
+                </div>
+              {/if}
+              {#if !showAddSecret}
+                <button type="button" class="add-chip" on:click={() => (showAddSecret = true)}>
+                  <Plus size={12} />
+                  <span>Add key</span>
+                </button>
+              {/if}
+            </div>
+          </section>
+        {:else}
+          <button type="button" class="add-chip standalone" on:click={() => (showAddSecret = true)}>
+            <Plus size={12} />
+            <span>Add another key</span>
+          </button>
+        {/if}
+      {:else}
+        <Card title="Credentials">
+          {#if endpointDisplay(selected)}
+            <button
+              type="button"
+              class="kv-row clickable"
+              on:click={() => onCopyValue("endpoint", endpointDisplay(selected))}
+            >
+              <span class="kv-label">Endpoint</span>
+              <code class="kv-value mono">{endpointDisplay(selected)}</code>
+              <span class="kv-hint">
+                {#if copied === "endpoint"}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+              </span>
+            </button>
+          {/if}
+          {#each selected.secretRefs as secret, index}
+            <div class="kv-row clickable secret">
+              <button
+                type="button"
+                class="kv-row-copy"
+                aria-label={`Copy ${index === 0 ? "API key" : secret.label}`}
+                on:click={() => onCopySecretByLabel(secret.label)}
+              >
+                <span class="kv-label">
+                  <KeyRound size={13} />
+                  {index === 0 ? "API key" : secret.label}
+                </span>
+                <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.label])}>
+                  {revealedSecrets[secret.label] || fullyMasked()}
+                </code>
+                <span class="kv-hint">
+                  {#if copied === `secret:${secret.label}`}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="reveal-btn"
+                aria-label={revealedSecrets[secret.label] ? `Hide ${secret.label}` : `Reveal ${secret.label}`}
+                aria-pressed={Boolean(revealedSecrets[secret.label])}
+                on:click={() => onRevealSecret(secret.label)}
+              >
+                {#if revealedSecrets[secret.label]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+              </button>
+            </div>
+          {/each}
+          {#if selected.defaultModel}
+            <button
+              type="button"
+              class="kv-row clickable"
+              on:click={() => onCopyValue("model", selected.defaultModel ?? "")}
+            >
+              <span class="kv-label">Default model</span>
+              <code class="kv-value mono">{selected.defaultModel}</code>
+              <span class="kv-hint">
+                {#if copied === "model"}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+              </span>
+            </button>
+          {/if}
+          {#if selected.modelAliases?.length}
+            <div class="kv-row">
+              <span class="kv-label">Aliases</span>
+              <code class="kv-value mono">{selected.modelAliases.map(([alias, model]) => `${alias} → ${model}`).join(", ")}</code>
+              <span></span>
             </div>
           {/if}
-          {#if selected.headerNames?.length}
-            <div class="meta-row">
-              <span class="kv-label">Headers</span>
-              <div class="chips">
-                {#each selected.headerNames as header}<span class="chip mono">{header}</span>{/each}
-              </div>
-            </div>
+          {#if consoleDisplay(selected)}
+            <button
+              type="button"
+              class="kv-row clickable"
+              on:click={() => onCopyValue("console", consoleDisplay(selected))}
+            >
+              <span class="kv-label">Console</span>
+              <code class="kv-value mono">{consoleDisplay(selected)}</code>
+              <span class="kv-hint">
+                {#if copied === "console"}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+              </span>
+            </button>
           {/if}
-          {#if selected.notes}
-            <div class="meta-row">
-              <span class="kv-label">Notes</span>
-              <p class="notes">{selected.notes}</p>
+          {#if selected.tags.length || selected.headerNames?.length}
+            {#if selected.tags.length}
+              <div class="kv-row">
+                <span class="kv-label">Tags</span>
+                <div class="chips kv-value">
+                  {#each selected.tags as tag}<span class="chip">{tag}</span>{/each}
+                </div>
+                <span></span>
+              </div>
+            {/if}
+            {#if selected.headerNames?.length}
+              <div class="kv-row">
+                <span class="kv-label">Headers</span>
+                <div class="chips kv-value">
+                  {#each selected.headerNames as header}<span class="chip mono">{header}</span>{/each}
+                </div>
+                <span></span>
+              </div>
+            {/if}
+          {/if}
+          {#if probeResult}
+            <div class="kv-row">
+              <span class="kv-label">Status</span>
+              <span class="kv-value">
+                <span class={`probe-dot ${probeResult.ok ? "ok" : "fail"}`}></span>
+                {probeResult.ok ? "Healthy" : "Check failed"}
+                {#if probeResult.modelCount !== undefined} · {probeResult.modelCount} models{/if}
+                {#if probeResult.error} · <span class="probe-error">{probeResult.error}</span>{/if}
+              </span>
+              <span></span>
             </div>
           {/if}
         </Card>
+
+        {#if hasQuota}
+          <Card title="Quota">
+            <div class="kv-row">
+              <span class="kv-label">{selected.quota?.label ?? "Quota"}</span>
+              <span class="kv-value">
+                <strong class="tabular">{selected.quota?.remaining ?? "—"}</strong>
+                <span class="text-tertiary"> / {selected.quota?.limit ?? "—"}</span>
+              </span>
+              <span></span>
+            </div>
+            {#if selected.quota?.resetAt}
+              <div class="kv-row">
+                <span class="kv-label">Resets</span>
+                <code class="kv-value mono">{selected.quota.resetAt}</code>
+                <span></span>
+              </div>
+            {/if}
+          </Card>
+        {/if}
+
+        {#if selected.notes}
+          <Card title="Notes">
+            <div class="notes-body">{selected.notes}</div>
+          </Card>
+        {/if}
+
+        {#if integrationTools.length > 0}
+          <Card title="Integrations">
+            <div class="integration-list">
+              {#each integrationTools as tool}
+                {@const state = integrationState[tool.id]}
+                <div class="integration-row">
+                  <div class="integration-header">
+                    <div class="integration-meta">
+                      <div class="integration-icon"><Terminal size={14} /></div>
+                      <div class="integration-text">
+                        <strong>{tool.name}</strong>
+                        <span class="text-tertiary">{tool.desc}</span>
+                      </div>
+                    </div>
+                    <div class="integration-actions">
+                      <Button variant="secondary" size="sm" on:click={() => previewIntegration(tool)} disabled={state.busy}>
+                        <Eye size={13} /> Preview
+                      </Button>
+                      <Button variant="primary" size="sm" on:click={() => applyIntegration(tool)} disabled={state.busy || !state.preview}>
+                        <Check size={13} /> Apply
+                      </Button>
+                    </div>
+                  </div>
+                  {#if state.error}
+                    <Banner tone="danger">{state.error}</Banner>
+                  {/if}
+                  {#if state.applied}
+                    <Banner tone="success">
+                      Configured {state.applied.entryTitle} at <code>{state.applied.targetPath}</code>
+                    </Banner>
+                  {/if}
+                  {#if state.preview}
+                    <div class="integration-preview">
+                      <div class="integration-preview-meta">
+                        <code>{state.preview.targetPath}</code>
+                      </div>
+                      <pre class="code-block" data-lang={detectLang(state.preview.targetPath)}>{@html highlightPreview(state.preview.preview, state.preview.targetPath)}</pre>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </Card>
+        {/if}
       {/if}
     </div>
   </section>
+  {/key}
 {:else}
   <section class="detail empty">
     <div class="empty-card">
@@ -426,7 +547,31 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    height: 100%;
     overflow: hidden;
+    background: color-mix(in oklab, var(--surface) 88%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+    animation: detail-in 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  @keyframes detail-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .detail {
+      animation: none;
+    }
   }
 
   .detail-header {
@@ -434,8 +579,9 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
-    padding: 20px 24px;
+    padding: 22px 28px;
     border-bottom: 1px solid var(--divider);
+    background: transparent;
   }
 
   .identity {
@@ -542,26 +688,139 @@
   .detail-body {
     flex: 1;
     overflow: auto;
-    padding: 20px 24px 32px;
+    padding: 22px 28px 36px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 18px;
+    background: transparent;
   }
 
   .kv-row {
     display: grid;
-    grid-template-columns: 130px minmax(0, 1fr) 28px;
+    grid-template-columns: 110px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    padding: 8px 14px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--divider);
+    text-align: left;
 
     &:last-child {
       border-bottom: 0;
     }
+
+    &.secret {
+      background: var(--surface-2);
+    }
+  }
+
+  button.kv-row.clickable {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    transition: background-color 80ms ease;
+
+    &:hover {
+      background: var(--surface-2);
+    }
+
+    &:hover .kv-hint {
+      color: var(--accent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: -2px;
+    }
+  }
+
+  /* Secret row: container + copy button + reveal button */
+  .kv-row.secret.clickable {
+    display: flex;
+    align-items: stretch;
+    padding: 0;
+    gap: 0;
+
+    &:hover {
+      background: color-mix(in oklab, var(--accent) 8%, var(--surface-2));
+    }
+  }
+
+  .kv-row-copy {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+    padding: 10px 16px;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+
+    &:hover ~ .reveal-btn {
+      /* keep reveal button visually neutral when row hovered */
+    }
+
+    &:hover .kv-hint {
+      color: var(--accent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: -2px;
+    }
+  }
+
+  .kv-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+    transition: color 120ms ease;
+    white-space: nowrap;
+  }
+
+  .reveal-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 36px;
+    margin-right: 10px;
+    border-radius: 6px;
+    color: var(--text-tertiary);
+    background: transparent;
+    transition: background-color 80ms ease, color 120ms ease;
+    cursor: pointer;
+    align-self: center;
+    height: 28px;
+
+    &:hover {
+      background: color-mix(in oklab, var(--text) 8%, transparent);
+      color: var(--text);
+    }
+
+    &[aria-pressed="true"] {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: 1px;
+    }
   }
 
   .kv-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 500;
@@ -573,20 +832,16 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
-    color: var(--text);
+    color: var(--text-tertiary);
+
+    &.revealed {
+      color: var(--text);
+    }
   }
 
-  .meta-row {
-    display: grid;
-    grid-template-columns: 130px minmax(0, 1fr);
-    gap: 12px;
-    align-items: start;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--divider);
-
-    &:last-child {
-      border-bottom: 0;
-    }
+  .kv-actions {
+    display: inline-flex;
+    gap: 2px;
   }
 
   .chips {
@@ -603,47 +858,92 @@
     font-size: 11px;
   }
 
-  .notes {
+  .notes-body {
+    padding: 14px 16px;
     color: var(--text);
     font-size: 13px;
     line-height: 1.5;
     white-space: pre-wrap;
   }
 
-  .secret-footer {
+  .form-section {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 10px;
   }
 
-  .link {
+  .section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0;
+    padding-left: 2px;
+  }
+
+  .section-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    background: var(--surface);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+  }
+
+  .key-row {
+    display: grid;
+    grid-template-columns: 130px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .key-row-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .key-row-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-tertiary);
+    font-size: 13px;
+  }
+
+  .key-row-remove {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    color: var(--accent);
-    font-size: 12px;
-    font-weight: 500;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius);
+    color: var(--text-tertiary);
+    transition: background-color 80ms ease, color 120ms ease;
+
+    &:hover:not(:disabled) {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
   }
 
-  .link:hover {
-    text-decoration: underline;
-  }
-
-  .inline-form {
+  .add-secret-row {
     display: grid;
-    grid-template-columns: 120px minmax(0, 1fr) auto auto;
-    gap: 6px;
-    width: 100%;
+    grid-template-columns: 130px minmax(0, 1fr) auto auto;
+    gap: 8px;
     align-items: center;
 
     input {
-      min-height: 30px;
-      padding: 0 9px;
+      min-height: 32px;
+      padding: 0 10px;
       border: 1px solid var(--border);
       border-radius: var(--radius);
       background: var(--surface);
       color: var(--text);
-      font-size: 12px;
+      font-size: 13px;
       outline: 0;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
 
       &:focus {
         border-color: var(--accent);
@@ -652,80 +952,213 @@
     }
   }
 
-  .snippet-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding-bottom: 10px;
-  }
-
-  .probe {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 14px;
-    font-size: 12px;
-  }
-
-  .probe-status {
+  .add-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: 12px;
     font-weight: 500;
+    cursor: pointer;
+    align-self: flex-start;
+    transition: background-color 80ms ease, color 120ms ease, border-color 120ms ease;
 
-    .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 999px;
-      background: var(--text-tertiary);
+    &:hover {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
     }
 
+    &.standalone {
+      margin-top: 4px;
+    }
+  }
+
+  .probe-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    margin-right: 8px;
+    background: var(--text-tertiary);
+
     &.ok {
-      color: var(--success);
-      .dot { background: var(--success); }
+      background: var(--success);
     }
 
     &.fail {
-      color: var(--danger);
-      .dot { background: var(--danger); }
+      background: var(--danger);
     }
   }
 
-  .probe-meta {
-    color: var(--text-tertiary);
+  .probe-error {
+    color: var(--danger);
   }
 
-  .probe-error {
-    flex: 1 1 100%;
-    color: var(--danger);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    word-break: break-all;
+  .integration-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .integration-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+  }
+
+  .integration-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .integration-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .integration-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  .integration-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+
+    strong {
+      font-size: 13px;
+    }
+
+    span {
+      font-size: 12px;
+    }
+  }
+
+  .integration-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .integration-mode {
+    display: flex;
+    align-items: center;
+  }
+
+  .integration-preview {
+    display: grid;
+    gap: 8px;
+
+    .code-block {
+      margin: 0;
+      max-height: 320px;
+      overflow: auto;
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      background: color-mix(in oklab, var(--text) 4%, var(--surface));
+      border: 1px solid var(--divider);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text);
+      white-space: pre;
+      tab-size: 2;
+    }
+  }
+
+  :global(.code-block .tok-key) {
+    color: var(--accent);
+  }
+
+  :global(.code-block .tok-str) {
+    color: var(--success);
+  }
+
+  :global(.code-block .tok-num) {
+    color: var(--warning);
+  }
+
+  :global(.code-block .tok-kw) {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  :global(.code-block .tok-section) {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  :global(.code-block .tok-comment) {
+    color: var(--text-tertiary);
+    font-style: italic;
+  }
+
+  :global(.code-block .tok-var) {
+    color: var(--accent);
+  }
+
+  .integration-preview-meta {
+    display: grid;
+    gap: 4px;
+
+    code {
+      overflow-wrap: anywhere;
+      font-size: 11px;
+      color: var(--text-tertiary);
+    }
   }
 
   .empty {
-    display: grid;
-    place-items: center;
-    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
     padding: 24px;
+    background: transparent;
   }
 
   .empty-card {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     text-align: center;
     color: var(--text-tertiary);
 
     h1 {
       color: var(--text);
-      font-size: 16px;
+      font-size: 14px;
+      font-weight: 600;
     }
 
     p {
-      max-width: 280px;
-      font-size: 13px;
+      max-width: 240px;
+      font-size: 12px;
+      line-height: 1.4;
     }
   }
 
@@ -733,8 +1166,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     border-radius: 999px;
     background: var(--surface-2);
     color: var(--text-tertiary);
@@ -749,11 +1182,6 @@
 
     .actions {
       justify-content: flex-end;
-    }
-
-    .kv-row,
-    .meta-row {
-      grid-template-columns: 1fr;
     }
   }
 </style>

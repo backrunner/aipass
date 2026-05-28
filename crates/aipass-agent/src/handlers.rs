@@ -136,6 +136,12 @@ fn dispatch_request(
             }
         })
         .map(AgentResponse::success),
+        AgentRequest::EntriesTrash => with_vault(state, true, |vault| {
+            vault
+                .list_trash_provider_summaries()
+                .map_err(map_vault_error)
+        })
+        .map(AgentResponse::success),
         AgentRequest::EntriesSearch { query } => with_vault(state, true, |vault| {
             vault.search(&query).map_err(map_vault_error)
         })
@@ -160,12 +166,34 @@ fn dispatch_request(
             vault.restore_provider(id).map_err(map_vault_error)
         })
         .map(|_| AgentResponse::empty()),
+        AgentRequest::ProviderTrash { id } => with_vault(state, false, |vault| {
+            vault.trash_provider(id).map_err(map_vault_error)
+        })
+        .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderDelete { id } => with_vault(state, false, |vault| {
             vault
                 .delete_provider_permanently(id)
                 .map_err(map_vault_error)
         })
         .map(|_| AgentResponse::empty()),
+        AgentRequest::TrashPurgeExpired => with_vault(state, false, |vault| {
+            vault
+                .purge_expired_trash(time::Duration::days(30))
+                .map_err(map_vault_error)
+        })
+        .map(|count| AgentResponse::success(json!({ "purged": count }))),
+        AgentRequest::TrashEmpty => with_vault(state, false, |vault| {
+            let trashed = vault
+                .list_trash_provider_summaries()
+                .map_err(map_vault_error)?;
+            for summary in &trashed {
+                vault
+                    .delete_provider_permanently(summary.id)
+                    .map_err(map_vault_error)?;
+            }
+            Ok(trashed.len())
+        })
+        .map(|count| AgentResponse::success(json!({ "purged": count }))),
         AgentRequest::SecretRevealField { id, field } => with_vault(state, true, |vault| {
             vault
                 .reveal_secret_field(id, &field)

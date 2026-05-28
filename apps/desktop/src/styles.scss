@@ -1,26 +1,26 @@
 :root {
   color-scheme: light dark;
 
-  --bg: #f5f7fb;
+  --bg: #f5f6fa;
   --surface: #ffffff;
-  --surface-2: #f3f5fa;
-  --sidebar-bg: #eaeef6;
+  --surface-2: #f1f3f8;
+  --sidebar-bg: #f8f9fc;
 
-  --text: #0e1424;
-  --text-secondary: #485066;
-  --text-tertiary: #818a9e;
+  --text: #08101f;
+  --text-secondary: #383f55;
+  --text-tertiary: #636b82;
 
-  --border: #d4dae6;
-  --border-strong: #b3bbcd;
-  --divider: #e6eaf2;
+  --border: #e1e4ed;
+  --border-strong: #c4cad8;
+  --divider: #edeff5;
 
-  --accent: #1d4ed8;
-  --accent-hover: #1a3fb8;
-  --accent-soft: rgba(29, 78, 216, 0.1);
-  --accent-ring: rgba(29, 78, 216, 0.28);
+  --accent: #2563eb;
+  --accent-hover: #1f4fd0;
+  --accent-soft: rgba(37, 99, 235, 0.1);
+  --accent-ring: rgba(37, 99, 235, 0.28);
 
-  --kind-official: #1d4ed8;
-  --kind-official-soft: rgba(29, 78, 216, 0.1);
+  --kind-official: #2563eb;
+  --kind-official-soft: rgba(37, 99, 235, 0.1);
   --kind-third: #b45309;
   --kind-third-soft: rgba(180, 83, 9, 0.1);
   --kind-self: #475569;
@@ -35,9 +35,9 @@
   --warning: #b25e09;
   --warning-soft: rgba(178, 94, 9, 0.1);
 
-  --radius-sm: 4px;
-  --radius: 6px;
-  --radius-lg: 8px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -81,7 +81,6 @@ body {
   background: var(--bg);
   border-radius: 10px;
   overflow: hidden;
-  border: 1px solid var(--border);
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
 }
 
@@ -188,44 +187,100 @@ textarea {
   }
 }
 
+@mixin dark-theme {
+  --bg: #0a0e1a;
+  --surface: #131826;
+  --surface-2: #1a2032;
+  --sidebar-bg: #0f1422;
+
+  --text: #f4f6fc;
+  --text-secondary: #c8cee0;
+  --text-tertiary: #969eb6;
+
+  --border: #232b40;
+  --border-strong: #354160;
+  --divider: #1c2336;
+
+  --accent: #6092ff;
+  --accent-hover: #76a2ff;
+  --accent-soft: rgba(96, 146, 255, 0.16);
+  --accent-ring: rgba(96, 146, 255, 0.36);
+
+  --kind-official: #6c9bff;
+  --kind-official-soft: rgba(108, 155, 255, 0.16);
+  --kind-third: #d0a25e;
+  --kind-third-soft: rgba(208, 162, 94, 0.16);
+  --kind-self: #9aa1b4;
+  --kind-self-soft: rgba(154, 161, 180, 0.16);
+  --kind-custom: #9aa3b8;
+  --kind-custom-soft: rgba(154, 163, 184, 0.16);
+
+  --danger: #f1a6a0;
+  --danger-soft: rgba(241, 166, 160, 0.14);
+  --success: #8ad8be;
+  --success-soft: rgba(138, 216, 190, 0.14);
+  --warning: #e2b070;
+  --warning-soft: rgba(226, 176, 112, 0.14);
+
+  --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.36);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.5);
+  --shadow-drawer: -16px 0 56px rgba(0, 0, 0, 0.45);
+}
+
+/* Global popover / menu / dropdown animations.
+   Bits-ui sets data-state="open" on enter and data-state="closed" on exit. */
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes pop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+.filter-menu,
+.dropdown-content,
+.titlebar-menu,
+.select-content {
+  transform-origin: var(--bits-floating-transform-origin, top center);
+  animation: pop-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+
+  &[data-state="closed"] {
+    animation: pop-out 120ms cubic-bezier(0.4, 0, 0.85, 0.4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .filter-menu,
+  .dropdown-content,
+  .titlebar-menu,
+  .select-content {
+    animation: none !important;
+  }
+}
+
+
+html[data-theme="dark"] {
+  @include dark-theme;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d1220;
-    --surface: #141a2c;
-    --surface-2: #182037;
-    --sidebar-bg: #10162a;
-
-    --text: #eef1f9;
-    --text-secondary: #b0b8cc;
-    --text-tertiary: #7c869f;
-
-    --border: #2a324a;
-    --border-strong: #3b4565;
-    --divider: #1f263b;
-
-    --accent: #5b8cff;
-    --accent-hover: #6e9bff;
-    --accent-soft: rgba(91, 140, 255, 0.16);
-    --accent-ring: rgba(91, 140, 255, 0.36);
-
-    --kind-official: #6c9bff;
-    --kind-official-soft: rgba(108, 155, 255, 0.16);
-    --kind-third: #d0a25e;
-    --kind-third-soft: rgba(208, 162, 94, 0.16);
-    --kind-self: #9aa1b4;
-    --kind-self-soft: rgba(154, 161, 180, 0.16);
-    --kind-custom: #9aa3b8;
-    --kind-custom-soft: rgba(154, 163, 184, 0.16);
-
-    --danger: #f1a6a0;
-    --danger-soft: rgba(241, 166, 160, 0.14);
-    --success: #8ad8be;
-    --success-soft: rgba(138, 216, 190, 0.14);
-    --warning: #e2b070;
-    --warning-soft: rgba(226, 176, 112, 0.14);
-
-    --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.36);
-    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.5);
-    --shadow-drawer: -16px 0 56px rgba(0, 0, 0, 0.45);
+  html:not([data-theme]),
+  html[data-theme="system"] {
+    @include dark-theme;
   }
 }

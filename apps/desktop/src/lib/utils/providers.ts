@@ -55,7 +55,8 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     createdAt: summary.createdAt,
     updatedAt: summary.updatedAt,
     lastUsedAt: summary.lastUsedAt,
-    archivedAt: summary.archivedAt
+    archivedAt: summary.archivedAt,
+    deletedAt: summary.deletedAt
   };
 }
 

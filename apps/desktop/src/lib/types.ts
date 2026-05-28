@@ -21,11 +21,14 @@ export type VaultStatus = { exists: boolean; locked: boolean };
 
 export type RecoveryKit = { recoveryKey: string };
 
+export type ThemePreference = "system" | "light" | "dark";
+
 export type AppPreferences = {
   autoLockMinutes: number;
   clipboardClearSeconds: number;
   lockOnSleep: boolean;
   lockOnScreenLock: boolean;
+  theme: ThemePreference;
 };
 
 export type SyncSettings = {
@@ -111,6 +114,7 @@ export type EntrySummary = {
   updatedAt?: string;
   lastUsedAt?: string;
   archivedAt?: string;
+  deletedAt?: string;
 };
 
 export type SyncObject = {

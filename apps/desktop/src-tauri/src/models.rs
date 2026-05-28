@@ -28,6 +28,17 @@ pub(crate) struct AppPreferences {
     pub(crate) clipboard_clear_seconds: u16,
     pub(crate) lock_on_sleep: bool,
     pub(crate) lock_on_screen_lock: bool,
+    #[serde(default)]
+    pub(crate) theme: ThemePreference,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 impl Default for AppPreferences {
@@ -37,6 +48,7 @@ impl Default for AppPreferences {
             clipboard_clear_seconds: 45,
             lock_on_sleep: true,
             lock_on_screen_lock: true,
+            theme: ThemePreference::System,
         }
     }
 }
@@ -73,6 +85,7 @@ pub(crate) struct SavePreferencesRequest {
     pub(crate) clipboard_clear_seconds: u16,
     pub(crate) lock_on_sleep: Option<bool>,
     pub(crate) lock_on_screen_lock: Option<bool>,
+    pub(crate) theme: Option<ThemePreference>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

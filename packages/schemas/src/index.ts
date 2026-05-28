@@ -63,6 +63,7 @@ export interface ProviderEntry {
   updatedAt?: string;
   lastUsedAt?: string;
   archivedAt?: string;
+  deletedAt?: string;
 }
 
 export interface ProviderDefinition {

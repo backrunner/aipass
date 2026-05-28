@@ -124,6 +124,8 @@ pub struct ProviderEntry {
     pub last_used_at: Option<OffsetDateTime>,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub archived_at: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub deleted_at: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
