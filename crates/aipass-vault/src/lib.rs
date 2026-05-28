@@ -1402,6 +1402,9 @@ fn plaintext_matches_query(
             .unwrap_or_default()
             .to_lowercase()
             .contains(query)
+        || entry.model_aliases.iter().any(|(alias, model)| {
+            alias.to_lowercase().contains(query) || model.to_lowercase().contains(query)
+        })
         || entry.environment.to_lowercase().contains(query)
         || entry
             .tags
@@ -1424,6 +1427,18 @@ fn plaintext_matches_query(
                 .unwrap_or_default()
                 .to_lowercase()
                 .contains(query)
+                || quota
+                    .limit
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(query)
+                || quota
+                    .remaining
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(query)
                 || quota
                     .reset_at
                     .as_deref()
@@ -1719,6 +1734,28 @@ mod tests {
         let serialized = serde_json::to_string(&matches).unwrap();
         assert!(!serialized.contains("sk-ant-api03-fingerprint-secret-1234"));
         assert!(serialized.contains("****1234") || serialized.contains("•••• 1234"));
+    }
+
+    #[test]
+    fn search_matches_model_aliases_and_quota_fields() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let mut input = input("sk-ant-api03-searchable");
+        input.model_aliases = vec![("fast".to_string(), "claude-haiku-4-5".to_string())];
+        input.quota = Some(QuotaInfo {
+            label: Some("team-monthly".to_string()),
+            limit: Some("1000000".to_string()),
+            remaining: Some("120000".to_string()),
+            reset_at: Some("2026-06-30".to_string()),
+        });
+        let id = vault.add_provider(input).unwrap();
+
+        for query in ["fast", "claude-haiku-4-5", "120000", "2026-06-30"] {
+            let matches = vault.search(query).unwrap();
+            assert_eq!(matches.len(), 1, "query {query}");
+            assert_eq!(matches[0].id, id, "query {query}");
+        }
     }
 
     #[test]

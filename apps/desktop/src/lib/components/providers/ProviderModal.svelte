@@ -105,6 +105,9 @@
               <Field label="API endpoints">
                 <input bind:value={draft.endpoint} placeholder="https://api.anthropic.com, https://api.example.com/v1" />
               </Field>
+              <Field label="Console URLs">
+                <input bind:value={draft.consoleUrl} placeholder="https://console.anthropic.com, https://platform.example.com" />
+              </Field>
               <div class="row two">
                 <Field label="Interface">
                   <select bind:value={draft.interfaceType}>

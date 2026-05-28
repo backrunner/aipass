@@ -110,6 +110,8 @@ pub(crate) struct ProviderAddRequest {
     pub(crate) endpoint: Option<String>,
     #[serde(default)]
     pub(crate) endpoints: Vec<String>,
+    #[serde(default)]
+    pub(crate) console_endpoints: Vec<String>,
     pub(crate) favicon_url: Option<String>,
     pub(crate) interface_type: InterfaceType,
     pub(crate) auth_scheme: AuthScheme,
@@ -137,6 +139,8 @@ pub(crate) struct ProviderUpdateRequest {
     pub(crate) endpoint: Option<String>,
     #[serde(default)]
     pub(crate) endpoints: Vec<String>,
+    #[serde(default)]
+    pub(crate) console_endpoints: Vec<String>,
     pub(crate) favicon_url: Option<String>,
     pub(crate) interface_type: InterfaceType,
     pub(crate) auth_scheme: AuthScheme,

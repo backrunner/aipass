@@ -1,11 +1,12 @@
 import type { ProviderEntry } from "@aipass/schemas";
 
-import type { Draft, EntrySummary, ProviderFilter } from "../types";
+import type { Draft, EntrySummary, ProviderCounts } from "../types";
 
 export const emptyDraft = (): Draft => ({
   title: "",
   domain: "",
   endpoint: "",
+  consoleUrl: "",
   faviconUrl: "",
   providerId: "anthropic",
   interfaceType: "anthropic_messages",
@@ -58,7 +59,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
   };
 }
 
-export function providerCounts(entries: ProviderEntry[]): Record<ProviderFilter, number> {
+export function providerCounts(entries: ProviderEntry[]): ProviderCounts {
   return {
     all: entries.length,
     recent: entries.filter((entry) => Boolean(entry.lastUsedAt)).length,

@@ -163,14 +163,18 @@
 
   $: filtered = entries
     .filter((entry) => {
-      if (providerFilter === "recent" && !entry.lastUsedAt) return false;
-      if (providerFilter !== "all" && providerFilter !== "recent" && entry.providerKind !== providerFilter) return false;
+      if (!entryMatchesFilter(entry, providerFilter)) return false;
       const haystack = [
         entry.title,
         entry.providerId ?? "",
         entry.interfaceType,
         entry.authScheme,
         entry.defaultModel ?? "",
+        ...(entry.modelAliases ?? []).flatMap(([alias, model]) => [alias, model]),
+        entry.quota?.label ?? "",
+        entry.quota?.limit ?? "",
+        entry.quota?.remaining ?? "",
+        entry.quota?.resetAt ?? "",
         entry.environment,
         entry.notes ?? "",
         ...entry.domains,
@@ -425,6 +429,39 @@
     }
   }
 
+  function entryMatchesFilter(entry: ProviderEntry, filter: ProviderFilter): boolean {
+    if (filter === "all") return true;
+    if (filter === "recent") return Boolean(entry.lastUsedAt);
+    if (filter === "quota_low") return isQuotaLow(entry.quota);
+    if (filter === "expiring") return isExpiringSoon(entry.quota);
+    if (filter.startsWith("environment:")) return entry.environment === filter.slice("environment:".length);
+    if (filter.startsWith("tag:")) return entry.tags.includes(filter.slice("tag:".length));
+    return entry.providerKind === filter;
+  }
+
+  function isQuotaLow(quota?: QuotaInfo): boolean {
+    const remaining = numericQuota(quota?.remaining);
+    const limit = numericQuota(quota?.limit);
+    if (remaining === undefined) return false;
+    if (limit && limit > 0) return remaining / limit <= 0.2;
+    return remaining <= 0;
+  }
+
+  function isExpiringSoon(quota?: QuotaInfo): boolean {
+    const resetAt = quota?.resetAt ? Date.parse(quota.resetAt) : Number.NaN;
+    if (Number.isNaN(resetAt)) return false;
+    const now = Date.now();
+    return resetAt >= now && resetAt - now <= 30 * 24 * 60 * 60 * 1000;
+  }
+
+  function numericQuota(value?: string): number | undefined {
+    if (!value) return undefined;
+    const normalized = value.replace(/,/g, "").match(/\d+(\.\d+)?/u)?.[0];
+    if (!normalized) return undefined;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
   function inferDraftFromDomain() {
     const firstDomain = splitCsv(draft.domain)[0] ?? draft.domain;
     const match = matchProviderByDomain(firstDomain);
@@ -459,7 +496,16 @@
     draft = {
       title: entry.title,
       domain: entry.domains.join(", "),
-      endpoint: entry.endpoints.map((endpoint) => endpoint.url).filter(Boolean).join(", "),
+      endpoint: entry.endpoints
+        .filter((endpoint) => endpoint.kind === "api")
+        .map((endpoint) => endpoint.url)
+        .filter(Boolean)
+        .join(", "),
+      consoleUrl: entry.endpoints
+        .filter((endpoint) => endpoint.kind === "console")
+        .map((endpoint) => endpoint.url)
+        .filter(Boolean)
+        .join(", "),
       faviconUrl: entry.faviconUrl ?? "",
       providerId: entry.providerId ?? "custom_http",
       interfaceType: entry.interfaceType,
@@ -486,6 +532,7 @@
       providerId: draft.providerId || provider?.id,
       domain: splitCsv(draft.domain),
       endpoints: splitCsv(draft.endpoint),
+      consoleEndpoints: splitCsv(draft.consoleUrl),
       faviconUrl: draft.faviconUrl || undefined,
       interfaceType: draft.interfaceType,
       authScheme: draft.authScheme,
@@ -1108,6 +1155,7 @@
 
       <ProviderListPane
         entries={filtered}
+        filterEntries={entries}
         selectedId={selected?.id ?? ""}
         {showArchived}
         {providerFilter}

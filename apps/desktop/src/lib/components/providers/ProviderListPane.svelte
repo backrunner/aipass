@@ -10,6 +10,7 @@
   import ProviderIcon from "../shared/ProviderIcon.svelte";
 
   export let entries: ProviderEntry[] = [];
+  export let filterEntries: ProviderEntry[] = [];
   export let selectedId = "";
   export let showArchived = false;
   export let providerFilter: ProviderFilter = "all";
@@ -19,14 +20,38 @@
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
   export let onSelect: (id: string) => MaybePromise = () => {};
 
-  const filterOptions: Array<{ value: ProviderFilter; label: string }> = [
+  const baseFilterOptions: Array<{ value: ProviderFilter; label: string }> = [
     { value: "all", label: "All Items" },
     { value: "recent", label: "Recent" },
     { value: "official", label: providerKindLabel.official },
     { value: "third_party", label: providerKindLabel.third_party },
     { value: "self_hosted", label: providerKindLabel.self_hosted },
-    { value: "unknown", label: providerKindLabel.unknown }
+    { value: "unknown", label: providerKindLabel.unknown },
+    { value: "quota_low", label: "Low quota" },
+    { value: "expiring", label: "Expiring soon" }
   ];
+
+  $: filterOptions = [
+    ...baseFilterOptions,
+    ...unique(filterEntries.map((entry) => entry.environment))
+      .slice(0, 8)
+      .map((environment) => ({
+        value: `environment:${environment}` as ProviderFilter,
+        label: `Environment: ${environment}`
+      })),
+    ...unique(filterEntries.flatMap((entry) => entry.tags))
+      .slice(0, 12)
+      .map((tag) => ({
+        value: `tag:${tag}` as ProviderFilter,
+        label: `Tag: ${tag}`
+      }))
+  ];
+
+  function unique(values: string[]): string[] {
+    return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) =>
+      left.localeCompare(right)
+    );
+  }
 
   function maskedSuffix(masked: string): string {
     if (!masked) return "";

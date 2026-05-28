@@ -92,7 +92,11 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         provider_id: request.provider_id,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
-        endpoints: endpoints_from(request.endpoint, request.endpoints),
+        endpoints: endpoints_from(
+            request.endpoint,
+            request.endpoints,
+            request.console_endpoints,
+        ),
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
         api_key: request.api_key.into_inner(),
@@ -114,7 +118,11 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         provider_id: request.provider_id,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
-        endpoints: endpoints_from(request.endpoint, request.endpoints),
+        endpoints: endpoints_from(
+            request.endpoint,
+            request.endpoints,
+            request.console_endpoints,
+        ),
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
         api_key: request
@@ -131,13 +139,24 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
     }
 }
 
-fn endpoints_from(endpoint: Option<String>, endpoints: Vec<String>) -> Vec<ProviderEndpoint> {
-    endpoints
+fn endpoints_from(
+    endpoint: Option<String>,
+    endpoints: Vec<String>,
+    console_endpoints: Vec<String>,
+) -> Vec<ProviderEndpoint> {
+    let mut api_endpoints = endpoints
         .into_iter()
         .chain(endpoint)
         .filter_map(non_empty)
         .map(ProviderEndpoint::api)
-        .collect()
+        .collect::<Vec<_>>();
+    api_endpoints.extend(
+        console_endpoints
+            .into_iter()
+            .filter_map(non_empty)
+            .map(ProviderEndpoint::console),
+    );
+    api_endpoints
 }
 
 fn clean_strings(values: Vec<String>) -> Vec<String> {
@@ -573,7 +592,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aipass_provider_registry::{ProviderKind, SecretRef};
+    use aipass_provider_registry::{EndpointKind, ProviderKind, SecretRef};
+
+    #[test]
+    fn endpoints_from_preserves_api_and_console_kinds() {
+        let endpoints = endpoints_from(
+            Some("https://api.example.com".to_string()),
+            vec!["https://api-backup.example.com".to_string()],
+            vec!["https://console.example.com".to_string()],
+        );
+
+        assert_eq!(endpoints.len(), 3);
+        assert_eq!(endpoints[0].kind, EndpointKind::Api);
+        assert_eq!(endpoints[1].kind, EndpointKind::Api);
+        assert_eq!(endpoints[2].kind, EndpointKind::Console);
+    }
 
     #[test]
     fn gemini_probe_does_not_return_api_key_in_endpoint_or_error() {

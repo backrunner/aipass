@@ -6,8 +6,8 @@ use aipass_agent_protocol::{
 use aipass_config_writers::endpoint_url;
 use aipass_native_host::native_manifest;
 use aipass_provider_registry::{
-    match_provider_by_domain, provider_kind_for_id, AuthScheme, InterfaceType, ProviderEndpoint,
-    QuotaInfo,
+    match_provider_by_domain, provider_kind_for_id, AuthScheme, EndpointKind, InterfaceType,
+    ProviderEndpoint, QuotaInfo,
 };
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
@@ -78,6 +78,8 @@ enum Command {
         domain: Vec<String>,
         #[arg(long)]
         endpoint: Option<String>,
+        #[arg(long = "console-url")]
+        console_url: Vec<String>,
         #[arg(long)]
         favicon_url: Option<String>,
         #[arg(long, value_enum)]
@@ -125,6 +127,8 @@ enum Command {
         domain: Vec<String>,
         #[arg(long)]
         endpoint: Option<String>,
+        #[arg(long = "console-url")]
+        console_url: Vec<String>,
         #[arg(long)]
         favicon_url: Option<String>,
         #[arg(long, value_enum)]
@@ -942,6 +946,37 @@ fn parse_headers(values: &[String]) -> Result<Vec<(String, String)>> {
             Ok((name.to_string(), header_value.trim().to_string()))
         })
         .collect()
+}
+
+fn endpoints_from_cli(
+    endpoint: Option<String>,
+    console_urls: Vec<String>,
+) -> Vec<ProviderEndpoint> {
+    endpoint
+        .map(ProviderEndpoint::api)
+        .into_iter()
+        .chain(console_urls.into_iter().map(ProviderEndpoint::console))
+        .collect()
+}
+
+fn update_endpoints_from_cli(
+    existing: &[ProviderEndpoint],
+    endpoint: Option<String>,
+    console_urls: Vec<String>,
+) -> Vec<ProviderEndpoint> {
+    let mut endpoints = existing
+        .iter()
+        .filter(|item| {
+            (endpoint.is_none() || item.kind != EndpointKind::Api)
+                && (console_urls.is_empty() || item.kind != EndpointKind::Console)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(endpoint) = endpoint {
+        endpoints.push(ProviderEndpoint::api(endpoint));
+    }
+    endpoints.extend(console_urls.into_iter().map(ProviderEndpoint::console));
+    endpoints
 }
 
 fn parse_model_aliases(values: &[String]) -> Result<Vec<(String, String)>> {

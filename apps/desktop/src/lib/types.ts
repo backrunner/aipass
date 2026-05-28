@@ -69,6 +69,7 @@ export type Draft = {
   title: string;
   domain: string;
   endpoint: string;
+  consoleUrl: string;
   faviconUrl: string;
   providerId: string;
   interfaceType: InterfaceType;
@@ -132,9 +133,16 @@ export type SyncConflict = {
   targetSummary?: EntrySummary;
 };
 
-export type ProviderFilter = "all" | "recent" | ProviderKind;
+export type ProviderFilter =
+  | "all"
+  | "recent"
+  | "quota_low"
+  | "expiring"
+  | ProviderKind
+  | `environment:${string}`
+  | `tag:${string}`;
 
-export type ProviderCounts = Record<ProviderFilter, number>;
+export type ProviderCounts = Record<"all" | "recent" | ProviderKind, number>;
 
 export type DeviceRecord = {
   id: string;

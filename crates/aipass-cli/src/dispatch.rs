@@ -316,6 +316,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             provider,
             domain,
             endpoint,
+            console_url,
             favicon_url,
             interface,
             auth,
@@ -337,10 +338,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     match_provider_by_domain(domain).map(|provider| provider.id.to_string())
                 })
             });
-            let endpoints = endpoint
-                .map(ProviderEndpoint::api)
-                .into_iter()
-                .collect::<Vec<_>>();
+            let endpoints = endpoints_from_cli(endpoint, console_url);
             let id: Uuid = agent.request(AgentRequest::ProviderAdd {
                 input: ProviderEntryInput {
                     title,
@@ -409,6 +407,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             provider,
             domain,
             endpoint,
+            console_url,
             favicon_url,
             interface,
             auth,
@@ -443,10 +442,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 provider_id: provider_guess,
                 domains,
                 favicon_url: favicon_url.or(existing.favicon_url),
-                endpoints: endpoint
-                    .map(ProviderEndpoint::api)
-                    .map(|endpoint| vec![endpoint])
-                    .unwrap_or(existing.endpoints),
+                endpoints: update_endpoints_from_cli(&existing.endpoints, endpoint, console_url),
                 interface_type: interface
                     .map(InterfaceType::from)
                     .unwrap_or(existing.interface_type),
