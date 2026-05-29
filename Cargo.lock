@@ -143,6 +143,8 @@ dependencies = [
  "aipass-storage",
  "aipass-sync",
  "aipass-vault",
+ "objc2-app-kit",
+ "objc2-quartz-core",
  "reqwest",
  "serde",
  "serde_json",
@@ -2512,6 +2514,7 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-quartz-core",
 ]
 
 [[package]]

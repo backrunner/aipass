@@ -533,9 +533,47 @@ fn configure_initial_window(app: &AppHandle) {
     };
     let _ = window.set_title(title);
     let _ = window.set_size(Size::Logical(LogicalSize { width, height }));
+    configure_window_chrome(&window);
     let _ = window.center();
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+#[cfg(target_os = "macos")]
+fn configure_window_chrome(window: &tauri::WebviewWindow) {
+    const WINDOW_CORNER_RADIUS: f64 = 10.0;
+
+    let _ = window.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)));
+    let _ = window.with_webview(|webview| unsafe {
+        use objc2_app_kit::{NSColor, NSView, NSWindow};
+
+        let ns_window: &NSWindow = &*webview.ns_window().cast();
+        let clear = NSColor::clearColor();
+        ns_window.setOpaque(false);
+        ns_window.setBackgroundColor(Some(&clear));
+        ns_window.setHasShadow(true);
+
+        if let Some(content_view) = ns_window.contentView() {
+            round_macos_view(&content_view, WINDOW_CORNER_RADIUS);
+        }
+
+        let webview_view: &NSView = &*webview.inner().cast();
+        round_macos_view(webview_view, WINDOW_CORNER_RADIUS);
+        ns_window.invalidateShadow();
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_window_chrome(_: &tauri::WebviewWindow) {}
+
+#[cfg(target_os = "macos")]
+fn round_macos_view(view: &objc2_app_kit::NSView, radius: f64) {
+    view.setWantsLayer(true);
+    if let Some(layer) = view.layer() {
+        layer.setCornerRadius(radius);
+        layer.setMasksToBounds(true);
+        layer.setOpaque(false);
+    }
 }
 
 pub fn run() {

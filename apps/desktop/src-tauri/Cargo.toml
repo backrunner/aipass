@@ -33,3 +33,7 @@ tauri = { version = "2.11.2", features = ["macos-private-api"] }
 tauri-plugin-updater = "2"
 time.workspace = true
 uuid.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-quartz-core", "NSColor", "NSView", "NSWindow"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "CALayer"] }
