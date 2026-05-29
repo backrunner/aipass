@@ -1,8 +1,26 @@
 import type { PasswordStrength, PasswordStrengthLevel } from "../types";
 
-export function passwordStrength(value: string): PasswordStrength {
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+const fallbackTranslate: Translate = (key, params = {}) => {
+  const fallback: Record<string, string> = {
+    "password.enter": "Enter a password",
+    "password.tooShort": "Too short",
+    "password.weak": "Weak",
+    "password.fair": "Fair",
+    "password.good": "Good",
+    "password.strong": "Strong",
+    "password.moreChars": "{count} more chars",
+    "password.mixCase": "mix case",
+    "password.addDigit": "add a digit",
+    "password.addSymbol": "add a symbol"
+  };
+  return (fallback[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? ""));
+};
+
+export function passwordStrength(value: string, translate: Translate = fallbackTranslate): PasswordStrength {
   if (!value) {
-    return { label: "Enter a password", className: "strength-empty", level: "empty", score: 0 };
+    return { label: translate("password.enter"), className: "strength-empty", level: "empty", score: 0 };
   }
 
   const length = value.length;
@@ -25,22 +43,22 @@ export function passwordStrength(value: string): PasswordStrength {
   let label: string;
   if (length < 8) {
     level = "weak";
-    label = "Too short";
+    label = translate("password.tooShort");
   } else if (score <= 2) {
     level = "weak";
-    label = "Weak";
+    label = translate("password.weak");
   } else if (score <= 4) {
     level = "fair";
-    label = "Fair";
+    label = translate("password.fair");
   } else if (score <= 5) {
     level = "good";
-    label = "Good";
+    label = translate("password.good");
   } else {
     level = "strong";
-    label = "Strong";
+    label = translate("password.strong");
   }
 
-  const hint = buildHint(length, hasLower, hasUpper, hasDigit, hasSymbol);
+  const hint = buildHint(length, hasLower, hasUpper, hasDigit, hasSymbol, translate);
 
   return {
     label,
@@ -56,13 +74,14 @@ function buildHint(
   hasLower: boolean,
   hasUpper: boolean,
   hasDigit: boolean,
-  hasSymbol: boolean
+  hasSymbol: boolean,
+  translate: Translate
 ): string | undefined {
   const tips: string[] = [];
-  if (length < 12) tips.push(`${Math.max(0, 12 - length)} more chars`);
-  if (!hasUpper || !hasLower) tips.push("mix case");
-  if (!hasDigit) tips.push("add a digit");
-  if (!hasSymbol) tips.push("add a symbol");
+  if (length < 12) tips.push(translate("password.moreChars", { count: Math.max(0, 12 - length) }));
+  if (!hasUpper || !hasLower) tips.push(translate("password.mixCase"));
+  if (!hasDigit) tips.push(translate("password.addDigit"));
+  if (!hasSymbol) tips.push(translate("password.addSymbol"));
   if (tips.length === 0) return undefined;
   return tips.slice(0, 2).join(" · ");
 }

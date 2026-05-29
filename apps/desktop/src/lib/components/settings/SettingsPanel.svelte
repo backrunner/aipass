@@ -3,9 +3,12 @@
   import { Check, Download, RefreshCw, RotateCw, Trash2, Upload, Wifi, X } from "lucide-svelte";
 
   import { themeStore, setTheme } from "../../stores/appearance";
+  import { isLocalizedMessage, localeStore, resolveMessage, setLocale, t } from "../../stores/i18n";
   import type {
     DeviceRecord,
+    LocalePreference,
     MaybePromise,
+    MessageValue,
     SyncConflict,
     SyncMode,
     SyncReport,
@@ -75,15 +78,32 @@
         : true;
   $: syncBusy = syncState === "syncing";
 
-  const themeOptions: Array<{ value: ThemePreference; label: string }> = [
-    { value: "system", label: "System" },
-    { value: "light", label: "Light" },
-    { value: "dark", label: "Dark" }
+  const themeOptions: ThemePreference[] = ["system", "light", "dark"];
+
+  $: localizedThemeOptions = themeOptions.map((value) => ({
+    value,
+    label:
+      value === "system"
+        ? $t("settings.themeSystem")
+        : value === "light"
+          ? $t("settings.themeLight")
+          : $t("settings.themeDark")
+  }));
+
+  $: localeOptions = [
+    { value: "system" as LocalePreference, label: $t("locale.system") },
+    { value: "en" as LocalePreference, label: $t("locale.en") },
+    { value: "zh-CN" as LocalePreference, label: $t("locale.zhCN") }
   ];
 
   function onThemeChange(next: ThemePreference) {
     setTheme(next);
-    onSavePreferences();
+    void onSavePreferences();
+  }
+
+  function onLocaleChange(next: LocalePreference) {
+    setLocale(next);
+    void onSavePreferences();
   }
 
   function conflictTitle(conflict: SyncConflict): string {
@@ -98,7 +118,9 @@
   let updateCheck: UpdateCheckResult | undefined;
   let updateChecking = false;
   let updateInstalling = false;
-  let updateError = "";
+  let updateError: MessageValue = "";
+  let updateErrorText = "";
+  $: updateErrorText = resolveMessage($t, updateError);
 
   async function runUpdateCheck() {
     updateChecking = true;
@@ -107,7 +129,7 @@
       updateCheck = await checkForUpdates();
       if (updateCheck.error) updateError = updateCheck.error;
     } catch (err) {
-      updateError = String(err);
+      updateError = isLocalizedMessage(err) ? err : String(err);
     } finally {
       updateChecking = false;
     }
@@ -119,7 +141,7 @@
     try {
       await installUpdate();
     } catch (err) {
-      updateError = String(err);
+      updateError = isLocalizedMessage(err) ? err : String(err);
     } finally {
       updateInstalling = false;
     }
@@ -154,10 +176,10 @@
     <Dialog.Overlay class="settings-overlay" />
     <Dialog.Content class="settings-drawer">
       <header class="drawer-header">
-        <Dialog.Title class="drawer-title">Settings</Dialog.Title>
+        <Dialog.Title class="drawer-title">{$t("settings.title")}</Dialog.Title>
         <Dialog.Close>
           {#snippet child({ props })}
-            <button {...props} type="button" class="close-btn" aria-label="Close settings">
+            <button {...props} type="button" class="close-btn" aria-label={$t("settings.close")}>
               <X size={16} />
             </button>
           {/snippet}
@@ -166,27 +188,39 @@
 
       <Tabs.Root bind:value={activeTab} class="settings-tabs">
         <Tabs.List class="tabs-list">
-          <Tabs.Trigger value="general" class="tab-trigger">General</Tabs.Trigger>
-          <Tabs.Trigger value="security" class="tab-trigger">Security</Tabs.Trigger>
-          <Tabs.Trigger value="sync" class="tab-trigger">Sync</Tabs.Trigger>
-          <Tabs.Trigger value="backup" class="tab-trigger">Backup</Tabs.Trigger>
-          <Tabs.Trigger value="about" class="tab-trigger">About</Tabs.Trigger>
+          <Tabs.Trigger value="general" class="tab-trigger">{$t("settings.general")}</Tabs.Trigger>
+          <Tabs.Trigger value="security" class="tab-trigger">{$t("settings.security")}</Tabs.Trigger>
+          <Tabs.Trigger value="sync" class="tab-trigger">{$t("settings.sync")}</Tabs.Trigger>
+          <Tabs.Trigger value="backup" class="tab-trigger">{$t("settings.backup")}</Tabs.Trigger>
+          <Tabs.Trigger value="about" class="tab-trigger">{$t("settings.about")}</Tabs.Trigger>
         </Tabs.List>
 
         <div class="tabs-body">
           <Tabs.Content value="general" class="tab-panel">
-            <Card title="Appearance">
+            <Card title={$t("settings.appearance")}>
               <div class="rows">
                 <div class="row">
                   <div class="row-text">
-                    <span class="row-label">Theme</span>
-                    <span class="row-desc">Match the system, or pick a fixed appearance.</span>
+                    <span class="row-label">{$t("settings.theme")}</span>
+                    <span class="row-desc">{$t("settings.themeDesc")}</span>
                   </div>
                   <SegmentedControl
-                    ariaLabel="Theme"
+                    ariaLabel={$t("settings.theme")}
                     value={$themeStore}
-                    options={themeOptions}
+                    options={localizedThemeOptions}
                     onChange={onThemeChange}
+                  />
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <span class="row-label">{$t("settings.language")}</span>
+                    <span class="row-desc">{$t("settings.languageDesc")}</span>
+                  </div>
+                  <SegmentedControl
+                    ariaLabel={$t("settings.language")}
+                    value={$localeStore}
+                    options={localeOptions}
+                    onChange={onLocaleChange}
                   />
                 </div>
               </div>
@@ -194,12 +228,12 @@
           </Tabs.Content>
 
           <Tabs.Content value="security" class="tab-panel">
-            <Card title="Lock policy">
+            <Card title={$t("settings.lockPolicy")}>
               <div class="rows">
                 <div class="row">
                   <div class="row-text">
-                    <span class="row-label">Auto-lock</span>
-                    <span class="row-desc">Lock after this many minutes of inactivity. 0 disables.</span>
+                    <span class="row-label">{$t("settings.autoLock")}</span>
+                    <span class="row-desc">{$t("settings.autoLockDesc")}</span>
                   </div>
                   <input
                     class="num-input"
@@ -212,8 +246,8 @@
                 </div>
                 <div class="row">
                   <div class="row-text">
-                    <span class="row-label">Clipboard clear</span>
-                    <span class="row-desc">Wipe copied secrets after this many seconds.</span>
+                    <span class="row-label">{$t("settings.clipboardClear")}</span>
+                    <span class="row-desc">{$t("settings.clipboardClearDesc")}</span>
                   </div>
                   <input
                     class="num-input"
@@ -225,23 +259,23 @@
                   />
                 </div>
                 <SwitchField
-                  label="Lock on sleep"
-                  description="Lock the vault when the system goes to sleep."
+                  label={$t("settings.lockOnSleep")}
+                  description={$t("settings.lockOnSleepDesc")}
                   bind:checked={lockOnSleep}
                   onCheckedChange={() => onSavePreferences()}
                 />
                 <SwitchField
-                  label="Lock on screen lock"
-                  description="Lock when the OS screen lock activates."
+                  label={$t("settings.lockOnScreenLock")}
+                  description={$t("settings.lockOnScreenLockDesc")}
                   bind:checked={lockOnScreenLock}
                   onCheckedChange={() => onSavePreferences()}
                 />
               </div>
             </Card>
 
-            <Card title="Master password">
+            <Card title={$t("settings.masterPassword")}>
               <div class="rows">
-                <Field label="New password">
+                <Field label={$t("auth.newPassword")}>
                   <input type="password" bind:value={newPassword} autocomplete="new-password" placeholder="••••••••" />
                 </Field>
                 <div class="row-actions">
@@ -250,18 +284,18 @@
                     on:click={() => onChangeMasterPassword()}
                     disabled={!newPassword.trim() || !!securityBusy}
                   >
-                    {securityBusy === "password" ? "Changing…" : "Change password"}
+                    {securityBusy === "password" ? $t("settings.changing") : $t("settings.changePassword")}
                   </Button>
                 </div>
               </div>
             </Card>
 
-            <Card title="Rotate keys">
+            <Card title={$t("settings.rotateKeys")}>
               <div class="rows">
-                <p class="hint">Re-encrypts all secrets with new keys. Trusted devices need to re-sync afterwards.</p>
+                <p class="hint">{$t("settings.rotateKeysDesc")}</p>
                 <div class="row-actions">
                   <Button variant="secondary" on:click={() => onRotateVault()} disabled={!!securityBusy}>
-                    <RotateCw size={14} /> {securityBusy === "rotate" ? "Rotating…" : "Rotate"}
+                    <RotateCw size={14} /> {securityBusy === "rotate" ? $t("settings.rotating") : $t("settings.rotate")}
                   </Button>
                 </div>
               </div>
@@ -269,83 +303,83 @@
           </Tabs.Content>
 
           <Tabs.Content value="sync" class="tab-panel">
-            <Card title="Sync target">
+            <Card title={$t("settings.syncTarget")}>
               <div class="rows">
                 <SegmentedControl
-                  ariaLabel="Sync target"
+                  ariaLabel={$t("settings.syncTarget")}
                   bind:value={syncMode}
                   options={[
-                    { value: "local", label: "Local" },
+                    { value: "local", label: $t("settings.local") },
                     { value: "icloud", label: "iCloud" },
                     { value: "onedrive", label: "OneDrive" },
                     { value: "webdav", label: "WebDAV" }
                   ]}
                 />
                 {#if syncMode === "local"}
-                  <Field label="Folder">
+                  <Field label={$t("settings.folder")}>
                     <input bind:value={syncFolder} placeholder="~/Sync/AIPass" />
                   </Field>
                 {:else if syncMode === "icloud"}
-                  <p class="hint">Uses your iCloud Drive's AIPass folder.</p>
+                  <p class="hint">{$t("settings.icloudDesc")}</p>
                 {:else if syncMode === "onedrive"}
-                  <p class="hint">Uses the first OneDrive root on this device.</p>
+                  <p class="hint">{$t("settings.onedriveDesc")}</p>
                 {:else}
-                  <Field label="URL">
+                  <Field label={$t("settings.url")}>
                     <input bind:value={webdavUrl} placeholder="https://cloud.example/dav" />
                   </Field>
-                  <Field label="Username">
-                    <input bind:value={webdavUsername} autocomplete="username" placeholder="user" />
+                  <Field label={$t("settings.username")}>
+                    <input bind:value={webdavUsername} autocomplete="username" placeholder={$t("settings.usernamePlaceholder")} />
                   </Field>
-                  <Field label="Password">
+                  <Field label={$t("settings.password")}>
                     <input bind:value={webdavPassword} type="password" autocomplete="current-password" placeholder="••••••••" />
                   </Field>
                   {#if hasSavedWebdavPassword}
-                    <p class="hint">A password is saved. Leave blank to keep it.</p>
+                    <p class="hint">{$t("settings.savedPasswordHint")}</p>
                   {/if}
                 {/if}
                 <div class="row-actions">
                   <Button variant="secondary" on:click={() => onSaveSyncSettings()} disabled={syncBusy}>
-                    Save
+                    {$t("common.save")}
                   </Button>
                   {#if syncMode === "webdav" && hasSavedWebdavPassword}
-                    <Button variant="ghost" on:click={() => onClearSavedWebdavPassword()} disabled={syncBusy}>Clear password</Button>
+                    <Button variant="ghost" on:click={() => onClearSavedWebdavPassword()} disabled={syncBusy}>{$t("settings.clearPassword")}</Button>
                   {/if}
                   <Button variant="primary" on:click={() => onRunSync()} disabled={!syncReady || syncBusy}>
-                    <Wifi size={14} /> {syncBusy ? "Syncing…" : "Sync now"}
+                    <Wifi size={14} /> {syncBusy ? $t("syncStatus.syncing") : $t("settings.syncNow")}
                   </Button>
                 </div>
               </div>
             </Card>
 
-            <Card title="Conflicts">
+            <Card title={$t("settings.conflicts")}>
               <span slot="actions">
                 <button type="button" class="link" disabled={conflictsLoading || syncBusy} on:click={() => onLoadSyncConflicts()}>
-                  {conflictsLoading ? "Refreshing…" : "Refresh"}
+                  {conflictsLoading ? $t("settings.refreshing") : $t("settings.refresh")}
                 </button>
               </span>
               <div class="rows">
                 {#if conflictsLoading}
-                  <p class="hint">Loading…</p>
+                  <p class="hint">{$t("common.loading")}</p>
                 {:else if syncConflicts.length === 0}
-                  <p class="hint">No unresolved sync conflicts.</p>
+                  <p class="hint">{$t("settings.noConflicts")}</p>
                 {:else}
                   <div class="stack">
                     {#each syncConflicts as conflict}
                       <div class="conflict-row">
                         <div class="conflict-head">
                           <strong>{conflictTitle(conflict)}</strong>
-                          <span class="text-tertiary">{conflict.scope} · incoming {conflict.origin}</span>
+                          <span class="text-tertiary">{conflict.scope} · {$t("settings.incomingOrigin", { origin: conflict.origin })}</span>
                         </div>
                         <div class="conflict-versions">
-                          <div><span class="kv-label">Current</span><code class="mono">{conflictDetail(conflict.targetSummary, `target ${conflict.object.hashHex.slice(0, 12)}`)}</code></div>
-                          <div><span class="kv-label">Incoming</span><code class="mono">{conflictDetail(conflict.conflictSummary, conflict.object.hashHex.slice(0, 12))}</code></div>
+                          <div><span class="kv-label">{$t("settings.current")}</span><code class="mono">{conflictDetail(conflict.targetSummary, `target ${conflict.object.hashHex.slice(0, 12)}`)}</code></div>
+                          <div><span class="kv-label">{$t("settings.incoming")}</span><code class="mono">{conflictDetail(conflict.conflictSummary, conflict.object.hashHex.slice(0, 12))}</code></div>
                         </div>
                         <div class="conflict-actions">
                           <Button variant="secondary" size="sm" disabled={!!conflictBusy} on:click={() => onResolveSyncConflict(conflict, "accept")}>
-                            <Check size={13} /> Accept incoming
+                            <Check size={13} /> {$t("settings.acceptIncoming")}
                           </Button>
                           <Button variant="ghost" size="sm" disabled={!!conflictBusy} on:click={() => onResolveSyncConflict(conflict, "discard")}>
-                            <Trash2 size={13} /> Keep current
+                            <Trash2 size={13} /> {$t("settings.keepCurrent")}
                           </Button>
                         </div>
                       </div>
@@ -355,12 +389,12 @@
               </div>
             </Card>
 
-            <Card title="Trusted devices">
+            <Card title={$t("settings.trustedDevices")}>
               <div class="rows">
                 {#if devicesLoading}
-                  <p class="hint">Loading…</p>
+                  <p class="hint">{$t("common.loading")}</p>
                 {:else if devices.length === 0}
-                  <p class="hint">No trusted devices yet.</p>
+                  <p class="hint">{$t("settings.noTrustedDevices")}</p>
                 {:else}
                   <div class="stack">
                     {#each devices as device}
@@ -368,7 +402,7 @@
                         <div class="device-meta">
                           <strong>{device.name}</strong>
                           <span class="text-tertiary">
-                            {device.trusted ? "Trusted" : "Revoked"} · epoch {device.lastEpoch}
+                            {device.trusted ? $t("settings.trusted") : $t("settings.revoked")} · {$t("settings.epoch", { epoch: device.lastEpoch })}
                           </span>
                         </div>
                         {#if device.trusted}
@@ -378,10 +412,10 @@
                             disabled={!!securityBusy}
                             on:click={() => onRevokeDevice(device.id)}
                           >
-                            {securityBusy === `revoke:${device.id}` ? "Revoking…" : "Revoke"}
+                            {securityBusy === `revoke:${device.id}` ? $t("settings.revoking") : $t("settings.revoke")}
                           </Button>
                         {:else}
-                          <Badge tone="danger">Revoked</Badge>
+                          <Badge tone="danger">{$t("settings.revoked")}</Badge>
                         {/if}
                       </div>
                     {/each}
@@ -392,34 +426,34 @@
           </Tabs.Content>
 
           <Tabs.Content value="backup" class="tab-panel">
-            <Card title="Export">
+            <Card title={$t("settings.export")}>
               <div class="rows">
-                <Field label="Output file">
+                <Field label={$t("settings.outputFile")}>
                   <input bind:value={exportPath} placeholder="~/Backups/aipass.aipexport" />
                 </Field>
-                <Field label="Export password">
+                <Field label={$t("settings.exportPassword")}>
                   <input bind:value={exportPassword} type="password" autocomplete="new-password" placeholder="••••••••" />
                 </Field>
                 <div class="row-actions">
                   <Button variant="secondary" on:click={() => onExportVault()} disabled={!exportReady || !!backupBusy}>
-                    <Download size={14} /> {backupBusy === "export" ? "Exporting…" : "Export vault"}
+                    <Download size={14} /> {backupBusy === "export" ? $t("settings.exporting") : $t("settings.exportVault")}
                   </Button>
                 </div>
               </div>
             </Card>
 
-            <Card title="Import">
+            <Card title={$t("settings.import")}>
               <div class="rows">
-                <Field label="Input file">
+                <Field label={$t("settings.inputFile")}>
                   <input bind:value={importPath} placeholder="~/Backups/aipass.aipexport" />
                 </Field>
-                <Field label="Import password">
+                <Field label={$t("settings.importPassword")}>
                   <input bind:value={importPassword} type="password" autocomplete="current-password" placeholder="••••••••" />
                 </Field>
-                <p class="hint">Importing replaces the current vault and locks it.</p>
+                <p class="hint">{$t("settings.importDesc")}</p>
                 <div class="row-actions">
                   <Button variant="secondary" on:click={() => onImportVault()} disabled={!importReady || !!backupBusy}>
-                    <Upload size={14} /> {backupBusy === "import" ? "Importing…" : "Import and lock"}
+                    <Upload size={14} /> {backupBusy === "import" ? $t("settings.importing") : $t("settings.importAndLock")}
                   </Button>
                 </div>
               </div>
@@ -427,34 +461,34 @@
           </Tabs.Content>
 
           <Tabs.Content value="about" class="tab-panel">
-            <Card title="About AIPass">
+            <Card title={$t("settings.aboutAipass")}>
               <div class="rows">
                 <div class="row">
-                  <span class="row-label">Version</span>
+                  <span class="row-label">{$t("settings.version")}</span>
                   <span class="text-secondary tabular">{updateCheck?.currentVersion ?? "—"}</span>
                 </div>
                 <div class="row">
-                  <span class="row-label">Platform</span>
+                  <span class="row-label">{$t("settings.platform")}</span>
                   <span class="text-secondary">{platformLabel}</span>
                 </div>
                 <div class="row">
-                  <span class="row-label">Vault</span>
-                  <span class="text-secondary">{entriesCount} {entriesCount === 1 ? "provider" : "providers"}</span>
+                  <span class="row-label">{$t("settings.vault")}</span>
+                  <span class="text-secondary">{$t("settings.providerCount", { count: entriesCount, label: entriesCount === 1 ? $t("settings.providerSingular") : $t("settings.providerPlural") })}</span>
                 </div>
-                <p class="hint">Encrypted with XChaCha20-Poly1305. Recovery key shown once at creation.</p>
+                <p class="hint">{$t("settings.cryptoDesc")}</p>
               </div>
             </Card>
 
-            <Card title="Updates">
+            <Card title={$t("settings.updates")}>
               <div class="rows">
                 {#if updateCheck?.available}
                   <div class="update-summary">
                     <div class="update-summary-text">
-                      <strong>Update available</strong>
-                      <span class="text-tertiary">Version {updateCheck.latestVersion}</span>
+                      <strong>{$t("settings.updateAvailable")}</strong>
+                      <span class="text-tertiary">{$t("settings.updateVersion", { version: updateCheck.latestVersion })}</span>
                     </div>
                     <Button variant="primary" on:click={() => runUpdateInstall()} disabled={updateInstalling}>
-                      {updateInstalling ? "Installing…" : "Install"}
+                      {updateInstalling ? $t("settings.installing") : $t("settings.install")}
                     </Button>
                   </div>
                   {#if updateCheck.notes}
@@ -462,33 +496,33 @@
                   {/if}
                   <div class="row-actions">
                     <Button variant="ghost" size="sm" on:click={() => runUpdateCheck()} disabled={updateChecking || updateInstalling}>
-                      <RefreshCw size={13} /> Re-check
+                      <RefreshCw size={13} /> {$t("settings.recheck")}
                     </Button>
                   </div>
                 {:else}
                   <div class="row">
                     <div class="row-text">
                       <span class="row-label">
-                        {#if updateCheck && !updateError}
-                          You're up to date
+                        {#if updateCheck && !updateErrorText}
+                          {$t("settings.upToDate")}
                         {:else}
-                          Check for updates
+                          {$t("settings.checkUpdates")}
                         {/if}
                       </span>
                       <span class="row-desc">
-                        {#if updateCheck && !updateError}
-                          AIPass is running the latest version.
+                        {#if updateCheck && !updateErrorText}
+                          {$t("settings.upToDateDesc")}
                         {:else}
-                          Look for a newer version on the AIPass servers.
+                          {$t("settings.checkUpdatesDesc")}
                         {/if}
                       </span>
                     </div>
                     <Button variant="secondary" on:click={() => runUpdateCheck()} disabled={updateChecking}>
-                      <RefreshCw size={14} /> {updateChecking ? "Checking…" : "Check now"}
+                      <RefreshCw size={14} /> {updateChecking ? $t("settings.checking") : $t("settings.checkNow")}
                     </Button>
                   </div>
-                  {#if updateError}
-                    <Banner tone="danger">{updateError}</Banner>
+                  {#if updateErrorText}
+                    <Banner tone="danger">{updateErrorText}</Banner>
                   {/if}
                 {/if}
               </div>
@@ -678,6 +712,10 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+
+  :global(.tab-panel[data-state="inactive"]) {
+    display: none;
   }
 
   .rows {

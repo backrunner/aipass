@@ -1,10 +1,10 @@
 <script lang="ts">
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { providerDefinitions } from "@aipass/schemas";
-  import { authLabel, interfaceLabel } from "@aipass/ui";
   import { Plus, X } from "lucide-svelte";
   import { onMount } from "svelte";
 
+  import { t } from "../../stores/i18n";
   import type { Draft, FormMode, MaybePromise } from "../../types";
   import Field from "../shared/Field.svelte";
   import SelectField from "../shared/SelectField.svelte";
@@ -38,22 +38,25 @@
     clear: () => void;
   };
 
-  const interfaceOptions: Array<{ value: InterfaceType; label: string }> = [
-    { value: "openai_compatible", label: interfaceLabel.openai_compatible },
-    { value: "anthropic_messages", label: interfaceLabel.anthropic_messages },
-    { value: "gemini", label: interfaceLabel.gemini },
-    { value: "azure_openai", label: interfaceLabel.azure_openai },
-    { value: "bedrock", label: interfaceLabel.bedrock },
-    { value: "custom_http", label: interfaceLabel.custom_http }
+  const interfaceValues: InterfaceType[] = [
+    "openai_compatible",
+    "anthropic_messages",
+    "gemini",
+    "azure_openai",
+    "bedrock",
+    "custom_http"
   ];
-  const authOptions: Array<{ value: AuthScheme; label: string }> = [
-    { value: "bearer", label: authLabel.bearer },
-    { value: "x_api_key", label: authLabel.x_api_key },
-    { value: "google_api_key", label: authLabel.google_api_key },
-    { value: "azure_api_key", label: authLabel.azure_api_key },
-    { value: "aws_profile", label: authLabel.aws_profile },
-    { value: "custom_header", label: authLabel.custom_header }
+  const authValues: AuthScheme[] = [
+    "bearer",
+    "x_api_key",
+    "google_api_key",
+    "azure_api_key",
+    "aws_profile",
+    "custom_header"
   ];
+
+  $: interfaceOptions = interfaceValues.map((value) => ({ value, label: $t(interfaceLabelKey(value)) }));
+  $: authOptions = authValues.map((value) => ({ value, label: $t(authLabelKey(value)) }));
 
   $: providerOptions = providerDefinitions.map((provider) => ({
     value: provider.id,
@@ -61,21 +64,21 @@
   }));
 
   const optionalFields: OptionalField[] = [
-    { id: "domain", label: "Domains", section: "details", hasValue: () => Boolean(draft.domain), clear: () => (draft.domain = "") },
-    { id: "endpoint", label: "Endpoint URL", section: "details", hasValue: () => Boolean(draft.endpoint), clear: () => (draft.endpoint = "") },
-    { id: "defaultModel", label: "Default model", section: "details", hasValue: () => Boolean(draft.defaultModel), clear: () => (draft.defaultModel = "") },
-    { id: "environment", label: "Environment", section: "details", hasValue: () => Boolean(draft.environment), clear: () => (draft.environment = "") },
-    { id: "tag", label: "Tags", section: "details", hasValue: () => Boolean(draft.tag), clear: () => (draft.tag = "") },
-    { id: "notes", label: "Notes", section: "details", hasValue: () => Boolean(draft.notes), clear: () => (draft.notes = "") },
-    { id: "consoleUrl", label: "Console URL", section: "advanced", hasValue: () => Boolean(draft.consoleUrl), clear: () => (draft.consoleUrl = "") },
-    { id: "faviconUrl", label: "Favicon URL", section: "advanced", hasValue: () => Boolean(draft.faviconUrl), clear: () => (draft.faviconUrl = "") },
-    { id: "modelAlias", label: "Model aliases", section: "advanced", hasValue: () => Boolean(draft.modelAlias), clear: () => (draft.modelAlias = "") },
-    { id: "header", label: "Custom headers", section: "advanced", hasValue: () => Boolean(draft.header), clear: () => (draft.header = "") },
-    { id: "interfaceType", label: "Interface", section: "advanced", hasValue: () => false, clear: () => {} },
-    { id: "authScheme", label: "Auth", section: "advanced", hasValue: () => false, clear: () => {} },
+    { id: "domain", label: "providerForm.domains", section: "details", hasValue: () => Boolean(draft.domain), clear: () => (draft.domain = "") },
+    { id: "endpoint", label: "providerForm.endpointUrl", section: "details", hasValue: () => Boolean(draft.endpoint), clear: () => (draft.endpoint = "") },
+    { id: "defaultModel", label: "providerForm.defaultModel", section: "details", hasValue: () => Boolean(draft.defaultModel), clear: () => (draft.defaultModel = "") },
+    { id: "environment", label: "providerForm.environment", section: "details", hasValue: () => Boolean(draft.environment), clear: () => (draft.environment = "") },
+    { id: "tag", label: "providerForm.tags", section: "details", hasValue: () => Boolean(draft.tag), clear: () => (draft.tag = "") },
+    { id: "notes", label: "providerForm.notes", section: "details", hasValue: () => Boolean(draft.notes), clear: () => (draft.notes = "") },
+    { id: "consoleUrl", label: "providerForm.consoleUrl", section: "advanced", hasValue: () => Boolean(draft.consoleUrl), clear: () => (draft.consoleUrl = "") },
+    { id: "faviconUrl", label: "providerForm.faviconUrl", section: "advanced", hasValue: () => Boolean(draft.faviconUrl), clear: () => (draft.faviconUrl = "") },
+    { id: "modelAlias", label: "providerForm.modelAliases", section: "advanced", hasValue: () => Boolean(draft.modelAlias), clear: () => (draft.modelAlias = "") },
+    { id: "header", label: "providerForm.customHeaders", section: "advanced", hasValue: () => Boolean(draft.header), clear: () => (draft.header = "") },
+    { id: "interfaceType", label: "providerForm.interface", section: "advanced", hasValue: () => false, clear: () => {} },
+    { id: "authScheme", label: "providerForm.auth", section: "advanced", hasValue: () => false, clear: () => {} },
     {
       id: "quota",
-      label: "Quota",
+      label: "providerForm.quota",
       section: "advanced",
       hasValue: () => Boolean(draft.quotaLabel || draft.quotaLimit || draft.quotaRemaining || draft.quotaResetAt),
       clear: () => {
@@ -118,6 +121,40 @@
     return visibleFields.has(id);
   }
 
+  function interfaceLabelKey(value: InterfaceType): string {
+    switch (value) {
+      case "openai_compatible":
+        return "interface.openaiCompatible";
+      case "anthropic_messages":
+        return "interface.anthropicMessages";
+      case "gemini":
+        return "interface.gemini";
+      case "azure_openai":
+        return "interface.azureOpenai";
+      case "bedrock":
+        return "interface.bedrock";
+      case "custom_http":
+        return "interface.customHttp";
+    }
+  }
+
+  function authLabelKey(value: AuthScheme): string {
+    switch (value) {
+      case "bearer":
+        return "authScheme.bearer";
+      case "x_api_key":
+        return "authScheme.xApiKey";
+      case "google_api_key":
+        return "authScheme.googleApiKey";
+      case "azure_api_key":
+        return "authScheme.azureApiKey";
+      case "aws_profile":
+        return "authScheme.awsProfile";
+      case "custom_header":
+        return "authScheme.customHeader";
+    }
+  }
+
   $: detailsAvailable = optionalFields.filter(
     (field) => field.section === "details" && !visibleFields.has(field.id)
   );
@@ -144,22 +181,22 @@
 </script>
 
 <section class="form-section">
-  <h3 class="section-title">Identity</h3>
+  <h3 class="section-title">{$t("providerForm.identity")}</h3>
   <div class="section-fields">
     <SelectField
-      label="Provider"
+      label={$t("providerForm.provider")}
       bind:value={draft.providerId}
       options={providerOptions}
       onValueChange={() => onProviderChanged()}
     />
-    <Field label="Title">
-      <input bind:value={draft.title} placeholder="My provider" />
+    <Field label={$t("providerForm.title")}>
+      <input bind:value={draft.title} placeholder={$t("providerForm.titlePlaceholder")} />
     </Field>
-    <Field label="API key">
+    <Field label={$t("providerForm.apiKey")}>
       <input
         bind:value={draft.apiKey}
         type="password"
-        placeholder={formMode === "edit" ? "Leave blank to keep current" : "Paste API key"}
+        placeholder={formMode === "edit" ? $t("providerForm.keepCurrent") : $t("providerForm.pasteApiKey")}
         autocomplete="off"
         spellcheck="false"
       />
@@ -169,11 +206,11 @@
 
 {#if detailsVisible}
   <section class="form-section">
-    <h3 class="section-title">Details</h3>
+    <h3 class="section-title">{$t("providerForm.details")}</h3>
     <div class="section-fields">
       {#if isVisible("domain")}
         <div class="removable-field">
-          <Field label="Domains">
+          <Field label={$t("providerForm.domains")}>
             <input
               bind:value={draft.domain}
               on:blur={() => onInferDraftFromDomain()}
@@ -182,61 +219,61 @@
               spellcheck="false"
             />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove domains" on:click={() => removeField("domain")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.domains") })} on:click={() => removeField("domain")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("endpoint")}
         <div class="removable-field">
-          <Field label="Endpoint URL">
+          <Field label={$t("providerForm.endpointUrl")}>
             <input
               bind:value={draft.endpoint}
               on:blur={() => onInferDraftFromEndpoint()}
               placeholder="https://api.example.com"
             />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove endpoint" on:click={() => removeField("endpoint")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.endpointUrl") })} on:click={() => removeField("endpoint")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("defaultModel")}
         <div class="removable-field">
-          <Field label="Default model">
+          <Field label={$t("providerForm.defaultModel")}>
             <input bind:value={draft.defaultModel} placeholder="gpt-4o" />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove default model" on:click={() => removeField("defaultModel")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.defaultModel") })} on:click={() => removeField("defaultModel")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("environment")}
         <div class="removable-field">
-          <Field label="Environment">
+          <Field label={$t("providerForm.environment")}>
             <input bind:value={draft.environment} placeholder="prod" />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove environment" on:click={() => removeField("environment")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.environment") })} on:click={() => removeField("environment")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("tag")}
         <div class="removable-field">
-          <Field label="Tags">
+          <Field label={$t("providerForm.tags")}>
             <input bind:value={draft.tag} placeholder="prod, team" />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove tags" on:click={() => removeField("tag")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.tags") })} on:click={() => removeField("tag")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("notes")}
         <div class="removable-field align-top">
-          <Field label="Notes">
-            <textarea bind:value={draft.notes} rows="3" placeholder="Notes for your team"></textarea>
+          <Field label={$t("providerForm.notes")}>
+            <textarea bind:value={draft.notes} rows="3" placeholder={$t("providerForm.notes")}></textarea>
           </Field>
-          <button type="button" class="remove-btn align-top" aria-label="Remove notes" on:click={() => removeField("notes")}>
+          <button type="button" class="remove-btn align-top" aria-label={$t("providerForm.removeField", { label: $t("providerForm.notes") })} on:click={() => removeField("notes")}>
             <X size={13} />
           </button>
         </div>
@@ -247,44 +284,44 @@
 
 {#if advancedVisible}
   <section class="form-section">
-    <h3 class="section-title">Advanced</h3>
+    <h3 class="section-title">{$t("providerForm.advanced")}</h3>
     <div class="section-fields">
       {#if isVisible("consoleUrl")}
         <div class="removable-field">
-          <Field label="Console URL">
+          <Field label={$t("providerForm.consoleUrl")}>
             <input bind:value={draft.consoleUrl} placeholder="https://console.example.com" />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove console URL" on:click={() => removeField("consoleUrl")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.consoleUrl") })} on:click={() => removeField("consoleUrl")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("faviconUrl")}
         <div class="removable-field">
-          <Field label="Favicon URL">
+          <Field label={$t("providerForm.faviconUrl")}>
             <input bind:value={draft.faviconUrl} placeholder="https://example.com/favicon.ico" />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove favicon" on:click={() => removeField("faviconUrl")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.faviconUrl") })} on:click={() => removeField("faviconUrl")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("modelAlias")}
         <div class="removable-field">
-          <Field label="Model aliases">
+          <Field label={$t("providerForm.modelAliases")}>
             <input bind:value={draft.modelAlias} placeholder="fast=gpt-4o-mini" />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove model aliases" on:click={() => removeField("modelAlias")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.modelAliases") })} on:click={() => removeField("modelAlias")}>
             <X size={13} />
           </button>
         </div>
       {/if}
       {#if isVisible("header")}
         <div class="removable-field">
-          <Field label="Custom headers">
+          <Field label={$t("providerForm.customHeaders")}>
             <input bind:value={draft.header} placeholder="x-version=1" />
           </Field>
-          <button type="button" class="remove-btn" aria-label="Remove headers" on:click={() => removeField("header")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.customHeaders") })} on:click={() => removeField("header")}>
             <X size={13} />
           </button>
         </div>
@@ -292,11 +329,11 @@
       {#if isVisible("interfaceType")}
         <div class="removable-field">
           <SelectField
-            label="Interface"
+            label={$t("providerForm.interface")}
             bind:value={draft.interfaceType}
             options={interfaceOptions}
           />
-          <button type="button" class="remove-btn" aria-label="Remove interface override" on:click={() => removeField("interfaceType")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeInterface")} on:click={() => removeField("interfaceType")}>
             <X size={13} />
           </button>
         </div>
@@ -304,11 +341,11 @@
       {#if isVisible("authScheme")}
         <div class="removable-field">
           <SelectField
-            label="Auth"
+            label={$t("providerForm.auth")}
             bind:value={draft.authScheme}
             options={authOptions}
           />
-          <button type="button" class="remove-btn" aria-label="Remove auth override" on:click={() => removeField("authScheme")}>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeAuth")} on:click={() => removeField("authScheme")}>
             <X size={13} />
           </button>
         </div>
@@ -316,20 +353,20 @@
       {#if isVisible("quota")}
         <div class="removable-field align-top quota-block">
           <div class="quota-grid">
-            <Field label="Quota label">
-              <input bind:value={draft.quotaLabel} placeholder="Pro plan" />
+            <Field label={$t("providerForm.quotaLabel")}>
+              <input bind:value={draft.quotaLabel} placeholder={$t("providerForm.quotaLabelPlaceholder")} />
             </Field>
-            <Field label="Resets at">
+            <Field label={$t("providerForm.resetsAt")}>
               <input bind:value={draft.quotaResetAt} placeholder="2026-06-01" />
             </Field>
-            <Field label="Remaining">
+            <Field label={$t("providerForm.remaining")}>
               <input bind:value={draft.quotaRemaining} placeholder="0" />
             </Field>
-            <Field label="Limit">
+            <Field label={$t("providerForm.limit")}>
               <input bind:value={draft.quotaLimit} placeholder="0" />
             </Field>
           </div>
-          <button type="button" class="remove-btn align-top" aria-label="Remove quota" on:click={() => removeField("quota")}>
+          <button type="button" class="remove-btn align-top" aria-label={$t("providerForm.removeField", { label: $t("providerForm.quota") })} on:click={() => removeField("quota")}>
             <X size={13} />
           </button>
         </div>
@@ -340,18 +377,18 @@
 
 {#if detailsAvailable.length > 0 || advancedAvailable.length > 0}
   <section class="form-section">
-    <h3 class="section-title">Add field</h3>
+    <h3 class="section-title">{$t("providerForm.addField")}</h3>
     <div class="chip-group">
       {#each detailsAvailable as field}
         <button type="button" class="add-chip" on:click={() => addField(field.id)}>
           <Plus size={12} />
-          <span>{field.label}</span>
+          <span>{$t(field.label)}</span>
         </button>
       {/each}
       {#each advancedAvailable as field}
         <button type="button" class="add-chip subtle" on:click={() => addField(field.id)}>
           <Plus size={12} />
-          <span>{field.label}</span>
+          <span>{$t(field.label)}</span>
         </button>
       {/each}
     </div>

@@ -1,9 +1,9 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { providerKindLabel } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
   import { KeyRound, Plus, Search, SlidersHorizontal, Trash2 } from "lucide-svelte";
 
+  import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderFilter } from "../../types";
   import Button from "../shared/Button.svelte";
   import ProviderIcon from "../shared/ProviderIcon.svelte";
@@ -21,15 +21,15 @@
   export let onEmptyTrash: () => MaybePromise = () => {};
   export let onSelect: (id: string) => MaybePromise = () => {};
 
-  const baseFilterOptions: Array<{ value: ProviderFilter; label: string }> = [
-    { value: "all", label: "All Items" },
-    { value: "recent", label: "Recent" },
-    { value: "official", label: providerKindLabel.official },
-    { value: "third_party", label: providerKindLabel.third_party },
-    { value: "self_hosted", label: providerKindLabel.self_hosted },
-    { value: "unknown", label: providerKindLabel.unknown },
-    { value: "quota_low", label: "Low quota" },
-    { value: "expiring", label: "Expiring soon" }
+  $: baseFilterOptions = [
+    { value: "all" as ProviderFilter, label: $t("providerList.allItems") },
+    { value: "recent" as ProviderFilter, label: $t("sidebar.recent") },
+    { value: "official" as ProviderFilter, label: $t("sidebar.official") },
+    { value: "third_party" as ProviderFilter, label: $t("sidebar.thirdParty") },
+    { value: "self_hosted" as ProviderFilter, label: $t("sidebar.selfHosted") },
+    { value: "unknown" as ProviderFilter, label: $t("sidebar.custom") },
+    { value: "quota_low" as ProviderFilter, label: $t("providerList.lowQuota") },
+    { value: "expiring" as ProviderFilter, label: $t("providerList.expiringSoon") }
   ];
 
   $: filterOptions = [
@@ -38,13 +38,13 @@
       .slice(0, 8)
       .map((environment) => ({
         value: `environment:${environment}` as ProviderFilter,
-        label: `Environment: ${environment}`
+        label: $t("providerList.environment", { value: environment })
       })),
     ...unique(filterEntries.flatMap((entry) => entry.tags))
       .slice(0, 12)
       .map((tag) => ({
         value: `tag:${tag}` as ProviderFilter,
-        label: `Tag: ${tag}`
+        label: $t("providerList.tag", { value: tag })
       }))
   ];
 
@@ -66,7 +66,7 @@
       <input
         bind:value={query}
         on:input={() => onSearch()}
-        placeholder="Search"
+        placeholder={$t("providerList.search")}
         type="search"
         spellcheck="false"
         autocapitalize="off"
@@ -79,8 +79,8 @@
               type="button"
               class="filter-trigger"
               class:active-filter={providerFilter !== "all"}
-              aria-label="Filter providers"
-              title="Filter providers"
+              aria-label={$t("providerList.filter")}
+              title={$t("providerList.filter")}
               disabled={showArchived || showTrash}
             >
               <SlidersHorizontal size={14} />
@@ -95,7 +95,7 @@
                 onSelect={() => onFilterChange(option.value)}
               >
                 <span>{option.label}</span>
-                {#if providerFilter === option.value}<span class="filter-check">Selected</span>{/if}
+                {#if providerFilter === option.value}<span class="filter-check">{$t("common.selected")}</span>{/if}
               </DropdownMenu.Item>
             {/each}
           </DropdownMenu.Content>
@@ -110,17 +110,17 @@
         disabled={entries.length === 0}
       >
         <Trash2 size={14} />
-        <span>Empty trash</span>
+        <span>{$t("providerList.emptyTrash")}</span>
       </button>
     {:else}
       <button type="button" class="cta-btn primary" on:click={() => onAdd()}>
         <Plus size={14} />
-        <span>Add</span>
+        <span>{$t("providerList.add")}</span>
       </button>
     {/if}
   </div>
 
-  <div class="entries" role="listbox" aria-label="Providers">
+  <div class="entries" role="listbox" aria-label={$t("providerList.providers")}>
     {#if entries.length === 0}
       <div class="empty">
         <span class="empty-icon">
@@ -128,25 +128,25 @@
         </span>
         <strong class="empty-title">
           {#if showTrash}
-            Trash is empty
+            {$t("providerList.trashEmpty")}
           {:else if showArchived}
-            Archive is empty
+            {$t("providerList.archiveEmpty")}
           {:else}
-            No providers yet
+            {$t("providerList.noProviders")}
           {/if}
         </strong>
         <span class="empty-meta">
           {#if showTrash}
-            Deleted items appear here for 30 days.
+            {$t("providerList.trashEmptyDesc")}
           {:else if showArchived}
-            Archived items will appear here.
+            {$t("providerList.archiveEmptyDesc")}
           {:else}
-            Add an AI provider credential to begin.
+            {$t("providerList.noProvidersDesc")}
           {/if}
         </span>
         {#if !showArchived && !showTrash}
           <Button variant="primary" size="sm" on:click={() => onAdd()}>
-            <Plus size={14} /> Add provider
+            <Plus size={14} /> {$t("providerList.addProvider")}
           </Button>
         {/if}
       </div>

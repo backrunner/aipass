@@ -5,7 +5,7 @@ import type { ToolConfigMode, ToolConfigTarget } from "../types";
 export type IntegrationToolDefinition = {
   id: ToolConfigTarget;
   name: string;
-  desc: string;
+  descKey: string;
   defaultMode: ToolConfigMode;
 };
 
@@ -20,25 +20,25 @@ export const integrationToolDefinitions: IntegrationToolDefinition[] = [
   {
     id: "codex",
     name: "Codex",
-    desc: "Writes ~/.codex/config.toml",
+    descKey: "integration.codexDesc",
     defaultMode: "helper"
   },
   {
     id: "claude-code",
     name: "Claude Code",
-    desc: "Writes ~/.claude/settings.json",
+    descKey: "integration.claudeCodeDesc",
     defaultMode: "helper"
   },
   {
     id: "gemini-cli",
     name: "Gemini CLI",
-    desc: "Writes ~/.gemini/aipass.env",
+    descKey: "integration.geminiCliDesc",
     defaultMode: "helper"
   },
   {
     id: "opencode",
     name: "OpenCode",
-    desc: "Writes ~/.config/opencode/opencode.json",
+    descKey: "integration.opencodeDesc",
     defaultMode: "helper"
   }
 ];
@@ -58,6 +58,10 @@ export function supportsIntegration(tool: ToolConfigTarget, entry: IntegrationEn
 
 export function compatibleToolsFor(entry: IntegrationEntry): IntegrationToolDefinition[] {
   return integrationToolDefinitions.filter((tool) => supportsIntegration(tool.id, entry));
+}
+
+export function integrationToolName(tool: ToolConfigTarget): string {
+  return integrationToolDefinitions.find((definition) => definition.id === tool)?.name ?? tool;
 }
 
 export function compatibleEntriesForTool(

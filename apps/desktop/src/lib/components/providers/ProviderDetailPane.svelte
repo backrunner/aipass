@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { ProviderEntry } from "@aipass/schemas";
-  import { authLabel, interfaceLabel, providerKindLabel, providerKindTone } from "@aipass/ui";
+  import type { InterfaceType, ProviderEntry, ProviderKind } from "@aipass/schemas";
+  import { providerKindTone } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
   import {
     Archive,
@@ -22,12 +22,14 @@
     Draft,
     FormMode,
     MaybePromise,
+    MessageValue,
     ProbeResult,
     ToolConfigApplyResult,
     ToolConfigMode,
     ToolConfigPreview,
     ToolConfigTarget
   } from "../../types";
+  import { isLocalizedMessage, localizedMessage, resolveMessage, t } from "../../stores/i18n";
   import {
     compatibleToolsFor,
     type IntegrationToolDefinition
@@ -76,14 +78,14 @@
     mode: ToolConfigMode;
     id: string;
   }) => Promise<ToolConfigPreview> = async () => {
-    throw new Error("Tool preview is unavailable");
+    throw localizedMessage("error.toolPreviewUnavailable");
   };
   export let onApplyToolConfig: (request: {
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
   }) => Promise<ToolConfigApplyResult> = async () => {
-    throw new Error("Tool apply is unavailable");
+    throw localizedMessage("error.toolApplyUnavailable");
   };
 
   let showAddSecret = false;
@@ -104,7 +106,7 @@
 
   type IntegrationState = {
     busy: boolean;
-    error: string;
+    error: MessageValue;
     preview?: ToolConfigPreview;
     applied?: ToolConfigApplyResult;
   };
@@ -138,7 +140,11 @@
     } catch (err) {
       integrationState = {
         ...integrationState,
-        [tool.id]: { ...integrationState[tool.id], busy: false, error: String(err) }
+        [tool.id]: {
+          ...integrationState[tool.id],
+          busy: false,
+          error: isLocalizedMessage(err) ? err : String(err)
+        }
       };
     }
   }
@@ -163,7 +169,11 @@
     } catch (err) {
       integrationState = {
         ...integrationState,
-        [tool.id]: { ...integrationState[tool.id], busy: false, error: String(err) }
+        [tool.id]: {
+          ...integrationState[tool.id],
+          busy: false,
+          error: isLocalizedMessage(err) ? err : String(err)
+        }
       };
     }
   }
@@ -199,6 +209,36 @@
     newSecretKey = "";
     onEditCancel();
   }
+
+  function providerKindLabelKey(kind: ProviderKind): string {
+    switch (kind) {
+      case "official":
+        return "providerKind.official";
+      case "third_party":
+        return "providerKind.thirdParty";
+      case "self_hosted":
+        return "providerKind.selfHosted";
+      case "unknown":
+        return "providerKind.custom";
+    }
+  }
+
+  function interfaceLabelKey(value: InterfaceType): string {
+    switch (value) {
+      case "openai_compatible":
+        return "interface.openaiCompatible";
+      case "anthropic_messages":
+        return "interface.anthropicMessages";
+      case "gemini":
+        return "interface.gemini";
+      case "azure_openai":
+        return "interface.azureOpenai";
+      case "bedrock":
+        return "interface.bedrock";
+      case "custom_http":
+        return "interface.customHttp";
+    }
+  }
 </script>
 
 {#if selected}
@@ -210,8 +250,8 @@
         <div class="identity-text">
           <h1>{selected.title}</h1>
           <div class="meta">
-            <Badge tone={providerKindTone[selected.providerKind]}>{providerKindLabel[selected.providerKind]}</Badge>
-            <Badge>{interfaceLabel[selected.interfaceType]}</Badge>
+            <Badge tone={providerKindTone[selected.providerKind]}>{$t(providerKindLabelKey(selected.providerKind))}</Badge>
+            <Badge>{$t(interfaceLabelKey(selected.interfaceType))}</Badge>
             {#if selected.environment}
               <Badge>{selected.environment}</Badge>
             {/if}
@@ -221,31 +261,31 @@
 
       <div class="actions">
         {#if editMode}
-          <Button variant="ghost" on:click={cancelEdit}>Cancel</Button>
-          <Button variant="primary" on:click={() => onEditSave()}>Save changes</Button>
+          <Button variant="ghost" on:click={cancelEdit}>{$t("common.cancel")}</Button>
+          <Button variant="primary" on:click={() => onEditSave()}>{$t("providerModal.saveChanges")}</Button>
         {:else if showTrash}
           <Button variant="ghost" on:click={() => onRestore()}>
-            <Undo2 size={14} /> Restore
+            <Undo2 size={14} /> {$t("providerDetail.restore")}
           </Button>
           <Button variant="primary" on:click={() => onDelete()}>
-            <Trash2 size={14} /> Delete forever
+            <Trash2 size={14} /> {$t("providerDetail.deleteForever")}
           </Button>
         {:else if showArchived}
           <Button variant="ghost" on:click={() => onRestore()}>
-            <Undo2 size={14} /> Restore
+            <Undo2 size={14} /> {$t("providerDetail.restore")}
           </Button>
           <Button variant="primary" on:click={() => onTrash()}>
-            <Trash2 size={14} /> Move to trash
+            <Trash2 size={14} /> {$t("providerDetail.moveToTrash")}
           </Button>
         {:else}
           <Button variant="primary" on:click={startEdit}>
-            <Pencil size={14} /> Edit
+            <Pencil size={14} /> {$t("providerDetail.edit")}
           </Button>
 
           <DropdownMenu.Root>
             <DropdownMenu.Trigger>
               {#snippet child({ props })}
-                <button class="more-trigger" {...props} aria-label="More actions" type="button">
+                <button class="more-trigger" {...props} aria-label={$t("providerDetail.moreActions")} type="button">
                   <MoreHorizontal size={16} />
                 </button>
               {/snippet}
@@ -254,16 +294,16 @@
               <DropdownMenu.Content sideOffset={6} align="end" class="dropdown-content">
                 <DropdownMenu.Item class="dropdown-item" onSelect={() => onProbe()} disabled={probing}>
                   <Wifi size={14} />
-                  <span>{probing ? "Probing…" : "Probe endpoint"}</span>
+                  <span>{probing ? $t("providerDetail.probing") : $t("providerDetail.probeEndpoint")}</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator class="dropdown-separator" />
                 <DropdownMenu.Item class="dropdown-item" onSelect={() => onArchive()}>
                   <Archive size={14} />
-                  <span>Archive</span>
+                  <span>{$t("sidebar.archive")}</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item class="dropdown-item danger" onSelect={() => onTrash()}>
                   <Trash2 size={14} />
-                  <span>Move to trash</span>
+                  <span>{$t("providerDetail.moveToTrash")}</span>
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
@@ -279,7 +319,7 @@
         {@const days = trashDaysRemaining(selected.deletedAt)}
         {#if days !== undefined}
           <Banner tone="warning">
-            {days === 0 ? "Will be deleted soon." : `Permanently deletes in ${days} ${days === 1 ? "day" : "days"}.`}
+            {days === 0 ? $t("providerDetail.deleteSoon") : $t("providerDetail.deletesIn", { count: days, unit: days === 1 ? $t("providerDetail.day") : $t("providerDetail.days") })}
           </Banner>
         {/if}
       {/if}
@@ -294,7 +334,7 @@
 
         {#if selected.secretRefs.length > 1 || showAddSecret}
           <section class="form-section">
-            <h3 class="section-title">Additional keys</h3>
+            <h3 class="section-title">{$t("providerDetail.additionalKeys")}</h3>
             <div class="section-fields">
               {#each selected.secretRefs.slice(1) as secret}
                 <div class="key-row">
@@ -303,7 +343,7 @@
                   <button
                     type="button"
                     class="key-row-remove"
-                    aria-label="Remove key"
+                    aria-label={$t("providerDetail.removeKey")}
                     on:click={() => onRemoveSecret(secret.label)}
                     disabled={secretBusy === secret.label}
                   >
@@ -315,17 +355,17 @@
                 <div class="add-secret-row">
                   <input
                     bind:value={newSecretLabel}
-                    aria-label="Secret label"
-                    placeholder="fallback"
+                    aria-label={$t("providerDetail.secretLabel")}
+                    placeholder={$t("providerDetail.secretLabelPlaceholder")}
                   />
                   <input
                     bind:value={newSecretKey}
-                    aria-label="Secret value"
+                    aria-label={$t("providerDetail.secretValue")}
                     type="password"
-                    placeholder="API key"
+                    placeholder={$t("providerDetail.apiKey")}
                   />
                   <Button variant="secondary" size="sm" disabled={secretBusy === "add"} on:click={() => onAddSecret()}>
-                    Save
+                    {$t("common.save")}
                   </Button>
                   <Button variant="ghost" size="sm" on:click={() => { showAddSecret = false; newSecretKey = ""; }}>
                     <Trash2 size={13} />
@@ -335,7 +375,7 @@
               {#if !showAddSecret}
                 <button type="button" class="add-chip" on:click={() => (showAddSecret = true)}>
                   <Plus size={12} />
-                  <span>Add key</span>
+                  <span>{$t("providerDetail.addKey")}</span>
                 </button>
               {/if}
             </div>
@@ -343,21 +383,21 @@
         {:else}
           <button type="button" class="add-chip standalone" on:click={() => (showAddSecret = true)}>
             <Plus size={12} />
-            <span>Add another key</span>
+            <span>{$t("providerDetail.addAnotherKey")}</span>
           </button>
         {/if}
       {:else}
-        <Card title="Credentials">
+        <Card title={$t("providerDetail.credentials")}>
           {#if endpointDisplay(selected)}
             <button
               type="button"
               class="kv-row clickable"
               on:click={() => onCopyValue("endpoint", endpointDisplay(selected))}
             >
-              <span class="kv-label">Endpoint</span>
+              <span class="kv-label">{$t("providerDetail.endpoint")}</span>
               <code class="kv-value mono">{endpointDisplay(selected)}</code>
               <span class="kv-hint">
-                {#if copied === "endpoint"}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+                {#if copied === "endpoint"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
               </span>
             </button>
           {/if}
@@ -366,24 +406,24 @@
               <button
                 type="button"
                 class="kv-row-copy"
-                aria-label={`Copy ${index === 0 ? "API key" : secret.label}`}
+                aria-label={$t("providerDetail.copySecret", { label: index === 0 ? $t("providerDetail.apiKey") : secret.label })}
                 on:click={() => onCopySecretByLabel(secret.label)}
               >
                 <span class="kv-label">
                   <KeyRound size={13} />
-                  {index === 0 ? "API key" : secret.label}
+                  {index === 0 ? $t("providerDetail.apiKey") : secret.label}
                 </span>
                 <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.label])}>
                   {revealedSecrets[secret.label] || fullyMasked()}
                 </code>
                 <span class="kv-hint">
-                  {#if copied === `secret:${secret.label}`}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+                  {#if copied === `secret:${secret.label}`}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
                 </span>
               </button>
               <button
                 type="button"
                 class="reveal-btn"
-                aria-label={revealedSecrets[secret.label] ? `Hide ${secret.label}` : `Reveal ${secret.label}`}
+                aria-label={revealedSecrets[secret.label] ? $t("providerDetail.hideSecret", { label: secret.label }) : $t("providerDetail.revealSecret", { label: secret.label })}
                 aria-pressed={Boolean(revealedSecrets[secret.label])}
                 on:click={() => onRevealSecret(secret.label)}
               >
@@ -397,16 +437,16 @@
               class="kv-row clickable"
               on:click={() => onCopyValue("model", selected.defaultModel ?? "")}
             >
-              <span class="kv-label">Default model</span>
+              <span class="kv-label">{$t("providerDetail.defaultModel")}</span>
               <code class="kv-value mono">{selected.defaultModel}</code>
               <span class="kv-hint">
-                {#if copied === "model"}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+                {#if copied === "model"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
               </span>
             </button>
           {/if}
           {#if selected.modelAliases?.length}
             <div class="kv-row">
-              <span class="kv-label">Aliases</span>
+              <span class="kv-label">{$t("providerDetail.aliases")}</span>
               <code class="kv-value mono">{selected.modelAliases.map(([alias, model]) => `${alias} → ${model}`).join(", ")}</code>
               <span></span>
             </div>
@@ -417,17 +457,17 @@
               class="kv-row clickable"
               on:click={() => onCopyValue("console", consoleDisplay(selected))}
             >
-              <span class="kv-label">Console</span>
+              <span class="kv-label">{$t("providerDetail.console")}</span>
               <code class="kv-value mono">{consoleDisplay(selected)}</code>
               <span class="kv-hint">
-                {#if copied === "console"}<Check size={13} /> Copied{:else}<Copy size={13} />{/if}
+                {#if copied === "console"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
               </span>
             </button>
           {/if}
           {#if selected.tags.length || selected.headerNames?.length}
             {#if selected.tags.length}
               <div class="kv-row">
-                <span class="kv-label">Tags</span>
+                <span class="kv-label">{$t("providerDetail.tags")}</span>
                 <div class="chips kv-value">
                   {#each selected.tags as tag}<span class="chip">{tag}</span>{/each}
                 </div>
@@ -436,7 +476,7 @@
             {/if}
             {#if selected.headerNames?.length}
               <div class="kv-row">
-                <span class="kv-label">Headers</span>
+                <span class="kv-label">{$t("providerDetail.headers")}</span>
                 <div class="chips kv-value">
                   {#each selected.headerNames as header}<span class="chip mono">{header}</span>{/each}
                 </div>
@@ -446,11 +486,11 @@
           {/if}
           {#if probeResult}
             <div class="kv-row">
-              <span class="kv-label">Status</span>
+              <span class="kv-label">{$t("providerDetail.status")}</span>
               <span class="kv-value">
                 <span class={`probe-dot ${probeResult.ok ? "ok" : "fail"}`}></span>
-                {probeResult.ok ? "Healthy" : "Check failed"}
-                {#if probeResult.modelCount !== undefined} · {probeResult.modelCount} models{/if}
+                {probeResult.ok ? $t("providerDetail.healthy") : $t("providerDetail.checkFailed")}
+                {#if probeResult.modelCount !== undefined} · {$t("providerDetail.modelCount", { count: probeResult.modelCount })}{/if}
                 {#if probeResult.error} · <span class="probe-error">{probeResult.error}</span>{/if}
               </span>
               <span></span>
@@ -459,9 +499,9 @@
         </Card>
 
         {#if hasQuota}
-          <Card title="Quota">
+          <Card title={$t("providerDetail.quota")}>
             <div class="kv-row">
-              <span class="kv-label">{selected.quota?.label ?? "Quota"}</span>
+              <span class="kv-label">{selected.quota?.label ?? $t("providerDetail.quota")}</span>
               <span class="kv-value">
                 <strong class="tabular">{selected.quota?.remaining ?? "—"}</strong>
                 <span class="text-tertiary"> / {selected.quota?.limit ?? "—"}</span>
@@ -470,7 +510,7 @@
             </div>
             {#if selected.quota?.resetAt}
               <div class="kv-row">
-                <span class="kv-label">Resets</span>
+                <span class="kv-label">{$t("providerDetail.resets")}</span>
                 <code class="kv-value mono">{selected.quota.resetAt}</code>
                 <span></span>
               </div>
@@ -479,13 +519,13 @@
         {/if}
 
         {#if selected.notes}
-          <Card title="Notes">
+          <Card title={$t("providerDetail.notes")}>
             <div class="notes-body">{selected.notes}</div>
           </Card>
         {/if}
 
         {#if integrationTools.length > 0}
-          <Card title="Integrations">
+          <Card title={$t("providerDetail.integrations")}>
             <div class="integration-list">
               {#each integrationTools as tool}
                 {@const state = integrationState[tool.id]}
@@ -495,24 +535,24 @@
                       <div class="integration-icon"><Terminal size={14} /></div>
                       <div class="integration-text">
                         <strong>{tool.name}</strong>
-                        <span class="text-tertiary">{tool.desc}</span>
+                        <span class="text-tertiary">{$t(tool.descKey)}</span>
                       </div>
                     </div>
                     <div class="integration-actions">
                       <Button variant="secondary" size="sm" on:click={() => previewIntegration(tool)} disabled={state.busy}>
-                        <Eye size={13} /> Preview
+                        <Eye size={13} /> {$t("providerDetail.preview")}
                       </Button>
                       <Button variant="primary" size="sm" on:click={() => applyIntegration(tool)} disabled={state.busy || !state.preview}>
-                        <Check size={13} /> Apply
+                        <Check size={13} /> {$t("providerDetail.apply")}
                       </Button>
                     </div>
                   </div>
                   {#if state.error}
-                    <Banner tone="danger">{state.error}</Banner>
+                    <Banner tone="danger">{resolveMessage($t, state.error)}</Banner>
                   {/if}
                   {#if state.applied}
                     <Banner tone="success">
-                      Configured {state.applied.entryTitle} at <code>{state.applied.targetPath}</code>
+                      {$t("providerDetail.configured", { title: state.applied.entryTitle })} <code>{state.applied.targetPath}</code>
                     </Banner>
                   {/if}
                   {#if state.preview}
@@ -536,8 +576,8 @@
   <section class="detail empty">
     <div class="empty-card">
       <span class="empty-icon"><KeyRound size={22} /></span>
-      <h1>No provider selected</h1>
-      <p class="text-tertiary">Select an item from the list to view its credentials.</p>
+      <h1>{$t("providerDetail.noneSelected")}</h1>
+      <p class="text-tertiary">{$t("providerDetail.noneSelectedDesc")}</p>
     </div>
   </section>
 {/if}
@@ -760,10 +800,6 @@
     text-align: left;
     color: inherit;
     font: inherit;
-
-    &:hover ~ .reveal-btn {
-      /* keep reveal button visually neutral when row hovered */
-    }
 
     &:hover .kv-hint {
       color: var(--accent);

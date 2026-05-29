@@ -2,6 +2,7 @@
   import { Dialog } from "bits-ui";
   import { Check, Copy, Download, KeyRound } from "lucide-svelte";
 
+  import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
   import Button from "../shared/Button.svelte";
 
@@ -49,31 +50,31 @@
       <Dialog.Content class="recovery-content" interactOutsideBehavior="ignore" escapeKeydownBehavior="ignore">
         <div class="recovery-icon" aria-hidden="true"><KeyRound size={18} /></div>
 
-        <Dialog.Title class="recovery-title">Save your recovery key</Dialog.Title>
+        <Dialog.Title class="recovery-title">{$t("recovery.title")}</Dialog.Title>
         <Dialog.Description class="recovery-sub">
-          Shown once. Required if you forget your master password — keep it offline.
+          {$t("recovery.shortDesc")}
         </Dialog.Description>
 
         <code class="recovery-key mono">{recoveryKey}</code>
 
         <div class="recovery-tools">
           <button type="button" class="tool-btn" on:click={() => onCopy()}>
-            {#if copied === "recovery-key"}<Check size={14} />Copied{:else}<Copy size={14} />Copy{/if}
+            {#if copied === "recovery-key"}<Check size={14} />{$t("recovery.copied")}{:else}<Copy size={14} />{$t("common.copy")}{/if}
           </button>
           {#if onDownload}
             <button type="button" class="tool-btn" on:click={() => onDownload?.()}>
-              <Download size={14} /> Download
+              <Download size={14} /> {$t("recovery.download")}
             </button>
           {/if}
         </div>
 
         <label class="confirm">
           <input type="checkbox" bind:checked={confirmed} />
-          <span>I've saved the key. I understand it cannot be recovered later.</span>
+          <span>{$t("recovery.ack")}</span>
         </label>
 
         <Button variant="primary" block on:click={confirm} disabled={!confirmed}>
-          Continue
+          {$t("recovery.continue")}
         </Button>
       </Dialog.Content>
     </Dialog.Portal>

@@ -4,6 +4,7 @@
   import { Lock, Menu, Minus, Settings, Square, X } from "lucide-svelte";
   import { onDestroy, onMount } from "svelte";
 
+  import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
   import Logo from "./Logo.svelte";
 
@@ -82,17 +83,17 @@
   on:dblclick={handleDoubleClick}
   role="toolbar"
   tabindex="-1"
-  aria-label="Window title bar"
+  aria-label={$t("titlebar.windowTitle")}
 >
   {#if isMac}
-    <div class="mac-controls" aria-label="Window controls">
-      <button class="mac-btn close" type="button" aria-label="Close" on:click|stopPropagation={close}>
+    <div class="mac-controls" aria-label={$t("titlebar.windowControls")}>
+      <button class="mac-btn close" type="button" aria-label={$t("common.close")} on:click|stopPropagation={close}>
         <span class="glyph">×</span>
       </button>
-      <button class="mac-btn min" type="button" aria-label="Minimize" on:click|stopPropagation={minimize}>
+      <button class="mac-btn min" type="button" aria-label={$t("titlebar.minimize")} on:click|stopPropagation={minimize}>
         <span class="glyph">−</span>
       </button>
-      <button class="mac-btn max" type="button" aria-label="Toggle maximize" on:click|stopPropagation={toggleMaximize}>
+      <button class="mac-btn max" type="button" aria-label={$t("titlebar.toggleMaximize")} on:click|stopPropagation={toggleMaximize}>
         <span class="glyph">+</span>
       </button>
     </div>
@@ -114,7 +115,7 @@
               {...props}
               type="button"
               class="menu-trigger"
-              aria-label="Menu"
+              aria-label={$t("titlebar.menu")}
             >
               <Menu size={16} />
             </button>
@@ -124,11 +125,11 @@
           <DropdownMenu.Content sideOffset={6} align="end" class="titlebar-menu">
             <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onOpenSettings()}>
               <Settings size={14} />
-              <span>Settings</span>
+              <span>{$t("titlebar.settings")}</span>
             </DropdownMenu.Item>
             <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onLock()}>
               <Lock size={14} />
-              <span>Lock</span>
+              <span>{$t("titlebar.lock")}</span>
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
@@ -137,14 +138,14 @@
   {/if}
 
   {#if !isMac}
-    <div class="win-controls" aria-label="Window controls">
-      <button class="win-btn" type="button" aria-label="Minimize" on:click|stopPropagation={minimize}>
+    <div class="win-controls" aria-label={$t("titlebar.windowControls")}>
+      <button class="win-btn" type="button" aria-label={$t("titlebar.minimize")} on:click|stopPropagation={minimize}>
         <Minus size={14} strokeWidth={2} />
       </button>
-      <button class="win-btn" type="button" aria-label="Toggle maximize" on:click|stopPropagation={toggleMaximize}>
+      <button class="win-btn" type="button" aria-label={$t("titlebar.toggleMaximize")} on:click|stopPropagation={toggleMaximize}>
         <Square size={11} strokeWidth={2} />
       </button>
-      <button class="win-btn close" type="button" aria-label="Close" on:click|stopPropagation={close}>
+      <button class="win-btn close" type="button" aria-label={$t("common.close")} on:click|stopPropagation={close}>
         <X size={14} strokeWidth={2} />
       </button>
     </div>

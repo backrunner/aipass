@@ -3,6 +3,8 @@
   import { onMount } from "svelte";
   import type { HTMLInputAttributes } from "svelte/elements";
 
+  import { t } from "../../stores/i18n";
+
   export let label = "";
   export let value = "";
   export let show = false;
@@ -29,7 +31,7 @@
       <button
         type="button"
         class="toggle"
-        aria-label={show ? "Hide password" : "Show password"}
+        aria-label={show ? $t("password.hide") : $t("password.show")}
         {disabled}
         on:click={() => (show = !show)}
       >

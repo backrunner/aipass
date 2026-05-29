@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Archive, Inbox, ShieldCheck, Sparkles, Terminal, Trash2, Wifi } from "lucide-svelte";
 
+  import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderCounts, ProviderFilter } from "../../types";
 
   export let showArchived = false;
@@ -16,14 +17,14 @@
 </script>
 
 <aside class="sidebar">
-  <nav class="nav" aria-label="Vault">
+  <nav class="nav" aria-label={$t("sidebar.vault")}>
     <button
       type="button"
       class:active={activeFilter === "all"}
       on:click={() => onFilterChange("all")}
     >
       <Inbox size={16} />
-      <span class="label">All items</span>
+      <span class="label">{$t("sidebar.allItems")}</span>
       <span class="count">{providerCounts.all}</span>
     </button>
     <button
@@ -32,21 +33,21 @@
       on:click={() => onFilterChange("recent")}
     >
       <Sparkles size={16} />
-      <span class="label">Recent</span>
+      <span class="label">{$t("sidebar.recent")}</span>
       <span class="count">{providerCounts.recent}</span>
     </button>
   </nav>
 
   <div class="group">
-    <span class="group-title">Providers</span>
-    <nav class="nav" aria-label="Provider kinds">
+    <span class="group-title">{$t("sidebar.providers")}</span>
+    <nav class="nav" aria-label={$t("sidebar.providerKinds")}>
       <button
         type="button"
         class:active={activeFilter === "official"}
         on:click={() => onFilterChange("official")}
       >
         <ShieldCheck size={16} class="kind-official-icon" />
-        <span class="label">Official</span>
+        <span class="label">{$t("sidebar.official")}</span>
         <span class="count">{providerCounts.official}</span>
       </button>
       <button
@@ -55,7 +56,7 @@
         on:click={() => onFilterChange("third_party")}
       >
         <Wifi size={16} />
-        <span class="label">Third-party</span>
+        <span class="label">{$t("sidebar.thirdParty")}</span>
         <span class="count">{providerCounts.third_party}</span>
       </button>
       <button
@@ -64,7 +65,7 @@
         on:click={() => onFilterChange("self_hosted")}
       >
         <Terminal size={16} />
-        <span class="label">Self-hosted</span>
+        <span class="label">{$t("sidebar.selfHosted")}</span>
         <span class="count">{providerCounts.self_hosted}</span>
       </button>
       <button
@@ -73,21 +74,21 @@
         on:click={() => onFilterChange("unknown")}
       >
         <Sparkles size={16} />
-        <span class="label">Custom</span>
+        <span class="label">{$t("sidebar.custom")}</span>
         <span class="count">{providerCounts.unknown}</span>
       </button>
     </nav>
   </div>
 
   <div class="group bottom-group">
-    <nav class="nav" aria-label="Storage">
+    <nav class="nav" aria-label={$t("sidebar.storage")}>
       <button
         type="button"
         class:active={activeFilter === "__archive"}
         on:click={() => onArchiveView(true)}
       >
         <Archive size={16} />
-        <span class="label">Archive</span>
+        <span class="label">{$t("sidebar.archive")}</span>
       </button>
       <button
         type="button"
@@ -95,7 +96,7 @@
         on:click={() => onTrashView(true)}
       >
         <Trash2 size={16} />
-        <span class="label">Trash</span>
+        <span class="label">{$t("sidebar.trash")}</span>
         {#if trashCount > 0}
           <span class="count">{trashCount}</span>
         {/if}

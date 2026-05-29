@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../../stores/i18n";
   import type { SyncReport } from "../../types";
 
   export let state: SyncReport["status"] = "idle";
@@ -14,19 +15,19 @@
 
   $: label =
     state === "syncing"
-      ? "Syncing…"
+      ? $t("syncStatus.syncing")
       : state === "conflict"
-        ? "Conflicts"
+        ? $t("syncStatus.conflict")
         : state === "offline"
-          ? "Offline"
+          ? $t("syncStatus.offline")
           : state === "auth_failed"
-            ? "Auth failed"
+            ? $t("syncStatus.authFailed")
             : state === "server_error"
-              ? "Server error"
-              : "Synced";
+              ? $t("syncStatus.serverError")
+              : $t("syncStatus.synced");
 </script>
 
-<button type="button" class={`pill tone-${tone}`} on:click={onClick} aria-label="Sync status">
+<button type="button" class={`pill tone-${tone}`} on:click={onClick} aria-label={$t("syncStatus.label")}>
   <span class="dot"></span>
   <span class="label">{label}</span>
 </button>

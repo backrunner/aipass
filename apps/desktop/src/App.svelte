@@ -46,14 +46,17 @@
   } from "./lib/types";
   import { passwordStrength } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { integrationToolName } from "./lib/utils/integrations";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
+  import { isLocalePreference, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
+  import type { MessageValue } from "./lib/types";
 
   const hasTauriRuntime = () =>
     typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
   async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     if (!hasTauriRuntime()) {
-      throw new Error("Open this app inside the Tauri desktop shell.");
+      throw new Error($t("error.browserPreview"));
     }
     return invoke<T>(command, args);
   }
@@ -154,12 +157,15 @@
   let recoveryPassword = "";
   let recoveryPasswordConfirm = "";
   let showRecoveryPassword = false;
-  let createPasswordStrength = passwordStrength("");
-  let recoveryPasswordStrength = passwordStrength("");
+  let createPasswordStrength = passwordStrength("", $t);
+  let recoveryPasswordStrength = passwordStrength("", $t);
+  let preferencesSaveChain: Promise<void> = Promise.resolve();
   let query = "";
   let copied = "";
-  let error = "";
-  let notice = "";
+  let error: MessageValue = "";
+  let notice: MessageValue = "";
+  let errorText = "";
+  let noticeText = "";
   let selectedId = "";
   let showForm = false;
   let formMode: FormMode = "add";
@@ -269,8 +275,10 @@
     revealedSecrets = {};
     probeResult = undefined;
   }
-  $: createPasswordStrength = passwordStrength(createPassword);
-  $: recoveryPasswordStrength = passwordStrength(recoveryPassword);
+  $: createPasswordStrength = passwordStrength(createPassword, $t);
+  $: recoveryPasswordStrength = passwordStrength(recoveryPassword, $t);
+  $: errorText = resolveMessage($t, error);
+  $: noticeText = resolveMessage($t, notice);
 
   onMount(() => {
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
@@ -326,7 +334,7 @@
     if (authBusy) return;
     error = "";
     if (createPassword !== createPasswordConfirm) {
-      error = "Passwords do not match";
+      error = localizedMessage("notice.passwordsDoNotMatch");
       return;
     }
     authBusy = "create";
@@ -337,7 +345,8 @@
       });
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        throw new Error(response.error ?? "Vault creation failed");
+        error = response.error ?? localizedMessage("error.vaultCreationFailed");
+        return;
       }
       status = {
         exists: response.exists ?? true,
@@ -366,7 +375,8 @@
       });
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        throw new Error(response.error ?? "Unlock failed");
+        error = response.error ?? localizedMessage("error.unlockFailed");
+        return;
       }
       status = {
         exists: response.exists ?? true,
@@ -377,7 +387,7 @@
       setAuthMode("unlock");
       await loadEntries();
     } catch (err) {
-      error = err instanceof Error ? err.message : "Unlock failed";
+      error = err instanceof Error ? err.message : localizedMessage("error.unlockFailed");
     } finally {
       authBusy = "";
     }
@@ -387,11 +397,11 @@
     if (authBusy) return;
     error = "";
     if (!recoveryKeyInput.trim()) {
-      error = "Recovery key required";
+      error = localizedMessage("notice.recoveryKeyRequired");
       return;
     }
     if (recoveryPassword !== recoveryPasswordConfirm) {
-      error = "Passwords do not match";
+      error = localizedMessage("notice.passwordsDoNotMatch");
       return;
     }
     authBusy = "recover";
@@ -405,7 +415,8 @@
       });
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        throw new Error(response.error ?? "Vault recovery failed");
+        error = response.error ?? localizedMessage("error.vaultRecoveryFailed");
+        return;
       }
       status = {
         exists: response.exists ?? true,
@@ -430,7 +441,7 @@
   async function copyRecoveryKit() {
     if (!pendingRecoveryKey) return;
     if (!navigator.clipboard?.writeText) {
-      error = "Clipboard unavailable";
+      error = localizedMessage("notice.clipboardUnavailable");
       return;
     }
     try {
@@ -672,7 +683,7 @@
     }
     const provider = providerDefinitions.find((item) => item.id === draft.providerId);
     const request = {
-      title: draft.title || provider?.displayName || "Custom Provider",
+      title: draft.title || provider?.displayName || $t("providerList.customProvider"),
       providerId: draft.providerId || provider?.id,
       domain: splitCsv(draft.domain),
       endpoints: splitCsv(draft.endpoint),
@@ -760,7 +771,7 @@
       newSecretLabel = "fallback";
       newSecretKey = "";
       await loadEntries();
-      notice = "Secret added";
+      notice = localizedMessage("notice.secretAdded");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       error = String(err);
@@ -779,7 +790,7 @@
       delete nextRevealed[label];
       revealedSecrets = nextRevealed;
       await loadEntries();
-      notice = "Secret removed";
+      notice = localizedMessage("notice.secretRemoved");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       error = String(err);
@@ -815,13 +826,13 @@
   }
 
   async function deleteSelected() {
-    if (!selected || !confirm(`Permanently delete ${selected.title}?`)) return;
+    if (!selected || !confirm($t("confirm.deleteProvider", { title: selected.title }))) return;
     await invokeTauri("provider_delete", { id: selected.id });
     await loadEntries();
   }
 
   async function emptyTrash() {
-    if (!confirm("Permanently delete everything in the trash?")) return;
+    if (!confirm($t("confirm.emptyTrash"))) return;
     await invokeTauri("trash_empty");
     await loadEntries();
   }
@@ -859,7 +870,7 @@
     error = "";
     try {
       await invokeTauri("vault_rotate");
-      notice = "Vault epoch rotated";
+      notice = localizedMessage("notice.vaultRotated");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       error = String(err);
@@ -905,7 +916,7 @@
     error = "";
     try {
       await invokeTauri("device_revoke", { id });
-      notice = "Device revoked · epoch rotated";
+      notice = localizedMessage("notice.deviceRevoked");
       await Promise.all([loadDevices(), loadEntries()]);
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
@@ -923,7 +934,7 @@
     try {
       await invokeTauri("vault_change_password", { request: { newPassword } });
       newPassword = "";
-      notice = "Master password changed";
+      notice = localizedMessage("notice.passwordChanged");
       resetAutoLock();
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
@@ -969,7 +980,10 @@
     error = "";
     try {
       const result = await invokeTauri<ToolConfigApplyResult>("tool_config_apply", { request });
-      notice = `${result.entryTitle} configured for ${result.tool}`;
+      notice = localizedMessage("notice.toolConfigured", {
+        title: result.entryTitle,
+        tool: integrationToolName(result.tool)
+      });
       setTimeout(() => (notice = ""), 2200);
       return result;
     } catch (err) {
@@ -1004,7 +1018,7 @@
       nativeHostStatus = await invokeTauri<NativeHostStatus>("native_host_repair", {
         request: { extensionIds: splitCsv(extensionIds) }
       });
-      notice = "Native host repaired";
+      notice = localizedMessage("notice.nativeHostRepaired");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       error = String(err);
@@ -1026,7 +1040,7 @@
         }
       });
       exportPassword = "";
-      notice = "Encrypted export written";
+      notice = localizedMessage("notice.exportWritten");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       error = String(err);
@@ -1051,7 +1065,7 @@
       showSettings = false;
       await refreshStatus();
       await lockVault();
-      notice = "Encrypted import restored";
+      notice = localizedMessage("notice.importRestored");
     } catch (err) {
       error = String(err);
     } finally {
@@ -1073,7 +1087,11 @@
       error = report.message ?? "";
       notice = report.message
         ? ""
-        : `${report.uploaded} up · ${report.downloaded} down · ${report.conflicts} conflicts`;
+        : localizedMessage("notice.syncSummary", {
+            uploaded: report.uploaded,
+            downloaded: report.downloaded,
+            conflicts: report.conflicts
+          });
       await Promise.all([loadEntries(), loadSyncConflicts()]);
     } catch (err) {
       syncState = "offline";
@@ -1113,7 +1131,7 @@
           conflictPath: conflict.conflictPath
         }
       });
-      notice = action === "accept" ? "Conflict version accepted" : "Current version kept";
+      notice = action === "accept" ? localizedMessage("notice.conflictAccepted") : localizedMessage("notice.currentKept");
       await loadSyncConflicts();
       await loadEntries();
       setTimeout(() => (notice = ""), 1800);
@@ -1249,7 +1267,7 @@
 
   async function clearSavedWebdavPassword() {
     if (!(await saveSyncSettings({ clearWebdavPassword: true }))) return;
-    notice = "Saved WebDAV password cleared";
+    notice = localizedMessage("notice.webdavPasswordCleared");
     setTimeout(() => (notice = ""), 1800);
   }
 
@@ -1263,31 +1281,32 @@
       if (isThemePreference(prefs.theme)) {
         setTheme(prefs.theme);
       }
+      if (isLocalePreference(prefs.locale)) {
+        setLocale(prefs.locale);
+      }
     } catch (err) {
       error = String(err);
     }
   }
 
   async function savePreferences() {
-    autoLockMinutes = clampPreference(autoLockMinutes, 0, 240, 15);
-    clipboardClearSeconds = clampPreference(clipboardClearSeconds, 0, 600, 45);
-    try {
-      const saved = await invokeTauri<AppPreferences>("preferences_save", {
+    const operation = preferencesSaveChain.then(async () => {
+      autoLockMinutes = clampPreference(autoLockMinutes, 0, 240, 15);
+      clipboardClearSeconds = clampPreference(clipboardClearSeconds, 0, 600, 45);
+      await invokeTauri<AppPreferences>("preferences_save", {
         request: {
           autoLockMinutes,
           clipboardClearSeconds,
           lockOnSleep,
           lockOnScreenLock,
-          theme: $themeStore
+          theme: $themeStore,
+          locale: $localeStore
         }
       });
-      autoLockMinutes = saved.autoLockMinutes;
-      clipboardClearSeconds = saved.clipboardClearSeconds;
-      lockOnSleep = saved.lockOnSleep ?? lockOnSleep;
-      lockOnScreenLock = saved.lockOnScreenLock ?? lockOnScreenLock;
-      if (isThemePreference(saved.theme)) {
-        setTheme(saved.theme);
-      }
+    });
+    preferencesSaveChain = operation.catch(() => {});
+    try {
+      await operation;
     } catch (err) {
       error = String(err);
     }
@@ -1342,7 +1361,7 @@
         {status}
         {authMode}
         busyMode={authBusy}
-        {error}
+        error={errorText}
         bind:password
         bind:createPassword
         bind:createPasswordConfirm
@@ -1400,8 +1419,8 @@
         {secretBusy}
         {probeResult}
         {probing}
-        {notice}
-        {error}
+        notice={noticeText}
+        error={errorText}
         editMode={detailEditMode}
         formMode="edit"
         bind:draft
@@ -1474,7 +1493,7 @@
   <ProviderModal
     {formMode}
     bind:draft
-    {error}
+    error={errorText}
     onSave={saveProvider}
     onClose={closeProviderForm}
     onInferDraftFromDomain={inferDraftFromDomain}

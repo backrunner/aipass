@@ -2,9 +2,11 @@
   import { Select } from "bits-ui";
   import { Check, ChevronDown } from "lucide-svelte";
 
+  import { t } from "../../stores/i18n";
+
   export let value = "";
   export let label = "";
-  export let placeholder = "Select...";
+  export let placeholder = "";
   export let disabled = false;
   export let options: Array<{ value: string; label: string; disabled?: boolean }> = [];
   export let onValueChange: (value: string) => void = () => {};
@@ -28,7 +30,7 @@
   >
     <Select.Trigger class="select-trigger" aria-label={label || placeholder}>
       <span class="select-value" class:placeholder={!selectedLabel}>
-        {selectedLabel || placeholder}
+        {selectedLabel || placeholder || $t("common.select")}
       </span>
       <ChevronDown size={14} />
     </Select.Trigger>

@@ -30,6 +30,8 @@ pub(crate) struct AppPreferences {
     pub(crate) lock_on_screen_lock: bool,
     #[serde(default)]
     pub(crate) theme: ThemePreference,
+    #[serde(default)]
+    pub(crate) locale: LocalePreference,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,6 +43,17 @@ pub(crate) enum ThemePreference {
     Dark,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) enum LocalePreference {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+}
+
 impl Default for AppPreferences {
     fn default() -> Self {
         Self {
@@ -49,6 +62,7 @@ impl Default for AppPreferences {
             lock_on_sleep: true,
             lock_on_screen_lock: true,
             theme: ThemePreference::System,
+            locale: LocalePreference::System,
         }
     }
 }
@@ -86,6 +100,7 @@ pub(crate) struct SavePreferencesRequest {
     pub(crate) lock_on_sleep: Option<bool>,
     pub(crate) lock_on_screen_lock: Option<bool>,
     pub(crate) theme: Option<ThemePreference>,
+    pub(crate) locale: Option<LocalePreference>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

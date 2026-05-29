@@ -87,6 +87,7 @@ pub(crate) async fn preferences_load(app: AppHandle) -> Result<AppPreferences, S
             lock_on_sleep: policy.lock_on_sleep,
             lock_on_screen_lock: policy.lock_on_screen_lock,
             theme: local.theme,
+            locale: local.locale,
         })
     })
     .await
@@ -112,6 +113,7 @@ pub(crate) async fn preferences_save(
                 .lock_on_screen_lock
                 .unwrap_or(current_policy.lock_on_screen_lock),
             theme: request.theme.unwrap_or(stored.theme),
+            locale: request.locale.unwrap_or(stored.locale),
         };
         save_preferences(&app, &preferences)?;
         let _: SessionPolicy = agent_request_no_unlock(

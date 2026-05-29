@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../../stores/i18n";
   import type { AuthMode, MaybePromise, PasswordStrength, VaultStatus } from "../../types";
   import Banner from "../shared/Banner.svelte";
   import Brand from "../shared/Brand.svelte";
@@ -47,7 +48,7 @@
 <main class="auth-shell">
   <HeroBackground />
 
-  <div class="auth-card" role="dialog" aria-label="AIPass authentication">
+  <div class="auth-card" role="dialog" aria-label={$t("auth.dialog")}>
     <div class="auth-brand">
       <Brand size="md" />
     </div>
@@ -55,12 +56,12 @@
     {#if showCreate}
       <form class="form" on:submit|preventDefault={() => onCreate()}>
         <div class="copy">
-          <h1>Create your vault</h1>
-          <p>Pick a master password you'll remember. We'll generate a recovery key shown once after creation.</p>
+          <h1>{$t("auth.create.title")}</h1>
+          <p>{$t("auth.create.desc")}</p>
         </div>
 
         <PasswordField
-          label="Master password"
+          label={$t("auth.masterPassword")}
           autocomplete="new-password"
           bind:value={createPassword}
           bind:show={showCreatePassword}
@@ -70,7 +71,7 @@
         <PasswordStrengthMeter strength={createPasswordStrength} />
 
         <PasswordField
-          label="Confirm password"
+          label={$t("auth.confirmPassword")}
           autocomplete="new-password"
           withToggle={false}
           bind:value={createPasswordConfirm}
@@ -79,24 +80,24 @@
         />
 
         {#if createMismatch}
-          <span class="inline-error">Passwords don't match.</span>
+          <span class="inline-error">{$t("auth.passwordMismatch")}</span>
         {:else if createMatches}
-          <span class="inline-ok">Passwords match.</span>
+          <span class="inline-ok">{$t("auth.passwordMatch")}</span>
         {/if}
 
         <Button variant="primary" type="submit" block loading={createBusy} disabled={!createReady || busy}>
-          {createBusy ? "Creating vault…" : "Create encrypted vault"}
+          {createBusy ? $t("auth.create.busy") : $t("auth.create.submit")}
         </Button>
       </form>
     {:else if showRecover}
       <form class="form" on:submit|preventDefault={() => onRecover()}>
         <div class="copy">
-          <h1>Recover vault</h1>
-          <p>Enter your recovery key, then choose a new master password.</p>
+          <h1>{$t("auth.recover.title")}</h1>
+          <p>{$t("auth.recover.desc")}</p>
         </div>
 
         <label class="field">
-          <span class="field-label">Recovery key</span>
+          <span class="field-label">{$t("auth.recoveryKey")}</span>
           <input
             bind:value={recoveryKeyInput}
             type="text"
@@ -109,7 +110,7 @@
           />
         </label>
         <PasswordField
-          label="New password"
+          label={$t("auth.newPassword")}
           autocomplete="new-password"
           bind:value={recoveryPassword}
           bind:show={showRecoveryPassword}
@@ -119,7 +120,7 @@
         <PasswordStrengthMeter strength={recoveryPasswordStrength} />
 
         <PasswordField
-          label="Confirm new password"
+          label={$t("auth.confirmNewPassword")}
           autocomplete="new-password"
           withToggle={false}
           bind:value={recoveryPasswordConfirm}
@@ -128,30 +129,30 @@
         />
 
         {#if recoverMismatch}
-          <span class="inline-error">Passwords don't match.</span>
+          <span class="inline-error">{$t("auth.passwordMismatch")}</span>
         {:else if recoverMatches}
-          <span class="inline-ok">Passwords match.</span>
+          <span class="inline-ok">{$t("auth.passwordMatch")}</span>
         {/if}
 
         <Button variant="primary" type="submit" block loading={recoverBusy} disabled={!recoverReady || busy}>
-          {recoverBusy ? "Recovering…" : "Recover vault"}
+          {recoverBusy ? $t("auth.recover.busy") : $t("auth.recover.submit")}
         </Button>
 
         <div class="meta">
           <button type="button" class="link" disabled={busy} on:click={() => onModeChange("unlock")}>
-            Back to unlock
+            {$t("auth.backToUnlock")}
           </button>
         </div>
       </form>
     {:else if showUnlock}
       <form class="form" on:submit|preventDefault={() => onUnlock()}>
         <div class="copy">
-          <h1>Welcome back</h1>
-          <p>Enter your master password to unlock the vault.</p>
+          <h1>{$t("auth.unlock.title")}</h1>
+          <p>{$t("auth.unlock.desc")}</p>
         </div>
 
         <PasswordField
-          label="Master password"
+          label={$t("auth.masterPassword")}
           autocomplete="current-password"
           bind:value={password}
           bind:show={showUnlockPassword}
@@ -160,12 +161,12 @@
         />
 
         <Button variant="primary" type="submit" block loading={unlockBusy} disabled={busy || password.length === 0}>
-          {unlockBusy ? "Unlocking…" : "Unlock"}
+          {unlockBusy ? $t("auth.unlock.busy") : $t("auth.unlock.submit")}
         </Button>
 
         <div class="meta">
           <button type="button" class="link" disabled={busy} on:click={() => onModeChange("recover")}>
-            Forgot master password?
+            {$t("auth.forgotPassword")}
           </button>
         </div>
       </form>

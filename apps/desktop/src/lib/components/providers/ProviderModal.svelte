@@ -2,6 +2,7 @@
   import { Dialog } from "bits-ui";
   import { X } from "lucide-svelte";
 
+  import { t } from "../../stores/i18n";
   import type { Draft, FormMode, MaybePromise } from "../../types";
   import Banner from "../shared/Banner.svelte";
   import Button from "../shared/Button.svelte";
@@ -42,11 +43,11 @@
       <form class="modal" on:submit|preventDefault={() => onSave()}>
         <header class="modal-header">
           <Dialog.Title class="modal-title">
-            {formMode === "add" ? "Add provider" : "Edit provider"}
+            {formMode === "add" ? $t("providerList.addProvider") : $t("providerModal.editProvider")}
           </Dialog.Title>
           <Dialog.Close>
             {#snippet child({ props })}
-              <button {...props} type="button" class="close-btn" aria-label="Close">
+              <button {...props} type="button" class="close-btn" aria-label={$t("common.close")}>
                 <X size={16} />
               </button>
             {/snippet}
@@ -66,9 +67,9 @@
         </div>
 
         <footer class="modal-footer">
-          <Button variant="ghost" on:click={handleClose}>Cancel</Button>
+          <Button variant="ghost" on:click={handleClose}>{$t("common.cancel")}</Button>
           <Button variant="primary" type="submit">
-            {formMode === "add" ? "Add provider" : "Save changes"}
+            {formMode === "add" ? $t("providerList.addProvider") : $t("providerModal.saveChanges")}
           </Button>
         </footer>
       </form>

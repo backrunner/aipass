@@ -22,6 +22,15 @@ export type VaultStatus = { exists: boolean; locked: boolean };
 export type RecoveryKit = { recoveryKey: string };
 
 export type ThemePreference = "system" | "light" | "dark";
+export type LocalePreference = "system" | "en" | "zh-CN";
+export type MessageParams = Record<string, string | number | boolean | undefined>;
+
+export type LocalizedMessage = {
+  key: string;
+  params?: MessageParams;
+};
+
+export type MessageValue = string | LocalizedMessage;
 
 export type AppPreferences = {
   autoLockMinutes: number;
@@ -29,6 +38,7 @@ export type AppPreferences = {
   lockOnSleep: boolean;
   lockOnScreenLock: boolean;
   theme: ThemePreference;
+  locale: LocalePreference;
 };
 
 export type SyncSettings = {
