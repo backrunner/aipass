@@ -1,7 +1,30 @@
 <script lang="ts">
-  import { matchProviderByDomain, providerDefinitions, type AuthScheme, type InterfaceType } from "@aipass/schemas";
-  import { authLabel, interfaceLabel, initials } from "@aipass/ui";
-  import { Ban, Check, KeyRound, Lock, Plus, RefreshCw, Search, X } from "lucide-svelte";
+  import {
+    detectAuthFromProvider,
+    detectInterfaceFromProvider,
+    inferProviderFromEndpoint,
+    matchProviderByDomain,
+    providerDefinitions,
+    type AuthScheme,
+    type InterfaceType
+  } from "@aipass/schemas";
+  import {
+    authLabel,
+    Badge,
+    Banner,
+    Brand,
+    Button,
+    emptyDraft,
+    IconButton,
+    interfaceLabel,
+    ProviderFormFields,
+    ProviderIcon,
+    providerKindLabel,
+    providerKindTone,
+    type Draft
+  } from "@aipass/ui";
+  import { t } from "@aipass/ui/i18n";
+  import { Ban, Check, KeyRound, RefreshCw, Search, X } from "lucide-svelte";
 
   type Connection = "checking" | "connected" | "locked" | "missing";
   type NativeResponse<T = unknown> = { ok?: boolean; protocolVersion?: number; error?: string; data?: T };
@@ -41,32 +64,13 @@
     environment: string;
     tags: string[];
   };
-  type DraftForm = {
-    providerId: string;
-    title: string;
-    endpoint: string;
-    interfaceType: InterfaceType;
-    authScheme: AuthScheme;
-    environment: string;
-    tags: string;
-  };
 
-  const interfaceOptions: InterfaceType[] = [
-    "openai_compatible",
-    "anthropic_messages",
-    "gemini",
-    "azure_openai",
-    "bedrock",
-    "custom_http"
-  ];
-  const authOptions: AuthScheme[] = [
-    "bearer",
-    "x_api_key",
-    "google_api_key",
-    "azure_api_key",
-    "aws_profile",
-    "custom_header"
-  ];
+  const connectionTone: Record<Connection, "neutral" | "success" | "warning" | "danger"> = {
+    checking: "neutral",
+    connected: "success",
+    locked: "warning",
+    missing: "danger"
+  };
 
   let connection: Connection = "checking";
   let currentUrl = "";
@@ -80,7 +84,7 @@
   let searchResults: Entry[] = [];
   let searchGrants: Grant[] = [];
   let pendingDraft: SafeDraft | null = null;
-  let draftForm: DraftForm | null = null;
+  let draft: Draft | null = null;
   let draftPreview: DraftPreview | null = null;
   let previewLoading = false;
   let statusText = "";
@@ -118,7 +122,7 @@
     }
     const draftResponse = await sendToWorker<{ draft: SafeDraft | null }>({ type: "aipass.pendingDraft" });
     pendingDraft = draftResponse?.ok ? draftResponse.data?.draft ?? null : null;
-    syncDraftForm();
+    syncDraft();
   }
 
   async function openDesktopUnlock() {
@@ -127,10 +131,10 @@
     const response = await sendToWorker<{ locked?: boolean }>({ type: "aipass.openUnlock" });
     unlockBusy = false;
     if (!response?.ok) {
-      statusText = response?.error ?? "Unable to open the unlock window";
+      statusText = response?.error ?? $t("ext.unlockFailed");
       return;
     }
-    statusText = "Finish unlocking in AIPass";
+    statusText = $t("ext.finishUnlock");
     void pollForUnlock();
   }
 
@@ -140,7 +144,7 @@
       const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
       if (ping?.ok && !ping.data?.locked) {
         await refresh();
-        statusText = "AIPass unlocked";
+        statusText = $t("ext.unlocked");
         return;
       }
     }
@@ -149,7 +153,7 @@
   async function useEntry(entry: Entry) {
     const grant = [...grants, ...searchGrants].find((item) => item.entryId === entry.id);
     if (!grant) {
-      statusText = "Grant expired. Refresh and try again.";
+      statusText = $t("ext.grantExpired");
       return;
     }
     const fill = await sendToWorker<{ secret: string }>({
@@ -158,7 +162,7 @@
       grantId: grant.id
     });
     if (!fill?.ok || !fill.data?.secret) {
-      statusText = fill?.error ?? "Unable to retrieve key";
+      statusText = fill?.error ?? $t("ext.fillFailed");
       return;
     }
     if (tabId) {
@@ -189,13 +193,13 @@
     });
     searchLoading = false;
     if (!response?.ok) {
-      statusText = response?.error ?? "Unable to search AIPass";
+      statusText = response?.error ?? $t("ext.searchFailed");
       return;
     }
     searchResults = response.data?.entries ?? [];
     searchGrants = response.data?.grants ?? [];
     if (!searchResults.length) {
-      statusText = "No matching provider found";
+      statusText = $t("ext.noMatch");
     }
   }
 
@@ -205,12 +209,12 @@
       draft: draftPatch()
     });
     if (!response?.ok) {
-      statusText = response?.error ?? "No pending key to save";
+      statusText = response?.error ?? $t("ext.saveFailed");
       return;
     }
     clearPendingDraftUi();
     await refresh();
-    statusText = "Saved to AIPass";
+    statusText = $t("ext.saved");
   }
 
   async function ignoreCurrentOrigin() {
@@ -220,66 +224,88 @@
       origin: currentOrigin
     });
     if (!response?.ok) {
-      statusText = response?.error ?? "Unable to ignore this site";
+      statusText = response?.error ?? $t("ext.ignoreFailed");
       return;
     }
     clearPendingDraftUi();
-    statusText = "This site is ignored";
+    statusText = $t("ext.siteIgnored");
   }
 
   async function dismissPendingDraft() {
     const response = await sendToWorker<{ ok?: boolean }>({ type: "aipass.dismissPendingDraft" });
     if (!response?.ok) {
-      statusText = response?.error ?? "Unable to dismiss detected key";
+      statusText = response?.error ?? $t("ext.dismissFailed");
       return;
     }
     clearPendingDraftUi();
-    statusText = "Detected key dismissed";
+    statusText = $t("ext.dismissed");
   }
 
-  function syncDraftForm() {
-    const draft = pendingDraft;
-    if (!draft) {
+  function syncDraft() {
+    const pending = pendingDraft;
+    if (!pending) {
       clearPendingDraftUi();
       return;
     }
     const key = [
-      draft.origin,
-      draft.url,
-      draft.providerId ?? "",
-      draft.title,
-      draft.endpoint ?? "",
-      draft.maskedSecret ?? "",
-      draft.environment ?? "",
-      (draft.tags ?? []).join(",")
+      pending.origin,
+      pending.url,
+      pending.providerId ?? "",
+      pending.title,
+      pending.endpoint ?? "",
+      pending.maskedSecret ?? "",
+      pending.environment ?? "",
+      (pending.tags ?? []).join(",")
     ].join("|");
-    if (key === lastDraftKey && draftForm) return;
+    if (key === lastDraftKey && draft) return;
 
     const definition =
-      providerDefinitions.find((item) => item.id === draft.providerId) ??
-      matchProviderByDomain(draft.origin);
-    const providerId = draft.providerId ?? definition?.id ?? "";
-    const interfaceType = draft.interfaceType ?? definition?.interfaces[0] ?? "custom_http";
-    const authScheme = draft.authScheme ?? definition?.authSchemes[0] ?? "custom_header";
-    const endpoint = draft.endpoint ?? definition?.endpoints.find((item) => item.kind === "api")?.url ?? "";
-    const tags = draft.tags?.length ? draft.tags.join(", ") : "browser";
+      providerDefinitions.find((item) => item.id === pending.providerId) ?? matchProviderByDomain(pending.origin);
+    const next = emptyDraft();
+    next.providerId = pending.providerId ?? definition?.id ?? "";
+    next.title = pending.title || definition?.displayName || "Browser Provider";
+    next.endpoint = pending.endpoint ?? definition?.endpoints.find((item) => item.kind === "api")?.url ?? "";
+    next.interfaceType = pending.interfaceType ?? definition?.interfaces[0] ?? "custom_http";
+    next.authScheme = pending.authScheme ?? definition?.authSchemes[0] ?? "custom_header";
+    next.environment = pending.environment || "browser";
+    next.tag = pending.tags?.length ? pending.tags.join(", ") : "browser";
 
-    draftForm = {
-      providerId,
-      title: draft.title || definition?.displayName || "Browser Provider",
-      endpoint,
-      interfaceType,
-      authScheme,
-      environment: draft.environment || "browser",
-      tags
-    };
+    draft = next;
     draftPreview = null;
     lastDraftKey = key;
     void previewPendingDraft();
   }
 
+  function onProviderChanged() {
+    const current = draft;
+    if (!current) return;
+    const definition = providerDefinitions.find((item) => item.id === current.providerId);
+    if (definition) {
+      current.interfaceType = detectInterfaceFromProvider(definition.id);
+      current.authScheme = detectAuthFromProvider(definition.id);
+      current.endpoint ||= definition.endpoints.find((item) => item.kind === "api")?.url ?? "";
+      current.title ||= definition.displayName;
+      draft = current;
+    }
+    schedulePreview();
+  }
+
+  function onInferDraftFromEndpoint() {
+    const current = draft;
+    if (!current) return;
+    const match = inferProviderFromEndpoint(current.endpoint.trim());
+    if (match) {
+      current.providerId = match.id;
+      current.title ||= match.displayName;
+      current.interfaceType = match.interfaces[0] ?? current.interfaceType;
+      current.authScheme = match.authSchemes[0] ?? current.authScheme;
+      draft = current;
+    }
+    schedulePreview();
+  }
+
   async function previewPendingDraft() {
-    if (!draftForm || !pendingDraft) return;
+    if (!draft || !pendingDraft) return;
     const patch = draftPatch();
     if (!patch) return;
     const requestId = ++previewRequestId;
@@ -291,7 +317,7 @@
     if (requestId !== previewRequestId) return;
     previewLoading = false;
     if (!response?.ok) {
-      statusText = response?.error ?? "Unable to preview detected key";
+      statusText = response?.error ?? $t("ext.previewFailed");
       return;
     }
     draftPreview = response.data ?? null;
@@ -301,70 +327,47 @@
     clearTimeout(previewTimer);
     previewTimer = setTimeout(() => {
       void previewPendingDraft();
-    }, 180);
-  }
-
-  function updateDraftField<K extends keyof DraftForm>(field: K, value: DraftForm[K]) {
-    if (!draftForm) return;
-    draftForm = {
-      ...draftForm,
-      [field]: value
-    };
-    schedulePreview();
-  }
-
-  function setDraftProvider(value: string) {
-    applyProviderSelection(value);
-  }
-
-  function setDraftInterface(value: string) {
-    updateDraftField("interfaceType", value as InterfaceType);
-  }
-
-  function setDraftAuth(value: string) {
-    updateDraftField("authScheme", value as AuthScheme);
-  }
-
-  function applyProviderSelection(providerId: string) {
-    if (!draftForm) return;
-    const definition = providerDefinitions.find((item) => item.id === providerId);
-    draftForm = {
-      ...draftForm,
-      providerId,
-      title: definition?.displayName ?? draftForm.title,
-      endpoint: definition?.endpoints.find((item) => item.kind === "api")?.url ?? draftForm.endpoint,
-      interfaceType: definition?.interfaces[0] ?? draftForm.interfaceType,
-      authScheme: definition?.authSchemes[0] ?? draftForm.authScheme
-    };
-    schedulePreview();
+    }, 220);
   }
 
   function draftPatch() {
-    if (!draftForm) return null;
-    const tags = draftForm.tags
+    if (!draft) return null;
+    const tags = draft.tag
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
     return {
-      providerId: draftForm.providerId || undefined,
-      title: draftForm.title.trim() || "Browser Provider",
-      endpoint: draftForm.endpoint.trim() || undefined,
-      interfaceType: draftForm.interfaceType,
-      authScheme: draftForm.authScheme,
-      environment: draftForm.environment.trim() || "browser",
+      providerId: draft.providerId || undefined,
+      title: draft.title.trim() || "Browser Provider",
+      endpoint: draft.endpoint.trim() || undefined,
+      interfaceType: draft.interfaceType,
+      authScheme: draft.authScheme,
+      environment: draft.environment.trim() || "browser",
       tags: tags.length ? tags : ["browser"]
     };
   }
 
   function clearPendingDraftUi() {
     pendingDraft = null;
-    draftForm = null;
+    draft = null;
     draftPreview = null;
     lastDraftKey = "";
     clearTimeout(previewTimer);
     previewTimer = undefined;
     previewLoading = false;
     previewRequestId += 1;
+  }
+
+  // Re-preview as the shared form mutates the bound draft.
+  $: if (draft) {
+    void draft.providerId;
+    void draft.title;
+    void draft.endpoint;
+    void draft.interfaceType;
+    void draft.authScheme;
+    void draft.environment;
+    void draft.tag;
+    if (lastDraftKey) schedulePreview();
   }
 
   function sendToWorker<T>(message: Record<string, unknown>): Promise<NativeResponse<T> | undefined> {
@@ -384,189 +387,413 @@
   function delay(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
+
+  function providerDefinitionFor(providerId: string | undefined) {
+    return providerDefinitions.find((item) => item.id === providerId);
+  }
+
+  function entryKind(entry: Entry) {
+    return providerDefinitionFor(entry.providerId)?.kind ?? "unknown";
+  }
+
+  function entryEndpoint(entry: Entry) {
+    return entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? entry.domains[0] ?? "";
+  }
 </script>
 
-<main class="popup">
-  <header>
-    <div class="mark"><KeyRound size={18} /></div>
-    <div>
-      <strong>AIPass</strong>
-      <span>{connection}</span>
+{#snippet entryRow(entry: Entry)}
+  <article class="entry-row">
+    <ProviderIcon title={entry.title} kind={entryKind(entry)} size="md" />
+    <div class="entry-copy">
+      <strong>{entry.title}</strong>
+      <span class="endpoint">{entryEndpoint(entry)}</span>
+      <div class="meta-row">
+        <Badge tone={providerKindTone[entryKind(entry)]}>{providerKindLabel[entryKind(entry)]}</Badge>
+        <Badge>{interfaceLabel[entry.interfaceType]}</Badge>
+        <Badge>{authLabel[entry.authScheme]}</Badge>
+      </div>
+      <code class="masked mono">{entry.maskedSecret}</code>
     </div>
-    <button aria-label="Refresh" on:click={refresh}><RefreshCw size={16} /></button>
+    <Button variant="primary" size="sm" on:click={() => useEntry(entry)}>
+      {#if copied === entry.id}<Check size={15} />{:else}<KeyRound size={15} />{/if}
+      {$t("ext.use")}
+    </Button>
+  </article>
+{/snippet}
+
+<main class="popup">
+  <header class="popup-header">
+    <Brand size="sm" responsive={false} />
+    <div class="header-actions">
+      <Badge tone={connectionTone[connection]}>{$t(`ext.state.${connection}`)}</Badge>
+      <IconButton label={$t("ext.refresh")} on:click={refresh}>
+        <RefreshCw size={15} />
+      </IconButton>
+    </div>
   </header>
 
   {#if connection === "missing"}
-    <section class="state">
-      <Lock size={22} />
-      <h1>Native host unavailable</h1>
-      <p>Open AIPass desktop and repair the browser extension connection.</p>
+    <section class="state-panel">
+      <Banner tone="danger">
+        <div class="banner-copy">
+          <strong>{$t("ext.missing.title")}</strong>
+          <span>{$t("ext.missing.desc")}</span>
+        </div>
+      </Banner>
     </section>
   {:else if connection === "locked"}
-    <section class="state">
-      <Lock size={22} />
-      <h1>AIPass is locked</h1>
-      <p>Unlock in the desktop app to keep using saved keys from the browser.</p>
-      <div class="unlock-actions">
-        <button type="button" on:click={openDesktopUnlock} disabled={unlockBusy}>
-          <Plus size={15} />Open AIPass
-        </button>
-      </div>
+    <section class="state-panel">
+      <Banner tone="warning">
+        <div class="banner-copy">
+          <strong>{$t("ext.locked.title")}</strong>
+          <span>{$t("ext.locked.desc")}</span>
+        </div>
+      </Banner>
+      <Button variant="primary" block on:click={openDesktopUnlock} disabled={unlockBusy}>
+        {$t("ext.openApp")}
+      </Button>
     </section>
   {:else}
-    <section class="site">
-      <small>Current site</small>
-      <strong>{provider?.displayName ?? "Custom provider"}</strong>
-      <span>{currentUrl || "No active tab"}</span>
-      <button class="ghost" type="button" on:click={ignoreCurrentOrigin} disabled={!currentOrigin}>
-        <Ban size={15} />Ignore site
-      </button>
+    <section class="site-row">
+      <ProviderIcon
+        title={provider?.displayName ?? $t("ext.customProvider")}
+        kind={provider?.kind ?? "unknown"}
+        size="md"
+      />
+      <div class="site-copy">
+        <small>{$t("ext.currentSite")}</small>
+        <strong>{provider?.displayName ?? $t("ext.customProvider")}</strong>
+        <span class="endpoint">{currentUrl || $t("ext.noActiveTab")}</span>
+      </div>
+      <Button variant="ghost" size="sm" on:click={ignoreCurrentOrigin} disabled={!currentOrigin}>
+        <Ban size={15} />
+        {$t("ext.ignoreSite")}
+      </Button>
     </section>
 
     {#if entries.length > 0}
-      {#each entries as entry}
-        <section class="match">
-          <div class="entry-mark">{initials(entry.title)}</div>
-          <div>
-            <strong>{entry.title}</strong>
-            <span>{interfaceLabel[entry.interfaceType]} · {authLabel[entry.authScheme]} · {entry.maskedSecret}</span>
-          </div>
-          <button on:click={() => useEntry(entry)}>{#if copied === entry.id}<Check size={16} />{:else}<KeyRound size={16} />{/if}Use</button>
-        </section>
-      {/each}
+      <section class="entry-list">
+        {#each entries as entry (entry.id)}
+          {@render entryRow(entry)}
+        {/each}
+      </section>
     {:else}
-      <section class="state">
-        <Search size={22} />
-        <h1>No saved key</h1>
-        <p>Save a provider key in AIPass or create one from this page.</p>
+      <section class="state-panel">
+        <div class="empty-copy">
+          <span class="empty-icon"><Search size={20} /></span>
+          <strong>{$t("ext.noSavedKey")}</strong>
+          <p>{$t("ext.noSavedKeyDesc")}</p>
+        </div>
         <form class="search-form" on:submit|preventDefault={searchSavedEntries}>
           <input
             bind:value={searchQuery}
-            placeholder="Search AIPass"
+            placeholder={$t("ext.search")}
             autocapitalize="off"
             spellcheck="false"
           />
-          <button type="submit" disabled={!searchQuery.trim() || searchLoading}>
-            {searchLoading ? "Searching" : "Search"}
-          </button>
+          <Button variant="secondary" size="sm" type="submit" disabled={!searchQuery.trim() || searchLoading}>
+            {searchLoading ? $t("ext.searching") : $t("ext.searchAction")}
+          </Button>
         </form>
       </section>
-      {#each searchResults as entry}
-        <section class="match">
-          <div class="entry-mark">{initials(entry.title)}</div>
-          <div>
-            <strong>{entry.title}</strong>
-            <span>{interfaceLabel[entry.interfaceType]} · {authLabel[entry.authScheme]} · {entry.maskedSecret}</span>
-          </div>
-          <button on:click={() => useEntry(entry)}>{#if copied === entry.id}<Check size={16} />{:else}<KeyRound size={16} />{/if}Use</button>
+      {#if searchResults.length > 0}
+        <section class="entry-list">
+          {#each searchResults as entry (entry.id)}
+            {@render entryRow(entry)}
+          {/each}
         </section>
-      {/each}
+      {/if}
     {/if}
 
-    {#if pendingDraft && draftForm}
+    {#if pendingDraft && draft}
       <section class="draft">
         <div class="draft-head">
-          <div>
-            <small>Detected key</small>
-            <strong>{draftPreview?.title ?? draftForm.title}</strong>
+          <div class="draft-title">
+            <small>{$t("ext.detectedKey")}</small>
+            <strong>{draftPreview?.title ?? draft.title}</strong>
           </div>
-          <button class="icon" type="button" aria-label="Dismiss detected key" on:click={dismissPendingDraft}>
+          <IconButton label={$t("ext.dismiss")} on:click={dismissPendingDraft}>
             <X size={15} />
-          </button>
+          </IconButton>
         </div>
 
-        <label class="field">
-          <span>Name</span>
-          <input
-            value={draftForm.title}
-            on:input={(event) => updateDraftField("title", (event.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
+        <Banner tone="info">{$t("ext.detectedKeyDesc")}</Banner>
 
-        <label class="field">
-          <span>Provider</span>
-          <select value={draftForm.providerId} on:change={(event) => setDraftProvider((event.currentTarget as HTMLSelectElement).value)}>
-            <option value="">Custom provider</option>
-            {#each providerDefinitions as definition}
-              <option value={definition.id}>{definition.displayName}</option>
-            {/each}
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Endpoint</span>
-          <input
-            value={draftForm.endpoint}
-            on:input={(event) => updateDraftField("endpoint", (event.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
-
-        <div class="field-grid">
-          <label class="field">
-            <span>Interface</span>
-            <select value={draftForm.interfaceType} on:change={(event) => setDraftInterface((event.currentTarget as HTMLSelectElement).value)}>
-              {#each interfaceOptions as value}
-                <option value={value}>{interfaceLabel[value]}</option>
-              {/each}
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Auth</span>
-            <select value={draftForm.authScheme} on:change={(event) => setDraftAuth((event.currentTarget as HTMLSelectElement).value)}>
-              {#each authOptions as value}
-                <option value={value}>{authLabel[value]}</option>
-              {/each}
-            </select>
-          </label>
-        </div>
-
-        <div class="field-grid">
-          <label class="field">
-            <span>Environment</span>
-            <input
-              value={draftForm.environment}
-              on:input={(event) => updateDraftField("environment", (event.currentTarget as HTMLInputElement).value)}
-            />
-          </label>
-
-          <label class="field">
-            <span>Tags</span>
-            <input
-              value={draftForm.tags}
-              on:input={(event) => updateDraftField("tags", (event.currentTarget as HTMLInputElement).value)}
-            />
-          </label>
-        </div>
-
-        <div class="preview">
-          <div>
-            <span>Secret</span>
-            <strong>{draftPreview?.maskedSecret ?? pendingDraft.maskedSecret ?? "••••"}</strong>
-          </div>
-          <div>
-            <span>Fingerprint</span>
-            <code>{draftPreview?.fingerprint ?? (previewLoading ? "Previewing..." : "Pending preview")}</code>
-          </div>
-          <div>
-            <span>Source</span>
-            <small>{draftPreview?.endpoint ?? pendingDraft.endpoint ?? pendingDraft.origin}</small>
-          </div>
+        <div class="draft-form">
+          <ProviderFormFields
+            formMode="add"
+            bind:draft
+            {onProviderChanged}
+            {onInferDraftFromEndpoint}
+          >
+            <div slot="secret" class="detected-secret">
+              <span class="detected-secret-label">{$t("ext.secret")}</span>
+              <code class="mono">{draftPreview?.maskedSecret ?? pendingDraft.maskedSecret ?? "••••"}</code>
+              <span class="detected-secret-fp mono">
+                {draftPreview?.fingerprint ?? (previewLoading ? $t("ext.previewing") : $t("ext.pendingPreview"))}
+              </span>
+            </div>
+          </ProviderFormFields>
         </div>
 
         <div class="draft-actions">
-          <button class="ghost" type="button" on:click={ignoreCurrentOrigin}>
-            <Ban size={15} />Ignore site
-          </button>
-          <button class="primary" type="button" on:click={savePendingDraft}>
-            <Plus size={16} />Save detected key
-          </button>
+          <Button variant="ghost" size="sm" on:click={ignoreCurrentOrigin}>
+            <Ban size={15} />
+            {$t("ext.ignoreSite")}
+          </Button>
+          <Button size="sm" variant="primary" on:click={savePendingDraft}>{$t("ext.save")}</Button>
         </div>
       </section>
     {/if}
 
     {#if statusText}
-      <p class="status">{statusText}</p>
+      <Banner tone="info">{statusText}</Banner>
     {/if}
   {/if}
 </main>
+
+<style lang="scss">
+  .popup {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .state-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .banner-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    strong {
+      font-size: 13px;
+    }
+  }
+
+  .site-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+  }
+
+  .site-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+
+    small {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-tertiary);
+    }
+
+    strong {
+      font-size: 13px;
+    }
+  }
+
+  .endpoint {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .entry-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .entry-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+  }
+
+  .entry-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+
+    strong {
+      font-size: 13px;
+    }
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .masked {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .empty-copy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    text-align: center;
+    padding: 8px 0;
+
+    strong {
+      font-size: 14px;
+    }
+
+    p {
+      font-size: 12px;
+      color: var(--text-tertiary);
+    }
+  }
+
+  .empty-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-tertiary);
+    margin-bottom: 2px;
+  }
+
+  .search-form {
+    display: flex;
+    gap: 8px;
+
+    input {
+      flex: 1;
+      min-width: 0;
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+
+      &:focus-visible {
+        outline: 2px solid var(--accent-ring);
+        outline-offset: 1px;
+        border-color: var(--accent);
+      }
+    }
+  }
+
+  .draft {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-lg);
+  }
+
+  .draft-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .draft-title {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    small {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-tertiary);
+    }
+
+    strong {
+      font-size: 14px;
+    }
+  }
+
+  .draft-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .detected-secret {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+  }
+
+  .detected-secret-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .detected-secret code {
+    font-size: 12px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .detected-secret-fp {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    overflow-wrap: anywhere;
+  }
+
+  .draft-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+</style>
+
+
+
