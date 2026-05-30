@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { initials, providerKindTone } from "@aipass/ui";
   import type { ProviderKind } from "@aipass/schemas";
+
+  import { initials, providerKindTone } from "../helpers";
 
   export let title: string;
   export let kind: ProviderKind = "unknown";

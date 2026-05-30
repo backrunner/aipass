@@ -4,19 +4,43 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "sideEffects": [
+    "*.scss"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "svelte": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./i18n": {
+      "types": "./src/i18n.ts",
+      "svelte": "./src/i18n.ts",
+      "default": "./src/i18n.ts"
+    },
+    "./styles/base.scss": "./src/styles/base.scss"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "lint": "tsc -p tsconfig.json --noEmit",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/index.test.js"
+    "lint": "svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@aipass/schemas": "workspace:*"
   },
+  "peerDependencies": {
+    "bits-ui": "^2.13.0",
+    "lucide-svelte": "^0.555.0",
+    "svelte": "^5.38.0"
+  },
   "devDependencies": {
     "@aipass/tsconfig": "workspace:*",
-    "typescript": "^5.9.3"
+    "bits-ui": "^2.13.0",
+    "lucide-svelte": "^0.555.0",
+    "sass": "^1.100.0",
+    "svelte": "^5.38.0",
+    "svelte-check": "^4.3.4",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.13"
   }
 }

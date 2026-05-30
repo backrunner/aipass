@@ -2,7 +2,7 @@
   import { Select } from "bits-ui";
   import { Check, ChevronDown } from "lucide-svelte";
 
-  import { t } from "../../stores/i18n";
+  import { t } from "../i18n";
 
   export let value = "";
   export let label = "";

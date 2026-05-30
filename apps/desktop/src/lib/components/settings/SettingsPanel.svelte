@@ -15,13 +15,9 @@
     ThemePreference
   } from "../../types";
   import { checkForUpdates, installUpdate, type UpdateCheckResult } from "../../services/updates";
-  import Badge from "../shared/Badge.svelte";
-  import Banner from "../shared/Banner.svelte";
-  import Button from "../shared/Button.svelte";
+  import { Badge, Banner, Button, Field, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
-  import Field from "../shared/Field.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
-  import SwitchField from "../shared/SwitchField.svelte";
 
   export let entriesCount = 0;
   export let autoLockMinutes = 15;

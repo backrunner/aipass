@@ -2,11 +2,12 @@
   import Logo from "./Logo.svelte";
 
   export let size: "sm" | "md" = "md";
+  export let responsive = true;
 
   $: logoSize = size === "sm" ? 22 : 28;
 </script>
 
-<div class={`brand size-${size}`}>
+<div class={`brand size-${size}`} class:responsive>
   <Logo size={logoSize} />
   <span class="wordmark">AIPass</span>
 </div>
@@ -36,7 +37,7 @@
   }
 
   @media (max-width: 920px) {
-    .wordmark {
+    .responsive .wordmark {
       display: none;
     }
   }

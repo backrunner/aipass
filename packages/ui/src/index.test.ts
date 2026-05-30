@@ -1,12 +1,14 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-import { authLabel, initials, interfaceLabel } from "./index.js";
+import { describe, expect, it } from "vitest";
 
-test("labels provider-native protocols", () => {
-  assert.equal(interfaceLabel.anthropic_messages, "Anthropic Messages");
-  assert.equal(authLabel.google_api_key, "Google API key");
-});
+import { authLabel, initials, interfaceLabel } from "./helpers";
 
-test("initials", () => {
-  assert.equal(initials("Google Gemini"), "GG");
+describe("@aipass/ui labels", () => {
+  it("labels provider-native protocols", () => {
+    expect(interfaceLabel.anthropic_messages).toBe("Anthropic Messages");
+    expect(authLabel.google_api_key).toBe("Google API key");
+  });
+
+  it("derives initials", () => {
+    expect(initials("Google Gemini")).toBe("GG");
+  });
 });

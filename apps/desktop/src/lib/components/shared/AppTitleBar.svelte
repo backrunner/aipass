@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Logo } from "@aipass/ui";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { DropdownMenu } from "bits-ui";
   import { Lock, Menu, Minus, Settings, Square, X } from "lucide-svelte";
@@ -6,7 +7,6 @@
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
-  import Logo from "./Logo.svelte";
 
   export let title = "AIPass";
   export let showAppMenu = true;

@@ -1,9 +1,15 @@
-import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { svelte, vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte({ preprocess: vitePreprocess() })],
+  resolve: {
+    dedupe: ["svelte", "bits-ui"]
+  },
+  optimizeDeps: {
+    exclude: ["@aipass/ui"]
+  },
   test: {
     environment: "happy-dom"
   },

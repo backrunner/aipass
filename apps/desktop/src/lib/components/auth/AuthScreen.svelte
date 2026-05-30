@@ -1,9 +1,8 @@
 <script lang="ts">
+  import { Banner, Brand, Button } from "@aipass/ui";
+
   import { t } from "../../stores/i18n";
   import type { AuthMode, MaybePromise, PasswordStrength, VaultStatus } from "../../types";
-  import Banner from "../shared/Banner.svelte";
-  import Brand from "../shared/Brand.svelte";
-  import Button from "../shared/Button.svelte";
   import HeroBackground from "./HeroBackground.svelte";
   import PasswordField from "./PasswordField.svelte";
   import PasswordStrengthMeter from "./PasswordStrengthMeter.svelte";

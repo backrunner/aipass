@@ -1,12 +1,10 @@
 <script lang="ts">
+  import { Banner, Button, ProviderFormFields } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { Draft, FormMode, MaybePromise } from "../../types";
-  import Banner from "../shared/Banner.svelte";
-  import Button from "../shared/Button.svelte";
-  import ProviderFormFields from "./ProviderFormFields.svelte";
 
   export let formMode: FormMode = "add";
   export let draft: Draft;

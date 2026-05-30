@@ -1,28 +1,8 @@
 import type { ProviderEntry } from "@aipass/schemas";
 
-import type { Draft, EntrySummary, ProviderCounts } from "../types";
+import type { EntrySummary, ProviderCounts } from "../types";
 
-export const emptyDraft = (): Draft => ({
-  title: "",
-  domain: "",
-  endpoint: "",
-  consoleUrl: "",
-  faviconUrl: "",
-  providerId: "anthropic",
-  interfaceType: "anthropic_messages",
-  authScheme: "x_api_key",
-  apiKey: "",
-  defaultModel: "",
-  modelAlias: "",
-  environment: "work",
-  tag: "",
-  header: "",
-  quotaLabel: "",
-  quotaLimit: "",
-  quotaRemaining: "",
-  quotaResetAt: "",
-  notes: ""
-});
+export { emptyDraft } from "@aipass/ui";
 
 export function summaryToEntry(summary: EntrySummary): ProviderEntry {
   return {

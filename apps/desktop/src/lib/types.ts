@@ -6,9 +6,19 @@ import type {
   QuotaInfo,
   SecretRef,
 } from "@aipass/schemas";
+import type { LocalePreference } from "@aipass/ui";
+
+export type {
+  Draft,
+  FormMode,
+  LocalePreference,
+  LocalizedMessage,
+  MaybePromise,
+  MessageParams,
+  MessageValue,
+} from "@aipass/ui";
 
 export type AuthMode = "create" | "unlock" | "recover";
-export type FormMode = "add" | "edit";
 export type SyncMode = "local" | "icloud" | "onedrive" | "webdav";
 export type ToolConfigTarget =
   | "codex"
@@ -22,15 +32,6 @@ export type VaultStatus = { exists: boolean; locked: boolean };
 export type RecoveryKit = { recoveryKey: string };
 
 export type ThemePreference = "system" | "light" | "dark";
-export type LocalePreference = "system" | "en" | "zh-CN";
-export type MessageParams = Record<string, string | number | boolean | undefined>;
-
-export type LocalizedMessage = {
-  key: string;
-  params?: MessageParams;
-};
-
-export type MessageValue = string | LocalizedMessage;
 
 export type AppPreferences = {
   autoLockMinutes: number;
@@ -76,28 +77,6 @@ export type SyncReport = {
     | "auth_failed"
     | "server_error";
   message?: string;
-};
-
-export type Draft = {
-  title: string;
-  domain: string;
-  endpoint: string;
-  consoleUrl: string;
-  faviconUrl: string;
-  providerId: string;
-  interfaceType: InterfaceType;
-  authScheme: AuthScheme;
-  apiKey: string;
-  defaultModel: string;
-  modelAlias: string;
-  environment: string;
-  tag: string;
-  header: string;
-  quotaLabel: string;
-  quotaLimit: string;
-  quotaRemaining: string;
-  quotaResetAt: string;
-  notes: string;
 };
 
 export type EntrySummary = {
@@ -224,5 +203,3 @@ export type PasswordStrength = {
   score: number;
   hint?: string;
 };
-
-export type MaybePromise<T = void> = T | Promise<T>;

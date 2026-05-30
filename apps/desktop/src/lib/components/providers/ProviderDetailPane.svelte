@@ -1,6 +1,14 @@
 <script lang="ts">
   import type { InterfaceType, ProviderEntry, ProviderKind } from "@aipass/schemas";
-  import { providerKindTone } from "@aipass/ui";
+  import {
+    Badge,
+    Banner,
+    Button,
+    IconButton,
+    ProviderFormFields,
+    ProviderIcon,
+    providerKindTone
+  } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
   import {
     Archive,
@@ -35,13 +43,7 @@
     type IntegrationToolDefinition
   } from "../../utils/integrations";
   import { detectLang, highlightPreview } from "../../utils/highlight";
-  import Badge from "../shared/Badge.svelte";
-  import Banner from "../shared/Banner.svelte";
-  import Button from "../shared/Button.svelte";
   import Card from "../shared/Card.svelte";
-  import IconButton from "../shared/IconButton.svelte";
-  import ProviderIcon from "../shared/ProviderIcon.svelte";
-  import ProviderFormFields from "./ProviderFormFields.svelte";
 
   export let selected: ProviderEntry | undefined;
   export let showArchived = false;

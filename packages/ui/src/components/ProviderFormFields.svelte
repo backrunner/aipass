@@ -4,10 +4,10 @@
   import { Plus, X } from "lucide-svelte";
   import { onMount } from "svelte";
 
-  import { t } from "../../stores/i18n";
-  import type { Draft, FormMode, MaybePromise } from "../../types";
-  import Field from "../shared/Field.svelte";
-  import SelectField from "../shared/SelectField.svelte";
+  import { t } from "../i18n";
+  import type { Draft, FormMode, MaybePromise } from "../types";
+  import Field from "./Field.svelte";
+  import SelectField from "./SelectField.svelte";
 
   export let formMode: FormMode = "add";
   export let draft: Draft;
@@ -192,15 +192,17 @@
     <Field label={$t("providerForm.title")}>
       <input bind:value={draft.title} placeholder={$t("providerForm.titlePlaceholder")} />
     </Field>
-    <Field label={$t("providerForm.apiKey")}>
-      <input
-        bind:value={draft.apiKey}
-        type="password"
-        placeholder={formMode === "edit" ? $t("providerForm.keepCurrent") : $t("providerForm.pasteApiKey")}
-        autocomplete="off"
-        spellcheck="false"
-      />
-    </Field>
+    <slot name="secret">
+      <Field label={$t("providerForm.apiKey")}>
+        <input
+          bind:value={draft.apiKey}
+          type="password"
+          placeholder={formMode === "edit" ? $t("providerForm.keepCurrent") : $t("providerForm.pasteApiKey")}
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </Field>
+    </slot>
   </div>
 </section>
 

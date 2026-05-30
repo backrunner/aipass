@@ -1,12 +1,11 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
+  import { Button, ProviderIcon } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
   import { KeyRound, Plus, Search, SlidersHorizontal, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderFilter } from "../../types";
-  import Button from "../shared/Button.svelte";
-  import ProviderIcon from "../shared/ProviderIcon.svelte";
 
   export let entries: ProviderEntry[] = [];
   export let filterEntries: ProviderEntry[] = [];

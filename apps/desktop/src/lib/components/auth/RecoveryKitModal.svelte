@@ -1,10 +1,10 @@
 <script lang="ts">
+  import { Button } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { Check, Copy, Download, KeyRound } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
-  import Button from "../shared/Button.svelte";
 
   export let recoveryKey = "";
   export let copied = "";
