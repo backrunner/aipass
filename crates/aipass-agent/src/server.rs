@@ -377,6 +377,9 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
         .map(|id| provider_kind_for_id(Some(id)))
         .unwrap_or(aipass_provider_registry::ProviderKind::Unknown);
     let preview = detected_secret_preview(vault, &fields);
+    if let Some(existing_entry_id) = preview.existing_entry_id.as_ref() {
+        return Ok(*existing_entry_id);
+    }
     let api_key = fields.api_key.into_inner();
     vault
         .add_provider(ProviderEntryInput {
@@ -398,6 +401,7 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
             model_aliases: Vec::new(),
             headers: Vec::new(),
             quota: None,
+            gateway: preview.gateway,
             tags: preview.tags,
             environment: preview.environment,
             notes: Some(format!("Captured from {}", fields.origin)),
@@ -474,7 +478,12 @@ fn detected_secret_preview(
     } else {
         fields.tags.clone()
     };
+    let existing_entry_id = vault
+        .search(fields.api_key.expose())
+        .ok()
+        .and_then(|matches| matches.into_iter().next().map(|entry| entry.id));
 
+    let is_saved = existing_entry_id.is_some();
     BrowserDetectedSecretPreview {
         title,
         provider_id: provider_guess,
@@ -483,8 +492,36 @@ fn detected_secret_preview(
         auth_scheme,
         masked_secret: mask_secret(fields.api_key.expose()),
         fingerprint: vault.fingerprint_secret(fields.api_key.expose()),
+        existing_entry_id,
+        is_saved,
         environment,
         tags,
+        gateway: clean_gateway(fields.gateway.clone()),
+    }
+}
+
+fn clean_gateway(
+    gateway: Option<aipass_provider_registry::GatewayMetadata>,
+) -> Option<aipass_provider_registry::GatewayMetadata> {
+    let mut gateway = gateway?;
+    gateway.group = gateway
+        .group
+        .and_then(|value| non_empty_string(value.trim().to_string()));
+    gateway.rate = gateway
+        .rate
+        .and_then(|value| non_empty_string(value.trim().to_string()));
+    if gateway.group.is_none() && gateway.rate.is_none() {
+        None
+    } else {
+        Some(gateway)
+    }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 

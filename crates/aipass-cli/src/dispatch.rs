@@ -359,6 +359,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                         quota_remaining,
                         quota_reset_at,
                     ),
+                    gateway: None,
                     tags: tag,
                     environment,
                     notes,
@@ -461,6 +462,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 },
                 quota: quota_from_parts(quota_label, quota_limit, quota_remaining, quota_reset_at)
                     .or(existing.quota),
+                gateway: existing.gateway,
                 tags: if tag.is_empty() { existing.tags } else { tag },
                 environment: environment.unwrap_or(existing.environment),
                 notes: notes.or(existing.notes),

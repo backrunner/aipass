@@ -28,6 +28,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     defaultModel: summary.defaultModel,
     modelAliases: summary.modelAliases,
     quota: summary.quota,
+    gateway: summary.gateway,
     tags: summary.tags,
     environment: summary.environment,
     notes: summary.notes,

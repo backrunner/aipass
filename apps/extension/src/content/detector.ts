@@ -7,6 +7,14 @@ import {
   type ProviderDefinition
 } from "@aipass/schemas";
 
+import {
+  extractSecret,
+  findSecretCandidates as scanSecretCandidates,
+  hasKeyContext,
+  SELF_HOSTED_TOKEN_PATH_PATTERN,
+  type SecretCandidate
+} from "./secret-scanner";
+
 export interface DetectedSecretDraft {
   providerId?: string;
   title: string;
@@ -17,111 +25,71 @@ export interface DetectedSecretDraft {
   endpoint?: string;
   interfaceType?: InterfaceType;
   authScheme?: AuthScheme;
+  gateway?: {
+    group?: string;
+    rate?: string;
+  };
 }
 
-const SECRET_PATTERNS = [
-  /sk-[A-Za-z0-9_-]{12,}/,
-  /sk-ant-[A-Za-z0-9_-]{12,}/,
-  /r8_[A-Za-z0-9_-]{20,}/,
-  /AIza[0-9A-Za-z_-]{20,}/,
-  /([A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})/
-];
-const CONTEXTUAL_SECRET_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]{15,}/;
 const ENDPOINT_PATTERN =
   /api|v1|v3|anthropic|generativelanguage|openrouter|openai|gateway|one-api|new-api|litellm|sub2api|replicate/i;
-const SELF_HOSTED_TOKEN_PATH_PATTERN = /\/(token|tokens|key|keys|api-?keys|settings|user)(\/|$)/i;
 const CLIPBOARD_SECRET_EVENT = "aipass.clipboardSecret";
-let lastSentDraftKey = "";
+const sentDraftKeys = new Set<string>();
 
 export function detectFromDocument(doc: Document = document): DetectedSecretDraft | null {
-  return buildDraft(doc);
+  return buildDraft(doc, findSecretCandidates(doc)[0]);
 }
 
-function buildDraft(doc: Document, providedSecret?: string): DetectedSecretDraft | null {
+export function detectAllFromDocument(doc: Document = document): DetectedSecretDraft[] {
+  const candidates = findSecretCandidates(doc);
+  if (!candidates.length) {
+    const draft = buildDraft(doc);
+    return draft ? [draft] : [];
+  }
+  return candidates
+    .map((candidate) => buildDraft(doc, candidate))
+    .filter((draft): draft is DetectedSecretDraft => Boolean(draft?.apiKey));
+}
+
+function buildDraft(doc: Document, candidate?: SecretCandidate): DetectedSecretDraft | null {
   const provider = matchProviderByDomain(location.hostname) ?? guessSelfHostedProvider(doc);
   const endpoint = findEndpoint(doc) ?? inferSelfHostedEndpoint(provider, doc);
-  const secret = providedSecret ?? findSecretCandidate(doc);
+  const secret = candidate?.secret ?? findSecretCandidate(doc);
   if (!provider && !endpoint && !secret) return null;
+  const baseTitle = provider?.displayName ?? titleFromEndpoint(endpoint) ?? "Custom AI Provider";
   return {
     providerId: provider?.id,
-    title: provider?.displayName ?? titleFromEndpoint(endpoint) ?? "Custom AI Provider",
+    title: titleFromCandidate(baseTitle, candidate),
     origin: location.origin,
     url: location.href,
     maskedSecret: secret ? maskSecret(secret) : undefined,
     apiKey: secret,
     endpoint,
     interfaceType: provider?.interfaces[0] ?? inferInterfaceFromEndpoint(endpoint),
-    authScheme: provider?.authSchemes[0] ?? "bearer"
+    authScheme: provider?.authSchemes[0] ?? "bearer",
+    gateway: candidate?.gateway
   };
 }
 
 function findSecretCandidate(doc: Document): string | undefined {
-  const inputs = Array.from(doc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
-  for (const input of inputs) {
-    const label = [
-      input.name,
-      input.id,
-      input.placeholder,
-      input.getAttribute("aria-label") ?? "",
-      input.getAttribute("title") ?? "",
-      input.closest("label, section, article, form, div, body")?.textContent?.slice(0, 400) ?? ""
-    ]
-      .join(" ")
-      .toLowerCase();
-    const value = input.value.trim();
-    if (!value) continue;
-    if (hasKeyContext(label)) {
-      const candidate = extractSecret(value, true);
-      if (candidate) return candidate;
-    }
-  }
-  const explicitKeyElements = Array.from(
-    doc.querySelectorAll<HTMLElement>(
-      "code, pre, output, [data-api-key], [data-token], [role='textbox'], [aria-label*='key' i], [aria-label*='token' i], [title*='key' i], [title*='token' i]"
-    )
-  );
-  for (const element of explicitKeyElements.slice(0, 80)) {
-    const context = [
-      element.getAttribute("aria-label") ?? "",
-      element.getAttribute("title") ?? "",
-      element.getAttribute("data-api-key") ?? "",
-      element.getAttribute("data-token") ?? "",
-      element.closest("section, article, form, div, body")?.textContent?.slice(0, 400) ?? ""
-    ]
-      .join(" ")
-      .toLowerCase();
-    if (!hasKeyContext(context)) continue;
-    const value = (element.textContent ?? "").trim();
-    const candidate = extractSecret(value, true);
-    if (candidate) return candidate;
-  }
-  return undefined;
+  return findSecretCandidates(doc)[0]?.secret;
 }
 
-function extractSecret(value: string, allowContextual: boolean): string | undefined {
-  for (const pattern of SECRET_PATTERNS) {
-    const match = value.match(pattern);
-    if (match?.[0]) return match[0];
-  }
-  if (!allowContextual) return undefined;
-  const match = value.match(CONTEXTUAL_SECRET_PATTERN);
-  if (!match?.[0]) return undefined;
-  const candidate = match[0].replace(/[),.;]+$/, "");
-  if (!isLikelySecret(candidate)) return undefined;
-  return candidate;
+function findSecretCandidates(doc: Document): SecretCandidate[] {
+  return scanSecretCandidates(doc, {
+    tokenManagementPage: SELF_HOSTED_TOKEN_PATH_PATTERN.test(location.pathname) || hasSelfHostedKeyPageText(doc)
+  });
 }
 
-function isLikelySecret(candidate: string): boolean {
-  if (/^https?:/i.test(candidate)) return false;
-  if (candidate.includes("@")) return false;
-  if (/^\d+$/.test(candidate)) return false;
-  if (/^[A-F0-9-]{36}$/i.test(candidate)) return false;
-  if (!/[A-Za-z]/.test(candidate) || !/\d/.test(candidate)) return false;
-  return true;
+function titleFromCandidate(baseTitle: string, candidate?: SecretCandidate): string {
+  const suffix = sanitizeTitleSuffix(candidate?.label) ?? sanitizeTitleSuffix(candidate?.gateway?.group);
+  return suffix ? `${baseTitle} · ${suffix}` : baseTitle;
 }
 
-function hasKeyContext(context: string): boolean {
-  return /(api|key|token|secret|credential|密钥|令牌)/i.test(context);
+function sanitizeTitleSuffix(value: string | undefined): string | undefined {
+  const cleaned = value?.trim();
+  if (!cleaned || cleaned.length > 48 || hasKeyContext(cleaned)) return undefined;
+  return cleaned;
 }
 
 function findEndpoint(doc: Document): string | undefined {
@@ -194,17 +162,20 @@ function titleFromEndpoint(endpoint?: string): string | undefined {
 
 async function sendDraftIfAllowed() {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
-  const draft = detectFromDocument();
-  if (!draft?.apiKey || (await isIgnoredOrigin(draft.origin)) || isDuplicateDraft(draft)) return;
-  chrome.runtime.sendMessage({ type: "aipass.detectedSecretDraft", draft });
+  const drafts = detectAllFromDocument().filter((draft) => draft.apiKey);
+  const origin = drafts[0]?.origin;
+  if (!drafts.length || !origin || (await isIgnoredOrigin(origin))) return;
+  const freshDrafts = takeUnsentDrafts(drafts);
+  if (!freshDrafts.length) return;
+  chrome.runtime.sendMessage({ type: "aipass.detectedSecretDrafts", drafts: freshDrafts });
 }
 
 async function sendDraftForClipboardSecret(secret: string) {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
   const candidate = extractSecret(secret, canUseContextualClipboardSecret(document));
   if (!candidate) return;
-  const draft = buildDraft(document, candidate);
-  if (!draft?.apiKey || (await isIgnoredOrigin(draft.origin)) || isDuplicateDraft(draft)) return;
+  const draft = buildDraft(document, { secret: candidate });
+  if (!draft?.apiKey || (await isIgnoredOrigin(draft.origin)) || !takeUnsentDrafts([draft]).length) return;
   chrome.runtime.sendMessage({ type: "aipass.detectedSecretDraft", draft });
 }
 
@@ -213,11 +184,27 @@ function canUseContextualClipboardSecret(doc: Document): boolean {
   return Boolean(provider && (SELF_HOSTED_TOKEN_PATH_PATTERN.test(location.pathname) || hasSelfHostedKeyPageText(doc)));
 }
 
-function isDuplicateDraft(draft: DetectedSecretDraft): boolean {
-  const key = [draft.origin, draft.url, draft.providerId ?? "", draft.endpoint ?? "", draft.apiKey ?? ""].join("|");
-  if (key === lastSentDraftKey) return true;
-  lastSentDraftKey = key;
-  return false;
+function takeUnsentDrafts(drafts: DetectedSecretDraft[]): DetectedSecretDraft[] {
+  const fresh: DetectedSecretDraft[] = [];
+  for (const draft of drafts) {
+    const key = draftKey(draft);
+    if (sentDraftKeys.has(key)) continue;
+    sentDraftKeys.add(key);
+    fresh.push(draft);
+  }
+  return fresh;
+}
+
+function draftKey(draft: DetectedSecretDraft): string {
+  return [
+    draft.origin,
+    draft.url,
+    draft.providerId ?? "",
+    draft.endpoint ?? "",
+    draft.apiKey ?? "",
+    draft.gateway?.group ?? "",
+    draft.gateway?.rate ?? ""
+  ].join("|");
 }
 
 function isIgnoredOrigin(origin: string): Promise<boolean> {

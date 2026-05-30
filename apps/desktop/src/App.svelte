@@ -660,6 +660,8 @@
       quotaLimit: entry.quota?.limit ?? "",
       quotaRemaining: entry.quota?.remaining ?? "",
       quotaResetAt: entry.quota?.resetAt ?? "",
+      gatewayGroup: entry.gateway?.group ?? "",
+      gatewayRate: entry.gateway?.rate ?? "",
       notes: entry.notes ?? ""
     };
     detailEditMode = true;
@@ -696,6 +698,7 @@
       modelAliases: modelAliasPairs(draft.modelAlias),
       headers: headerPairs(draft.header),
       quota: quotaFromDraft(),
+      gateway: gatewayFromDraft(),
       environment: draft.environment || "personal",
       tags: splitCsv(draft.tag),
       notes: draft.notes || undefined
@@ -1170,6 +1173,14 @@
       limit: draft.quotaLimit || undefined,
       remaining: draft.quotaRemaining || undefined,
       resetAt: draft.quotaResetAt || undefined
+    };
+  }
+
+  function gatewayFromDraft() {
+    if (!draft.gatewayGroup && !draft.gatewayRate) return undefined;
+    return {
+      group: draft.gatewayGroup || undefined,
+      rate: draft.gatewayRate || undefined
     };
   }
 

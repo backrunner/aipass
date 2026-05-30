@@ -116,6 +116,59 @@ describe("service worker pending drafts", () => {
     assert.equal(secondPending.data?.draft?.title, "OpenRouter B");
   });
 
+  it("exposes and saves detected drafts as one batch", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({
+      type: "aipass.detectedSecretDrafts",
+      drafts: [
+        {
+          title: "sub2api A",
+          origin: "https://sub2api.example.test",
+          url: "https://sub2api.example.test/keys",
+          providerId: "sub2api",
+          endpoint: "https://sub2api.example.test/v1",
+          apiKey: "productA_key_1234567890abcdef",
+          gateway: { group: "vip", rate: "0.8x" }
+        },
+        {
+          title: "sub2api B",
+          origin: "https://sub2api.example.test",
+          url: "https://sub2api.example.test/keys",
+          providerId: "sub2api",
+          endpoint: "https://sub2api.example.test/v1",
+          apiKey: "productB_key_abcdef1234567890",
+          gateway: { group: "default", rate: "1x" }
+        }
+      ]
+    });
+
+    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: Array<{ draftId?: string; apiKey?: string; gateway?: { group?: string; rate?: string } }> };
+    };
+    const drafts = pending.data?.drafts ?? [];
+    assert.equal(drafts.length, 2);
+    assert.equal(drafts[0]?.apiKey, undefined);
+    assert.equal(drafts[0]?.gateway?.group, "vip");
+
+    const saved = (await dispatchMessage({
+      type: "aipass.savePendingDrafts",
+      draftPatches: drafts.map((draft) => ({
+        draftId: draft.draftId,
+        draft: { gateway: draft.gateway }
+      }))
+    })) as { ok?: boolean; data?: { saved?: unknown[] } };
+    assert.equal(saved.ok, true);
+    assert.equal(saved.data?.saved?.length, 2);
+
+    const after = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: unknown[] };
+    };
+    assert.equal(after.data?.drafts?.length, 0);
+  });
+
   it("ignores all queued drafts for an origin", async () => {
     await import("./service-worker");
 

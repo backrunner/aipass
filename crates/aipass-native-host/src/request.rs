@@ -143,6 +143,7 @@ fn handle_request_inner(
             api_key,
             environment,
             tags,
+            gateway,
             ..
         } => {
             let result: BrowserDetectedSecretPreview = request_agent(
@@ -159,6 +160,7 @@ fn handle_request_inner(
                         api_key,
                         environment,
                         tags,
+                        gateway,
                     },
                 },
             )?;
@@ -175,6 +177,7 @@ fn handle_request_inner(
             api_key,
             environment,
             tags,
+            gateway,
             ..
         } => {
             let result: SaveDetectedResult = request_agent(
@@ -191,6 +194,7 @@ fn handle_request_inner(
                         api_key,
                         environment,
                         tags,
+                        gateway,
                     },
                 },
             )?;

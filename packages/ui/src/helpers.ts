@@ -68,5 +68,7 @@ export const emptyDraft = (): Draft => ({
   quotaLimit: "",
   quotaRemaining: "",
   quotaResetAt: "",
+  gatewayGroup: "",
+  gatewayRate: "",
   notes: ""
 });

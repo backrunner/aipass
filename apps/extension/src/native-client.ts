@@ -34,6 +34,10 @@ export interface ProviderSummary {
     remaining?: string;
     resetAt?: string;
   };
+  gateway?: {
+    group?: string;
+    rate?: string;
+  };
   tags: string[];
   environment: string;
   notes?: string;
@@ -69,6 +73,10 @@ export interface DetectedSecretDraft {
   authScheme?: string;
   environment?: string;
   tags?: string[];
+  gateway?: {
+    group?: string;
+    rate?: string;
+  };
 }
 
 export interface DetectedSecretPreview {
@@ -79,8 +87,14 @@ export interface DetectedSecretPreview {
   authScheme: string;
   maskedSecret: string;
   fingerprint: string;
+  existingEntryId?: string;
+  isSaved?: boolean;
   environment: string;
   tags: string[];
+  gateway?: {
+    group?: string;
+    rate?: string;
+  };
 }
 
 export function nativeRequest<T>(message: Record<string, unknown>): Promise<NativeResponse<T>> {
@@ -180,7 +194,8 @@ export function saveDetectedSecret(draft: DetectedSecretDraft): Promise<NativeRe
     auth_scheme: draft.authScheme,
     api_key: draft.apiKey,
     environment: draft.environment ?? "browser",
-    tags: draft.tags?.length ? draft.tags : ["browser"]
+    tags: draft.tags?.length ? draft.tags : ["browser"],
+    gateway: draft.gateway
   });
 }
 
@@ -197,6 +212,7 @@ export function previewDetectedSecret(draft: DetectedSecretDraft): Promise<Nativ
     auth_scheme: draft.authScheme,
     api_key: draft.apiKey,
     environment: draft.environment ?? "browser",
-    tags: draft.tags?.length ? draft.tags : ["browser"]
+    tags: draft.tags?.length ? draft.tags : ["browser"],
+    gateway: draft.gateway
   });
 }

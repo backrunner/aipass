@@ -41,6 +41,11 @@ export interface QuotaInfo {
   resetAt?: string;
 }
 
+export interface GatewayMetadata {
+  group?: string;
+  rate?: string;
+}
+
 export interface ProviderEntry {
   id: string;
   title: string;
@@ -55,6 +60,7 @@ export interface ProviderEntry {
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;
   quota?: QuotaInfo;
+  gateway?: GatewayMetadata;
   tags: string[];
   environment: string;
   notes?: string;

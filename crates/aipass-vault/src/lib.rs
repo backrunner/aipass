@@ -5,7 +5,8 @@ use aipass_crypto::{
     VaultEpochKey, VaultRootKey, WrappedDek, KEY_LEN,
 };
 use aipass_provider_registry::{
-    AuthScheme, InterfaceType, ProviderEndpoint, ProviderEntry, ProviderKind, QuotaInfo, SecretRef,
+    AuthScheme, GatewayMetadata, InterfaceType, ProviderEndpoint, ProviderEntry, ProviderKind,
+    QuotaInfo, SecretRef,
 };
 use aipass_storage::atomic_write_bytes;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
@@ -154,6 +155,7 @@ pub struct ProviderEntryInput {
     pub model_aliases: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
+    pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub environment: String,
     pub notes: Option<String>,
@@ -176,6 +178,7 @@ pub struct ProviderEntryUpdateInput {
     pub model_aliases: Vec<(String, String)>,
     pub headers: Option<Vec<(String, String)>>,
     pub quota: Option<QuotaInfo>,
+    pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub environment: String,
     pub notes: Option<String>,
@@ -201,6 +204,8 @@ pub struct EntrySummary {
     #[serde(default)]
     pub model_aliases: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
+    #[serde(default)]
+    pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub environment: String,
     pub notes: Option<String>,
@@ -613,6 +618,7 @@ impl Vault {
             model_aliases: input.model_aliases,
             headers: input.headers,
             quota: input.quota,
+            gateway: input.gateway,
             tags: input.tags,
             environment: input.environment,
             notes: input.notes,
@@ -737,6 +743,7 @@ impl Vault {
             model_aliases: input.model_aliases,
             headers: input.headers.unwrap_or(old.entry.headers),
             quota: input.quota,
+            gateway: input.gateway,
             tags: input.tags,
             environment: input.environment,
             notes: input.notes,
@@ -1381,6 +1388,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
         default_model: entry.default_model.clone(),
         model_aliases: entry.model_aliases.clone(),
         quota: entry.quota.clone(),
+        gateway: entry.gateway.clone(),
         tags: entry.tags.clone(),
         environment: entry.environment.clone(),
         notes: entry.notes.clone(),
@@ -1496,7 +1504,22 @@ fn plaintext_matches_query(
                     .to_lowercase()
                     .contains(query)
         });
+    let gateway_match = entry.gateway.as_ref().is_some_and(|gateway| {
+        gateway
+            .group
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase()
+            .contains(query)
+            || gateway
+                .rate
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase()
+                .contains(query)
+    });
     metadata_match
+        || gateway_match
         || entry.secret_refs.iter().any(|secret| {
             secret.masked.to_lowercase().contains(query)
                 || secret.fingerprint.to_lowercase().contains(query)
@@ -1692,6 +1715,7 @@ mod tests {
             model_aliases: Vec::new(),
             headers: vec![("anthropic-version".to_string(), "2023-06-01".to_string())],
             quota: None,
+            gateway: None,
             tags: vec!["prod".to_string()],
             environment: "work".to_string(),
             notes: Some("sensitive note".to_string()),
@@ -1725,6 +1749,7 @@ mod tests {
                 remaining: Some("500000".to_string()),
                 reset_at: Some("2026-06-01T00:00:00Z".to_string()),
             }),
+            gateway: None,
             tags: vec!["prod".to_string(), "team".to_string()],
             environment: "work".to_string(),
             notes: Some("renamed without rotating key".to_string()),
@@ -1799,9 +1824,20 @@ mod tests {
             remaining: Some("120000".to_string()),
             reset_at: Some("2026-06-30".to_string()),
         });
+        input.gateway = Some(GatewayMetadata {
+            group: Some("vip".to_string()),
+            rate: Some("0.8x".to_string()),
+        });
         let id = vault.add_provider(input).unwrap();
 
-        for query in ["fast", "claude-haiku-4-5", "120000", "2026-06-30"] {
+        for query in [
+            "fast",
+            "claude-haiku-4-5",
+            "120000",
+            "2026-06-30",
+            "vip",
+            "0.8x",
+        ] {
             let matches = vault.search(query).unwrap();
             assert_eq!(matches.len(), 1, "query {query}");
             assert_eq!(matches[0].id, id, "query {query}");

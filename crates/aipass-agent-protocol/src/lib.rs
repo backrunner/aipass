@@ -1,4 +1,4 @@
-use aipass_provider_registry::{AuthScheme, InterfaceType, ProviderEndpoint};
+use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, ProviderEndpoint};
 use aipass_sync::SyncObject;
 use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, ProviderEntryUpdateInput, RecoveryKit,
@@ -262,6 +262,8 @@ pub struct BrowserDetectedSecretFields {
     pub environment: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub gateway: Option<GatewayMetadata>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -274,8 +276,14 @@ pub struct BrowserDetectedSecretPreview {
     pub auth_scheme: AuthScheme,
     pub masked_secret: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub existing_entry_id: Option<Uuid>,
+    #[serde(default)]
+    pub is_saved: bool,
     pub environment: String,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub gateway: Option<GatewayMetadata>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

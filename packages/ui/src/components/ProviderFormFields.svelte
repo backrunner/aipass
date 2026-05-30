@@ -28,7 +28,8 @@
     | "header"
     | "interfaceType"
     | "authScheme"
-    | "quota";
+    | "quota"
+    | "gateway";
 
   type OptionalField = {
     id: FieldId;
@@ -86,6 +87,16 @@
         draft.quotaLimit = "";
         draft.quotaRemaining = "";
         draft.quotaResetAt = "";
+      }
+    },
+    {
+      id: "gateway",
+      label: "providerForm.gateway",
+      section: "advanced",
+      hasValue: () => Boolean(draft.gatewayGroup || draft.gatewayRate),
+      clear: () => {
+        draft.gatewayGroup = "";
+        draft.gatewayRate = "";
       }
     }
   ];
@@ -177,7 +188,8 @@
     isVisible("header") ||
     isVisible("interfaceType") ||
     isVisible("authScheme") ||
-    isVisible("quota");
+    isVisible("quota") ||
+    isVisible("gateway");
 </script>
 
 <section class="form-section">
@@ -373,6 +385,21 @@
           </button>
         </div>
       {/if}
+      {#if isVisible("gateway")}
+        <div class="removable-field">
+          <div class="gateway-grid">
+            <Field label={$t("providerForm.gatewayGroup")}>
+              <input bind:value={draft.gatewayGroup} placeholder={$t("providerForm.gatewayGroupPlaceholder")} />
+            </Field>
+            <Field label={$t("providerForm.gatewayRate")}>
+              <input bind:value={draft.gatewayRate} placeholder="1x" />
+            </Field>
+          </div>
+          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.gateway") })} on:click={() => removeField("gateway")}>
+            <X size={13} />
+          </button>
+        </div>
+      {/if}
     </div>
   </section>
 {/if}
@@ -466,6 +493,13 @@
     min-width: 0;
   }
 
+  .gateway-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 120px);
+    gap: 10px;
+    min-width: 0;
+  }
+
   .chip-group {
     display: flex;
     flex-wrap: wrap;
@@ -506,6 +540,10 @@
 
   @media (max-width: 540px) {
     .quota-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .gateway-grid {
       grid-template-columns: 1fr;
     }
   }

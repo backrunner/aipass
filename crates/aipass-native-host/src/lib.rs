@@ -221,6 +221,7 @@ mod tests {
                 api_key: "sk-ant-api03-browser-secret".into(),
                 environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
+                gateway: None,
             },
             &config,
         );
@@ -282,6 +283,7 @@ mod tests {
                     api_key: api_key.into(),
                     environment: Some("browser".to_string()),
                     tags: vec!["browser".to_string()],
+                    gateway: None,
                 },
                 &config,
             );
@@ -351,6 +353,10 @@ mod tests {
                 api_key: "sk-gateway-secret-value".into(),
                 environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
+                gateway: Some(aipass_provider_registry::GatewayMetadata {
+                    group: Some("vip".to_string()),
+                    rate: Some("0.8x".to_string()),
+                }),
             },
             &config,
         );
@@ -369,6 +375,42 @@ mod tests {
             entries[0].auth_scheme,
             aipass_provider_registry::AuthScheme::Bearer
         );
+        assert_eq!(
+            entries[0]
+                .gateway
+                .as_ref()
+                .and_then(|gateway| gateway.group.as_deref()),
+            Some("vip")
+        );
+        assert_eq!(
+            entries[0]
+                .gateway
+                .as_ref()
+                .and_then(|gateway| gateway.rate.as_deref()),
+            Some("0.8x")
+        );
+
+        let preview = handle_request_with_config(
+            NativeRequest::PreviewDetected {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://gateway.example.test".to_string(),
+                url: "https://gateway.example.test/ui".to_string(),
+                title: Some("Gateway".to_string()),
+                endpoint: Some("https://gateway.example.test/v1".to_string()),
+                provider_id: None,
+                interface_type: None,
+                auth_scheme: None,
+                api_key: "sk-gateway-secret-value".into(),
+                environment: Some("work".to_string()),
+                tags: vec!["browser".to_string()],
+                gateway: None,
+            },
+            &config,
+        );
+        assert!(preview.ok, "{preview:?}");
+        assert_eq!(preview.data["isSaved"], true);
+        assert!(preview.data["existingEntryId"].as_str().is_some());
     }
 
     #[test]
@@ -390,6 +432,7 @@ mod tests {
                 api_key: "sk-gateway-secret-value".into(),
                 environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
+                gateway: None,
             },
             &config,
         );

@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use uuid::Uuid;
 
 use aipass_agent_protocol::SensitiveString;
-use aipass_provider_registry::{AuthScheme, InterfaceType};
+use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType};
 use zeroize::Zeroize;
 
 pub const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -67,6 +67,7 @@ pub enum NativeRequest {
         api_key: SensitiveString,
         environment: Option<String>,
         tags: Vec<String>,
+        gateway: Option<GatewayMetadata>,
     },
     #[serde(rename = "secret.previewDetected")]
     PreviewDetected {
@@ -82,6 +83,7 @@ pub enum NativeRequest {
         api_key: SensitiveString,
         environment: Option<String>,
         tags: Vec<String>,
+        gateway: Option<GatewayMetadata>,
     },
     #[serde(rename = "unlock.request")]
     UnlockRequest {

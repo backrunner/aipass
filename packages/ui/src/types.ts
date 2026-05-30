@@ -34,5 +34,7 @@ export type Draft = {
   quotaLimit: string;
   quotaRemaining: string;
   quotaResetAt: string;
+  gatewayGroup: string;
+  gatewayRate: string;
   notes: string;
 };

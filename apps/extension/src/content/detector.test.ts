@@ -129,6 +129,48 @@ describe("content detector", () => {
     assert.equal(draft?.apiKey, "productA_key_1234567890abcdef");
   });
 
+  it("scans token management pages for multiple unsaved gateway keys", async () => {
+    setLocation("sub2api.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>sub2api</title>
+       <table>
+        <thead><tr><th>名称</th><th>API Key</th><th>分组</th><th>倍率</th></tr></thead>
+        <tbody>
+          <tr><td>Product A</td><td>productA_key_1234567890abcdef</td><td>vip</td><td>0.8x</td></tr>
+          <tr><td>Product B</td><td>productB_key_abcdef1234567890</td><td>default</td><td>1x</td></tr>
+        </tbody>
+       </table>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 2);
+    assert.equal(drafts[0]?.providerId, "sub2api");
+    assert.equal(drafts[0]?.gateway?.group, "vip");
+    assert.equal(drafts[0]?.gateway?.rate, "0.8x");
+    assert.equal(drafts[1]?.gateway?.group, "default");
+    assert.equal(drafts[1]?.gateway?.rate, "1x");
+  });
+
+  it("extracts New API group and rate metadata from token rows", async () => {
+    setLocation("newapi.example.test", "/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title>
+       <div role="row">
+        <span>令牌 sk-newapiManagedSecret1234567890</span>
+        <span>分组: premium</span>
+        <span>倍率: 0.5x</span>
+       </div>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "new_api");
+    assert.equal(drafts[0]?.gateway?.group, "premium");
+    assert.equal(drafts[0]?.gateway?.rate, "0.5x");
+  });
+
   it("detects OpenRouter and Replicate official console keys", async () => {
     setLocation("openrouter.ai", "/settings/keys");
     const { detectFromDocument } = await import("./detector");

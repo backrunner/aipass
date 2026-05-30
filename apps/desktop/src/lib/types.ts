@@ -95,6 +95,7 @@ export type EntrySummary = {
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;
   quota?: QuotaInfo;
+  gateway?: ProviderEntry["gateway"];
   tags: string[];
   environment: string;
   notes?: string;

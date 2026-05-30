@@ -7,7 +7,7 @@ use aipass_agent_protocol::{
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
     ToolConfigRequest as AgentToolConfigRequest, ToolConfigTool as AgentToolConfigTool,
 };
-use aipass_provider_registry::{AuthScheme, InterfaceType, QuotaInfo};
+use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, QuotaInfo};
 use aipass_sync::SyncObject;
 use aipass_vault::EntrySummary;
 use serde::{Deserialize, Serialize};
@@ -150,6 +150,7 @@ pub(crate) struct ProviderAddRequest {
     #[serde(default)]
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) quota: Option<QuotaInfo>,
+    pub(crate) gateway: Option<GatewayMetadata>,
     pub(crate) environment: String,
     #[serde(default)]
     pub(crate) tags: Vec<String>,
@@ -178,6 +179,7 @@ pub(crate) struct ProviderUpdateRequest {
     pub(crate) model_aliases: Vec<(String, String)>,
     pub(crate) headers: Option<Vec<(String, String)>>,
     pub(crate) quota: Option<QuotaInfo>,
+    pub(crate) gateway: Option<GatewayMetadata>,
     pub(crate) environment: String,
     #[serde(default)]
     pub(crate) tags: Vec<String>,

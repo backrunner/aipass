@@ -98,6 +98,13 @@ pub struct QuotaInfo {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct GatewayMetadata {
+    pub group: Option<String>,
+    pub rate: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderEntry {
     pub id: Uuid,
     pub title: String,
@@ -113,6 +120,8 @@ pub struct ProviderEntry {
     pub model_aliases: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
+    #[serde(default)]
+    pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub environment: String,
     pub notes: Option<String>,

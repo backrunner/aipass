@@ -5,8 +5,6 @@
     inferProviderFromEndpoint,
     matchProviderByDomain,
     providerDefinitions,
-    type AuthScheme,
-    type InterfaceType
   } from "@aipass/schemas";
   import {
     authLabel,
@@ -17,53 +15,18 @@
     emptyDraft,
     IconButton,
     interfaceLabel,
-    ProviderFormFields,
     ProviderIcon,
     providerKindLabel,
     providerKindTone,
     type Draft
   } from "@aipass/ui";
   import { t } from "@aipass/ui/i18n";
-  import { Ban, Check, KeyRound, RefreshCw, Search, X } from "lucide-svelte";
+  import { Ban, Check, KeyRound, RefreshCw, Search } from "lucide-svelte";
+
+  import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
+  import type { DraftItem, DraftPreview, Entry, Grant, LookupData, NativeResponse, SafeDraft } from "./types";
 
   type Connection = "checking" | "connected" | "locked" | "missing";
-  type NativeResponse<T = unknown> = { ok?: boolean; protocolVersion?: number; error?: string; data?: T };
-  type Entry = {
-    id: string;
-    title: string;
-    providerId?: string;
-    domains: string[];
-    endpoints: Array<{ id: string; kind: string; url?: string }>;
-    interfaceType: InterfaceType;
-    authScheme: AuthScheme;
-    maskedSecret: string;
-    fingerprint: string;
-  };
-  type Grant = { id: string; entryId?: string; expiresAt: string };
-  type LookupData = { entries: Entry[]; grants: Grant[] };
-  type SafeDraft = {
-    providerId?: string;
-    title: string;
-    origin: string;
-    url: string;
-    maskedSecret?: string;
-    endpoint?: string;
-    interfaceType?: InterfaceType;
-    authScheme?: AuthScheme;
-    environment?: string;
-    tags?: string[];
-  };
-  type DraftPreview = {
-    title: string;
-    providerId?: string;
-    endpoint?: string;
-    interfaceType: InterfaceType;
-    authScheme: AuthScheme;
-    maskedSecret: string;
-    fingerprint: string;
-    environment: string;
-    tags: string[];
-  };
 
   const connectionTone: Record<Connection, "neutral" | "success" | "warning" | "danger"> = {
     checking: "neutral",
@@ -83,16 +46,17 @@
   let searchLoading = false;
   let searchResults: Entry[] = [];
   let searchGrants: Grant[] = [];
-  let pendingDraft: SafeDraft | null = null;
-  let draft: Draft | null = null;
-  let draftPreview: DraftPreview | null = null;
-  let previewLoading = false;
+  let pendingDrafts: SafeDraft[] = [];
+  let draftItems: DraftItem[] = [];
   let statusText = "";
   let copied = "";
   let unlockBusy = false;
   let lastDraftKey = "";
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let previewRequestId = 0;
+
+  $: visibleDraftItems = draftItems.filter((item) => !item.saved && !item.preview?.isSaved);
+  $: selectedDraftCount = visibleDraftItems.filter((item) => item.selected).length;
 
   chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
     const tab = tabs[0];
@@ -120,9 +84,9 @@
       await sendToWorker<{ scanned: boolean }>({ type: "aipass.scanActiveTab", tabId });
       await delay(120);
     }
-    const draftResponse = await sendToWorker<{ draft: SafeDraft | null }>({ type: "aipass.pendingDraft" });
-    pendingDraft = draftResponse?.ok ? draftResponse.data?.draft ?? null : null;
-    syncDraft();
+    const draftResponse = await sendToWorker<{ drafts: SafeDraft[] }>({ type: "aipass.pendingDrafts" });
+    pendingDrafts = draftResponse?.ok ? draftResponse.data?.drafts ?? [] : [];
+    syncDrafts();
   }
 
   async function openDesktopUnlock() {
@@ -203,18 +167,38 @@
     }
   }
 
-  async function savePendingDraft() {
-    const response = await sendToWorker<{ entryId: string }>({
-      type: "aipass.savePendingDraft",
-      draft: draftPatch()
+  async function saveSelectedDrafts() {
+    const selected = visibleDraftItems.filter((item) => item.selected);
+    if (!selected.length) {
+      statusText = $t("ext.saveFailed");
+      return;
+    }
+    draftItems = draftItems.map((item) =>
+      selected.some((selectedItem) => selectedItem.draftId === item.draftId)
+        ? { ...item, saving: true }
+        : item
+    );
+    const response = await sendToWorker<{
+      saved: Array<{ draftId?: string; entryId?: string }>;
+      errors: Array<{ draftId?: string; error: string }>;
+    }>({
+      type: "aipass.savePendingDrafts",
+      draftPatches: selected.map((item) => ({
+        draftId: item.draftId,
+        draft: draftPatch(item)
+      }))
     });
     if (!response?.ok) {
+      if ((response?.data?.saved.length ?? 0) > 0) {
+        await refresh();
+      }
       statusText = response?.error ?? $t("ext.saveFailed");
+      draftItems = draftItems.map((item) => ({ ...item, saving: false }));
       return;
     }
     clearPendingDraftUi();
     await refresh();
-    statusText = $t("ext.saved");
+    statusText = $t("ext.savedCount", { count: response.data?.saved.length ?? selected.length });
   }
 
   async function ignoreCurrentOrigin() {
@@ -231,8 +215,8 @@
     statusText = $t("ext.siteIgnored");
   }
 
-  async function dismissPendingDraft() {
-    const response = await sendToWorker<{ ok?: boolean }>({ type: "aipass.dismissPendingDraft" });
+  async function dismissPendingDrafts() {
+    const response = await sendToWorker<{ ok?: boolean }>({ type: "aipass.dismissPendingDrafts" });
     if (!response?.ok) {
       statusText = response?.error ?? $t("ext.dismissFailed");
       return;
@@ -241,24 +225,43 @@
     statusText = $t("ext.dismissed");
   }
 
-  function syncDraft() {
-    const pending = pendingDraft;
-    if (!pending) {
+  async function dismissDraft(draftId: string) {
+    const response = await sendToWorker<{ ok?: boolean }>({ type: "aipass.dismissPendingDraft", draftId });
+    if (!response?.ok) {
+      statusText = response?.error ?? $t("ext.dismissFailed");
+      return;
+    }
+    draftItems = draftItems.filter((item) => item.draftId !== draftId);
+    pendingDrafts = pendingDrafts.filter((item) => item.draftId !== draftId);
+  }
+
+  function syncDrafts() {
+    if (!pendingDrafts.length) {
       clearPendingDraftUi();
       return;
     }
-    const key = [
-      pending.origin,
-      pending.url,
-      pending.providerId ?? "",
-      pending.title,
-      pending.endpoint ?? "",
-      pending.maskedSecret ?? "",
-      pending.environment ?? "",
-      (pending.tags ?? []).join(",")
-    ].join("|");
-    if (key === lastDraftKey && draft) return;
+    const key = pendingDrafts.map(pendingDraftKey).join("||");
+    if (key === lastDraftKey && draftItems.length) return;
 
+    draftItems = pendingDrafts.map((pending) => {
+      const existing = draftItems.find((item) => item.draftId === pending.draftId);
+      if (existing) return { ...existing, safe: pending };
+      return {
+        draftId: pending.draftId,
+        safe: pending,
+        draft: draftFromPending(pending),
+        selected: true,
+        preview: null,
+        previewLoading: false,
+        saving: false,
+        saved: false
+      };
+    });
+    lastDraftKey = key;
+    void previewDrafts();
+  }
+
+  function draftFromPending(pending: SafeDraft): Draft {
     const definition =
       providerDefinitions.find((item) => item.id === pending.providerId) ?? matchProviderByDomain(pending.origin);
     const next = emptyDraft();
@@ -269,105 +272,119 @@
     next.authScheme = pending.authScheme ?? definition?.authSchemes[0] ?? "custom_header";
     next.environment = pending.environment || "browser";
     next.tag = pending.tags?.length ? pending.tags.join(", ") : "browser";
-
-    draft = next;
-    draftPreview = null;
-    lastDraftKey = key;
-    void previewPendingDraft();
+    next.gatewayGroup = pending.gateway?.group ?? "";
+    next.gatewayRate = pending.gateway?.rate ?? "";
+    return next;
   }
 
-  function onProviderChanged() {
-    const current = draft;
-    if (!current) return;
+  function onProviderChanged(item: DraftItem) {
+    const current = item.draft;
     const definition = providerDefinitions.find((item) => item.id === current.providerId);
     if (definition) {
       current.interfaceType = detectInterfaceFromProvider(definition.id);
       current.authScheme = detectAuthFromProvider(definition.id);
       current.endpoint ||= definition.endpoints.find((item) => item.kind === "api")?.url ?? "";
       current.title ||= definition.displayName;
-      draft = current;
+      draftItems = draftItems.map((draftItem) =>
+        draftItem.draftId === item.draftId ? { ...draftItem, draft: current } : draftItem
+      );
     }
     schedulePreview();
   }
 
-  function onInferDraftFromEndpoint() {
-    const current = draft;
-    if (!current) return;
+  function onInferDraftFromEndpoint(item: DraftItem) {
+    const current = item.draft;
     const match = inferProviderFromEndpoint(current.endpoint.trim());
     if (match) {
       current.providerId = match.id;
       current.title ||= match.displayName;
       current.interfaceType = match.interfaces[0] ?? current.interfaceType;
       current.authScheme = match.authSchemes[0] ?? current.authScheme;
-      draft = current;
+      draftItems = draftItems.map((draftItem) =>
+        draftItem.draftId === item.draftId ? { ...draftItem, draft: current } : draftItem
+      );
     }
     schedulePreview();
   }
 
-  async function previewPendingDraft() {
-    if (!draft || !pendingDraft) return;
-    const patch = draftPatch();
-    if (!patch) return;
+  async function previewDrafts() {
     const requestId = ++previewRequestId;
-    previewLoading = true;
-    const response = await sendToWorker<DraftPreview>({
-      type: "aipass.previewPendingDraft",
-      draft: patch
-    });
-    if (requestId !== previewRequestId) return;
-    previewLoading = false;
-    if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.previewFailed");
-      return;
+    const candidates = draftItems.filter((item) => !item.saved);
+    draftItems = draftItems.map((item) =>
+      candidates.some((candidate) => candidate.draftId === item.draftId)
+        ? { ...item, previewLoading: true }
+        : item
+    );
+    for (const item of candidates) {
+      const response = await sendToWorker<DraftPreview>({
+        type: "aipass.previewPendingDraft",
+        draftId: item.draftId,
+        draft: draftPatch(item)
+      });
+      if (requestId !== previewRequestId) return;
+      if (!response?.ok) {
+        statusText = response?.error ?? $t("ext.previewFailed");
+        draftItems = draftItems.map((draftItem) =>
+          draftItem.draftId === item.draftId ? { ...draftItem, previewLoading: false } : draftItem
+        );
+        continue;
+      }
+      const preview = response.data ?? null;
+      draftItems = draftItems.map((draftItem) =>
+        draftItem.draftId === item.draftId
+          ? {
+              ...draftItem,
+              preview,
+              previewLoading: false,
+              selected: preview?.isSaved ? false : draftItem.selected,
+              saved: Boolean(preview?.isSaved)
+            }
+          : draftItem
+      );
+      if (preview?.isSaved) {
+        void sendToWorker({ type: "aipass.dismissPendingDraft", draftId: item.draftId });
+      }
     }
-    draftPreview = response.data ?? null;
   }
 
   function schedulePreview() {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(() => {
-      void previewPendingDraft();
+      void previewDrafts();
     }, 220);
   }
 
-  function draftPatch() {
-    if (!draft) return null;
-    const tags = draft.tag
+  function draftPatch(item: DraftItem) {
+    const tags = item.draft.tag
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
+    const gateway =
+      item.draft.gatewayGroup.trim() || item.draft.gatewayRate.trim()
+        ? {
+            group: item.draft.gatewayGroup.trim() || undefined,
+            rate: item.draft.gatewayRate.trim() || undefined
+          }
+        : undefined;
     return {
-      providerId: draft.providerId || undefined,
-      title: draft.title.trim() || "Browser Provider",
-      endpoint: draft.endpoint.trim() || undefined,
-      interfaceType: draft.interfaceType,
-      authScheme: draft.authScheme,
-      environment: draft.environment.trim() || "browser",
-      tags: tags.length ? tags : ["browser"]
+      providerId: item.draft.providerId || undefined,
+      title: item.draft.title.trim() || "Browser Provider",
+      endpoint: item.draft.endpoint.trim() || undefined,
+      interfaceType: item.draft.interfaceType,
+      authScheme: item.draft.authScheme,
+      environment: item.draft.environment.trim() || "browser",
+      tags: tags.length ? tags : ["browser"],
+      gateway
     };
   }
 
   function clearPendingDraftUi() {
-    pendingDraft = null;
-    draft = null;
-    draftPreview = null;
+    pendingDrafts = [];
+    draftItems = [];
     lastDraftKey = "";
     clearTimeout(previewTimer);
     previewTimer = undefined;
-    previewLoading = false;
     previewRequestId += 1;
-  }
-
-  // Re-preview as the shared form mutates the bound draft.
-  $: if (draft) {
-    void draft.providerId;
-    void draft.title;
-    void draft.endpoint;
-    void draft.interfaceType;
-    void draft.authScheme;
-    void draft.environment;
-    void draft.tag;
-    if (lastDraftKey) schedulePreview();
   }
 
   function sendToWorker<T>(message: Record<string, unknown>): Promise<NativeResponse<T> | undefined> {
@@ -388,6 +405,22 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  function pendingDraftKey(pending: SafeDraft): string {
+    return [
+      pending.draftId,
+      pending.origin,
+      pending.url,
+      pending.providerId ?? "",
+      pending.title,
+      pending.endpoint ?? "",
+      pending.maskedSecret ?? "",
+      pending.environment ?? "",
+      pending.gateway?.group ?? "",
+      pending.gateway?.rate ?? "",
+      (pending.tags ?? []).join(",")
+    ].join("|");
+  }
+
   function providerDefinitionFor(providerId: string | undefined) {
     return providerDefinitions.find((item) => item.id === providerId);
   }
@@ -398,6 +431,12 @@
 
   function entryEndpoint(entry: Entry) {
     return entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? entry.domains[0] ?? "";
+  }
+
+  function toggleDraftSelection(draftId: string) {
+    draftItems = draftItems.map((item) =>
+      item.draftId === draftId ? { ...item, selected: !item.selected } : item
+    );
   }
 </script>
 
@@ -505,46 +544,18 @@
       {/if}
     {/if}
 
-    {#if pendingDraft && draft}
-      <section class="draft">
-        <div class="draft-head">
-          <div class="draft-title">
-            <small>{$t("ext.detectedKey")}</small>
-            <strong>{draftPreview?.title ?? draft.title}</strong>
-          </div>
-          <IconButton label={$t("ext.dismiss")} on:click={dismissPendingDraft}>
-            <X size={15} />
-          </IconButton>
-        </div>
-
-        <Banner tone="info">{$t("ext.detectedKeyDesc")}</Banner>
-
-        <div class="draft-form">
-          <ProviderFormFields
-            formMode="add"
-            bind:draft
-            {onProviderChanged}
-            {onInferDraftFromEndpoint}
-          >
-            <div slot="secret" class="detected-secret">
-              <span class="detected-secret-label">{$t("ext.secret")}</span>
-              <code class="mono">{draftPreview?.maskedSecret ?? pendingDraft.maskedSecret ?? "••••"}</code>
-              <span class="detected-secret-fp mono">
-                {draftPreview?.fingerprint ?? (previewLoading ? $t("ext.previewing") : $t("ext.pendingPreview"))}
-              </span>
-            </div>
-          </ProviderFormFields>
-        </div>
-
-        <div class="draft-actions">
-          <Button variant="ghost" size="sm" on:click={ignoreCurrentOrigin}>
-            <Ban size={15} />
-            {$t("ext.ignoreSite")}
-          </Button>
-          <Button size="sm" variant="primary" on:click={savePendingDraft}>{$t("ext.save")}</Button>
-        </div>
-      </section>
-    {/if}
+    <DetectedDraftBatch
+      {visibleDraftItems}
+      {selectedDraftCount}
+      onDismissAll={dismissPendingDrafts}
+      onDismissDraft={dismissDraft}
+      onIgnoreOrigin={ignoreCurrentOrigin}
+      onInferDraftFromEndpoint={onInferDraftFromEndpoint}
+      onProviderChanged={onProviderChanged}
+      onSaveSelected={saveSelectedDrafts}
+      onSchedulePreview={schedulePreview}
+      onToggleSelection={toggleDraftSelection}
+    />
 
     {#if statusText}
       <Banner tone="info">{statusText}</Banner>
@@ -719,81 +730,4 @@
       }
     }
   }
-
-  .draft {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px;
-    background: var(--surface-2);
-    border: 1px solid var(--divider);
-    border-radius: var(--radius-lg);
-  }
-
-  .draft-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .draft-title {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-
-    small {
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--text-tertiary);
-    }
-
-    strong {
-      font-size: 14px;
-    }
-  }
-
-  .draft-form {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .detected-secret {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 10px 12px;
-    background: var(--surface);
-    border: 1px solid var(--divider);
-    border-radius: var(--radius);
-  }
-
-  .detected-secret-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-
-  .detected-secret code {
-    font-size: 12px;
-    color: var(--text);
-    overflow-wrap: anywhere;
-  }
-
-  .detected-secret-fp {
-    font-size: 11px;
-    color: var(--text-tertiary);
-    overflow-wrap: anywhere;
-  }
-
-  .draft-actions {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-  }
 </style>
-
-
-

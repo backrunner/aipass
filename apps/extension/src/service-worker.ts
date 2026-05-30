@@ -12,6 +12,7 @@ import {
 } from "./native-client";
 
 type PendingDraftRecord = {
+  id: string;
   key: string;
   expiresAt: number;
   draft: DetectedSecretDraft;
@@ -30,6 +31,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     entryId?: string;
     grantId?: string;
     draft?: Partial<DetectedSecretDraft> | null;
+    drafts?: Array<Partial<DetectedSecretDraft>> | null;
+    draftId?: string;
+    draftPatches?: Array<{ draftId?: string; draft?: Partial<DetectedSecretDraft> | null }>;
     tabId?: number;
   };
 
@@ -78,6 +82,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (typed.type === "aipass.detectedSecretDrafts" && Array.isArray(typed.drafts)) {
+    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    for (const draft of drafts) {
+      enqueuePendingDraft(draft);
+    }
+    sendResponse({ ok: true, count: drafts.length });
+    return false;
+  }
+
   if (typed.type === "aipass.pendingDraft") {
     const draft = getPendingDraft();
     const safeDraft = draft
@@ -90,8 +103,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (typed.type === "aipass.pendingDrafts") {
+    const drafts = getPendingDrafts().map(safePendingDraft);
+    sendResponse({ ok: true, data: { drafts } });
+    return false;
+  }
+
   if (typed.type === "aipass.previewPendingDraft") {
-    const draft = mergePendingDraft(typed.draft);
+    const draft = mergePendingDraft(typed.draft, typed.draftId);
     if (!draft?.apiKey) {
       sendResponse({ ok: false, error: "No pending API key draft" });
       return false;
@@ -101,22 +120,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.savePendingDraft") {
-    const draft = mergePendingDraft(typed.draft);
+    const draft = mergePendingDraft(typed.draft, typed.draftId);
     if (!draft?.apiKey) {
       sendResponse({ ok: false, error: "No pending API key draft" });
       return false;
     }
     saveDetectedSecret(draft).then((response) => {
       if (response.ok) {
-        clearPendingDraft();
+        clearPendingDraft(typed.draftId);
       }
       sendResponse(response);
     });
     return true;
   }
 
+  if (typed.type === "aipass.savePendingDrafts" && Array.isArray(typed.draftPatches)) {
+    savePendingDraftBatch(typed.draftPatches).then(sendResponse);
+    return true;
+  }
+
   if (typed.type === "aipass.dismissPendingDraft") {
-    clearPendingDraft();
+    clearPendingDraft(typed.draftId);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (typed.type === "aipass.dismissPendingDrafts") {
+    clearPendingDrafts();
     sendResponse({ ok: true });
     return false;
   }
@@ -140,13 +170,27 @@ function getPendingDraft(): DetectedSecretDraft | null {
   return pendingDrafts[0]?.draft ?? null;
 }
 
-function mergePendingDraft(patch?: Partial<DetectedSecretDraft> | null): DetectedSecretDraft | null {
-  const draft = getPendingDraft();
-  if (!draft) return null;
+function getPendingDrafts(): PendingDraftRecord[] {
+  pruneExpiredPendingDrafts();
+  return pendingDrafts;
+}
+
+function getPendingDraftRecord(draftId?: string): PendingDraftRecord | undefined {
+  pruneExpiredPendingDrafts();
+  if (!draftId) return pendingDrafts[0];
+  return pendingDrafts.find((item) => item.id === draftId);
+}
+
+function mergePendingDraft(
+  patch?: Partial<DetectedSecretDraft> | null,
+  draftId?: string
+): DetectedSecretDraft | null {
+  const record = getPendingDraftRecord(draftId);
+  if (!record) return null;
   return {
-    ...draft,
+    ...record.draft,
     ...patch,
-    apiKey: draft.apiKey
+    apiKey: record.draft.apiKey
   };
 }
 
@@ -154,9 +198,26 @@ function isDetectedSecretDraft(draft: Partial<DetectedSecretDraft>): draft is De
   return Boolean(draft.title && draft.origin && draft.url);
 }
 
-function clearPendingDraft() {
+function safePendingDraft(record: PendingDraftRecord) {
+  return {
+    ...record.draft,
+    draftId: record.id,
+    apiKey: undefined
+  };
+}
+
+function clearPendingDraft(draftId?: string) {
   pruneExpiredPendingDrafts();
-  pendingDrafts.shift();
+  if (!draftId) {
+    pendingDrafts.shift();
+  } else {
+    pendingDrafts = pendingDrafts.filter((item) => item.id !== draftId);
+  }
+  schedulePendingDraftCleanup();
+}
+
+function clearPendingDrafts() {
+  pendingDrafts = [];
   schedulePendingDraftCleanup();
 }
 
@@ -168,7 +229,7 @@ function enqueuePendingDraft(draft: DetectedSecretDraft) {
     existing.draft = draft;
     existing.expiresAt = expiresAt;
   } else {
-    pendingDrafts.push({ key, draft, expiresAt });
+    pendingDrafts.push({ id: crypto.randomUUID(), key, draft, expiresAt });
   }
   schedulePendingDraftCleanup();
 }
@@ -201,7 +262,41 @@ function schedulePendingDraftCleanup() {
 }
 
 function pendingDraftKey(draft: DetectedSecretDraft): string {
-  return [draft.origin, draft.url, draft.providerId ?? "", draft.endpoint ?? "", draft.apiKey ?? ""].join("|");
+  return [
+    draft.origin,
+    draft.url,
+    draft.providerId ?? "",
+    draft.endpoint ?? "",
+    draft.apiKey ?? "",
+    draft.gateway?.group ?? "",
+    draft.gateway?.rate ?? ""
+  ].join("|");
+}
+
+async function savePendingDraftBatch(
+  draftPatches: Array<{ draftId?: string; draft?: Partial<DetectedSecretDraft> | null }>
+) {
+  const saved: Array<{ draftId?: string; entryId?: string }> = [];
+  const errors: Array<{ draftId?: string; error: string }> = [];
+  for (const item of draftPatches) {
+    const draft = mergePendingDraft(item.draft, item.draftId);
+    if (!draft?.apiKey) {
+      errors.push({ draftId: item.draftId, error: "No pending API key draft" });
+      continue;
+    }
+    const response = await saveDetectedSecret(draft);
+    if (response.ok) {
+      saved.push({ draftId: item.draftId, entryId: response.data?.entryId });
+      clearPendingDraft(item.draftId);
+    } else {
+      errors.push({ draftId: item.draftId, error: response.error ?? "Unable to save detected key" });
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    error: errors[0]?.error,
+    data: { saved, errors }
+  };
 }
 
 async function scanActiveTab(tabId: number) {

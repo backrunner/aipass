@@ -97,6 +97,7 @@
     selected?.quota &&
       (selected.quota.label || selected.quota.limit || selected.quota.remaining || selected.quota.resetAt)
   );
+  $: hasGateway = Boolean(selected?.gateway && (selected.gateway.group || selected.gateway.rate));
   $: integrationTools = selected
     ? compatibleToolsFor({
         id: selected.id,
@@ -450,6 +451,16 @@
             <div class="kv-row">
               <span class="kv-label">{$t("providerDetail.aliases")}</span>
               <code class="kv-value mono">{selected.modelAliases.map(([alias, model]) => `${alias} → ${model}`).join(", ")}</code>
+              <span></span>
+            </div>
+          {/if}
+          {#if hasGateway}
+            <div class="kv-row">
+              <span class="kv-label">{$t("providerDetail.gateway")}</span>
+              <div class="chips kv-value">
+                {#if selected.gateway?.group}<span class="chip">{$t("providerDetail.gatewayGroup")}: {selected.gateway.group}</span>{/if}
+                {#if selected.gateway?.rate}<span class="chip mono">{$t("providerDetail.gatewayRate")}: {selected.gateway.rate}</span>{/if}
+              </div>
               <span></span>
             </div>
           {/if}
