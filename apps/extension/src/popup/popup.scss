@@ -1,11 +1,11 @@
 @use "@aipass/ui/styles/base.scss";
 
-// Browser-popup shell. The popup has a fixed width and a floating card look.
+// Browser-popup shell. Fixed width, content-driven height.
 
 html,
 body,
 #app {
-  height: 100%;
+  height: auto;
 }
 
 body {
@@ -16,5 +16,4 @@ body {
 
 #app {
   background: var(--bg);
-  min-height: 200px;
 }

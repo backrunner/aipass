@@ -28,10 +28,16 @@ pub(crate) struct AppPreferences {
     pub(crate) clipboard_clear_seconds: u16,
     pub(crate) lock_on_sleep: bool,
     pub(crate) lock_on_screen_lock: bool,
+    #[serde(default = "default_persist_unlock")]
+    pub(crate) persist_unlock: bool,
     #[serde(default)]
     pub(crate) theme: ThemePreference,
     #[serde(default)]
     pub(crate) locale: LocalePreference,
+}
+
+fn default_persist_unlock() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,10 +63,11 @@ pub(crate) enum LocalePreference {
 impl Default for AppPreferences {
     fn default() -> Self {
         Self {
-            auto_lock_minutes: 15,
+            auto_lock_minutes: 30,
             clipboard_clear_seconds: 45,
             lock_on_sleep: true,
             lock_on_screen_lock: true,
+            persist_unlock: true,
             theme: ThemePreference::System,
             locale: LocalePreference::System,
         }
@@ -99,6 +106,7 @@ pub(crate) struct SavePreferencesRequest {
     pub(crate) clipboard_clear_seconds: u16,
     pub(crate) lock_on_sleep: Option<bool>,
     pub(crate) lock_on_screen_lock: Option<bool>,
+    pub(crate) persist_unlock: Option<bool>,
     pub(crate) theme: Option<ThemePreference>,
     pub(crate) locale: Option<LocalePreference>,
 }

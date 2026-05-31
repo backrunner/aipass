@@ -8,6 +8,8 @@ use aipass_agent_protocol::{
     BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
     BrowserIgnoredStatus, SaveDetectedResult, SessionStatus, SessionUnlockMode,
 };
+use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
+use aipass_vault::ProviderEntryInput;
 use anyhow::{bail, Result};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -80,8 +82,19 @@ fn handle_request_inner(
                 "desktopRequired": true
             }))
         }
-        NativeRequest::SessionUnlock { interactive, .. } => {
-            let status: SessionStatus = if interactive.as_deref() == Some("native_window") {
+        NativeRequest::SessionUnlock {
+            interactive,
+            password,
+            ..
+        } => {
+            let status: SessionStatus = if let Some(password) = password {
+                request_agent(
+                    config,
+                    &AgentRequest::SessionUnlock {
+                        mode: SessionUnlockMode::Password { password },
+                    },
+                )?
+            } else if interactive.as_deref() == Some("native_window") {
                 request_agent(
                     config,
                     &AgentRequest::SessionUnlock {
@@ -200,7 +213,70 @@ fn handle_request_inner(
             )?;
             Ok(serde_json::to_value(result)?)
         }
+        NativeRequest::ProviderAdd {
+            title,
+            provider_id,
+            domain,
+            favicon_url,
+            endpoint,
+            endpoints,
+            console_endpoints,
+            interface_type,
+            auth_scheme,
+            api_key,
+            default_model,
+            model_aliases,
+            headers,
+            quota,
+            gateway,
+            tags,
+            environment,
+            notes,
+            ..
+        } => {
+            let mut api_endpoints: Vec<ProviderEndpoint> = endpoints
+                .into_iter()
+                .chain(endpoint)
+                .filter_map(non_empty)
+                .map(ProviderEndpoint::api)
+                .collect();
+            api_endpoints.extend(
+                console_endpoints
+                    .into_iter()
+                    .filter_map(non_empty)
+                    .map(ProviderEndpoint::console),
+            );
+            let input = ProviderEntryInput {
+                title: non_empty(title).unwrap_or_else(|| "Custom Provider".to_string()),
+                provider_kind: provider_kind_for_id(provider_id.as_deref()),
+                provider_id,
+                domains: domain.into_iter().filter_map(non_empty).collect(),
+                favicon_url: favicon_url.and_then(non_empty),
+                endpoints: api_endpoints,
+                interface_type,
+                auth_scheme,
+                api_key: api_key.into_inner(),
+                default_model: default_model.and_then(non_empty),
+                model_aliases: model_aliases
+                    .into_iter()
+                    .filter_map(|(a, m)| Some((non_empty(a)?, non_empty(m)?)))
+                    .collect(),
+                headers,
+                quota,
+                gateway,
+                tags: tags.into_iter().filter_map(non_empty).collect(),
+                environment: non_empty(environment).unwrap_or_else(|| "personal".to_string()),
+                notes: notes.and_then(non_empty),
+            };
+            let entry_id: Uuid = request_agent(config, &AgentRequest::ProviderAdd { input })?;
+            Ok(json!({ "entryId": entry_id }))
+        }
     }
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn request_id(request: &NativeRequest) -> Uuid {
@@ -213,6 +289,7 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::SecretFill { id, .. }
         | NativeRequest::SaveDetected { id, .. }
         | NativeRequest::PreviewDetected { id, .. }
+        | NativeRequest::ProviderAdd { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
         | NativeRequest::SessionUnlock { id, .. } => *id,
     }
@@ -228,6 +305,7 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::SecretFill { extension_id, .. }
         | NativeRequest::SaveDetected { extension_id, .. }
         | NativeRequest::PreviewDetected { extension_id, .. }
+        | NativeRequest::ProviderAdd { extension_id, .. }
         | NativeRequest::UnlockRequest { extension_id, .. }
         | NativeRequest::SessionUnlock { extension_id, .. } => extension_id.as_deref(),
     }

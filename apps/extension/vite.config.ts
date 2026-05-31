@@ -18,7 +18,7 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, "src/popup/index.html"),
+        popup: resolve(__dirname, "popup.html"),
         serviceWorker: resolve(__dirname, "src/service-worker.ts"),
         content: resolve(__dirname, "src/content/detector.ts"),
         clipboardBridge: resolve(__dirname, "src/content/clipboard-bridge.ts")

@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use uuid::Uuid;
 
 use aipass_agent_protocol::SensitiveString;
-use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType};
+use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, QuotaInfo};
 use zeroize::Zeroize;
 
 pub const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -85,6 +85,35 @@ pub enum NativeRequest {
         tags: Vec<String>,
         gateway: Option<GatewayMetadata>,
     },
+    #[serde(rename = "provider.add")]
+    ProviderAdd {
+        id: Uuid,
+        extension_id: Option<String>,
+        title: String,
+        provider_id: Option<String>,
+        #[serde(default)]
+        domain: Vec<String>,
+        favicon_url: Option<String>,
+        endpoint: Option<String>,
+        #[serde(default)]
+        endpoints: Vec<String>,
+        #[serde(default)]
+        console_endpoints: Vec<String>,
+        interface_type: InterfaceType,
+        auth_scheme: AuthScheme,
+        api_key: SensitiveString,
+        default_model: Option<String>,
+        #[serde(default)]
+        model_aliases: Vec<(String, String)>,
+        #[serde(default)]
+        headers: Vec<(String, String)>,
+        quota: Option<QuotaInfo>,
+        gateway: Option<GatewayMetadata>,
+        #[serde(default)]
+        tags: Vec<String>,
+        environment: String,
+        notes: Option<String>,
+    },
     #[serde(rename = "unlock.request")]
     UnlockRequest {
         id: Uuid,
@@ -96,6 +125,8 @@ pub enum NativeRequest {
         id: Uuid,
         extension_id: Option<String>,
         interactive: Option<String>,
+        #[serde(default)]
+        password: Option<SensitiveString>,
     },
 }
 
@@ -182,5 +213,35 @@ mod tests {
         };
         let err = write_message(Vec::new(), &response).unwrap_err();
         assert_eq!(err.to_string(), "native message too large");
+    }
+
+    #[test]
+    fn provider_add_deserializes_from_snake_case_payload() {
+        let request: NativeRequest = serde_json::from_str(
+            r#"{
+                "type": "provider.add",
+                "id": "00000000-0000-0000-0000-000000000000",
+                "title": "My Gateway",
+                "interface_type": "openai_compatible",
+                "auth_scheme": "bearer",
+                "api_key": "sk-test",
+                "endpoints": ["https://gw.example.com/v1"],
+                "environment": "work"
+            }"#,
+        )
+        .unwrap();
+        match request {
+            NativeRequest::ProviderAdd {
+                title,
+                interface_type,
+                endpoints,
+                ..
+            } => {
+                assert_eq!(title, "My Gateway");
+                assert_eq!(interface_type, InterfaceType::OpenAiCompatible);
+                assert_eq!(endpoints, vec!["https://gw.example.com/v1".to_string()]);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 }

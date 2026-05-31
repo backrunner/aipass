@@ -174,6 +174,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    position: relative;
     background: color-mix(in oklab, var(--surface) 86%, transparent);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
@@ -384,12 +385,13 @@
   }
 
   .empty {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 10px;
-    flex: 1;
     padding: 24px 16px;
     text-align: center;
     color: var(--text-tertiary);

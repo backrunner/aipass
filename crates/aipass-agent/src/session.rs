@@ -153,8 +153,20 @@ pub fn unlock_with_password(
     }
     let vault =
         Vault::open(&state.vault_dir, &SecretString::new(&password)).map_err(map_vault_error);
+    let vault = match vault {
+        Ok(vault) => vault,
+        Err(err) => {
+            password.zeroize();
+            return Err(err);
+        }
+    };
+    if current_policy(state)
+        .map(|p| p.persist_unlock)
+        .unwrap_or(false)
+    {
+        let _ = device_secrets::set_session_unlock(&state.vault_dir, &password);
+    }
     password.zeroize();
-    let vault = vault?;
     let now = OffsetDateTime::now_utc();
     *state
         .session
@@ -172,14 +184,51 @@ pub fn unlock_with_password(
     session_status(state)
 }
 
+/// On agent start, re-open the vault from a device-sealed password (if the policy
+/// allows and one was stored), so a process restart does not force a manual unlock.
+pub fn try_restore_session(state: &Arc<AgentState>) {
+    if !current_policy(state)
+        .map(|p| p.persist_unlock)
+        .unwrap_or(false)
+    {
+        let _ = device_secrets::delete_session_unlock(&state.vault_dir);
+        return;
+    }
+    let Ok(Some(mut password)) = device_secrets::get_session_unlock(&state.vault_dir) else {
+        return;
+    };
+    let opened = Vault::open(&state.vault_dir, &SecretString::new(&password));
+    password.zeroize();
+    let Ok(vault) = opened else {
+        let _ = device_secrets::delete_session_unlock(&state.vault_dir);
+        return;
+    };
+    set_session_vault(state, vault);
+    if let Ok(mut last_reason) = state.last_lock_reason.lock() {
+        *last_reason = None;
+    }
+}
+
 pub fn create_vault(
     state: &Arc<AgentState>,
     mut password: String,
 ) -> ServiceResult<(RecoveryKit, SessionStatus)> {
     let creation =
         Vault::create(&state.vault_dir, &SecretString::new(&password)).map_err(map_vault_error);
+    let creation = match creation {
+        Ok(creation) => creation,
+        Err(err) => {
+            password.zeroize();
+            return Err(err);
+        }
+    };
+    if current_policy(state)
+        .map(|p| p.persist_unlock)
+        .unwrap_or(false)
+    {
+        let _ = device_secrets::set_session_unlock(&state.vault_dir, &password);
+    }
     password.zeroize();
-    let creation = creation?;
     let recovery_kit = creation.recovery_kit.clone();
     set_session_vault(state, creation.vault);
     Ok((recovery_kit, session_status(state)?))
@@ -197,8 +246,20 @@ pub fn recover_vault(
     )
     .map_err(map_vault_error);
     recovery_key.zeroize();
+    let creation = match creation {
+        Ok(creation) => creation,
+        Err(err) => {
+            new_password.zeroize();
+            return Err(err);
+        }
+    };
+    if current_policy(state)
+        .map(|p| p.persist_unlock)
+        .unwrap_or(false)
+    {
+        let _ = device_secrets::set_session_unlock(&state.vault_dir, &new_password);
+    }
     new_password.zeroize();
-    let creation = creation?;
     let recovery_kit = creation.recovery_kit.clone();
     set_session_vault(state, creation.vault);
     Ok((recovery_kit, session_status(state)?))
@@ -231,6 +292,7 @@ pub fn reset_vault(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
     }
     remove_file_if_exists(&sync_settings_path(root)).map_err(remove_err)?;
     device_secrets::delete_webdav_password(root).ok();
+    device_secrets::delete_session_unlock(root).ok();
 
     session_status(state)
 }
@@ -261,6 +323,12 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
     if let Ok(mut session) = state.session.lock() {
         *session = SessionState::Locked;
     }
+    // Drop the device-sealed password so a fresh agent start honors the lock. The sole
+    // exception is AgentRestart, which is the reason we persist an unlock in the first
+    // place (process death, not a user/idle lock).
+    if reason != LockReason::AgentRestart {
+        let _ = device_secrets::delete_session_unlock(&state.vault_dir);
+    }
     if let Ok(mut last_reason) = state.last_lock_reason.lock() {
         *last_reason = Some(reason);
     }
@@ -271,6 +339,7 @@ pub fn lock_if_idle(state: &Arc<AgentState>) -> ServiceResult<bool> {
     if policy.idle_lock_minutes == 0 {
         return Ok(false);
     }
+    let idle_threshold = time::Duration::minutes(policy.idle_lock_minutes.into());
     let should_lock = {
         let session = state
             .session
@@ -279,8 +348,15 @@ pub fn lock_if_idle(state: &Arc<AgentState>) -> ServiceResult<bool> {
         match &*session {
             SessionState::Locked => false,
             SessionState::Unlocked(info) => {
-                let idle_for = OffsetDateTime::now_utc() - info.last_activity_at;
-                idle_for >= time::Duration::minutes(policy.idle_lock_minutes.into())
+                let request_idle = OffsetDateTime::now_utc() - info.last_activity_at;
+                // Mirror 1Password: only lock when the user is also idle system-wide
+                // (no keyboard/mouse anywhere). Where the OS idle is unavailable, fall
+                // back to request activity alone.
+                let system_idle_ok = match system_idle_seconds() {
+                    Some(seconds) => time::Duration::seconds_f64(seconds) >= idle_threshold,
+                    None => true,
+                };
+                request_idle >= idle_threshold && system_idle_ok
             }
         }
     };
@@ -290,11 +366,102 @@ pub fn lock_if_idle(state: &Arc<AgentState>) -> ServiceResult<bool> {
     Ok(should_lock)
 }
 
+/// Seconds since the last system-wide input event (keyboard/mouse), or `None` when
+/// the platform exposes no such signal.
+#[cfg(target_os = "macos")]
+pub fn system_idle_seconds() -> Option<f64> {
+    use objc2_core_graphics::{CGEventSource, CGEventSourceStateID, CGEventType};
+    const ANY_INPUT_EVENT_TYPE: CGEventType = CGEventType(0xFFFF_FFFF);
+    let seconds = CGEventSource::seconds_since_last_event_type(
+        CGEventSourceStateID::CombinedSessionState,
+        ANY_INPUT_EVENT_TYPE,
+    );
+    (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn system_idle_seconds() -> Option<f64> {
+    None
+}
+
+/// Lock the session when the OS sleeps or the screen locks, honoring the policy
+/// flags. macOS only; other platforms wire this elsewhere (Windows service) or not
+/// at all.
+#[cfg(target_os = "macos")]
+pub fn spawn_power_watcher(state: Arc<AgentState>) {
+    use block2::RcBlock;
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSDistributedNotificationCenter, NSNotification, NSString};
+    use std::ptr::NonNull;
+
+    std::thread::spawn(move || {
+        // NSWorkspace/distributed notifications are delivered on the thread's run loop.
+        let workspace = NSWorkspace::sharedWorkspace();
+        let workspace_center = workspace.notificationCenter();
+        let distributed = NSDistributedNotificationCenter::defaultCenter();
+
+        let make_handler = |reason: LockReason| {
+            let state = state.clone();
+            RcBlock::new(move |_note: NonNull<NSNotification>| {
+                let lock = match reason {
+                    LockReason::SystemSleep => current_policy(&state)
+                        .map(|p| p.lock_on_sleep)
+                        .unwrap_or(true),
+                    LockReason::ScreenLock => current_policy(&state)
+                        .map(|p| p.lock_on_screen_lock)
+                        .unwrap_or(true),
+                    _ => true,
+                };
+                if lock {
+                    lock_session(&state, reason.clone());
+                }
+            })
+        };
+
+        let sleep_name = unsafe { objc2_app_kit::NSWorkspaceWillSleepNotification };
+        let _sleep_obs = unsafe {
+            workspace_center.addObserverForName_object_queue_usingBlock(
+                Some(sleep_name),
+                None,
+                None,
+                &make_handler(LockReason::SystemSleep),
+            )
+        };
+
+        let lock_name = NSString::from_str("com.apple.screenIsLocked");
+        let _lock_obs = unsafe {
+            distributed.addObserverForName_object_queue_usingBlock(
+                Some(&lock_name),
+                None,
+                None,
+                &make_handler(LockReason::ScreenLock),
+            )
+        };
+
+        // Keep the observers alive and pump the run loop for the agent's lifetime.
+        loop {
+            if state.shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+            objc2_core_foundation::CFRunLoop::run_in_mode(
+                unsafe { objc2_core_foundation::kCFRunLoopDefaultMode },
+                1.0,
+                false,
+            );
+        }
+        let _ = (_sleep_obs, _lock_obs);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn spawn_power_watcher(_state: Arc<AgentState>) {}
+
 pub fn clamp_policy(policy: SessionPolicy) -> SessionPolicy {
     SessionPolicy {
         idle_lock_minutes: policy.idle_lock_minutes.min(240),
         lock_on_sleep: policy.lock_on_sleep,
         lock_on_screen_lock: policy.lock_on_screen_lock,
+        persist_unlock: policy.persist_unlock,
     }
 }
 

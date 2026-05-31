@@ -137,6 +137,14 @@ export function openNativeUnlock(): Promise<NativeResponse<{ locked: boolean; ex
   });
 }
 
+export function unlockWithPassword(password: string): Promise<NativeResponse<{ locked: boolean; exists?: boolean }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "session.unlock",
+    password
+  });
+}
+
 export function lookupContext(url: string, origin: string): Promise<NativeResponse<ContextLookupData>> {
   return nativeRequest({
     id: crypto.randomUUID(),
@@ -178,6 +186,52 @@ export function fillSecret(entryId: string, grantId: string): Promise<NativeResp
     entry_id: entryId,
     field_id: "primary",
     grant_id: grantId
+  });
+}
+
+export interface ProviderAddRequest {
+  title: string;
+  providerId?: string;
+  domain: string[];
+  faviconUrl?: string;
+  endpoint?: string;
+  endpoints: string[];
+  consoleEndpoints: string[];
+  interfaceType: string;
+  authScheme: string;
+  apiKey: string;
+  defaultModel?: string;
+  modelAliases: Array<[string, string]>;
+  headers: Array<[string, string]>;
+  quota?: { label?: string; limit?: string; remaining?: string; resetAt?: string };
+  gateway?: { group?: string; rate?: string };
+  tags: string[];
+  environment: string;
+  notes?: string;
+}
+
+export function addProvider(request: ProviderAddRequest): Promise<NativeResponse<{ entryId: string }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "provider.add",
+    title: request.title,
+    provider_id: request.providerId,
+    domain: request.domain,
+    favicon_url: request.faviconUrl,
+    endpoint: request.endpoint,
+    endpoints: request.endpoints,
+    console_endpoints: request.consoleEndpoints,
+    interface_type: request.interfaceType,
+    auth_scheme: request.authScheme,
+    api_key: request.apiKey,
+    default_model: request.defaultModel,
+    model_aliases: request.modelAliases,
+    headers: request.headers,
+    quota: request.quota,
+    gateway: request.gateway,
+    tags: request.tags,
+    environment: request.environment,
+    notes: request.notes
   });
 }
 

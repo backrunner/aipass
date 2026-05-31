@@ -26,6 +26,12 @@
   export let onCreate: () => MaybePromise = () => {};
   export let onUnlock: () => MaybePromise = () => {};
   export let onRecover: () => MaybePromise = () => {};
+  export let resetOpen = false;
+  export let resetConfirm = "";
+  export let resetBusy = false;
+  export let onResetRequest: () => MaybePromise = () => {};
+  export let onReset: () => MaybePromise = () => {};
+  export let onResetCancel: () => MaybePromise = () => {};
 
   $: showCreate = !status.exists;
   $: showRecover = status.exists && authMode === "recover";
@@ -141,8 +147,43 @@
           <button type="button" class="link" disabled={busy} on:click={() => onModeChange("unlock")}>
             {$t("auth.backToUnlock")}
           </button>
+          {#if !resetOpen}
+            <button type="button" class="link danger" disabled={busy} on:click={() => onResetRequest()}>
+              {$t("auth.reset.trigger")}
+            </button>
+          {/if}
         </div>
       </form>
+
+      {#if resetOpen}
+        <div class="reset">
+          <Banner tone="danger">{$t("auth.reset.warning")}</Banner>
+          <input
+            bind:value={resetConfirm}
+            type="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            placeholder={$t("auth.reset.placeholder")}
+            class="text-input"
+            disabled={resetBusy}
+          />
+          <Button
+            variant="danger"
+            block
+            loading={resetBusy}
+            disabled={resetConfirm.trim() !== "RESET" || resetBusy}
+            on:click={() => onReset()}
+          >
+            {resetBusy ? $t("auth.reset.busy") : $t("auth.reset.submit")}
+          </Button>
+          <div class="meta">
+            <button type="button" class="link" disabled={resetBusy} on:click={() => onResetCancel()}>
+              {$t("auth.reset.cancel")}
+            </button>
+          </div>
+        </div>
+      {/if}
     {:else if showUnlock}
       <form class="form" on:submit|preventDefault={() => onUnlock()}>
         <div class="copy">
@@ -298,6 +339,21 @@
     &:hover:not(:disabled) {
       background: var(--accent-soft);
     }
+  }
+
+  .link.danger {
+    color: var(--danger);
+
+    &:hover:not(:disabled) {
+      background: var(--danger-soft);
+    }
+  }
+
+  .reset {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 12px;
   }
 
   .inline-error,

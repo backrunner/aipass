@@ -1,22 +1,24 @@
 #!/usr/bin/env node
-import { copyFile, mkdir, rm, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const projectRoot = resolve(process.argv[2] ?? process.cwd());
 const distDir = resolve(projectRoot, "dist");
-const manifestSource = resolve(projectRoot, "public", "manifest.json");
-const manifestTarget = resolve(distDir, "manifest.json");
-const popupSource = resolve(distDir, "src", "popup", "index.html");
-const popupTarget = resolve(distDir, "popup.html");
+const requiredFiles = [
+  ["extension manifest", resolve(distDir, "manifest.json")],
+  ["popup html", resolve(distDir, "popup.html")],
+  ["service worker", resolve(distDir, "serviceWorker.js")],
+  ["content script", resolve(distDir, "content.js")],
+  ["clipboard bridge", resolve(distDir, "clipboardBridge.js")],
+  ["16px icon", resolve(distDir, "icons", "icon-16.png")],
+  ["32px icon", resolve(distDir, "icons", "icon-32.png")],
+  ["48px icon", resolve(distDir, "icons", "icon-48.png")],
+  ["128px icon", resolve(distDir, "icons", "icon-128.png")]
+];
 
-await assertFile(manifestSource, "extension manifest");
-await assertFile(popupSource, "built popup html");
-await mkdir(distDir, { recursive: true });
-await copyFile(manifestSource, manifestTarget);
-await copyFile(popupSource, popupTarget);
-await rm(resolve(distDir, "src"), { recursive: true, force: true });
+await Promise.all(requiredFiles.map(([label, path]) => assertFile(path, label)));
 
-console.log("Extension package prepared.");
+console.log("Extension package verified.");
 
 async function assertFile(path, label) {
   try {

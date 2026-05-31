@@ -20,6 +20,21 @@ pub fn delete_webdav_password(vault_dir: &Path) -> Result<()> {
     delete_secret(vault_dir, "sync.webdav.password")
 }
 
+pub fn set_session_unlock(vault_dir: &Path, password: &str) -> Result<bool> {
+    set_secret(vault_dir, "session.unlock", password.as_bytes())
+}
+
+pub fn get_session_unlock(vault_dir: &Path) -> Result<Option<String>> {
+    Ok(match get_secret(vault_dir, "session.unlock")? {
+        Some(bytes) => Some(utf8_string(bytes)?),
+        None => None,
+    })
+}
+
+pub fn delete_session_unlock(vault_dir: &Path) -> Result<()> {
+    delete_secret(vault_dir, "session.unlock")
+}
+
 #[cfg(target_os = "macos")]
 fn set_secret(vault_dir: &Path, purpose: &str, value: &[u8]) -> Result<bool> {
     let account = account_for(vault_dir, purpose)?;

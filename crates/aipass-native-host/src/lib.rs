@@ -192,6 +192,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 extension_id: None,
                 interactive: None,
+                password: None,
             },
             &config,
         );
@@ -200,6 +201,24 @@ mod tests {
             response.error.as_deref(),
             Some("interactive unlock via desktop window is required")
         );
+    }
+
+    #[test]
+    fn session_unlock_accepts_password() {
+        let agent = RunningAgent::start();
+        let password = agent.password.clone();
+        let config = agent.config();
+        let response = handle_request_with_config(
+            NativeRequest::SessionUnlock {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                interactive: None,
+                password: Some(password.as_str().into()),
+            },
+            &config,
+        );
+        assert!(response.ok);
+        assert_eq!(response.data["locked"], false);
     }
 
     #[test]

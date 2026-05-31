@@ -44,6 +44,9 @@ fn dispatch_request(
         AgentRequest::SessionPolicySet { policy } => {
             let policy = clamp_policy(policy);
             save_policy(&state.vault_dir, &policy)?;
+            if !policy.persist_unlock {
+                crate::device_secrets::delete_session_unlock(&state.vault_dir).ok();
+            }
             *state.policy.lock().map_err(|_| {
                 ServiceError::new(AgentErrorCode::Internal, "policy lock poisoned")
             })? = policy.clone();

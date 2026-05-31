@@ -15,13 +15,14 @@
     emptyDraft,
     IconButton,
     interfaceLabel,
+    ProviderFormFields,
     ProviderIcon,
     providerKindLabel,
     providerKindTone,
     type Draft
   } from "@aipass/ui";
   import { t } from "@aipass/ui/i18n";
-  import { Ban, Check, KeyRound, RefreshCw, Search } from "lucide-svelte";
+  import { Ban, Check, Eye, EyeOff, KeyRound, Plus, RefreshCw, Search, X } from "lucide-svelte";
 
   import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
   import type { DraftItem, DraftPreview, Entry, Grant, LookupData, NativeResponse, SafeDraft } from "./types";
@@ -49,11 +50,27 @@
   let pendingDrafts: SafeDraft[] = [];
   let draftItems: DraftItem[] = [];
   let statusText = "";
+  let statusError = false;
   let copied = "";
   let unlockBusy = false;
+  let unlockPassword = "";
+  let unlockFailures = 0;
+  let showPassword = false;
   let lastDraftKey = "";
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let previewRequestId = 0;
+  let statusTimer: ReturnType<typeof setTimeout> | undefined;
+  let showAddForm = false;
+  let addBusy = false;
+  let addDraft: Draft = emptyDraft();
+
+  // Auto-dismiss transient success messages; errors stay until the next action.
+  $: {
+    clearTimeout(statusTimer);
+    if (statusText && !statusError) {
+      statusTimer = setTimeout(() => (statusText = ""), 2500);
+    }
+  }
 
   $: visibleDraftItems = draftItems.filter((item) => !item.saved && !item.preview?.isSaved);
   $: selectedDraftCount = visibleDraftItems.filter((item) => item.selected).length;
@@ -69,6 +86,7 @@
 
   async function refresh() {
     statusText = "";
+    statusError = false;
     const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
     if (!ping?.ok) {
       connection = "missing";
@@ -92,14 +110,37 @@
   async function openDesktopUnlock() {
     if (unlockBusy) return;
     unlockBusy = true;
+    statusError = false;
     const response = await sendToWorker<{ locked?: boolean }>({ type: "aipass.openUnlock" });
     unlockBusy = false;
     if (!response?.ok) {
       statusText = response?.error ?? $t("ext.unlockFailed");
+      statusError = true;
       return;
     }
     statusText = $t("ext.finishUnlock");
     void pollForUnlock();
+  }
+
+  async function unlockWithPassword() {
+    if (unlockBusy || !unlockPassword) return;
+    unlockBusy = true;
+    statusText = "";
+    statusError = false;
+    const response = await sendToWorker<{ locked?: boolean }>({
+      type: "aipass.unlockPassword",
+      password: unlockPassword
+    });
+    unlockPassword = "";
+    unlockBusy = false;
+    if (!response?.ok || response.data?.locked) {
+      statusText = $t("ext.unlock.wrongPassword");
+      statusError = true;
+      unlockFailures += 1;
+      return;
+    }
+    await refresh();
+    statusText = $t("ext.unlocked");
   }
 
   async function pollForUnlock() {
@@ -438,6 +479,129 @@
       item.draftId === draftId ? { ...item, selected: !item.selected } : item
     );
   }
+
+  function openAddForm() {
+    addDraft = emptyDraft();
+    addDraft.environment = "browser";
+    addDraft.tag = "browser";
+    if (currentUrl) {
+      const match = matchProviderByDomain(currentUrl);
+      if (match) {
+        addDraft.providerId = match.id;
+        addDraft.title = match.displayName;
+        addDraft.endpoint = match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
+        addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
+        addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
+      }
+    }
+    statusText = "";
+    statusError = false;
+    showAddForm = true;
+  }
+
+  function closeAddForm() {
+    showAddForm = false;
+    addDraft = emptyDraft();
+  }
+
+  function addProviderChanged() {
+    const definition = providerDefinitions.find((item) => item.id === addDraft.providerId);
+    if (!definition) return;
+    addDraft.interfaceType = detectInterfaceFromProvider(definition.id);
+    addDraft.authScheme = detectAuthFromProvider(definition.id);
+    addDraft.endpoint ||= definition.endpoints.find((item) => item.kind === "api")?.url ?? "";
+    addDraft.title ||= definition.displayName;
+  }
+
+  function addInferFromDomain() {
+    const match = matchProviderByDomain(splitCsv(addDraft.domain)[0] ?? addDraft.domain);
+    if (!match) return;
+    addDraft.providerId = match.id;
+    addDraft.title ||= match.displayName;
+    addDraft.endpoint ||= match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
+    addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
+    addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
+  }
+
+  function addInferFromEndpoint() {
+    const match = inferProviderFromEndpoint(splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint);
+    if (!match) return;
+    addDraft.providerId = match.id;
+    addDraft.title ||= match.displayName;
+    addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
+    addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
+  }
+
+  async function submitAddProvider() {
+    if (addBusy) return;
+    if (!addDraft.apiKey.trim()) {
+      statusText = $t("ext.addProviderFailed");
+      statusError = true;
+      return;
+    }
+    addBusy = true;
+    statusText = "";
+    statusError = false;
+    const definition = providerDefinitions.find((item) => item.id === addDraft.providerId);
+    const response = await sendToWorker<{ entryId: string }>({
+      type: "aipass.providerAdd",
+      request: {
+        title: addDraft.title || definition?.displayName || "Browser Provider",
+        providerId: addDraft.providerId || definition?.id,
+        domain: splitCsv(addDraft.domain),
+        faviconUrl: addDraft.faviconUrl || undefined,
+        endpoint: addDraft.endpoint || undefined,
+        endpoints: [],
+        consoleEndpoints: splitCsv(addDraft.consoleUrl),
+        interfaceType: addDraft.interfaceType,
+        authScheme: addDraft.authScheme,
+        apiKey: addDraft.apiKey,
+        defaultModel: addDraft.defaultModel || undefined,
+        modelAliases: pairsFromCsv(addDraft.modelAlias),
+        headers: pairsFromCsv(addDraft.header),
+        quota: quotaFrom(addDraft),
+        gateway: gatewayFrom(addDraft),
+        tags: splitCsv(addDraft.tag),
+        environment: addDraft.environment || "browser",
+        notes: addDraft.notes || undefined
+      }
+    });
+    addBusy = false;
+    if (!response?.ok) {
+      statusText = response?.error ?? $t("ext.addProviderFailed");
+      statusError = true;
+      return;
+    }
+    closeAddForm();
+    await refresh();
+    statusText = $t("ext.providerAdded");
+  }
+
+  function splitCsv(value: string): string[] {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+
+  function pairsFromCsv(value: string): Array<[string, string]> {
+    return splitCsv(value)
+      .map((item) => item.split("="))
+      .filter(([key, val]) => key && val !== undefined)
+      .map(([key, val]) => [key.trim(), val.trim()] as [string, string]);
+  }
+
+  function quotaFrom(draft: Draft) {
+    if (!draft.quotaLabel && !draft.quotaLimit && !draft.quotaRemaining && !draft.quotaResetAt) return undefined;
+    return {
+      label: draft.quotaLabel || undefined,
+      limit: draft.quotaLimit || undefined,
+      remaining: draft.quotaRemaining || undefined,
+      resetAt: draft.quotaResetAt || undefined
+    };
+  }
+
+  function gatewayFrom(draft: Draft) {
+    if (!draft.gatewayGroup && !draft.gatewayRate) return undefined;
+    return { group: draft.gatewayGroup || undefined, rate: draft.gatewayRate || undefined };
+  }
 </script>
 
 {#snippet entryRow(entry: Entry)}
@@ -465,13 +629,23 @@
     <Brand size="sm" responsive={false} />
     <div class="header-actions">
       <Badge tone={connectionTone[connection]}>{$t(`ext.state.${connection}`)}</Badge>
+      {#if connection === "connected"}
+        <IconButton label={$t("providerList.addProvider")} tone="primary" on:click={openAddForm}>
+          <Plus size={15} />
+        </IconButton>
+      {/if}
       <IconButton label={$t("ext.refresh")} on:click={refresh}>
         <RefreshCw size={15} />
       </IconButton>
     </div>
   </header>
 
-  {#if connection === "missing"}
+  {#if connection === "checking"}
+    <section class="state-panel loading-panel">
+      <RefreshCw class="spin" size={20} />
+      <span>{$t("ext.state.checking")}</span>
+    </section>
+  {:else if connection === "missing"}
     <section class="state-panel">
       <Banner tone="danger">
         <div class="banner-copy">
@@ -488,7 +662,32 @@
           <span>{$t("ext.locked.desc")}</span>
         </div>
       </Banner>
-      <Button variant="primary" block on:click={openDesktopUnlock} disabled={unlockBusy}>
+      <form class="unlock-form" on:submit|preventDefault={unlockWithPassword}>
+        <div class="password-field">
+          <input
+            type={showPassword ? "text" : "password"}
+            bind:value={unlockPassword}
+            placeholder={$t("ext.unlock.passwordPlaceholder")}
+            autocomplete="current-password"
+          />
+          <button
+            type="button"
+            class="reveal-toggle"
+            on:click={() => (showPassword = !showPassword)}
+            aria-label={$t(showPassword ? "ext.unlock.hidePassword" : "ext.unlock.showPassword")}
+            title={$t(showPassword ? "ext.unlock.hidePassword" : "ext.unlock.showPassword")}
+          >
+            {#if showPassword}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
+          </button>
+        </div>
+        <Button variant="primary" block type="submit" disabled={!unlockPassword || unlockBusy}>
+          {$t("ext.unlock.action")}
+        </Button>
+      </form>
+      {#if unlockFailures >= 3}
+        <p class="unlock-hint">{$t("ext.unlock.recoverHint")}</p>
+      {/if}
+      <Button variant="ghost" block on:click={openDesktopUnlock} disabled={unlockBusy}>
         {$t("ext.openApp")}
       </Button>
     </section>
@@ -504,11 +703,40 @@
         <strong>{provider?.displayName ?? $t("ext.customProvider")}</strong>
         <span class="endpoint">{currentUrl || $t("ext.noActiveTab")}</span>
       </div>
-      <Button variant="ghost" size="sm" on:click={ignoreCurrentOrigin} disabled={!currentOrigin}>
+      <IconButton
+        label={$t("ext.ignoreSite")}
+        tone="danger"
+        size="sm"
+        on:click={ignoreCurrentOrigin}
+        disabled={!currentOrigin}
+      >
         <Ban size={15} />
-        {$t("ext.ignoreSite")}
-      </Button>
+      </IconButton>
     </section>
+
+    {#if showAddForm}
+      <section class="add-form">
+        <div class="add-head">
+          <strong>{$t("providerList.addProvider")}</strong>
+          <IconButton label={$t("common.cancel")} on:click={closeAddForm}>
+            <X size={15} />
+          </IconButton>
+        </div>
+        <ProviderFormFields
+          formMode="add"
+          bind:draft={addDraft}
+          onInferDraftFromDomain={addInferFromDomain}
+          onInferDraftFromEndpoint={addInferFromEndpoint}
+          onProviderChanged={addProviderChanged}
+        />
+        <div class="add-actions">
+          <Button variant="ghost" size="sm" on:click={closeAddForm}>{$t("common.cancel")}</Button>
+          <Button variant="primary" size="sm" on:click={submitAddProvider} disabled={addBusy}>
+            {addBusy ? $t("ext.adding") : $t("common.save")}
+          </Button>
+        </div>
+      </section>
+    {/if}
 
     {#if entries.length > 0}
       <section class="entry-list">
@@ -556,10 +784,10 @@
       onSchedulePreview={schedulePreview}
       onToggleSelection={toggleDraftSelection}
     />
+  {/if}
 
-    {#if statusText}
-      <Banner tone="info">{statusText}</Banner>
-    {/if}
+  {#if statusText}
+    <Banner tone={statusError ? "danger" : "info"}>{statusText}</Banner>
   {/if}
 </main>
 
@@ -588,6 +816,50 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .add-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-lg);
+  }
+
+  .add-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    strong {
+      font-size: 14px;
+    }
+  }
+
+  .add-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .loading-panel {
+    align-items: center;
+    justify-content: center;
+    padding: 32px 0;
+    color: var(--text-tertiary);
+  }
+
+  .loading-panel :global(.spin) {
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .banner-copy {
@@ -729,5 +1001,59 @@
         border-color: var(--accent);
       }
     }
+  }
+
+  .unlock-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .password-field {
+      position: relative;
+    }
+
+    input {
+      width: 100%;
+      height: 32px;
+      padding: 0 34px 0 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+
+      &:focus-visible {
+        outline: 2px solid var(--accent-ring);
+        outline-offset: 1px;
+        border-color: var(--accent);
+      }
+    }
+
+    .reveal-toggle {
+      position: absolute;
+      top: 50%;
+      right: 6px;
+      transform: translateY(-50%);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--text-tertiary);
+      cursor: pointer;
+
+      &:hover {
+        color: var(--text);
+      }
+    }
+  }
+
+  .unlock-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-tertiary);
   }
 </style>

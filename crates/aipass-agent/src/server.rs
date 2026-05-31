@@ -75,6 +75,7 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         last_lock_reason: Mutex::new(Some(LockReason::AgentRestart)),
         shutdown: AtomicBool::new(false),
     });
+    crate::session::try_restore_session(&state);
     run_server_with_state(state)
 }
 
@@ -95,6 +96,7 @@ fn run_server_with_state(state: Arc<AgentState>) -> Result<()> {
         .context("failed to set agent listener to nonblocking accept mode")?;
 
     spawn_idle_lock_watcher(state.clone());
+    crate::session::spawn_power_watcher(state.clone());
 
     let active_connections = Arc::new(AtomicUsize::new(0));
     loop {

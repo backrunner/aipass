@@ -157,6 +157,9 @@
   let recoveryPassword = "";
   let recoveryPasswordConfirm = "";
   let showRecoveryPassword = false;
+  let resetOpen = false;
+  let resetConfirm = "";
+  let resetBusy = false;
   let createPasswordStrength = passwordStrength("", $t);
   let recoveryPasswordStrength = passwordStrength("", $t);
   let preferencesSaveChain: Promise<void> = Promise.resolve();
@@ -179,10 +182,11 @@
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
   let clipboardClearTimer: ReturnType<typeof setTimeout> | undefined;
   let lastSessionTouchAt = 0;
-  let autoLockMinutes = 15;
+  let autoLockMinutes = 30;
   let clipboardClearSeconds = 45;
   let lockOnSleep = true;
   let lockOnScreenLock = true;
+  let persistUnlock = true;
   let newPassword = "";
   let syncState: SyncReport["status"] = "idle";
   let syncMode: SyncMode = "local";
@@ -436,6 +440,45 @@
   function acknowledgeRecoveryKit() {
     pendingRecoveryKey = "";
     copied = "";
+  }
+
+  function requestReset() {
+    resetOpen = true;
+    resetConfirm = "";
+  }
+
+  function cancelReset() {
+    resetOpen = false;
+    resetConfirm = "";
+  }
+
+  async function resetVault() {
+    if (resetBusy || resetConfirm.trim() !== "RESET") return;
+    error = "";
+    resetBusy = true;
+    await flushUiBeforeBlockingWork();
+    try {
+      const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_reset");
+      const response = await waitForVaultAuthTask(started.taskId);
+      if (response.phase !== "succeeded") {
+        error = response.error ?? localizedMessage("error.vaultResetFailed");
+        return;
+      }
+      status = { exists: false, locked: true };
+      password = "";
+      recoveryKeyInput = "";
+      recoveryPassword = "";
+      recoveryPasswordConfirm = "";
+      resetOpen = false;
+      resetConfirm = "";
+      entries = [];
+      selectedId = "";
+      setAuthMode("unlock");
+    } catch (err) {
+      error = String(err);
+    } finally {
+      resetBusy = false;
+    }
   }
 
   async function copyRecoveryKit() {
@@ -1289,6 +1332,7 @@
       clipboardClearSeconds = clampPreference(prefs.clipboardClearSeconds, 0, 600, clipboardClearSeconds);
       lockOnSleep = prefs.lockOnSleep ?? lockOnSleep;
       lockOnScreenLock = prefs.lockOnScreenLock ?? lockOnScreenLock;
+      persistUnlock = prefs.persistUnlock ?? persistUnlock;
       if (isThemePreference(prefs.theme)) {
         setTheme(prefs.theme);
       }
@@ -1302,7 +1346,7 @@
 
   async function savePreferences() {
     const operation = preferencesSaveChain.then(async () => {
-      autoLockMinutes = clampPreference(autoLockMinutes, 0, 240, 15);
+      autoLockMinutes = clampPreference(autoLockMinutes, 0, 240, 30);
       clipboardClearSeconds = clampPreference(clipboardClearSeconds, 0, 600, 45);
       await invokeTauri<AppPreferences>("preferences_save", {
         request: {
@@ -1310,6 +1354,7 @@
           clipboardClearSeconds,
           lockOnSleep,
           lockOnScreenLock,
+          persistUnlock,
           theme: $themeStore,
           locale: $localeStore
         }
@@ -1346,6 +1391,8 @@
       recoveryPassword = "";
       recoveryPasswordConfirm = "";
       showRecoveryPassword = false;
+      resetOpen = false;
+      resetConfirm = "";
     }
   }
 </script>
@@ -1388,6 +1435,12 @@
         onCreate={createVault}
         onUnlock={unlockVault}
         onRecover={recoverVault}
+        bind:resetOpen
+        bind:resetConfirm
+        {resetBusy}
+        onResetRequest={requestReset}
+        onReset={resetVault}
+        onResetCancel={cancelReset}
       />
     {/if}
 
@@ -1466,6 +1519,7 @@
     bind:clipboardClearSeconds
     bind:lockOnSleep
     bind:lockOnScreenLock
+    bind:persistUnlock
     bind:newPassword
     bind:exportPath
     bind:exportPassword

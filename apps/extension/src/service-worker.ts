@@ -1,4 +1,5 @@
 import {
+  addProvider,
   fillSecret,
   ignoreOrigin,
   isOriginIgnored,
@@ -8,7 +9,9 @@ import {
   previewDetectedSecret,
   saveDetectedSecret,
   searchEntries,
-  type DetectedSecretDraft
+  unlockWithPassword,
+  type DetectedSecretDraft,
+  type ProviderAddRequest
 } from "./native-client";
 
 type PendingDraftRecord = {
@@ -35,6 +38,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     draftId?: string;
     draftPatches?: Array<{ draftId?: string; draft?: Partial<DetectedSecretDraft> | null }>;
     tabId?: number;
+    password?: string;
+    request?: ProviderAddRequest;
   };
 
   if (typed.type === "aipass.ping") {
@@ -59,6 +64,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.openUnlock") {
     openNativeUnlock().then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.unlockPassword" && typeof typed.password === "string") {
+    unlockWithPassword(typed.password).then(sendResponse);
     return true;
   }
 
@@ -162,6 +172,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (typed.type === "aipass.providerAdd" && typed.request) {
+    addProvider(typed.request).then(sendResponse);
+    return true;
+  }
+
   return false;
 });
 
@@ -214,11 +229,13 @@ function clearPendingDraft(draftId?: string) {
     pendingDrafts = pendingDrafts.filter((item) => item.id !== draftId);
   }
   schedulePendingDraftCleanup();
+  updateActionBadge();
 }
 
 function clearPendingDrafts() {
   pendingDrafts = [];
   schedulePendingDraftCleanup();
+  updateActionBadge();
 }
 
 function enqueuePendingDraft(draft: DetectedSecretDraft) {
@@ -232,17 +249,21 @@ function enqueuePendingDraft(draft: DetectedSecretDraft) {
     pendingDrafts.push({ id: crypto.randomUUID(), key, draft, expiresAt });
   }
   schedulePendingDraftCleanup();
+  updateActionBadge();
 }
 
 function removePendingDraftsForOrigin(origin: string) {
   pruneExpiredPendingDrafts();
   pendingDrafts = pendingDrafts.filter((item) => item.draft.origin !== origin);
   schedulePendingDraftCleanup();
+  updateActionBadge();
 }
 
 function pruneExpiredPendingDrafts() {
+  const before = pendingDrafts.length;
   const now = Date.now();
   pendingDrafts = pendingDrafts.filter((item) => item.expiresAt > now);
+  if (pendingDrafts.length !== before) updateActionBadge();
 }
 
 function schedulePendingDraftCleanup() {
@@ -259,6 +280,15 @@ function schedulePendingDraftCleanup() {
     pruneExpiredPendingDrafts();
     schedulePendingDraftCleanup();
   }, Math.max(0, nextExpiry - Date.now()));
+}
+
+function updateActionBadge() {
+  if (!chrome.action?.setBadgeText) return;
+  const count = pendingDrafts.length;
+  chrome.action.setBadgeText({ text: count ? String(Math.min(count, 99)) : "" });
+  if (count && chrome.action.setBadgeBackgroundColor) {
+    chrome.action.setBadgeBackgroundColor({ color: "#2563eb" });
+  }
 }
 
 function pendingDraftKey(draft: DetectedSecretDraft): string {

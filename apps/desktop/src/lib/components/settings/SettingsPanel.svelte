@@ -20,10 +20,11 @@
   import SegmentedControl from "../shared/SegmentedControl.svelte";
 
   export let entriesCount = 0;
-  export let autoLockMinutes = 15;
+  export let autoLockMinutes = 30;
   export let clipboardClearSeconds = 45;
   export let lockOnSleep = true;
   export let lockOnScreenLock = true;
+  export let persistUnlock = true;
   export let newPassword = "";
   export let exportPath = "";
   export let exportPassword = "";
@@ -264,6 +265,12 @@
                   label={$t("settings.lockOnScreenLock")}
                   description={$t("settings.lockOnScreenLockDesc")}
                   bind:checked={lockOnScreenLock}
+                  onCheckedChange={() => onSavePreferences()}
+                />
+                <SwitchField
+                  label={$t("settings.persistUnlock")}
+                  description={$t("settings.persistUnlockDesc")}
+                  bind:checked={persistUnlock}
                   onCheckedChange={() => onSavePreferences()}
                 />
               </div>

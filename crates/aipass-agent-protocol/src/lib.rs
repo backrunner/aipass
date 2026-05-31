@@ -81,14 +81,21 @@ pub struct SessionPolicy {
     pub idle_lock_minutes: u16,
     pub lock_on_sleep: bool,
     pub lock_on_screen_lock: bool,
+    #[serde(default = "default_persist_unlock")]
+    pub persist_unlock: bool,
+}
+
+fn default_persist_unlock() -> bool {
+    true
 }
 
 impl Default for SessionPolicy {
     fn default() -> Self {
         Self {
-            idle_lock_minutes: 15,
+            idle_lock_minutes: 30,
             lock_on_sleep: true,
             lock_on_screen_lock: true,
+            persist_unlock: true,
         }
     }
 }

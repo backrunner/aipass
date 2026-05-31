@@ -86,6 +86,7 @@ pub(crate) async fn preferences_load(app: AppHandle) -> Result<AppPreferences, S
             clipboard_clear_seconds: local.clipboard_clear_seconds,
             lock_on_sleep: policy.lock_on_sleep,
             lock_on_screen_lock: policy.lock_on_screen_lock,
+            persist_unlock: policy.persist_unlock,
             theme: local.theme,
             locale: local.locale,
         })
@@ -112,6 +113,9 @@ pub(crate) async fn preferences_save(
             lock_on_screen_lock: request
                 .lock_on_screen_lock
                 .unwrap_or(current_policy.lock_on_screen_lock),
+            persist_unlock: request
+                .persist_unlock
+                .unwrap_or(current_policy.persist_unlock),
             theme: request.theme.unwrap_or(stored.theme),
             locale: request.locale.unwrap_or(stored.locale),
         };
@@ -123,6 +127,7 @@ pub(crate) async fn preferences_save(
                     idle_lock_minutes: preferences.auto_lock_minutes,
                     lock_on_sleep: preferences.lock_on_sleep,
                     lock_on_screen_lock: preferences.lock_on_screen_lock,
+                    persist_unlock: preferences.persist_unlock,
                 },
             },
         )?;
