@@ -89,6 +89,6 @@ fn default_vault_dir() -> Result<PathBuf, std::env::VarError> {
 }
 
 fn project_dirs() -> Result<ProjectDirs> {
-    ProjectDirs::from("dev", "aipass", "AIPass")
+    ProjectDirs::from("dev", "aipass", "desktop")
         .ok_or_else(|| anyhow::anyhow!("cannot determine AIPass project directory"))
 }

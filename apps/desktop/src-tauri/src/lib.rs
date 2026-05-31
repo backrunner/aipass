@@ -9,7 +9,7 @@ use updates::{check_for_updates, install_update};
 use crate::auth_tasks::AuthTasks;
 use crate::models::{AppPreferences, NativeHostStatus, ProviderAddRequest, ProviderUpdateRequest};
 use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
-use aipass_agent_protocol::{AgentRequest, LockReason, SessionPolicy, SessionStatus};
+use aipass_agent_protocol::{AgentRequest, SessionStatus};
 use aipass_native_host::{
     load_allowed_extension_ids, native_host_settings_path, native_manifest,
     save_allowed_extension_ids,
@@ -41,8 +41,13 @@ struct AppState {
     auth_tasks: AuthTasks,
 }
 
-fn agent_client(app: &AppHandle) -> Result<AgentClient, String> {
-    let config = AgentClientConfig::for_vault(vault_dir(app)?).map_err(|err| err.to_string())?;
+fn agent_client(_app: &AppHandle) -> Result<AgentClient, String> {
+    let config = if let Some(explicit) = std::env::var_os("AIPASS_VAULT_DIR") {
+        AgentClientConfig::for_vault(PathBuf::from(explicit))
+    } else {
+        AgentClientConfig::default_vault()
+    }
+    .map_err(|err| err.to_string())?;
     Ok(AgentClient::new(config))
 }
 
@@ -61,18 +66,8 @@ fn agent_request_no_unlock<T: DeserializeOwned>(
     client.request(&request).map_err(agent_error_to_string)
 }
 
-fn agent_status(app: &AppHandle) -> SessionStatus {
-    agent_request_no_unlock::<SessionStatus>(app, AgentRequest::SessionStatus).unwrap_or(
-        SessionStatus {
-            exists: vault_dir(app)
-                .map(|root| root.join("manifest.aipmanifest").exists())
-                .unwrap_or(false),
-            locked: true,
-            policy: SessionPolicy::default(),
-            last_lock_reason: Some(LockReason::AgentRestart),
-            vault_namespace: None,
-        },
-    )
+fn agent_status(app: &AppHandle) -> Result<SessionStatus, String> {
+    agent_request_no_unlock::<SessionStatus>(app, AgentRequest::SessionStatus)
 }
 
 fn agent_error_to_string(err: AgentCommandError) -> String {
@@ -515,14 +510,6 @@ fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> 
     atomic_write_bytes(path, &bytes).map_err(|err| err.to_string())
 }
 
-fn vault_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|err| err.to_string())?
-        .join("vault"))
-}
-
 fn configure_initial_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -595,6 +582,7 @@ pub fn run() {
             vault_create,
             vault_unlock,
             vault_recover,
+            vault_reset,
             vault_auth_status,
             vault_lock,
             vault_change_password,

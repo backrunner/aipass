@@ -120,7 +120,6 @@ pub struct ProviderEntry {
     pub model_aliases: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
-    #[serde(default)]
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub environment: String,
@@ -129,11 +128,11 @@ pub struct ProviderEntry {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
-    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[serde(with = "time::serde::rfc3339::option")]
     pub last_used_at: Option<OffsetDateTime>,
-    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[serde(with = "time::serde::rfc3339::option")]
     pub archived_at: Option<OffsetDateTime>,
-    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[serde(with = "time::serde::rfc3339::option")]
     pub deleted_at: Option<OffsetDateTime>,
 }
 

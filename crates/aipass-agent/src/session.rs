@@ -1,5 +1,4 @@
 use crate::device_secrets;
-use crate::paths::{canonical_vault_dir, default_vault_dir};
 use aipass_agent_protocol::{
     AgentErrorCode, LockReason, SensitiveString, SessionPolicy, SessionStatus, SyncMode,
     SyncSettings, SyncSettingsUpdate,
@@ -10,6 +9,7 @@ use aipass_vault::{RecoveryKit, Vault, VaultError};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -18,35 +18,11 @@ use std::sync::{
 use time::OffsetDateTime;
 use zeroize::Zeroize;
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct LegacyDesktopPreferences {
-    #[serde(default)]
-    pub auto_lock_minutes: Option<u16>,
-    #[serde(default)]
-    pub lock_on_sleep: Option<bool>,
-    #[serde(default)]
-    pub lock_on_screen_lock: Option<bool>,
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeHostSettings {
     #[serde(default)]
     pub ignored_origins: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct LegacyDesktopSyncSettings {
-    #[serde(default)]
-    pub mode: SyncMode,
-    #[serde(default)]
-    pub sync_folder: Option<PathBuf>,
-    #[serde(default)]
-    pub webdav_url: Option<String>,
-    #[serde(default)]
-    pub webdav_username: Option<String>,
-    #[serde(default)]
-    pub webdav_password: Option<SensitiveString>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -228,6 +204,37 @@ pub fn recover_vault(
     Ok((recovery_kit, session_status(state)?))
 }
 
+pub fn reset_vault(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
+    let root = &state.vault_dir;
+    let remove_err = |err: std::io::Error| {
+        ServiceError::new(
+            AgentErrorCode::Internal,
+            format!("failed to remove vault: {err}"),
+        )
+    };
+
+    *state
+        .session
+        .lock()
+        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))? =
+        SessionState::Locked;
+    *state
+        .last_lock_reason
+        .lock()
+        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "lock reason poisoned"))? = None;
+
+    for file in ["manifest.aipmanifest", "sync-checkpoint.aipcheckpoint"] {
+        remove_file_if_exists(&root.join(file)).map_err(remove_err)?;
+    }
+    for dir in ["objects", "audit", "devices", "grants", "index"] {
+        remove_dir_if_exists(&root.join(dir)).map_err(remove_err)?;
+    }
+    remove_file_if_exists(&sync_settings_path(root)).map_err(remove_err)?;
+    device_secrets::delete_webdav_password(root).ok();
+
+    session_status(state)
+}
+
 pub fn set_session_vault(state: &Arc<AgentState>, vault: Vault) {
     let now = OffsetDateTime::now_utc();
     if let Ok(mut session) = state.session.lock() {
@@ -296,23 +303,7 @@ pub fn load_policy(vault_dir: &Path) -> Result<SessionPolicy> {
     if path.exists() {
         return Ok(clamp_policy(serde_json::from_slice(&fs::read(path)?)?));
     }
-    let mut policy = SessionPolicy::default();
-    if canonical_vault_dir(vault_dir)? == canonical_vault_dir(default_vault_dir()?)? {
-        let legacy_path = legacy_desktop_preferences_path()?;
-        if legacy_path.exists() {
-            let legacy: LegacyDesktopPreferences = serde_json::from_slice(&fs::read(legacy_path)?)?;
-            if let Some(value) = legacy.auto_lock_minutes {
-                policy.idle_lock_minutes = value.min(240);
-            }
-            if let Some(value) = legacy.lock_on_sleep {
-                policy.lock_on_sleep = value;
-            }
-            if let Some(value) = legacy.lock_on_screen_lock {
-                policy.lock_on_screen_lock = value;
-            }
-        }
-    }
-    Ok(policy)
+    Ok(SessionPolicy::default())
 }
 
 pub fn save_policy(vault_dir: &Path, policy: &SessionPolicy) -> Result<()> {
@@ -332,12 +323,6 @@ pub fn policy_path(vault_dir: &Path) -> PathBuf {
         .join("session-policy.json")
 }
 
-pub fn legacy_desktop_preferences_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("dev", "aipass", "AIPass")
-        .context("cannot determine project dir")?;
-    Ok(dirs.config_dir().join("preferences.json"))
-}
-
 pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
     let path = sync_settings_path(vault_dir);
     if path.exists() {
@@ -354,22 +339,6 @@ pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
             },
         });
     }
-
-    if canonical_vault_dir(vault_dir)? == canonical_vault_dir(default_vault_dir()?)? {
-        let legacy_path = legacy_desktop_sync_settings_path()?;
-        if legacy_path.exists() {
-            let legacy: LegacyDesktopSyncSettings =
-                serde_json::from_slice(&fs::read(legacy_path)?)?;
-            return Ok(StoredSyncSettings {
-                mode: legacy.mode,
-                sync_folder: legacy.sync_folder,
-                webdav_url: legacy.webdav_url,
-                webdav_username: legacy.webdav_username,
-                webdav_password: legacy.webdav_password.map(StoredSyncSecret::Plaintext),
-            });
-        }
-    }
-
     Ok(StoredSyncSettings::default())
 }
 
@@ -412,7 +381,6 @@ pub fn save_sync_settings(
         fs::create_dir_all(parent)?;
     }
     atomic_write_bytes(&path, &serde_json::to_vec_pretty(&persisted)?)?;
-    remove_legacy_sync_settings(vault_dir).ok();
     Ok(StoredSyncSettings {
         mode: settings.mode,
         sync_folder: settings.sync_folder.clone(),
@@ -483,12 +451,6 @@ pub fn sync_settings_path(vault_dir: &Path) -> PathBuf {
         .join("sync-settings.json")
 }
 
-pub fn legacy_desktop_sync_settings_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("dev", "aipass", "AIPass")
-        .context("cannot determine project dir")?;
-    Ok(dirs.config_dir().join("sync-settings.json"))
-}
-
 pub fn native_host_settings_path(vault_dir: &Path) -> PathBuf {
     vault_dir
         .parent()
@@ -499,16 +461,6 @@ pub fn native_host_settings_path(vault_dir: &Path) -> PathBuf {
 
 pub fn manifest_path(vault_dir: &Path) -> PathBuf {
     vault_dir.join("manifest.aipmanifest")
-}
-
-fn remove_legacy_sync_settings(vault_dir: &Path) -> Result<()> {
-    if canonical_vault_dir(vault_dir)? == canonical_vault_dir(default_vault_dir()?)? {
-        let legacy = legacy_desktop_sync_settings_path()?;
-        if legacy.exists() {
-            fs::remove_file(legacy)?;
-        }
-    }
-    Ok(())
 }
 
 fn persist_sync_secret(
@@ -588,6 +540,22 @@ fn decrypt_sync_ciphertext(vault: &Vault, ciphertext: &Ciphertext) -> Result<Str
             bytes.zeroize();
             bail!("stored webdav password is not valid utf-8")
         }
+    }
+}
+
+fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn remove_dir_if_exists(path: &Path) -> std::io::Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
     }
 }
 
@@ -730,5 +698,44 @@ mod tests {
             loaded.webdav_password,
             Some(StoredSyncSecret::Device)
         ));
+    }
+
+    #[test]
+    fn reset_vault_removes_vault_and_locks_session() {
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let state = Arc::new(AgentState {
+            policy: Mutex::new(SessionPolicy::default()),
+            vault_dir: vault_dir.clone(),
+            namespace: "test".to_string(),
+            auth_token: SensitiveString::from("token"),
+            session: Mutex::new(SessionState::Locked),
+            last_lock_reason: Mutex::new(None),
+            shutdown: AtomicBool::new(false),
+        });
+
+        create_vault(&state, "correct horse battery staple".to_string()).expect("create");
+        let sync_settings = PersistedSyncSettings {
+            mode: SyncMode::WebDav,
+            sync_folder: Some(temp.path().join("sync")),
+            webdav_url: Some("https://dav.example".to_string()),
+            webdav_username: Some("alice".to_string()),
+            webdav_password: None,
+            webdav_password_device: false,
+        };
+        atomic_write_bytes(
+            sync_settings_path(&vault_dir),
+            &serde_json::to_vec(&sync_settings).expect("encode settings"),
+        )
+        .expect("write sync settings");
+        assert!(manifest_path(&vault_dir).exists());
+        assert!(sync_settings_path(&vault_dir).exists());
+
+        let status = reset_vault(&state).expect("reset");
+        assert!(!status.exists);
+        assert!(status.locked);
+        assert!(!manifest_path(&vault_dir).exists());
+        assert!(!vault_dir.join("objects").exists());
+        assert!(!sync_settings_path(&vault_dir).exists());
     }
 }

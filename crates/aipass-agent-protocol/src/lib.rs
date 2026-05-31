@@ -341,6 +341,8 @@ pub enum AgentRequest {
         recovery_key: SensitiveString,
         new_password: SensitiveString,
     },
+    #[serde(rename = "vault.reset")]
+    VaultReset,
     #[serde(rename = "vault.change_password")]
     VaultChangePassword { new_password: SensitiveString },
     #[serde(rename = "vault.rotate")]

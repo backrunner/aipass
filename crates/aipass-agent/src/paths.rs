@@ -11,7 +11,7 @@ const CLOUD_SYNC_SUBDIR: &str = "AIPass";
 
 pub fn default_vault_dir() -> Result<PathBuf> {
     let dirs =
-        ProjectDirs::from("dev", "aipass", "AIPass").context("cannot determine project dir")?;
+        ProjectDirs::from("dev", "aipass", "desktop").context("cannot determine project dir")?;
     Ok(dirs.data_dir().join("vault"))
 }
 
@@ -49,7 +49,7 @@ pub fn agent_service_name(path: impl AsRef<Path>) -> Result<String> {
 
 pub fn agent_runtime_dir() -> Result<PathBuf> {
     let dirs =
-        ProjectDirs::from("dev", "aipass", "AIPass").context("cannot determine project dir")?;
+        ProjectDirs::from("dev", "aipass", "desktop").context("cannot determine project dir")?;
     let dir = if let Some(explicit) = std::env::var_os("AIPASS_AGENT_RUNTIME_DIR") {
         PathBuf::from(explicit)
     } else if cfg!(target_os = "windows") {

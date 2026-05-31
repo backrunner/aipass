@@ -61,6 +61,7 @@ fn dispatch_request(
                 recover_vault(state, recovery_key.into_inner(), new_password.into_inner())?;
             Ok(AgentResponse::success(response))
         }
+        AgentRequest::VaultReset => Ok(AgentResponse::success(reset_vault(state)?)),
         AgentRequest::VaultChangePassword { new_password } => {
             with_vault_mut(state, false, |vault| {
                 let new_password = SecretString::new(new_password.into_inner());

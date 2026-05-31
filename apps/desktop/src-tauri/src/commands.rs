@@ -58,7 +58,7 @@ pub(crate) fn window_target() -> Option<String> {
 
 #[tauri::command]
 pub(crate) async fn vault_status(app: AppHandle) -> Result<VaultStatus, String> {
-    let status = run_blocking(move || Ok(agent_status(&app))).await?;
+    let status = run_blocking(move || agent_status(&app)).await?;
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
@@ -226,6 +226,32 @@ pub(crate) async fn vault_recover(
         })
         .await;
         finish_vault_create_task(app_handle, auth_tasks, task_id, result);
+    });
+    Ok(VaultAuthTaskStartResponse { task_id })
+}
+
+#[tauri::command]
+pub(crate) async fn vault_reset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VaultAuthTaskStartResponse, String> {
+    let task_id = Uuid::new_v4();
+    let app_handle = app.clone();
+    let request_app = app.clone();
+    let auth_tasks = state.auth_tasks.clone();
+    prune_auth_tasks(&auth_tasks);
+    set_auth_task_state(
+        &auth_tasks,
+        task_id,
+        VaultAuthTaskState::Pending {
+            message: "Resetting vault".to_string(),
+        },
+    )?;
+    tauri::async_runtime::spawn(async move {
+        let result =
+            run_blocking(move || agent_request_no_unlock(&request_app, AgentRequest::VaultReset))
+                .await;
+        finish_vault_unlock_task(app_handle, auth_tasks, task_id, result);
     });
     Ok(VaultAuthTaskStartResponse { task_id })
 }
