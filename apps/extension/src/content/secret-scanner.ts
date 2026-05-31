@@ -7,7 +7,8 @@ export type SecretCandidate = {
   };
 };
 
-export const SELF_HOSTED_TOKEN_PATH_PATTERN = /\/(token|tokens|key|keys|api-?keys|settings|user)(\/|$)/i;
+export const SELF_HOSTED_TOKEN_PATH_PATTERN =
+  /\/(console\/token|app\/tokens|token|tokens|key|keys|api-?keys|virtual-keys|api-manager|downstream-keys|settings|user)(\/|$)/i;
 
 const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9_-]{12,}/,
@@ -88,6 +89,8 @@ function extractSecrets(value: string, allowContextual: boolean): string[] {
   const contextual = new RegExp(CONTEXTUAL_SECRET_PATTERN.source, "g");
   for (const match of value.matchAll(contextual)) {
     const candidate = match[0].replace(/[),.;]+$/, "");
+    if (/sk-/i.test(candidate) && !candidate.toLowerCase().startsWith("sk-")) continue;
+    if (matches.some((secret) => secret.includes(candidate))) continue;
     if (isLikelySecret(candidate)) matches.push(candidate);
   }
   return Array.from(new Set(matches));

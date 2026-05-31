@@ -14,9 +14,11 @@ pub enum ProviderKind {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InterfaceType {
+    #[serde(rename = "openai_compatible", alias = "open_ai_compatible")]
     OpenAiCompatible,
     AnthropicMessages,
     Gemini,
+    #[serde(rename = "azure_openai", alias = "azure_open_ai")]
     AzureOpenAi,
     Bedrock,
     CustomHttp,
@@ -447,6 +449,47 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
             env_keys: &[],
         },
         ProviderDefinition {
+            id: "veloera",
+            display_name: "Veloera",
+            kind: ProviderKind::SelfHosted,
+            domains: &[],
+            interfaces: &[
+                InterfaceType::OpenAiCompatible,
+                InterfaceType::AnthropicMessages,
+                InterfaceType::Gemini,
+            ],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[],
+            env_keys: &[],
+        },
+        ProviderDefinition {
+            id: "omniroute",
+            display_name: "OmniRoute",
+            kind: ProviderKind::SelfHosted,
+            domains: &[],
+            interfaces: &[
+                InterfaceType::OpenAiCompatible,
+                InterfaceType::AnthropicMessages,
+                InterfaceType::Gemini,
+            ],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[],
+            env_keys: &[],
+        },
+        ProviderDefinition {
+            id: "metapi",
+            display_name: "Metapi",
+            kind: ProviderKind::SelfHosted,
+            domains: &[],
+            interfaces: &[
+                InterfaceType::OpenAiCompatible,
+                InterfaceType::AnthropicMessages,
+            ],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[],
+            env_keys: &[],
+        },
+        ProviderDefinition {
             id: "custom_openai_compatible",
             display_name: "Custom OpenAI-compatible",
             kind: ProviderKind::Unknown,
@@ -564,6 +607,14 @@ mod tests {
         );
         assert_eq!(
             provider_kind_for_id(Some("sub2api")),
+            ProviderKind::SelfHosted
+        );
+        assert_eq!(
+            provider_kind_for_id(Some("omniroute")),
+            ProviderKind::SelfHosted
+        );
+        assert_eq!(
+            provider_kind_for_id(Some("metapi")),
             ProviderKind::SelfHosted
         );
         assert_eq!(

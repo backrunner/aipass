@@ -25,6 +25,8 @@ test("infers providers from endpoint hosts", () => {
   assert.equal(inferProviderFromEndpoint("https://api.openai.com/v1/models")?.id, "openai");
   assert.equal(inferProviderFromEndpoint("https://openrouter.ai/api/v1")?.id, "openrouter");
   assert.equal(inferProviderFromEndpoint("https://team-litellm.example.com/v1")?.id, "litellm");
+  assert.equal(inferProviderFromEndpoint("https://my-omniroute.example.com/v1")?.id, "omniroute");
+  assert.equal(inferProviderFromEndpoint("https://metapi.example.com/v1")?.id, "metapi");
   assert.equal(inferProviderFromEndpoint("https://gateway.example.test/v1")?.id, "custom_openai_compatible");
 });
 

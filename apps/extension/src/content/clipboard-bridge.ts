@@ -77,7 +77,7 @@ function canUseContextualSecret(): boolean {
   ]
     .join(" ")
     .toLowerCase();
-  return /(api\s*key|api\s*keys|token|key|令牌|密钥|复制|copy|virtual\s+key|sub2api|one[- ]?api|new[- ]?api|litellm)/i.test(text);
+  return /(api\s*key|api\s*keys|token|key|令牌|密钥|下游密钥|复制|copy|virtual\s+key|sub2api|one[-_ ]?api|new[-_ ]?api|litellm|veloera|omniroute|metapi|onehub|donehub|anyrouter|中转|网关|渠道|模型)/i.test(text);
 }
 
 function isLikelySecret(candidate: string): boolean {

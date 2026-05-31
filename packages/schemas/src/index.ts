@@ -314,6 +314,36 @@ export const providerDefinitions: ProviderDefinition[] = [
     envKeys: []
   },
   {
+    id: "veloera",
+    displayName: "Veloera",
+    kind: "self_hosted",
+    domains: [],
+    interfaces: ["openai_compatible", "anthropic_messages", "gemini"],
+    authSchemes: ["bearer"],
+    endpoints: [],
+    envKeys: []
+  },
+  {
+    id: "omniroute",
+    displayName: "OmniRoute",
+    kind: "self_hosted",
+    domains: [],
+    interfaces: ["openai_compatible", "anthropic_messages", "gemini"],
+    authSchemes: ["bearer"],
+    endpoints: [],
+    envKeys: []
+  },
+  {
+    id: "metapi",
+    displayName: "Metapi",
+    kind: "self_hosted",
+    domains: [],
+    interfaces: ["openai_compatible", "anthropic_messages"],
+    authSchemes: ["bearer"],
+    endpoints: [],
+    envKeys: []
+  },
+  {
     id: "custom_openai_compatible",
     displayName: "Custom OpenAI-compatible",
     kind: "unknown",
@@ -386,6 +416,9 @@ export function inferProviderFromEndpoint(endpoint: string): ProviderDefinition 
   if (normalizedHost.includes("litellm")) return providerById("litellm");
   if (normalizedHost.includes("oneapi")) return providerById("one_api");
   if (normalizedHost.includes("newapi")) return providerById("new_api");
+  if (normalizedHost.includes("veloera")) return providerById("veloera");
+  if (normalizedHost.includes("omniroute")) return providerById("omniroute");
+  if (normalizedHost.includes("metapi")) return providerById("metapi");
 
   const lowerEndpoint = endpoint.toLowerCase();
   if (/\/v1\b|openai|gateway/.test(lowerEndpoint)) return providerById("custom_openai_compatible");

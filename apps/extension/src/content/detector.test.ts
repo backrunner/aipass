@@ -51,6 +51,16 @@ describe("content detector", () => {
     assert.equal(draft?.interfaceType, "anthropic_messages");
   });
 
+  it("ignores unrelated sites even when a stray URL is present", async () => {
+    setLocation("blog.example.test", "/posts/welcome");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<input value="https://blog.example.test/feed" />`,
+      "text/html"
+    );
+    assert.equal(detectFromDocument(doc), null);
+  });
+
   it("detects New API self-hosted dashboards from UI text", async () => {
     setLocation("ai.example.test", "/token");
     const { detectFromDocument } = await import("./detector");
@@ -75,6 +85,19 @@ describe("content detector", () => {
     assert.equal(draft?.providerId, "new_api");
     assert.equal(draft?.endpoint, "https://newapi.example.test/v1");
     assert.equal(draft?.apiKey, "sk-newapiResolvedSecret1234567890");
+  });
+
+  it("detects New API console token routes without relying on the hostname", async () => {
+    setLocation("relay.example.test", "/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<h1>令牌</h1><span>渠道</span><div role="row"><span>开发 Key</span><code>sk-consoleTokenSecret1234567890</code><span>分组: default</span><span>倍率: 1x</span></div>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "new_api");
+    assert.equal(drafts[0]?.endpoint, "https://relay.example.test/v1");
   });
 
   it("detects One API copy fallback inputs", async () => {
@@ -127,6 +150,59 @@ describe("content detector", () => {
     assert.equal(draft?.providerId, "sub2api");
     assert.equal(draft?.endpoint, "https://sub2api.example.test/v1");
     assert.equal(draft?.apiKey, "productA_key_1234567890abcdef");
+  });
+
+  it("detects Veloera token tables from the app token route", async () => {
+    setLocation("apihub.example.test", "/app/tokens");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>Veloera</title><h1>令牌</h1><button>复制</button><code>sk-veloeraManagedSecret1234567890</code>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, "veloera");
+    assert.equal(draft?.endpoint, "https://apihub.example.test/v1");
+    assert.equal(draft?.interfaceType, "openai_compatible");
+  });
+
+  it("detects OmniRoute API manager keys", async () => {
+    setLocation("routebox.example.test", "/dashboard/api-manager");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>OmniRoute</title><h1>API Keys</h1><p>Key created</p><code>sk-machine123-key456-789abc</code><button>Copy</button>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, "omniroute");
+    assert.equal(draft?.endpoint, "https://routebox.example.test/v1");
+    assert.equal(draft?.apiKey, "sk-machine123-key456-789abc");
+  });
+
+  it("detects Metapi downstream keys", async () => {
+    setLocation("metapi.example.test", "/downstream-keys");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>Metapi</title><h1>下游密钥</h1><span>统一代理网关</span><code>sk-metapiDownstreamSecret1234567890</code><button aria-label="复制完整密钥">复制</button>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, "metapi");
+    assert.equal(draft?.endpoint, "https://metapi.example.test/v1");
+    assert.equal(draft?.apiKey, "sk-metapiDownstreamSecret1234567890");
+  });
+
+  it("recognizes related gateway brands as custom OpenAI-compatible sites", async () => {
+    setLocation("anyrouter.example.test", "/keys");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>AnyRouter</title><h1>API Keys</h1><p>OpenAI and Claude compatible gateway</p><code>sk-anyrouterSecret1234567890</code>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, undefined);
+    assert.equal(draft?.title, "AnyRouter");
+    assert.equal(draft?.endpoint, "https://anyrouter.example.test/v1");
+    assert.equal(draft?.interfaceType, "openai_compatible");
   });
 
   it("scans token management pages for multiple unsaved gateway keys", async () => {
@@ -190,6 +266,29 @@ describe("content detector", () => {
     assert.equal(replicateDraft?.interfaceType, "custom_http");
     assert.equal(replicateDraft?.authScheme, "bearer");
     assert.equal(replicateDraft?.apiKey, "r8_1234567890abcdefghijklmnopqrstuvwxyz");
+  });
+
+  it("ignores generic non-AI token pages with long contextual values", async () => {
+    setLocation("billing.example.test", "/settings/tokens");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<h1>API tokens</h1><label>Webhook token</label><input name="api-token" value="billingToken1234567890abcdef" />`,
+      "text/html"
+    );
+    assert.equal(detectFromDocument(doc), null);
+  });
+
+  it("keeps generic AI gateway pages when endpoint evidence is explicit", async () => {
+    setLocation("relay.example.test", "/settings/tokens");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<h1>API Keys</h1><label>Base URL</label><input value="https://relay.example.test/v1" /><label>API Key</label><input value="sk-genericGatewaySecret1234567890" />`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, undefined);
+    assert.equal(draft?.endpoint, "https://relay.example.test/v1");
+    assert.equal(draft?.interfaceType, "openai_compatible");
   });
 
   it("turns copied one-api keys into detected drafts", async () => {

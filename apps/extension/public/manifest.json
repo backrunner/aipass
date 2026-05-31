@@ -11,36 +11,18 @@
     "type": "module"
   },
   "permissions": ["activeTab", "nativeMessaging", "scripting"],
-  "host_permissions": [
-    "https://platform.openai.com/*",
-    "https://api.openai.com/*",
-    "https://console.anthropic.com/*",
-    "https://api.anthropic.com/*",
-    "https://aistudio.google.com/*",
-    "https://generativelanguage.googleapis.com/*",
-    "https://openrouter.ai/*",
-    "https://*.openrouter.ai/*",
-    "https://portal.azure.com/*",
-    "https://console.aws.amazon.com/*",
-    "https://platform.deepseek.com/*",
-    "https://api.deepseek.com/*",
-    "https://platform.moonshot.cn/*",
-    "https://api.moonshot.cn/*",
-    "https://dashscope.console.aliyun.com/*",
-    "https://dashscope.aliyuncs.com/*",
-    "https://bigmodel.cn/*",
-    "https://open.bigmodel.cn/*",
-    "https://console.volcengine.com/*",
-    "https://*.volces.com/*",
-    "https://*.together.ai/*",
-    "https://api.together.xyz/*",
-    "https://fireworks.ai/*",
-    "https://api.fireworks.ai/*",
-    "https://console.groq.com/*",
-    "https://api.groq.com/*",
-    "https://replicate.com/*",
-    "https://api.replicate.com/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["clipboardBridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
   ]
 }
