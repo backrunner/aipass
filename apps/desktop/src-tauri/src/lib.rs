@@ -1,6 +1,7 @@
 mod auth_tasks;
 mod commands;
 mod models;
+mod tray;
 mod updates;
 
 use commands::*;
@@ -571,6 +572,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             configure_initial_window(app.handle());
+            tray::setup(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

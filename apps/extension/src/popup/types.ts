@@ -29,12 +29,14 @@ export type SafeDraft = {
   title: string;
   origin: string;
   url: string;
+  apiKey?: string;
   maskedSecret?: string;
   endpoint?: string;
   interfaceType?: InterfaceType;
   authScheme?: AuthScheme;
   environment?: string;
   tags?: string[];
+  editMode?: boolean;
   gateway?: {
     group?: string;
     rate?: string;

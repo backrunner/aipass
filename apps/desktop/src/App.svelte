@@ -1598,9 +1598,15 @@
     z-index: 0;
   }
 
-  .app-shell > :global(*) {
+  .app-shell > :global(:not(.titlebar)) {
     position: relative;
     z-index: 1;
+  }
+
+  .app-shell > :global(.titlebar) {
+    position: absolute;
+    inset: 0 0 auto 0;
+    z-index: 70;
   }
 
   .boot-shell {
@@ -1628,6 +1634,18 @@
     box-shadow:
       0 1px 0 color-mix(in oklab, var(--surface) 60%, transparent) inset,
       0 12px 32px rgba(8, 12, 24, 0.05);
+  }
+
+  .workspace > :global(.sidebar) {
+    padding-top: 50px;
+  }
+
+  .workspace > :global(.list-pane .toolbar) {
+    padding-top: 48px;
+  }
+
+  .workspace > :global(.detail-header) {
+    padding-top: 56px;
   }
 
   @media (max-width: 1100px) {

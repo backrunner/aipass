@@ -32,11 +32,24 @@ function installChromeStub() {
   });
 }
 
+function flushTimers() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function clickPromptAction(action: string) {
+  const host = document.getElementById("aipass-extension-toast");
+  const button = host?.shadowRoot?.querySelector<HTMLButtonElement>(`button[data-action="${action}"]`);
+  assert.ok(button, `expected ${action} prompt action`);
+  button.click();
+}
+
 describe("content detector", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     setLocation("console.anthropic.com");
     sentMessages.length = 0;
+    document.title = "";
+    document.body.innerHTML = "";
   });
 
   it("detects Anthropic as a first-class provider", async () => {
@@ -291,7 +304,20 @@ describe("content detector", () => {
     assert.equal(draft?.interfaceType, "openai_compatible");
   });
 
-  it("turns copied one-api keys into detected drafts", async () => {
+  it("does not show a watching hint before a secret is detected", async () => {
+    setLocation("one.example.test", "/token");
+    document.title = "One API";
+    document.body.innerHTML = "<h1>API Keys</h1><button>Copy</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+    await flushTimers();
+
+    assert.equal(document.getElementById("aipass-extension-toast"), null);
+    assert.equal(sentMessages.some((message) => (message as { type?: string }).type?.startsWith("aipass.detected")), false);
+  });
+
+  it("prompts before saving copied one-api keys", async () => {
     setLocation("one.example.test", "/token");
     document.title = "One API";
     document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
@@ -304,18 +330,20 @@ describe("content detector", () => {
         detail: { text: "sk-oneApiCopiedSecret1234567890" }
       })
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushTimers();
+    clickPromptAction("save");
+    await flushTimers();
 
     const detection = sentMessages.find((message) => {
       const typed = message as { type?: string };
-      return typed.type === "aipass.detectedSecretDraft";
-    }) as { draft?: { providerId?: string; apiKey?: string; endpoint?: string } } | undefined;
-    assert.equal(detection?.draft?.providerId, "one_api");
-    assert.equal(detection?.draft?.apiKey, "sk-oneApiCopiedSecret1234567890");
-    assert.equal(detection?.draft?.endpoint, "https://one.example.test/v1");
+      return typed.type === "aipass.saveDetectedDraftsNow";
+    }) as { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string }> } | undefined;
+    assert.equal(detection?.drafts?.[0]?.providerId, "one_api");
+    assert.equal(detection?.drafts?.[0]?.apiKey, "sk-oneApiCopiedSecret1234567890");
+    assert.equal(detection?.drafts?.[0]?.endpoint, "https://one.example.test/v1");
   });
 
-  it("turns copied sub2api custom keys into detected drafts", async () => {
+  it("prompts before saving copied sub2api custom keys", async () => {
     setLocation("sub2api.example.test", "/keys");
     document.title = "sub2api";
     document.body.innerHTML = "<h1>API keys</h1><button>Copy</button>";
@@ -328,14 +356,16 @@ describe("content detector", () => {
         detail: { text: "productA_key_1234567890abcdef" }
       })
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushTimers();
+    clickPromptAction("save");
+    await flushTimers();
 
     const detection = sentMessages.find((message) => {
       const typed = message as { type?: string };
-      return typed.type === "aipass.detectedSecretDraft";
-    }) as { draft?: { providerId?: string; apiKey?: string; endpoint?: string } } | undefined;
-    assert.equal(detection?.draft?.providerId, "sub2api");
-    assert.equal(detection?.draft?.apiKey, "productA_key_1234567890abcdef");
-    assert.equal(detection?.draft?.endpoint, "https://sub2api.example.test/v1");
+      return typed.type === "aipass.saveDetectedDraftsNow";
+    }) as { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string }> } | undefined;
+    assert.equal(detection?.drafts?.[0]?.providerId, "sub2api");
+    assert.equal(detection?.drafts?.[0]?.apiKey, "productA_key_1234567890abcdef");
+    assert.equal(detection?.drafts?.[0]?.endpoint, "https://sub2api.example.test/v1");
   });
 });

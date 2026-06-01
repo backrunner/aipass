@@ -7,15 +7,21 @@ const SECRET_PATTERNS = [
   /([A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})/
 ];
 const CONTEXTUAL_SECRET_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]{15,}/;
+const CONTEXTUAL_SCAN_SELECTOR = "button, label, h1, h2, h3, code";
+const MAX_CONTEXT_ELEMENTS = 80;
 
 installClipboardBridge();
 
 function installClipboardBridge() {
-  const win = window as Window & { __AIPASS_CLIPBOARD_BRIDGE__?: boolean };
-  if (win.__AIPASS_CLIPBOARD_BRIDGE__) return;
-  win.__AIPASS_CLIPBOARD_BRIDGE__ = true;
-  patchClipboardWriteText();
-  document.addEventListener("copy", emitSelectedSecret, true);
+  try {
+    const win = window as Window & { __AIPASS_CLIPBOARD_BRIDGE__?: boolean };
+    if (win.__AIPASS_CLIPBOARD_BRIDGE__) return;
+    win.__AIPASS_CLIPBOARD_BRIDGE__ = true;
+    patchClipboardWriteText();
+    document.addEventListener("copy", emitSelectedSecret, { capture: true, passive: true });
+  } catch {
+    // The bridge runs in the page world; never let it affect page scripts.
+  }
 }
 
 function patchClipboardWriteText() {
@@ -23,9 +29,20 @@ function patchClipboardWriteText() {
   const original = clipboard?.writeText?.bind(clipboard);
   if (!clipboard || !original) return;
   try {
-    clipboard.writeText = (async (text: string) => {
-      emitSecret(String(text));
-      return original(text);
+    clipboard.writeText = ((text: string) => {
+      const value = String(text);
+      let result: Promise<void>;
+      try {
+        result = original(text);
+      } catch (error) {
+        deferEmitSecret(value);
+        throw error;
+      }
+      void Promise.resolve(result).then(
+        () => deferEmitSecret(value),
+        () => deferEmitSecret(value)
+      );
+      return result;
     }) as Clipboard["writeText"];
   } catch {
     // Some browsers expose a non-writable Clipboard API; copy events still cover fallback flows.
@@ -33,24 +50,36 @@ function patchClipboardWriteText() {
 }
 
 function emitSelectedSecret() {
-  const active = document.activeElement;
-  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-    const start = active.selectionStart ?? 0;
-    const end = active.selectionEnd ?? active.value.length;
-    emitSecret(active.value.slice(start, end));
-    return;
+  try {
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+      const start = active.selectionStart ?? 0;
+      const end = active.selectionEnd ?? active.value.length;
+      deferEmitSecret(active.value.slice(start, end));
+      return;
+    }
+    deferEmitSecret(window.getSelection()?.toString() ?? "");
+  } catch {
+    // Ignore bridge failures so native copy handlers continue normally.
   }
-  emitSecret(window.getSelection()?.toString() ?? "");
+}
+
+function deferEmitSecret(text: string) {
+  window.setTimeout(() => emitSecret(text), 0);
 }
 
 function emitSecret(text: string) {
-  const secret = extractSecret(text);
-  if (!secret) return;
-  window.dispatchEvent(
-    new CustomEvent(CLIPBOARD_SECRET_EVENT, {
-      detail: { text: secret }
-    })
-  );
+  try {
+    const secret = extractSecret(text);
+    if (!secret) return;
+    window.dispatchEvent(
+      new CustomEvent(CLIPBOARD_SECRET_EVENT, {
+        detail: { text: secret }
+      })
+    );
+  } catch {
+    // The page's copy flow should not depend on AIPass detection.
+  }
 }
 
 function extractSecret(value: string): string | undefined {
@@ -71,13 +100,21 @@ function canUseContextualSecret(): boolean {
     location.hostname,
     location.pathname,
     document.title,
-    ...Array.from(document.querySelectorAll("button, label, h1, h2, h3, code"))
-      .slice(0, 80)
-      .map((element) => element.textContent ?? "")
+    ...limitedElements<HTMLElement>(CONTEXTUAL_SCAN_SELECTOR, MAX_CONTEXT_ELEMENTS).map((element) => element.textContent ?? "")
   ]
     .join(" ")
     .toLowerCase();
   return /(api\s*key|api\s*keys|token|key|令牌|密钥|下游密钥|复制|copy|virtual\s+key|sub2api|one[-_ ]?api|new[-_ ]?api|litellm|veloera|omniroute|metapi|onehub|donehub|anyrouter|中转|网关|渠道|模型)/i.test(text);
+}
+
+function limitedElements<T extends Element>(selector: string, limit: number): T[] {
+  const nodes = document.querySelectorAll<T>(selector);
+  const elements: T[] = [];
+  for (let index = 0; index < nodes.length && elements.length < limit; index += 1) {
+    const element = nodes.item(index);
+    if (element) elements.push(element);
+  }
+  return elements;
 }
 
 function isLikelySecret(candidate: string): boolean {

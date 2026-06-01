@@ -4,6 +4,7 @@ import { beforeEach, describe, it, vi } from "vitest";
 type Listener = (message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => boolean | void;
 
 const listeners: Listener[] = [];
+const openPopup = vi.fn().mockResolvedValue(undefined);
 
 function installChromeStub() {
   vi.stubGlobal("chrome", {
@@ -52,6 +53,11 @@ function installChromeStub() {
         callback({ id: "1", ok: true, data: {} });
       })
     },
+    action: {
+      openPopup,
+      setBadgeText: vi.fn(),
+      setBadgeBackgroundColor: vi.fn()
+    },
     scripting: {
       executeScript: vi.fn().mockResolvedValue([])
     }
@@ -71,6 +77,7 @@ describe("service worker pending drafts", () => {
     vi.resetModules();
     vi.unstubAllGlobals();
     listeners.length = 0;
+    openPopup.mockClear();
     installChromeStub();
   });
 
@@ -167,6 +174,60 @@ describe("service worker pending drafts", () => {
       data?: { drafts?: unknown[] };
     };
     assert.equal(after.data?.drafts?.length, 0);
+  });
+
+  it("saves detected drafts immediately without queueing review state", async () => {
+    await import("./service-worker");
+
+    const saved = (await dispatchMessage({
+      type: "aipass.saveDetectedDraftsNow",
+      drafts: [
+        {
+          title: "OpenRouter",
+          origin: "https://openrouter.ai",
+          url: "https://openrouter.ai/settings/keys",
+          providerId: "openrouter",
+          endpoint: "https://openrouter.ai/api/v1",
+          apiKey: "sk-or-v1-direct-secret1234"
+        }
+      ]
+    })) as { ok?: boolean; data?: { saved?: unknown[] } };
+    assert.equal(saved.ok, true);
+    assert.equal(saved.data?.saved?.length, 1);
+
+    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: unknown[] };
+    };
+    assert.equal(pending.data?.drafts?.length, 0);
+  });
+
+  it("stages a single detected draft for popup editing with its secret", async () => {
+    await import("./service-worker");
+
+    const staged = (await dispatchMessage({
+      type: "aipass.editDetectedDrafts",
+      drafts: [
+        {
+          title: "One API",
+          origin: "https://one.example.test",
+          url: "https://one.example.test/token",
+          providerId: "one_api",
+          endpoint: "https://one.example.test/v1",
+          apiKey: "sk-oneapi-edit-secret1234"
+        }
+      ]
+    })) as { ok?: boolean; data?: { opened?: boolean } };
+    assert.equal(staged.ok, true);
+    assert.equal(staged.data?.opened, true);
+    assert.equal(openPopup.mock.calls.length, 1);
+
+    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: Array<{ editMode?: boolean; apiKey?: string }> };
+    };
+    assert.equal(pending.data?.drafts?.[0]?.editMode, true);
+    assert.equal(pending.data?.drafts?.[0]?.apiKey, "sk-oneapi-edit-secret1234");
   });
 
   it("ignores all queued drafts for an origin", async () => {

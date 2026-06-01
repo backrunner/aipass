@@ -52,7 +52,12 @@
   let statusText = "";
   let statusError = false;
   let copied = "";
-  let unlockBusy = false;
+  type RefreshOptions = {
+    scanActiveTab?: boolean;
+  };
+
+  let passwordUnlockBusy = false;
+  let desktopUnlockBusy = false;
   let unlockPassword = "";
   let unlockFailures = 0;
   let showPassword = false;
@@ -63,6 +68,9 @@
   let showAddForm = false;
   let addBusy = false;
   let addDraft: Draft = emptyDraft();
+  let editingDraftId = "";
+
+  $: unlockBusy = passwordUnlockBusy || desktopUnlockBusy;
 
   // Auto-dismiss transient success messages; errors stay until the next action.
   $: {
@@ -81,10 +89,11 @@
     currentUrl = tab?.url ?? "";
     currentOrigin = originFromUrl(currentUrl);
     provider = matchProviderByDomain(currentUrl);
-    await refresh();
+    await refresh({ scanActiveTab: false });
   });
 
-  async function refresh() {
+  async function refresh(options: RefreshOptions = {}) {
+    const scanActiveTab = options.scanActiveTab ?? false;
     statusText = "";
     statusError = false;
     const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
@@ -93,12 +102,18 @@
       return;
     }
     connection = ping.data?.locked ? "locked" : "connected";
-    if (connection === "connected" && currentUrl && currentOrigin) {
+    if (connection !== "connected") {
+      entries = [];
+      grants = [];
+      clearPendingDraftUi();
+      return;
+    }
+    if (currentUrl && currentOrigin) {
       const lookup = await sendToWorker<LookupData>({ type: "aipass.lookup", url: currentUrl, origin: currentOrigin });
       entries = lookup?.ok ? lookup.data?.entries ?? [] : [];
       grants = lookup?.ok ? lookup.data?.grants ?? [] : [];
     }
-    if (tabId && currentUrl) {
+    if (scanActiveTab && tabId && currentUrl) {
       await sendToWorker<{ scanned: boolean }>({ type: "aipass.scanActiveTab", tabId });
       await delay(120);
     }
@@ -109,13 +124,19 @@
 
   async function openDesktopUnlock() {
     if (unlockBusy) return;
-    unlockBusy = true;
+    desktopUnlockBusy = true;
     statusError = false;
     const response = await sendToWorker<{ locked?: boolean }>({ type: "aipass.openUnlock" });
-    unlockBusy = false;
     if (!response?.ok) {
+      desktopUnlockBusy = false;
       statusText = response?.error ?? $t("ext.unlockFailed");
       statusError = true;
+      return;
+    }
+    if (response.data?.locked === false) {
+      await refresh({ scanActiveTab: false });
+      desktopUnlockBusy = false;
+      statusText = $t("ext.unlocked");
       return;
     }
     statusText = $t("ext.finishUnlock");
@@ -124,7 +145,7 @@
 
   async function unlockWithPassword() {
     if (unlockBusy || !unlockPassword) return;
-    unlockBusy = true;
+    passwordUnlockBusy = true;
     statusText = "";
     statusError = false;
     const response = await sendToWorker<{ locked?: boolean }>({
@@ -132,26 +153,31 @@
       password: unlockPassword
     });
     unlockPassword = "";
-    unlockBusy = false;
     if (!response?.ok || response.data?.locked) {
+      passwordUnlockBusy = false;
       statusText = $t("ext.unlock.wrongPassword");
       statusError = true;
       unlockFailures += 1;
       return;
     }
-    await refresh();
+    await refresh({ scanActiveTab: false });
+    passwordUnlockBusy = false;
     statusText = $t("ext.unlocked");
   }
 
   async function pollForUnlock() {
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      await delay(750);
-      const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
-      if (ping?.ok && !ping.data?.locked) {
-        await refresh();
-        statusText = $t("ext.unlocked");
-        return;
+    try {
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await delay(750);
+        const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
+        if (ping?.ok && !ping.data?.locked) {
+          await refresh({ scanActiveTab: false });
+          statusText = $t("ext.unlocked");
+          return;
+        }
       }
+    } finally {
+      desktopUnlockBusy = false;
     }
   }
 
@@ -281,10 +307,26 @@
       clearPendingDraftUi();
       return;
     }
-    const key = pendingDrafts.map(pendingDraftKey).join("||");
+    const editable = pendingDrafts.find((pending) => pending.editMode && pending.apiKey);
+    if (editable && pendingDrafts.length === 1) {
+      const key = pendingDraftKey(editable);
+      if (key !== lastDraftKey || editingDraftId !== editable.draftId || !showAddForm) {
+        openAddFormFromPending(editable);
+        lastDraftKey = key;
+      }
+      draftItems = [];
+      return;
+    }
+
+    const reviewDrafts = pendingDrafts.filter((pending) => !pending.editMode);
+    if (!reviewDrafts.length) {
+      clearPendingDraftUi();
+      return;
+    }
+    const key = reviewDrafts.map(pendingDraftKey).join("||");
     if (key === lastDraftKey && draftItems.length) return;
 
-    draftItems = pendingDrafts.map((pending) => {
+    draftItems = reviewDrafts.map((pending) => {
       const existing = draftItems.find((item) => item.draftId === pending.draftId);
       if (existing) return { ...existing, safe: pending };
       return {
@@ -308,6 +350,9 @@
     const next = emptyDraft();
     next.providerId = pending.providerId ?? definition?.id ?? "";
     next.title = pending.title || definition?.displayName || "Browser Provider";
+    next.domain = hostFromOrigin(pending.origin);
+    next.consoleUrl = pending.url ?? "";
+    next.apiKey = pending.apiKey ?? "";
     next.endpoint = pending.endpoint ?? definition?.endpoints.find((item) => item.kind === "api")?.url ?? "";
     next.interfaceType = pending.interfaceType ?? definition?.interfaces[0] ?? "custom_http";
     next.authScheme = pending.authScheme ?? definition?.authSchemes[0] ?? "custom_header";
@@ -316,6 +361,14 @@
     next.gatewayGroup = pending.gateway?.group ?? "";
     next.gatewayRate = pending.gateway?.rate ?? "";
     return next;
+  }
+
+  function openAddFormFromPending(pending: SafeDraft) {
+    addDraft = draftFromPending(pending);
+    editingDraftId = pending.draftId;
+    statusText = "";
+    statusError = false;
+    showAddForm = true;
   }
 
   function onProviderChanged(item: DraftItem) {
@@ -396,24 +449,29 @@
   }
 
   function draftPatch(item: DraftItem) {
-    const tags = item.draft.tag
+    return draftPatchFromDraft(item.draft);
+  }
+
+  function draftPatchFromDraft(draft: Draft, includeApiKey = false) {
+    const tags = draft.tag
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
     const gateway =
-      item.draft.gatewayGroup.trim() || item.draft.gatewayRate.trim()
+      draft.gatewayGroup.trim() || draft.gatewayRate.trim()
         ? {
-            group: item.draft.gatewayGroup.trim() || undefined,
-            rate: item.draft.gatewayRate.trim() || undefined
+            group: draft.gatewayGroup.trim() || undefined,
+            rate: draft.gatewayRate.trim() || undefined
           }
         : undefined;
     return {
-      providerId: item.draft.providerId || undefined,
-      title: item.draft.title.trim() || "Browser Provider",
-      endpoint: item.draft.endpoint.trim() || undefined,
-      interfaceType: item.draft.interfaceType,
-      authScheme: item.draft.authScheme,
-      environment: item.draft.environment.trim() || "browser",
+      providerId: draft.providerId || undefined,
+      title: draft.title.trim() || "Browser Provider",
+      endpoint: draft.endpoint.trim() || undefined,
+      interfaceType: draft.interfaceType,
+      authScheme: draft.authScheme,
+      apiKey: includeApiKey ? draft.apiKey.trim() || undefined : undefined,
+      environment: draft.environment.trim() || "browser",
       tags: tags.length ? tags : ["browser"],
       gateway
     };
@@ -423,6 +481,7 @@
     pendingDrafts = [];
     draftItems = [];
     lastDraftKey = "";
+    editingDraftId = "";
     clearTimeout(previewTimer);
     previewTimer = undefined;
     previewRequestId += 1;
@@ -482,6 +541,7 @@
 
   function openAddForm() {
     addDraft = emptyDraft();
+    editingDraftId = "";
     addDraft.environment = "browser";
     addDraft.tag = "browser";
     if (currentUrl) {
@@ -500,8 +560,11 @@
   }
 
   function closeAddForm() {
+    const draftId = editingDraftId;
     showAddForm = false;
+    editingDraftId = "";
     addDraft = emptyDraft();
+    if (draftId) void sendToWorker({ type: "aipass.dismissPendingDraft", draftId });
   }
 
   function addProviderChanged() {
@@ -542,6 +605,23 @@
     addBusy = true;
     statusText = "";
     statusError = false;
+    if (editingDraftId) {
+      const response = await sendToWorker<{ entryId: string }>({
+        type: "aipass.savePendingDraft",
+        draftId: editingDraftId,
+        draft: draftPatchFromDraft(addDraft, true)
+      });
+      addBusy = false;
+      if (!response?.ok) {
+        statusText = response?.error ?? $t("ext.addProviderFailed");
+        statusError = true;
+        return;
+      }
+      closeAddForm();
+      await refresh({ scanActiveTab: false });
+      statusText = $t("ext.saved");
+      return;
+    }
     const definition = providerDefinitions.find((item) => item.id === addDraft.providerId);
     const response = await sendToWorker<{ entryId: string }>({
       type: "aipass.providerAdd",
@@ -579,6 +659,14 @@
 
   function splitCsv(value: string): string[] {
     return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+
+  function hostFromOrigin(origin: string): string {
+    try {
+      return new URL(origin).hostname;
+    } catch {
+      return "";
+    }
   }
 
   function pairsFromCsv(value: string): Array<[string, string]> {
@@ -634,7 +722,7 @@
           <Plus size={15} />
         </IconButton>
       {/if}
-      <IconButton label={$t("ext.refresh")} on:click={refresh}>
+      <IconButton label={$t("ext.refresh")} on:click={() => refresh({ scanActiveTab: true })}>
         <RefreshCw size={15} />
       </IconButton>
     </div>
@@ -680,14 +768,14 @@
             {#if showPassword}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
           </button>
         </div>
-        <Button variant="primary" block type="submit" disabled={!unlockPassword || unlockBusy}>
-          {$t("ext.unlock.action")}
+        <Button variant="primary" block type="submit" loading={passwordUnlockBusy} disabled={!unlockPassword || unlockBusy}>
+          {passwordUnlockBusy ? $t("auth.unlock.busy") : $t("ext.unlock.action")}
         </Button>
       </form>
       {#if unlockFailures >= 3}
         <p class="unlock-hint">{$t("ext.unlock.recoverHint")}</p>
       {/if}
-      <Button variant="ghost" block on:click={openDesktopUnlock} disabled={unlockBusy}>
+      <Button variant="ghost" block on:click={openDesktopUnlock} loading={desktopUnlockBusy} disabled={unlockBusy}>
         {$t("ext.openApp")}
       </Button>
     </section>

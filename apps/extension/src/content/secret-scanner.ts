@@ -18,10 +18,14 @@ const SECRET_PATTERNS = [
   /([A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})/
 ];
 const CONTEXTUAL_SECRET_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]{15,}/;
+const INPUT_SCAN_LIMIT = 160;
+const EXPLICIT_KEY_ELEMENT_SCAN_LIMIT = 80;
+const TOKEN_ROW_SCAN_LIMIT = 240;
+const TABLE_CELL_SCAN_LIMIT = 24;
 
 export function findSecretCandidates(doc: Document, options: { tokenManagementPage?: boolean } = {}): SecretCandidate[] {
   const candidates: SecretCandidate[] = [];
-  const inputs = Array.from(doc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
+  const inputs = limitedElements<HTMLInputElement | HTMLTextAreaElement>(doc, "input, textarea", INPUT_SCAN_LIMIT);
   for (const input of inputs) {
     const label = [
       input.name,
@@ -41,12 +45,12 @@ export function findSecretCandidates(doc: Document, options: { tokenManagementPa
       }
     }
   }
-  const explicitKeyElements = Array.from(
-    doc.querySelectorAll<HTMLElement>(
-      "code, pre, output, [data-api-key], [data-token], [role='textbox'], [aria-label*='key' i], [aria-label*='token' i], [title*='key' i], [title*='token' i]"
-    )
+  const explicitKeyElements = limitedElements<HTMLElement>(
+    doc,
+    "code, pre, output, [data-api-key], [data-token], [role='textbox'], [aria-label*='key' i], [aria-label*='token' i], [title*='key' i], [title*='token' i]",
+    EXPLICIT_KEY_ELEMENT_SCAN_LIMIT
   );
-  for (const element of explicitKeyElements.slice(0, 80)) {
+  for (const element of explicitKeyElements) {
     const context = [
       element.getAttribute("aria-label") ?? "",
       element.getAttribute("title") ?? "",
@@ -106,13 +110,13 @@ function isLikelySecret(candidate: string): boolean {
 }
 
 function findTokenManagementCandidates(doc: Document): SecretCandidate[] {
-  const rows = Array.from(
-    doc.querySelectorAll<HTMLElement>(
-      "tr, [role='row'], article, li, section, .ant-table-row, .el-table__row, .semi-table-row, .v-data-table__tr"
-    )
+  const rows = limitedElements<HTMLElement>(
+    doc,
+    "tr, [role='row'], article, li, section, .ant-table-row, .el-table__row, .semi-table-row, .v-data-table__tr",
+    TOKEN_ROW_SCAN_LIMIT
   );
   const candidates: SecretCandidate[] = [];
-  for (const row of rows.slice(0, 240)) {
+  for (const row of rows) {
     const text = normalizedText(row);
     if (text.length < 16 || text.length > 2000) continue;
     if (!hasKeyContext(text) && !/sk-|AIza|r8_|倍率|分组|group|rate/i.test(text)) continue;
@@ -138,7 +142,7 @@ function metadataFromElement(element: Element, secret: string): Omit<SecretCandi
 }
 
 function metadataFromTableRow(row: Element, secret: string): Omit<SecretCandidate, "secret"> {
-  const cells = Array.from(row.querySelectorAll<HTMLElement>("td, th, [role='cell'], [role='gridcell'], [role='columnheader']"));
+  const cells = limitedElements<HTMLElement>(row, "td, th, [role='cell'], [role='gridcell'], [role='columnheader']", TABLE_CELL_SCAN_LIMIT);
   if (!cells.length) return {};
   const headers = tableHeadersForRow(row);
   let label: string | undefined;
@@ -158,12 +162,26 @@ function metadataFromTableRow(row: Element, secret: string): Omit<SecretCandidat
   };
 }
 
+function limitedElements<T extends Element>(
+  root: Document | Element,
+  selector: string,
+  limit: number
+): T[] {
+  const nodes = root.querySelectorAll<T>(selector);
+  const elements: T[] = [];
+  for (let index = 0; index < nodes.length && elements.length < limit; index += 1) {
+    const element = nodes.item(index);
+    if (element) elements.push(element);
+  }
+  return elements;
+}
+
 function tableHeadersForRow(row: Element): string[] {
   const table = row.closest("table");
   if (!table) return [];
   const headerRow = table.querySelector("thead tr") ?? table.querySelector("tr");
   if (!headerRow || headerRow === row) return [];
-  return Array.from(headerRow.querySelectorAll<HTMLElement>("th, td, [role='columnheader']"))
+  return limitedElements<HTMLElement>(headerRow, "th, td, [role='columnheader']", TABLE_CELL_SCAN_LIMIT)
     .map((cell) => normalizedText(cell))
     .filter(Boolean);
 }

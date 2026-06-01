@@ -39,9 +39,20 @@ const AI_GATEWAY_TEXT_PATTERN =
   /(openai|anthropic|claude|gemini|generativelanguage|chat\s*completions?|base\s*url|api\s*base|gateway|proxy|relay|router|llm|ai\s*provider|virtual\s+key|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|veloera|omniroute|metapi|onehub|donehub|anyrouter|中转|网关|聚合|渠道|模型|下游|上游|分发|倍率|分组|路由)/i;
 const CLIPBOARD_SECRET_EVENT = "aipass.clipboardSecret";
 const TOAST_HOST_ID = "aipass-extension-toast";
+const ENDPOINT_INPUT_SCAN_LIMIT = 160;
+const ENDPOINT_TEXT_SCAN_LIMIT = 80;
+const GATEWAY_HAYSTACK_SCAN_LIMIT = 120;
+const KEY_PAGE_TEXT_SCAN_LIMIT = 80;
+const FILL_TARGET_SCAN_LIMIT = 120;
+const MUTATION_SCAN_DEBOUNCE_MS = 800;
+const MUTATION_SCAN_MIN_INTERVAL_MS = 2500;
 const sentDraftKeys = new Set<string>();
 const shownToastKeys = new Set<string>();
 let toastSequence = 0;
+let draftScanTimer: ReturnType<typeof setTimeout> | undefined;
+let draftScanInFlight = false;
+let draftScanQueued = false;
+let lastDraftScanStartedAt = 0;
 
 type GatewaySignature = {
   id?: string;
@@ -59,6 +70,32 @@ type PageRecognition = {
   aiGatewayEvidence: boolean;
   endpoint?: string;
 };
+
+type DetectionResult = {
+  recognition: PageRecognition;
+  drafts: DetectedSecretDraft[];
+};
+
+type RuntimeResponse<T = unknown> = {
+  ok?: boolean;
+  error?: string;
+  data?: T;
+};
+
+type ToastHelpers = {
+  close: () => void;
+  setStatus: (message: string, tone?: "info" | "error" | "success") => void;
+};
+
+type ToastAction = {
+  label: string;
+  busyLabel?: string;
+  tone?: "primary" | "secondary";
+  dataAction?: string;
+  onClick: (helpers: ToastHelpers) => Promise<void> | void;
+};
+
+type PageTheme = "light" | "dark";
 
 const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
   {
@@ -127,21 +164,35 @@ const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
 ];
 
 export function detectFromDocument(doc: Document = document): DetectedSecretDraft | null {
-  return buildDraft(doc, findSecretCandidates(doc)[0]);
+  const recognition = recognizePage(doc);
+  const candidates = findSecretCandidates(doc, recognition);
+  return buildDraft(doc, candidates[0], recognition, false);
 }
 
 export function detectAllFromDocument(doc: Document = document): DetectedSecretDraft[] {
-  const candidates = findSecretCandidates(doc);
-  const drafts = candidates
-    .map((candidate) => buildDraft(doc, candidate))
-    .filter((draft): draft is DetectedSecretDraft => Boolean(draft?.apiKey));
-  return uniqueDrafts(drafts);
+  return detectDraftsFromDocument(doc).drafts;
 }
 
-function buildDraft(doc: Document, candidate?: SecretCandidate): DetectedSecretDraft | null {
+function detectDraftsFromDocument(doc: Document): DetectionResult {
   const recognition = recognizePage(doc);
+  const candidates = findSecretCandidates(doc, recognition);
+  const drafts = candidates
+    .map((candidate) => buildDraft(doc, candidate, recognition))
+    .filter((draft): draft is DetectedSecretDraft => Boolean(draft?.apiKey));
+  return {
+    recognition,
+    drafts: uniqueDrafts(drafts)
+  };
+}
+
+function buildDraft(
+  doc: Document,
+  candidate?: SecretCandidate,
+  recognition: PageRecognition = recognizePage(doc),
+  findFallbackSecret = true
+): DetectedSecretDraft | null {
   const provider = recognition.provider;
-  const secret = candidate?.secret ?? findSecretCandidate(doc);
+  const secret = candidate?.secret ?? (findFallbackSecret ? findSecretCandidate(doc, recognition) : undefined);
   const recognized =
     Boolean(provider) ||
     (recognition.tokenPage && recognition.aiGatewayEvidence && (Boolean(secret) || recognition.knownGateway));
@@ -162,13 +213,13 @@ function buildDraft(doc: Document, candidate?: SecretCandidate): DetectedSecretD
   };
 }
 
-function findSecretCandidate(doc: Document): string | undefined {
-  return findSecretCandidates(doc)[0]?.secret;
+function findSecretCandidate(doc: Document, recognition?: PageRecognition): string | undefined {
+  return findSecretCandidates(doc, recognition)[0]?.secret;
 }
 
-function findSecretCandidates(doc: Document): SecretCandidate[] {
+function findSecretCandidates(doc: Document, recognition: PageRecognition = recognizePage(doc)): SecretCandidate[] {
   return scanSecretCandidates(doc, {
-    tokenManagementPage: isTokenManagementPage(doc)
+    tokenManagementPage: isTokenManagementPage(recognition)
   });
 }
 
@@ -195,12 +246,16 @@ function uniqueDrafts(drafts: DetectedSecretDraft[]): DetectedSecretDraft[] {
 }
 
 function findEndpoint(doc: Document): string | undefined {
-  const candidates = Array.from(doc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"))
+  const candidates = limitedElements<HTMLInputElement | HTMLTextAreaElement>(
+    doc,
+    "input, textarea",
+    ENDPOINT_INPUT_SCAN_LIMIT
+  )
     .map((input) => input.value || input.placeholder || input.textContent || "")
     .filter((value) => /^https?:\/\//.test(value));
   const explicit = candidates.find((value) => ENDPOINT_PATTERN.test(value));
   if (explicit) return explicit;
-  const textCandidates = Array.from(doc.querySelectorAll<HTMLElement>("code, pre, output"))
+  const textCandidates = limitedElements<HTMLElement>(doc, "code, pre, output", ENDPOINT_TEXT_SCAN_LIMIT)
     .map((element) => element.textContent?.trim() ?? "")
     .filter((value) => /^https?:\/\//.test(value));
   return textCandidates.find((value) => ENDPOINT_PATTERN.test(value));
@@ -238,12 +293,14 @@ function gatewayHaystack(doc: Document): string {
     location.hostname,
     location.pathname,
     doc.title,
-    ...Array.from(doc.querySelectorAll("input, textarea, button, label, h1, h2, h3, span, td, th, code, pre, [role='row'], [role='cell'], [aria-label], [title]"))
-      .slice(0, 120)
-      .map(
-        (element) =>
-          `${element.textContent ?? ""} ${(element as HTMLInputElement).name ?? ""} ${(element as HTMLInputElement).id ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""}`
-      )
+    ...limitedElements<HTMLElement>(
+      doc,
+      "input, textarea, button, label, h1, h2, h3, span, td, th, code, pre, [role='row'], [role='cell'], [aria-label], [title]",
+      GATEWAY_HAYSTACK_SCAN_LIMIT
+    ).map(
+      (element) =>
+        `${element.textContent ?? ""} ${(element as HTMLInputElement).name ?? ""} ${(element as HTMLInputElement).id ?? ""} ${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""}`
+    )
   ]
     .join(" ")
     .toLowerCase();
@@ -258,9 +315,9 @@ function inferSelfHostedEndpoint(recognition: PageRecognition): string | undefin
 function hasSelfHostedKeyPageText(doc: Document): boolean {
   const text = [
     doc.title,
-    ...Array.from(doc.querySelectorAll("button, label, h1, h2, h3, code"))
-      .slice(0, 80)
-      .map((element) => element.textContent ?? "")
+    ...limitedElements<HTMLElement>(doc, "button, label, h1, h2, h3, code", KEY_PAGE_TEXT_SCAN_LIMIT).map(
+      (element) => element.textContent ?? ""
+    )
   ]
     .join(" ")
     .toLowerCase();
@@ -272,8 +329,7 @@ function hasAiGatewayEvidence(doc: Document, endpoint?: string): boolean {
   return AI_GATEWAY_TEXT_PATTERN.test(gatewayHaystack(doc));
 }
 
-function isTokenManagementPage(doc: Document): boolean {
-  const recognition = recognizePage(doc);
+function isTokenManagementPage(recognition: PageRecognition): boolean {
   return recognition.tokenPage && recognition.aiGatewayEvidence;
 }
 
@@ -296,57 +352,94 @@ function titleFromEndpoint(endpoint?: string): string | undefined {
 
 async function sendDraftIfAllowed() {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
-  const drafts = detectAllFromDocument().filter((draft) => draft.apiKey);
-  const shouldShowHint = !drafts.length && isKeyPageHintRelevant(document);
-  if (!drafts.length && !shouldShowHint) return;
+  const detection = detectDraftsFromDocument(document);
+  const drafts = detection.drafts.filter((draft) => draft.apiKey);
+  if (!drafts.length) return;
   const origin = location.origin;
   if (!origin || (await isIgnoredOrigin(origin))) return;
-  if (!drafts.length) {
-    showKeyPageHint();
-    return;
-  }
   const freshDrafts = takeUnsentDrafts(drafts);
   if (!freshDrafts.length) return;
-  const response = await sendRuntimeMessage<{ ok?: boolean }>({
-    type: "aipass.detectedSecretDrafts",
-    drafts: freshDrafts
-  });
-  if (response?.ok !== false) showDetectedDraftToast(freshDrafts.length);
+  showDetectedDraftPrompt(freshDrafts);
 }
 
 async function sendDraftForClipboardSecret(secret: string) {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
-  const candidate = extractSecret(secret, canUseContextualClipboardSecret(document));
+  const recognition = recognizePage(document);
+  const candidate = extractSecret(secret, canUseContextualClipboardSecret(recognition));
   if (!candidate) return;
-  const draft = buildDraft(document, { secret: candidate });
-  if (!draft?.apiKey || (await isIgnoredOrigin(draft.origin)) || !takeUnsentDrafts([draft]).length) return;
-  const response = await sendRuntimeMessage<{ ok?: boolean }>({ type: "aipass.detectedSecretDraft", draft });
-  if (response?.ok !== false) showDetectedDraftToast(1);
+  const draft = buildDraft(document, { secret: candidate }, recognition);
+  if (!draft?.apiKey || (await isIgnoredOrigin(draft.origin))) return;
+  const freshDrafts = takeUnsentDrafts([draft]);
+  if (!freshDrafts.length) return;
+  showDetectedDraftPrompt(freshDrafts);
 }
 
-function canUseContextualClipboardSecret(doc: Document): boolean {
-  const recognition = recognizePage(doc);
+function canUseContextualClipboardSecret(recognition: PageRecognition): boolean {
   return recognition.tokenPage && recognition.aiGatewayEvidence;
 }
 
-function isKeyPageHintRelevant(doc: Document): boolean {
-  const recognition = recognizePage(doc);
-  return recognition.tokenPage && (Boolean(recognition.provider) || recognition.knownGateway || recognition.aiGatewayEvidence);
-}
-
-function showKeyPageHint() {
-  showToast("hint", {
-    title: "AIPass is watching this API key page.",
-    detail: "Reveal or copy a key here and it will appear in the extension.",
-    autoDismissMs: 9000
+function showDetectedDraftPrompt(drafts: DetectedSecretDraft[]) {
+  const count = drafts.length;
+  const first = drafts[0];
+  const key = `detected:${drafts.map(draftKey).join("||")}`;
+  const title = count === 1 ? "Save API key in AIPass?" : `Save ${count} API keys in AIPass?`;
+  const detail =
+    count === 1
+      ? [first?.title, first?.maskedSecret].filter(Boolean).join(" - ")
+      : "AIPass can save the detected keys directly.";
+  showToast(key, {
+    title,
+    detail,
+    autoDismissMs: 20000,
+    actions: [
+      {
+        label: "Save",
+        busyLabel: "Saving",
+        tone: "primary",
+        dataAction: "save",
+        onClick: async ({ close }) => {
+          const response = await sendRuntimeMessage<
+            RuntimeResponse<{ saved?: Array<{ entryId?: string }>; errors?: Array<{ error: string }> }>
+          >({
+            type: "aipass.saveDetectedDraftsNow",
+            drafts
+          });
+          if (!response?.ok) {
+            throw new Error(response?.error ?? "Unable to save this key");
+          }
+          close();
+          showSavedToast(response.data?.saved?.length ?? count);
+        }
+      },
+      {
+        label: "Edit",
+        busyLabel: "Opening",
+        tone: "secondary",
+        dataAction: "edit",
+        onClick: async ({ close, setStatus }) => {
+          const response = await sendRuntimeMessage<RuntimeResponse<{ opened?: boolean }>>({
+            type: "aipass.editDetectedDrafts",
+            drafts
+          });
+          if (!response?.ok) {
+            throw new Error(response?.error ?? "Unable to open AIPass");
+          }
+          if (response.data?.opened) {
+            close();
+            return;
+          }
+          setStatus("Click the AIPass toolbar icon to finish editing.", "info");
+        }
+      }
+    ]
   });
 }
 
-function showDetectedDraftToast(count: number) {
-  showToast(`detected:${count}`, {
-    title: count === 1 ? "AIPass detected an API key." : `AIPass detected ${count} API keys.`,
-    detail: "Open the AIPass extension to review and save.",
-    autoDismissMs: 12000
+function showSavedToast(count: number) {
+  showToast(`saved:${Date.now()}`, {
+    title: count === 1 ? "Saved to AIPass." : `Saved ${count} keys to AIPass.`,
+    detail: "You can manage it from the AIPass app.",
+    autoDismissMs: 4500
   });
 }
 
@@ -400,11 +493,13 @@ function showToast(
     title: string;
     detail: string;
     autoDismissMs: number;
+    actions?: ToastAction[];
   }
 ) {
   if (typeof document === "undefined" || !document.body || shownToastKeys.has(key)) return;
   shownToastKeys.add(key);
   const host = ensureToastHost();
+  host.dataset.theme = detectPageTheme();
   const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
   root.replaceChildren();
 
@@ -416,23 +511,55 @@ function showToast(
       top: 18px;
       right: 18px;
       z-index: 2147483647;
-      color-scheme: light dark;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --aipass-surface: #ffffff;
+      --aipass-surface-2: #f1f3f8;
+      --aipass-text: #08101f;
+      --aipass-text-secondary: #383f55;
+      --aipass-text-tertiary: #636b82;
+      --aipass-border: #e1e4ed;
+      --aipass-accent: #2563eb;
+      --aipass-accent-hover: #1f4fd0;
+      --aipass-accent-soft: rgba(37, 99, 235, 0.1);
+      --aipass-danger: #b42318;
+      --aipass-danger-soft: rgba(180, 35, 24, 0.08);
+      --aipass-success: #18794e;
+      --aipass-success-soft: rgba(24, 121, 78, 0.1);
+      --aipass-shadow: 0 4px 16px rgba(15, 17, 16, 0.12);
+      color-scheme: light;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text", system-ui, sans-serif;
+    }
+    :host([data-theme="dark"]) {
+      --aipass-surface: #131826;
+      --aipass-surface-2: #1a2032;
+      --aipass-text: #f4f6fc;
+      --aipass-text-secondary: #c8cee0;
+      --aipass-text-tertiary: #969eb6;
+      --aipass-border: #232b40;
+      --aipass-accent: #6092ff;
+      --aipass-accent-hover: #76a2ff;
+      --aipass-accent-soft: rgba(96, 146, 255, 0.16);
+      --aipass-danger: #f1a6a0;
+      --aipass-danger-soft: rgba(241, 166, 160, 0.14);
+      --aipass-success: #8ad8be;
+      --aipass-success-soft: rgba(138, 216, 190, 0.14);
+      --aipass-shadow: 0 4px 16px rgba(0, 0, 0, 0.36);
+      color-scheme: dark;
     }
     .toast {
       box-sizing: border-box;
-      width: min(360px, calc(100vw - 32px));
+      width: min(380px, calc(100vw - 32px));
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
-      padding: 12px 12px 12px 14px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid var(--aipass-border);
       border-radius: 8px;
-      background: #111827;
-      color: #f9fafb;
-      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28);
+      background: var(--aipass-surface);
+      color: var(--aipass-text);
+      box-shadow: var(--aipass-shadow);
       font-size: 13px;
       line-height: 1.35;
+      font-feature-settings: "ss01", "cv11";
     }
     .copy {
       display: flex;
@@ -440,28 +567,100 @@ function showToast(
       flex-direction: column;
       gap: 3px;
     }
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      grid-column: 1 / -1;
+    }
     strong {
       font-size: 13px;
-      font-weight: 700;
+      font-weight: 600;
       letter-spacing: 0;
+      color: var(--aipass-text);
     }
-    span {
-      color: rgba(249, 250, 251, 0.74);
+    .detail {
+      color: var(--aipass-text-tertiary);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .status {
+      grid-column: 1 / -1;
+      margin-top: -4px;
+      color: var(--aipass-text-tertiary);
       font-size: 12px;
     }
+    .status.error {
+      color: var(--aipass-danger);
+    }
+    .status.success {
+      color: var(--aipass-success);
+    }
     button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       width: 24px;
       height: 24px;
       border: 0;
       border-radius: 6px;
-      background: rgba(255, 255, 255, 0.1);
-      color: #f9fafb;
+      background: transparent;
+      color: var(--aipass-text-secondary);
       cursor: pointer;
       font: inherit;
       line-height: 1;
+      transition:
+        background-color 80ms ease,
+        border-color 120ms ease,
+        color 120ms ease;
     }
     button:hover {
-      background: rgba(255, 255, 255, 0.18);
+      background: var(--aipass-accent-soft);
+      color: var(--aipass-text);
+    }
+    .close-button {
+      border: 1px solid transparent;
+    }
+    .close-button:hover {
+      background: var(--aipass-danger-soft);
+      color: var(--aipass-danger);
+    }
+    .close-button svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+    .action {
+      width: auto;
+      min-width: 64px;
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--aipass-border);
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .action.primary {
+      background: var(--aipass-accent);
+      color: #ffffff;
+      border-color: var(--aipass-accent);
+    }
+    .action.primary:hover {
+      background: var(--aipass-accent-hover);
+      border-color: var(--aipass-accent-hover);
+      color: #ffffff;
+    }
+    .action.secondary {
+      background: var(--aipass-surface);
+      color: var(--aipass-text);
+    }
+    .action.secondary:hover {
+      background: var(--aipass-surface-2);
+    }
+    button:disabled {
+      opacity: 0.58;
+      cursor: default;
     }
     @media (max-width: 480px) {
       :host {
@@ -485,17 +684,64 @@ function showToast(
   const title = document.createElement("strong");
   title.textContent = options.title;
   const detail = document.createElement("span");
+  detail.className = "detail";
   detail.textContent = options.detail;
   copy.append(title, detail);
 
   const close = document.createElement("button");
   close.type = "button";
+  close.className = "close-button";
   close.title = "Dismiss";
   close.setAttribute("aria-label", "Dismiss AIPass notification");
-  close.textContent = "x";
+  close.append(createCloseIcon());
   close.addEventListener("click", () => host.remove());
 
   toast.append(copy, close);
+  const status = document.createElement("span");
+  status.className = "status";
+  status.hidden = true;
+
+  const helpers: ToastHelpers = {
+    close: () => host.remove(),
+    setStatus: (message, tone = "info") => {
+      status.textContent = message;
+      status.className = `status ${tone}`;
+      status.hidden = false;
+    }
+  };
+
+  if (options.actions?.length) {
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    for (const action of options.actions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `action ${action.tone ?? "secondary"}`;
+      button.textContent = action.label;
+      if (action.dataAction) button.dataset.action = action.dataAction;
+      button.addEventListener("click", async () => {
+        const buttons = Array.from(actions.querySelectorAll<HTMLButtonElement>("button"));
+        buttons.forEach((item) => (item.disabled = true));
+        const originalLabel = button.textContent ?? action.label;
+        button.textContent = action.busyLabel ?? action.label;
+        status.hidden = true;
+        try {
+          await action.onClick(helpers);
+          if (host.isConnected) {
+            button.textContent = originalLabel;
+            buttons.forEach((item) => (item.disabled = false));
+          }
+        } catch (err) {
+          button.textContent = originalLabel;
+          buttons.forEach((item) => (item.disabled = false));
+          helpers.setStatus(err instanceof Error ? err.message : String(err), "error");
+        }
+      });
+      actions.append(button);
+    }
+    toast.append(actions);
+  }
+  toast.append(status);
   root.append(style, toast);
 
   const sequence = ++toastSequence;
@@ -513,33 +759,104 @@ function ensureToastHost(): HTMLElement {
   return host;
 }
 
-void sendDraftIfAllowed();
+function createCloseIcon(): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M18 6 6 18M6 6l12 12");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
+}
+
+function detectPageTheme(): PageTheme {
+  try {
+    const rootStyle = window.getComputedStyle(document.documentElement);
+    const bodyStyle = window.getComputedStyle(document.body);
+    const scheme = `${rootStyle.colorScheme} ${bodyStyle.colorScheme}`.toLowerCase();
+    if (scheme.includes("dark") && !scheme.includes("light")) return "dark";
+    const background =
+      parseCssColor(bodyStyle.backgroundColor) ??
+      parseCssColor(rootStyle.backgroundColor);
+    if (background) {
+      return relativeLuminance(background) < 0.48 ? "dark" : "light";
+    }
+    if (typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      return "dark";
+    }
+  } catch {
+    // Fall through to the extension's light popup palette.
+  }
+  return "light";
+}
+
+function parseCssColor(value: string | undefined): { r: number; g: number; b: number } | undefined {
+  if (!value || value === "transparent") return undefined;
+  const rgb = value.match(/rgba?\(([^)]+)\)/i);
+  if (!rgb?.[1]) return undefined;
+  const parts = rgb[1].split(",").map((part) => part.trim());
+  if (parts.length < 3) return undefined;
+  const alpha = parts[3] === undefined ? 1 : Number(parts[3]);
+  if (Number.isFinite(alpha) && alpha <= 0.05) return undefined;
+  const [r, g, b] = parts.slice(0, 3).map((part) => {
+    if (part.endsWith("%")) return Math.round((Number(part.slice(0, -1)) / 100) * 255);
+    return Number(part);
+  });
+  if (![r, g, b].every((part) => Number.isFinite(part))) return undefined;
+  return {
+    r: Math.max(0, Math.min(255, r)),
+    g: Math.max(0, Math.min(255, g)),
+    b: Math.max(0, Math.min(255, b))
+  };
+}
+
+function relativeLuminance(color: { r: number; g: number; b: number }): number {
+  const [r, g, b] = [color.r, color.g, color.b].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+void runDraftScan();
 installDraftMutationObserver();
 installClipboardSecretListener();
+installFillMessageListener();
 
-if (typeof chrome !== "undefined" && typeof document !== "undefined" && !listenerAlreadyInstalled()) {
+function installFillMessageListener() {
+  if (typeof chrome === "undefined" || typeof document === "undefined" || listenerAlreadyInstalled()) return;
   markListenerInstalled();
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    const typed = message as { type?: string; secret?: string; endpoint?: string };
-    if (typed.type !== "aipass.fillSecret" || !typed.secret) return false;
-    const input = findFillTarget(document);
-    if (!input) {
-      sendResponse({ ok: false, error: "No API key field found" });
+    try {
+      const typed = message as { type?: string; secret?: string; endpoint?: string };
+      if (typed.type !== "aipass.fillSecret" || !typed.secret) return false;
+      const input = findFillTarget(document);
+      if (!input) {
+        sendResponse({ ok: false, error: "No API key field found" });
+        return false;
+      }
+      input.value = typed.secret;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      if (typed.endpoint) {
+        const endpointInput = findEndpointTarget(document);
+        if (endpointInput) {
+          endpointInput.value = typed.endpoint;
+          endpointInput.dispatchEvent(new Event("input", { bubbles: true }));
+          endpointInput.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+      sendResponse({ ok: true });
+      return false;
+    } catch (err) {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
       return false;
     }
-    input.value = typed.secret;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    if (typed.endpoint) {
-      const endpointInput = findEndpointTarget(document);
-      if (endpointInput) {
-        endpointInput.value = typed.endpoint;
-        endpointInput.dispatchEvent(new Event("input", { bubbles: true }));
-        endpointInput.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-    }
-    sendResponse({ ok: true });
-    return false;
   });
 }
 
@@ -549,18 +866,14 @@ function installClipboardSecretListener() {
   window.addEventListener(CLIPBOARD_SECRET_EVENT, (event) => {
     const detail = (event as CustomEvent<{ text?: string }>).detail;
     if (typeof detail?.text !== "string") return;
-    void sendDraftForClipboardSecret(detail.text);
+    void sendDraftForClipboardSecret(detail.text).catch(() => undefined);
   });
 }
 
 function installDraftMutationObserver() {
   if (typeof chrome === "undefined" || typeof document === "undefined" || mutationObserverAlreadyInstalled()) return;
   markMutationObserverInstalled();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const observer = new MutationObserver(() => {
-    clearTimeout(timer);
-    timer = setTimeout(() => void sendDraftIfAllowed(), 500);
-  });
+  const observer = new MutationObserver(() => scheduleDraftScan());
   const start = () => {
     if (!document.body) return;
     observer.observe(document.body, {
@@ -573,6 +886,39 @@ function installDraftMutationObserver() {
     start();
   } else {
     document.addEventListener("DOMContentLoaded", start, { once: true });
+  }
+}
+
+function scheduleDraftScan() {
+  if (draftScanInFlight) {
+    draftScanQueued = true;
+    return;
+  }
+  clearTimeout(draftScanTimer);
+  const elapsed = Date.now() - lastDraftScanStartedAt;
+  const delay = Math.max(MUTATION_SCAN_DEBOUNCE_MS, MUTATION_SCAN_MIN_INTERVAL_MS - elapsed, 0);
+  draftScanTimer = setTimeout(() => void runDraftScan(), delay);
+}
+
+async function runDraftScan() {
+  if (draftScanInFlight) {
+    draftScanQueued = true;
+    return;
+  }
+  clearTimeout(draftScanTimer);
+  draftScanTimer = undefined;
+  draftScanInFlight = true;
+  lastDraftScanStartedAt = Date.now();
+  try {
+    await sendDraftIfAllowed();
+  } catch {
+    // Ignore detector failures; injected scripts should never destabilize the page.
+  } finally {
+    draftScanInFlight = false;
+    if (draftScanQueued) {
+      draftScanQueued = false;
+      scheduleDraftScan();
+    }
   }
 }
 
@@ -601,7 +947,7 @@ function markClipboardListenerInstalled() {
 }
 
 function findFillTarget(doc: Document): HTMLInputElement | HTMLTextAreaElement | undefined {
-  const inputs = Array.from(doc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
+  const inputs = limitedElements<HTMLInputElement | HTMLTextAreaElement>(doc, "input, textarea", FILL_TARGET_SCAN_LIMIT);
   return inputs.find((input) => {
     const label = `${input.name} ${input.id} ${input.placeholder} ${input.getAttribute("aria-label") ?? ""}`.toLowerCase();
     return label.includes("api") || label.includes("key") || label.includes("token");
@@ -609,9 +955,19 @@ function findFillTarget(doc: Document): HTMLInputElement | HTMLTextAreaElement |
 }
 
 function findEndpointTarget(doc: Document): HTMLInputElement | undefined {
-  const inputs = Array.from(doc.querySelectorAll<HTMLInputElement>("input"));
+  const inputs = limitedElements<HTMLInputElement>(doc, "input", FILL_TARGET_SCAN_LIMIT);
   return inputs.find((input) => {
     const label = `${input.name} ${input.id} ${input.placeholder} ${input.getAttribute("aria-label") ?? ""}`.toLowerCase();
     return label.includes("endpoint") || label.includes("base") || label.includes("url");
   });
+}
+
+function limitedElements<T extends Element>(doc: Document, selector: string, limit: number): T[] {
+  const nodes = doc.querySelectorAll<T>(selector);
+  const elements: T[] = [];
+  for (let index = 0; index < nodes.length && elements.length < limit; index += 1) {
+    const element = nodes.item(index);
+    if (element) elements.push(element);
+  }
+  return elements;
 }

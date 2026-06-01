@@ -1,6 +1,7 @@
 import {
   addProvider,
   fillSecret,
+  handleNativeReconnectAlarm,
   ignoreOrigin,
   isOriginIgnored,
   lookupContext,
@@ -9,6 +10,7 @@ import {
   previewDetectedSecret,
   saveDetectedSecret,
   searchEntries,
+  startNativeConnectionMonitor,
   unlockWithPassword,
   type DetectedSecretDraft,
   type ProviderAddRequest
@@ -19,11 +21,17 @@ type PendingDraftRecord = {
   key: string;
   expiresAt: number;
   draft: DetectedSecretDraft;
+  mode: "review" | "edit";
 };
 
 let pendingDrafts: PendingDraftRecord[] = [];
 let pendingDraftTimer: ReturnType<typeof setTimeout> | undefined;
 const PENDING_DRAFT_TTL_MS = 5 * 60 * 1000;
+
+startNativeConnectionMonitor();
+chrome.runtime.onStartup?.addListener(startNativeConnectionMonitor);
+chrome.runtime.onInstalled?.addListener(startNativeConnectionMonitor);
+chrome.alarms?.onAlarm.addListener((alarm) => handleNativeReconnectAlarm(alarm.name));
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const typed = message as {
@@ -90,6 +98,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     enqueuePendingDraft(typed.draft);
     sendResponse({ ok: true, maskedSecret: typed.draft.maskedSecret });
     return false;
+  }
+
+  if (typed.type === "aipass.saveDetectedDraftsNow" && Array.isArray(typed.drafts)) {
+    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    if (!drafts.length) {
+      sendResponse({ ok: false, error: "Invalid API key draft" });
+      return false;
+    }
+    saveDetectedDraftBatch(drafts).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.editDetectedDrafts" && Array.isArray(typed.drafts)) {
+    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    if (!drafts.length) {
+      sendResponse({ ok: false, error: "Invalid API key draft" });
+      return false;
+    }
+    const mode = drafts.length === 1 ? "edit" : "review";
+    for (const draft of drafts) {
+      enqueuePendingDraft(draft, mode);
+    }
+    openPopupForEdit().then((opened) => {
+      sendResponse({ ok: true, data: { opened, count: drafts.length } });
+    });
+    return true;
   }
 
   if (typed.type === "aipass.detectedSecretDrafts" && Array.isArray(typed.drafts)) {
@@ -205,19 +239,20 @@ function mergePendingDraft(
   return {
     ...record.draft,
     ...patch,
-    apiKey: record.draft.apiKey
+    apiKey: typeof patch?.apiKey === "string" && patch.apiKey ? patch.apiKey : record.draft.apiKey
   };
 }
 
 function isDetectedSecretDraft(draft: Partial<DetectedSecretDraft>): draft is DetectedSecretDraft {
-  return Boolean(draft.title && draft.origin && draft.url);
+  return Boolean(draft.title && draft.origin && draft.url && draft.apiKey);
 }
 
 function safePendingDraft(record: PendingDraftRecord) {
   return {
     ...record.draft,
     draftId: record.id,
-    apiKey: undefined
+    apiKey: record.mode === "edit" ? record.draft.apiKey : undefined,
+    editMode: record.mode === "edit"
   };
 }
 
@@ -238,15 +273,16 @@ function clearPendingDrafts() {
   updateActionBadge();
 }
 
-function enqueuePendingDraft(draft: DetectedSecretDraft) {
+function enqueuePendingDraft(draft: DetectedSecretDraft, mode: PendingDraftRecord["mode"] = "review") {
   const key = pendingDraftKey(draft);
   const expiresAt = Date.now() + PENDING_DRAFT_TTL_MS;
   const existing = pendingDrafts.find((item) => item.key === key);
   if (existing) {
     existing.draft = draft;
     existing.expiresAt = expiresAt;
+    existing.mode = mode;
   } else {
-    pendingDrafts.push({ id: crypto.randomUUID(), key, draft, expiresAt });
+    pendingDrafts.push({ id: crypto.randomUUID(), key, draft, expiresAt, mode });
   }
   schedulePendingDraftCleanup();
   updateActionBadge();
@@ -327,6 +363,34 @@ async function savePendingDraftBatch(
     error: errors[0]?.error,
     data: { saved, errors }
   };
+}
+
+async function saveDetectedDraftBatch(drafts: DetectedSecretDraft[]) {
+  const saved: Array<{ entryId?: string }> = [];
+  const errors: Array<{ error: string }> = [];
+  for (const draft of drafts) {
+    const response = await saveDetectedSecret(draft);
+    if (response.ok) {
+      saved.push({ entryId: response.data?.entryId });
+    } else {
+      errors.push({ error: response.error ?? "Unable to save detected key" });
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    error: errors[0]?.error,
+    data: { saved, errors }
+  };
+}
+
+async function openPopupForEdit(): Promise<boolean> {
+  if (typeof chrome.action?.openPopup !== "function") return false;
+  try {
+    await chrome.action.openPopup();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function scanActiveTab(tabId: number) {

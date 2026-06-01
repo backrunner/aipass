@@ -8,6 +8,25 @@ export interface NativeResponse<T = unknown> {
   data: T;
 }
 
+const REQUEST_TIMEOUT_MS = 30_000;
+const RECONNECT_INITIAL_MS = 500;
+const RECONNECT_MAX_MS = 30_000;
+const HEARTBEAT_MS = 15_000;
+const RECONNECT_ALARM = "aipass.nativeReconnect";
+const RECONNECT_ALARM_PERIOD_MINUTES = 1;
+
+type PendingNativeRequest = {
+  resolve: (response: NativeResponse<unknown>) => void;
+  timeout: ReturnType<typeof setTimeout>;
+};
+
+let nativePort: chrome.runtime.Port | undefined;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+let reconnectDelay = RECONNECT_INITIAL_MS;
+let lastPortError = "Native host unavailable";
+const pendingNativeRequests = new Map<string, PendingNativeRequest>();
+
 export interface ProviderSummary {
   id: string;
   title: string;
@@ -97,21 +116,168 @@ export interface DetectedSecretPreview {
   };
 }
 
+export function startNativeConnectionMonitor() {
+  if (!supportsNativePort()) return;
+  connectNativePort();
+  scheduleNativeHeartbeat();
+  chrome.alarms?.create(RECONNECT_ALARM, { periodInMinutes: RECONNECT_ALARM_PERIOD_MINUTES });
+}
+
+export function handleNativeReconnectAlarm(alarmName: string) {
+  if (alarmName !== RECONNECT_ALARM || !supportsNativePort()) return;
+  if (nativePort) {
+    void pingNativeHost();
+  } else {
+    connectNativePort();
+  }
+  scheduleNativeHeartbeat();
+}
+
 export function nativeRequest<T>(message: Record<string, unknown>): Promise<NativeResponse<T>> {
+  const id = String(message.id ?? crypto.randomUUID());
+  const request = withExtensionId({ ...message, id });
+  if (!supportsNativePort()) {
+    return sendOneShotNativeMessage<T>(id, request);
+  }
+
   return new Promise((resolve) => {
-    chrome.runtime.sendNativeMessage(NATIVE_HOST, withExtensionId(message), (response) => {
+    const timeout = setTimeout(() => {
+      pendingNativeRequests.delete(id);
+      resolve(nativeErrorResponse<T>(id, "Native host request timed out"));
+      disconnectNativePort();
+      scheduleReconnect();
+    }, REQUEST_TIMEOUT_MS);
+
+    pendingNativeRequests.set(id, {
+      resolve: (response) => resolve(response as NativeResponse<T>),
+      timeout
+    });
+
+    const port = connectNativePort();
+    if (!port) {
+      failPendingRequest(id, lastPortError);
+      return;
+    }
+
+    try {
+      port.postMessage(request);
+    } catch (err) {
+      failPendingRequest(id, errorMessage(err));
+      disconnectNativePort();
+      scheduleReconnect();
+    }
+  });
+}
+
+function sendOneShotNativeMessage<T>(
+  id: string,
+  message: Record<string, unknown>
+): Promise<NativeResponse<T>> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendNativeMessage(NATIVE_HOST, message, (response) => {
       if (chrome.runtime.lastError) {
-        resolve({
-          id: String(message.id ?? "unknown"),
-          ok: false,
-          error: chrome.runtime.lastError.message ?? "Native host unavailable",
-          data: undefined as T
-        });
+        resolve(nativeErrorResponse(id, chrome.runtime.lastError.message ?? "Native host unavailable"));
         return;
       }
       resolve(response as NativeResponse<T>);
     });
   });
+}
+
+function connectNativePort(): chrome.runtime.Port | undefined {
+  if (nativePort) return nativePort;
+  if (!supportsNativePort()) return undefined;
+
+  try {
+    nativePort = chrome.runtime.connectNative?.(NATIVE_HOST);
+  } catch (err) {
+    lastPortError = errorMessage(err);
+    scheduleReconnect();
+    return undefined;
+  }
+
+  nativePort?.onMessage.addListener(handleNativeMessage);
+  nativePort?.onDisconnect.addListener(handleNativeDisconnect);
+  return nativePort;
+}
+
+function handleNativeMessage(response: unknown) {
+  const nativeResponse = response as NativeResponse<unknown>;
+  const id = typeof nativeResponse?.id === "string" ? nativeResponse.id : "";
+  const pending = pendingNativeRequests.get(id);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingNativeRequests.delete(id);
+  reconnectDelay = RECONNECT_INITIAL_MS;
+  pending.resolve(nativeResponse);
+}
+
+function handleNativeDisconnect() {
+  lastPortError = chrome.runtime.lastError?.message ?? "Native host disconnected";
+  nativePort = undefined;
+  for (const id of pendingNativeRequests.keys()) {
+    failPendingRequest(id, lastPortError);
+  }
+  scheduleReconnect();
+}
+
+function disconnectNativePort() {
+  const port = nativePort;
+  nativePort = undefined;
+  try {
+    port?.disconnect();
+  } catch {
+    // The port may already be closed by Chrome.
+  }
+}
+
+function scheduleReconnect() {
+  if (!supportsNativePort() || reconnectTimer) return;
+  const delay = reconnectDelay;
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    if (!nativePort) connectNativePort();
+    if (!nativePort) scheduleReconnect();
+  }, delay);
+}
+
+function scheduleNativeHeartbeat() {
+  if (!supportsNativePort() || heartbeatTimer) return;
+  heartbeatTimer = setTimeout(() => {
+    heartbeatTimer = undefined;
+    if (nativePort) {
+      void pingNativeHost();
+    } else {
+      connectNativePort();
+    }
+    scheduleNativeHeartbeat();
+  }, HEARTBEAT_MS);
+}
+
+function failPendingRequest(id: string, error: string) {
+  const pending = pendingNativeRequests.get(id);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingNativeRequests.delete(id);
+  pending.resolve(nativeErrorResponse(id, error));
+}
+
+function nativeErrorResponse<T>(id: string, error: string): NativeResponse<T> {
+  return {
+    id,
+    ok: false,
+    error,
+    data: undefined as T
+  };
+}
+
+function supportsNativePort() {
+  return typeof chrome !== "undefined" && typeof chrome.runtime?.connectNative === "function";
+}
+
+function errorMessage(err: unknown) {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function withExtensionId(message: Record<string, unknown>): Record<string, unknown> {

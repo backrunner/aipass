@@ -1,9 +1,11 @@
 <script lang="ts">
+  import "@vinlemon/window-controls/window-controls.js";
+  import type { MacOsControls } from "@vinlemon/window-controls";
   import { Logo } from "@aipass/ui";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { DropdownMenu } from "bits-ui";
   import { Lock, Menu, Minus, Settings, Square, X } from "lucide-svelte";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
@@ -19,6 +21,7 @@
   let unlistenResize: (() => void) | undefined;
   let unlistenFocus: (() => void) | undefined;
   let unlistenBlur: (() => void) | undefined;
+  let macControls: MacOsControls | undefined;
 
   const hasTauri =
     typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -73,6 +76,30 @@
     if ((event.target as HTMLElement | null)?.closest("button")) return;
     toggleMaximize();
   }
+
+  $: if (macControls) {
+    const closeLabel = $t("common.close");
+    const minimizeLabel = $t("titlebar.minimize");
+    const maximizeLabel = $t("titlebar.toggleMaximize");
+    macControls.inactive = !isFocused;
+    macControls.minimize = () => void minimize();
+    macControls.maximize = () => void toggleMaximize();
+    macControls.close = () => void close();
+    void labelMacControlButtons(closeLabel, minimizeLabel, maximizeLabel);
+  }
+
+  async function labelMacControlButtons(closeLabel: string, minimizeLabel: string, maximizeLabel: string) {
+    await tick();
+    const buttons = macControls?.shadowRoot?.querySelectorAll<HTMLButtonElement>("button");
+    const labels = [closeLabel, minimizeLabel, maximizeLabel];
+    buttons?.forEach((button, index) => {
+      const label = labels[index];
+      if (!label) return;
+      button.type = "button";
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
+    });
+  }
 </script>
 
 <header
@@ -87,15 +114,7 @@
 >
   {#if isMac}
     <div class="mac-controls" aria-label={$t("titlebar.windowControls")}>
-      <button class="mac-btn close" type="button" aria-label={$t("common.close")} on:click|stopPropagation={close}>
-        <span class="glyph">×</span>
-      </button>
-      <button class="mac-btn min" type="button" aria-label={$t("titlebar.minimize")} on:click|stopPropagation={minimize}>
-        <span class="glyph">−</span>
-      </button>
-      <button class="mac-btn max" type="button" aria-label={$t("titlebar.toggleMaximize")} on:click|stopPropagation={toggleMaximize}>
-        <span class="glyph">+</span>
-      </button>
+      <macos-controls bind:this={macControls}></macos-controls>
     </div>
   {/if}
 
@@ -155,6 +174,7 @@
 <style lang="scss">
   .titlebar {
     height: 34px;
+    width: 100%;
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -163,7 +183,8 @@
     background: transparent;
     user-select: none;
     -webkit-user-select: none;
-    position: relative;
+    position: absolute;
+    inset: 0 0 auto 0;
     z-index: 70;
   }
 
@@ -263,52 +284,17 @@
   .mac-controls {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
     padding-right: 4px;
+    -webkit-app-region: no-drag;
   }
 
-  .mac-btn {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 0.5px solid rgba(0, 0, 0, 0.18);
-    cursor: pointer;
-    color: rgba(0, 0, 0, 0.55);
-    transition: background-color 80ms ease;
-  }
-
-  .mac-btn.close {
-    background: #ff5f57;
-  }
-
-  .mac-btn.min {
-    background: #febc2e;
-  }
-
-  .mac-btn.max {
-    background: #28c840;
-  }
-
-  .titlebar.blurred .mac-btn {
-    background: #cccccc;
-    color: transparent;
-    border-color: rgba(0, 0, 0, 0.1);
-  }
-
-  .mac-btn .glyph {
-    font-size: 10px;
-    line-height: 1;
-    font-weight: 700;
-    opacity: 0;
-    transition: opacity 80ms ease;
-    pointer-events: none;
-  }
-
-  .mac-controls:hover .mac-btn .glyph {
-    opacity: 1;
+  .mac-controls :global(macos-controls) {
+    --close-bg: #ff5f57;
+    --minimize-bg: #febc2e;
+    --maximize-bg: #28c840;
+    --active-background-color: rgba(0, 0, 0, 0.64);
+    --hover-background-color: rgba(0, 0, 0, 0.16);
+    --background-inactive: #cccccc;
   }
 
   /* Windows / Linux controls */

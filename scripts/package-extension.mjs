@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const projectRoot = resolve(process.argv[2] ?? process.cwd());
@@ -15,8 +15,13 @@ const requiredFiles = [
   ["48px icon", resolve(distDir, "icons", "icon-48.png")],
   ["128px icon", resolve(distDir, "icons", "icon-128.png")]
 ];
+const classicScriptFiles = [
+  ["content script", resolve(distDir, "content.js")],
+  ["clipboard bridge", resolve(distDir, "clipboardBridge.js")]
+];
 
 await Promise.all(requiredFiles.map(([label, path]) => assertFile(path, label)));
+await Promise.all(classicScriptFiles.map(([label, path]) => assertClassicScript(path, label)));
 
 console.log("Extension package verified.");
 
@@ -28,5 +33,14 @@ async function assertFile(path, label) {
     }
   } catch (error) {
     throw new Error(`Missing ${label}: ${path}`, { cause: error });
+  }
+}
+
+async function assertClassicScript(path, label) {
+  const source = await readFile(path, "utf8");
+  try {
+    new Function(source);
+  } catch (error) {
+    throw new Error(`${label} must be built as a classic script: ${path}`, { cause: error });
   }
 }
