@@ -351,6 +351,180 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
             env_keys: &["TOGETHER_API_KEY"],
         },
         ProviderDefinition {
+            id: "siliconflow",
+            display_name: "SiliconFlow",
+            kind: ProviderKind::ThirdParty,
+            domains: &[
+                "siliconflow.cn",
+                "cloud.siliconflow.cn",
+                "api.siliconflow.cn",
+            ],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.siliconflow.cn/v1"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://cloud.siliconflow.cn",
+                ),
+            ],
+            env_keys: &["SILICONFLOW_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "xai",
+            display_name: "xAI",
+            kind: ProviderKind::ThirdParty,
+            domains: &["x.ai", "console.x.ai", "api.x.ai"],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.x.ai/v1"),
+                ("console", EndpointKind::Console, "https://console.x.ai"),
+            ],
+            env_keys: &["XAI_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "mistral",
+            display_name: "Mistral AI",
+            kind: ProviderKind::Official,
+            domains: &["console.mistral.ai", "api.mistral.ai"],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.mistral.ai/v1"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://console.mistral.ai",
+                ),
+            ],
+            env_keys: &["MISTRAL_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "cohere",
+            display_name: "Cohere",
+            kind: ProviderKind::ThirdParty,
+            domains: &["dashboard.cohere.com", "api.cohere.com"],
+            interfaces: &[InterfaceType::CustomHttp],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.cohere.com/v2"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://dashboard.cohere.com",
+                ),
+            ],
+            env_keys: &["COHERE_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "perplexity",
+            display_name: "Perplexity",
+            kind: ProviderKind::ThirdParty,
+            domains: &["perplexity.ai", "api.perplexity.ai"],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.perplexity.ai"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://www.perplexity.ai/settings/api",
+                ),
+            ],
+            env_keys: &["PERPLEXITY_API_KEY", "PPLX_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "cerebras",
+            display_name: "Cerebras",
+            kind: ProviderKind::ThirdParty,
+            domains: &[
+                "cloud.cerebras.ai",
+                "api.cerebras.ai",
+                "inference.cerebras.ai",
+            ],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.cerebras.ai/v1"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://cloud.cerebras.ai",
+                ),
+            ],
+            env_keys: &["CEREBRAS_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "nvidia",
+            display_name: "NVIDIA NIM",
+            kind: ProviderKind::ThirdParty,
+            domains: &["build.nvidia.com", "integrate.api.nvidia.com"],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                (
+                    "api",
+                    EndpointKind::Api,
+                    "https://integrate.api.nvidia.com/v1",
+                ),
+                ("console", EndpointKind::Console, "https://build.nvidia.com"),
+            ],
+            env_keys: &["NVIDIA_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "novita",
+            display_name: "Novita AI",
+            kind: ProviderKind::ThirdParty,
+            domains: &["novita.ai", "api.novita.ai"],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.novita.ai/v3/openai"),
+                ("console", EndpointKind::Console, "https://novita.ai"),
+            ],
+            env_keys: &["NOVITA_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "minimax",
+            display_name: "MiniMax",
+            kind: ProviderKind::ThirdParty,
+            domains: &["platform.minimaxi.com", "api.minimaxi.com"],
+            interfaces: &[InterfaceType::CustomHttp],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.minimaxi.com"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://platform.minimaxi.com",
+                ),
+            ],
+            env_keys: &["MINIMAX_API_KEY"],
+        },
+        ProviderDefinition {
+            id: "huggingface",
+            display_name: "Hugging Face",
+            kind: ProviderKind::ThirdParty,
+            domains: &[
+                "huggingface.co",
+                "api-inference.huggingface.co",
+                "router.huggingface.co",
+            ],
+            interfaces: &[InterfaceType::OpenAiCompatible, InterfaceType::CustomHttp],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://router.huggingface.co/v1"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://huggingface.co/settings/tokens",
+                ),
+            ],
+            env_keys: &["HF_TOKEN", "HUGGINGFACE_API_KEY"],
+        },
+        ProviderDefinition {
             id: "fireworks",
             display_name: "Fireworks AI",
             kind: ProviderKind::ThirdParty,
@@ -600,6 +774,18 @@ mod tests {
         assert_eq!(
             provider_kind_for_id(Some("openrouter")),
             ProviderKind::ThirdParty
+        );
+        assert_eq!(
+            provider_kind_for_id(Some("siliconflow")),
+            ProviderKind::ThirdParty
+        );
+        assert_eq!(
+            provider_kind_for_id(Some("perplexity")),
+            ProviderKind::ThirdParty
+        );
+        assert_eq!(
+            provider_kind_for_id(Some("mistral")),
+            ProviderKind::Official
         );
         assert_eq!(
             provider_kind_for_id(Some("replicate")),

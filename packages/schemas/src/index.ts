@@ -235,6 +235,136 @@ export const providerDefinitions: ProviderDefinition[] = [
     envKeys: ["TOGETHER_API_KEY"]
   },
   {
+    id: "siliconflow",
+    displayName: "SiliconFlow",
+    kind: "third_party",
+    domains: ["siliconflow.cn", "cloud.siliconflow.cn", "api.siliconflow.cn"],
+    interfaces: ["openai_compatible"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.siliconflow.cn/v1" },
+      { id: "console", kind: "console", url: "https://cloud.siliconflow.cn" }
+    ],
+    envKeys: ["SILICONFLOW_API_KEY"]
+  },
+  {
+    id: "xai",
+    displayName: "xAI",
+    kind: "third_party",
+    domains: ["x.ai", "console.x.ai", "api.x.ai"],
+    interfaces: ["openai_compatible"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.x.ai/v1" },
+      { id: "console", kind: "console", url: "https://console.x.ai" }
+    ],
+    envKeys: ["XAI_API_KEY"]
+  },
+  {
+    id: "mistral",
+    displayName: "Mistral AI",
+    kind: "official",
+    domains: ["console.mistral.ai", "api.mistral.ai"],
+    interfaces: ["openai_compatible"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.mistral.ai/v1" },
+      { id: "console", kind: "console", url: "https://console.mistral.ai" }
+    ],
+    envKeys: ["MISTRAL_API_KEY"]
+  },
+  {
+    id: "cohere",
+    displayName: "Cohere",
+    kind: "third_party",
+    domains: ["dashboard.cohere.com", "api.cohere.com"],
+    interfaces: ["custom_http"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.cohere.com/v2" },
+      { id: "console", kind: "console", url: "https://dashboard.cohere.com" }
+    ],
+    envKeys: ["COHERE_API_KEY"]
+  },
+  {
+    id: "perplexity",
+    displayName: "Perplexity",
+    kind: "third_party",
+    domains: ["perplexity.ai", "api.perplexity.ai"],
+    interfaces: ["openai_compatible"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.perplexity.ai" },
+      { id: "console", kind: "console", url: "https://www.perplexity.ai/settings/api" }
+    ],
+    envKeys: ["PERPLEXITY_API_KEY", "PPLX_API_KEY"]
+  },
+  {
+    id: "cerebras",
+    displayName: "Cerebras",
+    kind: "third_party",
+    domains: ["cloud.cerebras.ai", "api.cerebras.ai", "inference.cerebras.ai"],
+    interfaces: ["openai_compatible"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.cerebras.ai/v1" },
+      { id: "console", kind: "console", url: "https://cloud.cerebras.ai" }
+    ],
+    envKeys: ["CEREBRAS_API_KEY"]
+  },
+  {
+    id: "nvidia",
+    displayName: "NVIDIA NIM",
+    kind: "third_party",
+    domains: ["build.nvidia.com", "integrate.api.nvidia.com"],
+    interfaces: ["openai_compatible"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://integrate.api.nvidia.com/v1" },
+      { id: "console", kind: "console", url: "https://build.nvidia.com" }
+    ],
+    envKeys: ["NVIDIA_API_KEY"]
+  },
+  {
+    id: "novita",
+    displayName: "Novita AI",
+    kind: "third_party",
+    domains: ["novita.ai", "api.novita.ai"],
+    interfaces: ["openai_compatible"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.novita.ai/v3/openai" },
+      { id: "console", kind: "console", url: "https://novita.ai" }
+    ],
+    envKeys: ["NOVITA_API_KEY"]
+  },
+  {
+    id: "minimax",
+    displayName: "MiniMax",
+    kind: "third_party",
+    domains: ["platform.minimaxi.com", "api.minimaxi.com"],
+    interfaces: ["custom_http"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://api.minimaxi.com" },
+      { id: "console", kind: "console", url: "https://platform.minimaxi.com" }
+    ],
+    envKeys: ["MINIMAX_API_KEY"]
+  },
+  {
+    id: "huggingface",
+    displayName: "Hugging Face",
+    kind: "third_party",
+    domains: ["huggingface.co", "api-inference.huggingface.co", "router.huggingface.co"],
+    interfaces: ["openai_compatible", "custom_http"],
+    authSchemes: ["bearer"],
+    endpoints: [
+      { id: "api", kind: "api", url: "https://router.huggingface.co/v1" },
+      { id: "console", kind: "console", url: "https://huggingface.co/settings/tokens" }
+    ],
+    envKeys: ["HF_TOKEN", "HUGGINGFACE_API_KEY"]
+  },
+  {
     id: "fireworks",
     displayName: "Fireworks AI",
     kind: "third_party",
@@ -419,15 +549,25 @@ export function inferProviderFromEndpoint(endpoint: string): ProviderDefinition 
   if (normalizedHost.includes("veloera")) return providerById("veloera");
   if (normalizedHost.includes("omniroute")) return providerById("omniroute");
   if (normalizedHost.includes("metapi")) return providerById("metapi");
+  if (normalizedHost.includes("siliconflow")) return providerById("siliconflow");
+  if (normalizedHost.includes("perplexity")) return providerById("perplexity");
+  if (normalizedHost.includes("cerebras")) return providerById("cerebras");
+  if (normalizedHost.includes("novita")) return providerById("novita");
+  if (normalizedHost.includes("minimax")) return providerById("minimax");
 
   const lowerEndpoint = endpoint.toLowerCase();
-  if (/\/v1\b|openai|gateway/.test(lowerEndpoint)) return providerById("custom_openai_compatible");
+  if (/\/v1\b|openai|gateway|siliconflow|mistral|perplexity|cerebras|novita|nvidia|huggingface/.test(lowerEndpoint)) return providerById("custom_openai_compatible");
   return providerById("custom_http");
 }
 
 export function maskSecret(secret: string): string {
-  const suffix = secret.slice(-4);
-  return suffix ? `•••• ${suffix}` : "••••";
+  if (!secret) return "****";
+  if (secret.length <= 8) {
+    const head = secret.slice(0, 2);
+    const tail = secret.slice(-2);
+    return tail ? `${head}...${tail}` : "****";
+  }
+  return `${secret.slice(0, 6)}...${secret.slice(-4)}`;
 }
 
 export function detectInterfaceFromProvider(providerId?: string): InterfaceType {
