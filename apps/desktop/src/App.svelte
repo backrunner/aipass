@@ -694,6 +694,7 @@
       interfaceType: entry.interfaceType,
       authScheme: entry.authScheme,
       apiKey: "",
+      secretLabel: entry.secretRefs[0]?.label ?? "",
       defaultModel: entry.defaultModel ?? "",
       modelAlias: (entry.modelAliases ?? []).map(([alias, model]) => `${alias}=${model}`).join(", "),
       environment: entry.environment,
