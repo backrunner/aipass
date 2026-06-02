@@ -233,6 +233,8 @@ mod tests {
                 origin: "https://console.anthropic.com".to_string(),
                 url: "https://console.anthropic.com/settings/keys".to_string(),
                 title: Some("Anthropic Browser".to_string()),
+                favicon_url: None,
+                secret_label: None,
                 endpoint: Some("https://api.anthropic.com".to_string()),
                 provider_id: Some("anthropic".to_string()),
                 interface_type: Some(aipass_provider_registry::InterfaceType::AnthropicMessages),
@@ -295,6 +297,8 @@ mod tests {
                     origin: "https://openrouter.ai".to_string(),
                     url: "https://openrouter.ai/settings/keys".to_string(),
                     title: Some(title.to_string()),
+                    favicon_url: None,
+                    secret_label: Some(title.replace("OpenRouter ", "")),
                     endpoint: Some("https://openrouter.ai/api/v1".to_string()),
                     provider_id: Some("openrouter".to_string()),
                     interface_type: Some(aipass_provider_registry::InterfaceType::OpenAiCompatible),
@@ -354,6 +358,104 @@ mod tests {
     }
 
     #[test]
+    fn provider_update_and_delete_round_trip() {
+        let agent = RunningAgent::start();
+        agent.unlock();
+        let config = agent.config();
+        let add = handle_request_with_config(
+            NativeRequest::ProviderAdd {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                title: "OpenRouter".to_string(),
+                provider_id: Some("openrouter".to_string()),
+                domain: vec!["openrouter.ai".to_string()],
+                favicon_url: None,
+                endpoint: Some("https://openrouter.ai/api/v1".to_string()),
+                endpoints: vec![],
+                console_endpoints: vec!["https://openrouter.ai/settings/keys".to_string()],
+                interface_type: aipass_provider_registry::InterfaceType::OpenAiCompatible,
+                auth_scheme: aipass_provider_registry::AuthScheme::Bearer,
+                api_key: "sk-or-v1-native-host-secret".into(),
+                default_model: None,
+                model_aliases: vec![],
+                headers: vec![],
+                quota: None,
+                gateway: None,
+                tags: vec!["browser".to_string()],
+                environment: "browser".to_string(),
+                notes: None,
+            },
+            &config,
+        );
+        assert!(add.ok, "{add:?}");
+        let entry_id = Uuid::parse_str(add.data["entryId"].as_str().unwrap()).unwrap();
+
+        let update = handle_request_with_config(
+            NativeRequest::ProviderUpdate {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                entry_id,
+                title: "OpenRouter Edited".to_string(),
+                provider_id: Some("openrouter".to_string()),
+                domain: vec!["openrouter.ai".to_string()],
+                favicon_url: None,
+                endpoint: Some("https://openrouter.ai/api/v1".to_string()),
+                endpoints: vec![],
+                console_endpoints: vec!["https://openrouter.ai/settings/keys".to_string()],
+                interface_type: aipass_provider_registry::InterfaceType::OpenAiCompatible,
+                auth_scheme: aipass_provider_registry::AuthScheme::Bearer,
+                api_key: None,
+                default_model: Some("openai/gpt-4o-mini".to_string()),
+                model_aliases: vec![],
+                headers: None,
+                quota: None,
+                gateway: None,
+                tags: vec!["browser".to_string(), "edited".to_string()],
+                environment: "browser".to_string(),
+                notes: Some("edited from extension".to_string()),
+            },
+            &config,
+        );
+        assert!(update.ok, "{update:?}");
+
+        let lookup = handle_request_with_config(
+            NativeRequest::ContextLookup {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://openrouter.ai".to_string(),
+                url: "https://openrouter.ai/settings/keys".to_string(),
+            },
+            &config,
+        );
+        assert!(lookup.ok, "{lookup:?}");
+        let entries = lookup.data["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["title"], "OpenRouter Edited");
+        assert_eq!(entries[0]["notes"], "edited from extension");
+
+        let delete = handle_request_with_config(
+            NativeRequest::ProviderDelete {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                entry_id,
+            },
+            &config,
+        );
+        assert!(delete.ok, "{delete:?}");
+
+        let after_delete = handle_request_with_config(
+            NativeRequest::ContextLookup {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://openrouter.ai".to_string(),
+                url: "https://openrouter.ai/settings/keys".to_string(),
+            },
+            &config,
+        );
+        assert!(after_delete.ok, "{after_delete:?}");
+        assert_eq!(after_delete.data["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
     fn save_detected_infers_endpoint_interface_and_auth() {
         let agent = RunningAgent::start();
         agent.unlock();
@@ -365,6 +467,8 @@ mod tests {
                 origin: "https://gateway.example.test".to_string(),
                 url: "https://gateway.example.test/ui".to_string(),
                 title: Some("Gateway".to_string()),
+                favicon_url: Some("https://gateway.example.test/favicon.svg".to_string()),
+                secret_label: Some("Production".to_string()),
                 endpoint: Some("https://gateway.example.test/v1".to_string()),
                 provider_id: None,
                 interface_type: None,
@@ -394,6 +498,11 @@ mod tests {
             entries[0].auth_scheme,
             aipass_provider_registry::AuthScheme::Bearer
         );
+        assert_eq!(entries[0].secret_refs[0].label, "Production");
+        assert_eq!(
+            entries[0].favicon_url.as_deref(),
+            Some("https://gateway.example.test/favicon.svg")
+        );
         assert_eq!(
             entries[0]
                 .gateway
@@ -416,6 +525,8 @@ mod tests {
                 origin: "https://gateway.example.test".to_string(),
                 url: "https://gateway.example.test/ui".to_string(),
                 title: Some("Gateway".to_string()),
+                favicon_url: Some("https://gateway.example.test/favicon.svg".to_string()),
+                secret_label: Some("Production".to_string()),
                 endpoint: Some("https://gateway.example.test/v1".to_string()),
                 provider_id: None,
                 interface_type: None,
@@ -429,6 +540,11 @@ mod tests {
         );
         assert!(preview.ok, "{preview:?}");
         assert_eq!(preview.data["isSaved"], true);
+        assert_eq!(preview.data["secretLabel"], "Production");
+        assert_eq!(
+            preview.data["faviconUrl"],
+            "https://gateway.example.test/favicon.svg"
+        );
         assert!(preview.data["existingEntryId"].as_str().is_some());
     }
 
@@ -444,6 +560,8 @@ mod tests {
                 origin: "https://gateway.example.test".to_string(),
                 url: "https://gateway.example.test/ui".to_string(),
                 title: Some("Gateway".to_string()),
+                favicon_url: Some("https://gateway.example.test/favicon.svg".to_string()),
+                secret_label: Some("Preview".to_string()),
                 endpoint: Some("https://gateway.example.test/v1".to_string()),
                 provider_id: None,
                 interface_type: None,
@@ -456,7 +574,8 @@ mod tests {
             &config,
         );
         assert!(preview.ok, "{preview:?}");
-        assert_eq!(preview.data["maskedSecret"], "•••• alue");
+        assert_eq!(preview.data["secretLabel"], "Preview");
+        assert_eq!(preview.data["maskedSecret"], "sk-gat...alue");
         assert!(!preview.data["fingerprint"].as_str().unwrap().is_empty());
         let vault = aipass_vault::Vault::open(
             agent.dir.path(),

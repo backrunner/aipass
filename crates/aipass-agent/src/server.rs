@@ -389,7 +389,7 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
             provider_kind,
             provider_id: preview.provider_id,
             domains: vec![domain],
-            favicon_url: None,
+            favicon_url: preview.favicon_url,
             endpoints: preview
                 .endpoint
                 .clone()
@@ -399,6 +399,7 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
             interface_type: preview.interface_type,
             auth_scheme: preview.auth_scheme,
             api_key,
+            secret_label: preview.secret_label,
             default_model: None,
             model_aliases: Vec::new(),
             headers: Vec::new(),
@@ -488,6 +489,8 @@ fn detected_secret_preview(
     let is_saved = existing_entry_id.is_some();
     BrowserDetectedSecretPreview {
         title,
+        secret_label: clean_secret_label(fields.secret_label.as_deref()),
+        favicon_url: clean_favicon_url(fields.favicon_url.as_deref()),
         provider_id: provider_guess,
         endpoint,
         interface_type,
@@ -499,6 +502,36 @@ fn detected_secret_preview(
         environment,
         tags,
         gateway: clean_gateway(fields.gateway.clone()),
+    }
+}
+
+fn clean_secret_label(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty()
+        || value.len() > 64
+        || value.chars().any(char::is_control)
+        || value.eq_ignore_ascii_case("api key")
+        || value.eq_ignore_ascii_case("token")
+        || value.eq_ignore_ascii_case("secret")
+        || value == "密钥"
+        || value == "令牌"
+    {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn clean_favicon_url(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() || value.len() > 2048 || value.chars().any(char::is_control) {
+        return None;
+    }
+    let lower = value.to_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Some(value.to_string())
+    } else {
+        None
     }
 }
 
@@ -556,7 +589,10 @@ fn infer_interface_from_endpoint(endpoint: &str) -> Option<InterfaceType> {
         Some(InterfaceType::Gemini)
     } else if endpoint.contains("anthropic") {
         Some(InterfaceType::AnthropicMessages)
-    } else if endpoint.contains("replicate.com") {
+    } else if endpoint.contains("replicate.com")
+        || endpoint.contains("cohere.com")
+        || endpoint.contains("minimaxi.com")
+    {
         Some(InterfaceType::CustomHttp)
     } else if endpoint.contains("openai")
         || endpoint.contains("/v1")
@@ -565,6 +601,13 @@ fn infer_interface_from_endpoint(endpoint: &str) -> Option<InterfaceType> {
         || endpoint.contains("new-api")
         || endpoint.contains("litellm")
         || endpoint.contains("sub2api")
+        || endpoint.contains("siliconflow")
+        || endpoint.contains("mistral")
+        || endpoint.contains("perplexity")
+        || endpoint.contains("cerebras")
+        || endpoint.contains("nvidia")
+        || endpoint.contains("novita")
+        || endpoint.contains("huggingface")
     {
         Some(InterfaceType::OpenAiCompatible)
     } else {

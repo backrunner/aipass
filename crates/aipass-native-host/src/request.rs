@@ -9,7 +9,7 @@ use aipass_agent_protocol::{
     BrowserIgnoredStatus, SaveDetectedResult, SessionStatus, SessionUnlockMode,
 };
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
-use aipass_vault::ProviderEntryInput;
+use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
 use anyhow::{bail, Result};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -126,6 +126,11 @@ fn handle_request_inner(
                 request_agent(config, &AgentRequest::BrowserContextLookup { origin, url })?;
             Ok(serde_json::to_value(result)?)
         }
+        NativeRequest::EntriesList { .. } => {
+            let entries: Vec<aipass_vault::EntrySummary> =
+                request_agent(config, &AgentRequest::EntriesList { archived: false })?;
+            Ok(json!({ "entries": entries, "grants": [] }))
+        }
         NativeRequest::EntriesSearch { origin, query, .. } => {
             let result: BrowserContextLookupData = request_agent(
                 config,
@@ -149,6 +154,8 @@ fn handle_request_inner(
             origin,
             url,
             title,
+            favicon_url,
+            secret_label,
             endpoint,
             provider_id,
             interface_type,
@@ -166,6 +173,8 @@ fn handle_request_inner(
                         origin,
                         url,
                         title,
+                        favicon_url,
+                        secret_label,
                         endpoint,
                         provider_id,
                         interface_type,
@@ -183,6 +192,8 @@ fn handle_request_inner(
             origin,
             url,
             title,
+            favicon_url,
+            secret_label,
             endpoint,
             provider_id,
             interface_type,
@@ -200,6 +211,8 @@ fn handle_request_inner(
                         origin,
                         url,
                         title,
+                        favicon_url,
+                        secret_label,
                         endpoint,
                         provider_id,
                         interface_type,
@@ -256,6 +269,7 @@ fn handle_request_inner(
                 interface_type,
                 auth_scheme,
                 api_key: api_key.into_inner(),
+                secret_label: None,
                 default_model: default_model.and_then(non_empty),
                 model_aliases: model_aliases
                     .into_iter()
@@ -271,6 +285,76 @@ fn handle_request_inner(
             let entry_id: Uuid = request_agent(config, &AgentRequest::ProviderAdd { input })?;
             Ok(json!({ "entryId": entry_id }))
         }
+        NativeRequest::ProviderUpdate {
+            entry_id,
+            title,
+            provider_id,
+            domain,
+            favicon_url,
+            endpoint,
+            endpoints,
+            console_endpoints,
+            interface_type,
+            auth_scheme,
+            api_key,
+            default_model,
+            model_aliases,
+            headers,
+            quota,
+            gateway,
+            tags,
+            environment,
+            notes,
+            ..
+        } => {
+            let mut api_endpoints: Vec<ProviderEndpoint> = endpoints
+                .into_iter()
+                .chain(endpoint)
+                .filter_map(non_empty)
+                .map(ProviderEndpoint::api)
+                .collect();
+            api_endpoints.extend(
+                console_endpoints
+                    .into_iter()
+                    .filter_map(non_empty)
+                    .map(ProviderEndpoint::console),
+            );
+            let input = ProviderEntryUpdateInput {
+                title: non_empty(title).unwrap_or_else(|| "Custom Provider".to_string()),
+                provider_kind: provider_kind_for_id(provider_id.as_deref()),
+                provider_id,
+                domains: domain.into_iter().filter_map(non_empty).collect(),
+                favicon_url: favicon_url.and_then(non_empty),
+                endpoints: api_endpoints,
+                interface_type,
+                auth_scheme,
+                api_key: api_key.map(|value| value.into_inner()).and_then(non_empty),
+                default_model: default_model.and_then(non_empty),
+                model_aliases: model_aliases
+                    .into_iter()
+                    .filter_map(|(a, m)| Some((non_empty(a)?, non_empty(m)?)))
+                    .collect(),
+                headers,
+                quota,
+                gateway,
+                tags: tags.into_iter().filter_map(non_empty).collect(),
+                environment: non_empty(environment).unwrap_or_else(|| "personal".to_string()),
+                notes: notes.and_then(non_empty),
+            };
+            let _: serde_json::Value = request_agent(
+                config,
+                &AgentRequest::ProviderUpdate {
+                    id: entry_id,
+                    input,
+                },
+            )?;
+            Ok(json!({ "entryId": entry_id }))
+        }
+        NativeRequest::ProviderDelete { entry_id, .. } => {
+            let _: serde_json::Value =
+                request_agent(config, &AgentRequest::ProviderDelete { id: entry_id })?;
+            Ok(json!({ "entryId": entry_id, "deleted": true }))
+        }
     }
 }
 
@@ -283,6 +367,7 @@ fn request_id(request: &NativeRequest) -> Uuid {
     match request {
         NativeRequest::Ping { id, .. }
         | NativeRequest::ContextLookup { id, .. }
+        | NativeRequest::EntriesList { id, .. }
         | NativeRequest::EntriesSearch { id, .. }
         | NativeRequest::IsOriginIgnored { id, .. }
         | NativeRequest::IgnoreOrigin { id, .. }
@@ -290,6 +375,8 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::SaveDetected { id, .. }
         | NativeRequest::PreviewDetected { id, .. }
         | NativeRequest::ProviderAdd { id, .. }
+        | NativeRequest::ProviderUpdate { id, .. }
+        | NativeRequest::ProviderDelete { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
         | NativeRequest::SessionUnlock { id, .. } => *id,
     }
@@ -299,6 +386,7 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
     match request {
         NativeRequest::Ping { extension_id, .. }
         | NativeRequest::ContextLookup { extension_id, .. }
+        | NativeRequest::EntriesList { extension_id, .. }
         | NativeRequest::EntriesSearch { extension_id, .. }
         | NativeRequest::IsOriginIgnored { extension_id, .. }
         | NativeRequest::IgnoreOrigin { extension_id, .. }
@@ -306,6 +394,8 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::SaveDetected { extension_id, .. }
         | NativeRequest::PreviewDetected { extension_id, .. }
         | NativeRequest::ProviderAdd { extension_id, .. }
+        | NativeRequest::ProviderUpdate { extension_id, .. }
+        | NativeRequest::ProviderDelete { extension_id, .. }
         | NativeRequest::UnlockRequest { extension_id, .. }
         | NativeRequest::SessionUnlock { extension_id, .. } => extension_id.as_deref(),
     }

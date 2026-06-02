@@ -261,6 +261,9 @@ pub struct BrowserDetectedSecretFields {
     pub origin: String,
     pub url: String,
     pub title: Option<String>,
+    pub favicon_url: Option<String>,
+    #[serde(default)]
+    pub secret_label: Option<String>,
     pub endpoint: Option<String>,
     pub provider_id: Option<String>,
     pub interface_type: Option<InterfaceType>,
@@ -277,6 +280,10 @@ pub struct BrowserDetectedSecretFields {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserDetectedSecretPreview {
     pub title: String,
+    #[serde(default)]
+    pub secret_label: Option<String>,
+    #[serde(default)]
+    pub favicon_url: Option<String>,
     pub provider_id: Option<String>,
     pub endpoint: Option<String>,
     pub interface_type: InterfaceType,

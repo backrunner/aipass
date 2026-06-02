@@ -26,6 +26,11 @@ pub enum NativeRequest {
         origin: String,
         url: String,
     },
+    #[serde(rename = "entries.list")]
+    EntriesList {
+        id: Uuid,
+        extension_id: Option<String>,
+    },
     #[serde(rename = "entries.search")]
     EntriesSearch {
         id: Uuid,
@@ -60,6 +65,9 @@ pub enum NativeRequest {
         origin: String,
         url: String,
         title: Option<String>,
+        favicon_url: Option<String>,
+        #[serde(default)]
+        secret_label: Option<String>,
         endpoint: Option<String>,
         provider_id: Option<String>,
         interface_type: Option<InterfaceType>,
@@ -76,6 +84,9 @@ pub enum NativeRequest {
         origin: String,
         url: String,
         title: Option<String>,
+        favicon_url: Option<String>,
+        #[serde(default)]
+        secret_label: Option<String>,
         endpoint: Option<String>,
         provider_id: Option<String>,
         interface_type: Option<InterfaceType>,
@@ -113,6 +124,42 @@ pub enum NativeRequest {
         tags: Vec<String>,
         environment: String,
         notes: Option<String>,
+    },
+    #[serde(rename = "provider.update")]
+    ProviderUpdate {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+        title: String,
+        provider_id: Option<String>,
+        #[serde(default)]
+        domain: Vec<String>,
+        favicon_url: Option<String>,
+        endpoint: Option<String>,
+        #[serde(default)]
+        endpoints: Vec<String>,
+        #[serde(default)]
+        console_endpoints: Vec<String>,
+        interface_type: InterfaceType,
+        auth_scheme: AuthScheme,
+        api_key: Option<SensitiveString>,
+        default_model: Option<String>,
+        #[serde(default)]
+        model_aliases: Vec<(String, String)>,
+        #[serde(default)]
+        headers: Option<Vec<(String, String)>>,
+        quota: Option<QuotaInfo>,
+        gateway: Option<GatewayMetadata>,
+        #[serde(default)]
+        tags: Vec<String>,
+        environment: String,
+        notes: Option<String>,
+    },
+    #[serde(rename = "provider.delete")]
+    ProviderDelete {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
     },
     #[serde(rename = "unlock.request")]
     UnlockRequest {
@@ -240,6 +287,53 @@ mod tests {
                 assert_eq!(title, "My Gateway");
                 assert_eq!(interface_type, InterfaceType::OpenAiCompatible);
                 assert_eq!(endpoints, vec!["https://gw.example.com/v1".to_string()]);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn entries_list_deserializes_without_payload() {
+        let request: NativeRequest = serde_json::from_str(
+            r#"{
+                "type": "entries.list",
+                "id": "00000000-0000-0000-0000-000000000000"
+            }"#,
+        )
+        .unwrap();
+        match request {
+            NativeRequest::EntriesList { id, .. } => {
+                assert_eq!(id.to_string(), "00000000-0000-0000-0000-000000000000");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn provider_update_deserializes_entry_id_and_optional_secret() {
+        let request: NativeRequest = serde_json::from_str(
+            r#"{
+                "type": "provider.update",
+                "id": "00000000-0000-0000-0000-000000000000",
+                "entry_id": "11111111-1111-1111-1111-111111111111",
+                "title": "Edited Gateway",
+                "interface_type": "openai_compatible",
+                "auth_scheme": "bearer",
+                "api_key": "sk-updated",
+                "environment": "work"
+            }"#,
+        )
+        .unwrap();
+        match request {
+            NativeRequest::ProviderUpdate {
+                entry_id,
+                title,
+                api_key,
+                ..
+            } => {
+                assert_eq!(entry_id.to_string(), "11111111-1111-1111-1111-111111111111");
+                assert_eq!(title, "Edited Gateway");
+                assert_eq!(api_key.unwrap().into_inner(), "sk-updated");
             }
             other => panic!("unexpected variant: {other:?}"),
         }

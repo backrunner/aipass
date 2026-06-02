@@ -1,9 +1,11 @@
 import {
   addProvider,
+  deleteProvider,
   fillSecret,
   handleNativeReconnectAlarm,
   ignoreOrigin,
   isOriginIgnored,
+  listEntries,
   lookupContext,
   openNativeUnlock,
   pingNativeHost,
@@ -11,9 +13,11 @@ import {
   saveDetectedSecret,
   searchEntries,
   startNativeConnectionMonitor,
+  updateProvider,
   unlockWithPassword,
   type DetectedSecretDraft,
-  type ProviderAddRequest
+  type ProviderAddRequest,
+  type ProviderUpdateRequest
 } from "./native-client";
 
 type PendingDraftRecord = {
@@ -22,10 +26,12 @@ type PendingDraftRecord = {
   expiresAt: number;
   draft: DetectedSecretDraft;
   mode: "review" | "edit";
+  saveAfterUnlock?: boolean;
 };
 
 let pendingDrafts: PendingDraftRecord[] = [];
 let pendingDraftTimer: ReturnType<typeof setTimeout> | undefined;
+let debugEnabledCache: boolean | undefined;
 const PENDING_DRAFT_TTL_MS = 5 * 60 * 1000;
 
 startNativeConnectionMonitor();
@@ -47,7 +53,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     draftPatches?: Array<{ draftId?: string; draft?: Partial<DetectedSecretDraft> | null }>;
     tabId?: number;
     password?: string;
-    request?: ProviderAddRequest;
+    request?: ProviderAddRequest | ProviderUpdateRequest;
   };
 
   if (typed.type === "aipass.ping") {
@@ -57,6 +63,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.lookup" && typed.url && typed.origin) {
     lookupContext(typed.url, typed.origin).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.entriesList") {
+    listEntries().then(sendResponse);
     return true;
   }
 
@@ -77,6 +88,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.unlockPassword" && typeof typed.password === "string") {
     unlockWithPassword(typed.password).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.resumePendingSaves") {
+    resumePendingSaves().then(sendResponse);
     return true;
   }
 
@@ -107,6 +123,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
     saveDetectedDraftBatch(drafts).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.filterUnsavedDetectedDrafts" && Array.isArray(typed.drafts)) {
+    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    if (!drafts.length) {
+      sendResponse({ ok: true, data: { drafts: [], savedCount: 0, checkedCount: 0 } });
+      return false;
+    }
+    filterUnsavedDetectedDrafts(drafts).then(sendResponse);
     return true;
   }
 
@@ -169,12 +195,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, error: "No pending API key draft" });
       return false;
     }
-    saveDetectedSecret(draft).then((response) => {
-      if (response.ok) {
-        clearPendingDraft(typed.draftId);
-      }
-      sendResponse(response);
-    });
+    savePendingDraft(draft, typed.draftId).then(sendResponse);
     return true;
   }
 
@@ -207,7 +228,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.providerAdd" && typed.request) {
-    addProvider(typed.request).then(sendResponse);
+    addProvider(typed.request as ProviderAddRequest).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.providerUpdate" && typed.request) {
+    updateProvider(typed.request as ProviderUpdateRequest).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.providerDelete" && typed.entryId) {
+    deleteProvider(typed.entryId).then(sendResponse);
     return true;
   }
 
@@ -252,7 +283,8 @@ function safePendingDraft(record: PendingDraftRecord) {
     ...record.draft,
     draftId: record.id,
     apiKey: record.mode === "edit" ? record.draft.apiKey : undefined,
-    editMode: record.mode === "edit"
+    editMode: record.mode === "edit",
+    resumeSave: record.saveAfterUnlock
   };
 }
 
@@ -273,7 +305,11 @@ function clearPendingDrafts() {
   updateActionBadge();
 }
 
-function enqueuePendingDraft(draft: DetectedSecretDraft, mode: PendingDraftRecord["mode"] = "review") {
+function enqueuePendingDraft(
+  draft: DetectedSecretDraft,
+  mode: PendingDraftRecord["mode"] = "review",
+  saveAfterUnlock = false
+) {
   const key = pendingDraftKey(draft);
   const expiresAt = Date.now() + PENDING_DRAFT_TTL_MS;
   const existing = pendingDrafts.find((item) => item.key === key);
@@ -281,8 +317,9 @@ function enqueuePendingDraft(draft: DetectedSecretDraft, mode: PendingDraftRecor
     existing.draft = draft;
     existing.expiresAt = expiresAt;
     existing.mode = mode;
+    existing.saveAfterUnlock = existing.saveAfterUnlock || saveAfterUnlock;
   } else {
-    pendingDrafts.push({ id: crypto.randomUUID(), key, draft, expiresAt, mode });
+    pendingDrafts.push({ id: crypto.randomUUID(), key, draft, expiresAt, mode, saveAfterUnlock });
   }
   schedulePendingDraftCleanup();
   updateActionBadge();
@@ -333,10 +370,48 @@ function pendingDraftKey(draft: DetectedSecretDraft): string {
     draft.url,
     draft.providerId ?? "",
     draft.endpoint ?? "",
-    draft.apiKey ?? "",
-    draft.gateway?.group ?? "",
-    draft.gateway?.rate ?? ""
+    draft.apiKey ?? ""
   ].join("|");
+}
+
+async function savePendingDraft(draft: DetectedSecretDraft, draftId?: string) {
+  const response = await saveDetectedSecret(draft);
+  if (response.ok) {
+    clearPendingDraft(draftId);
+    return response;
+  }
+  if (isLockedResponse(response)) {
+    markPendingDraftForSaveAfterUnlock(draft, draftId);
+    const opened = await openPopupForEdit();
+    return saveRequiresUnlockResponse(1, opened);
+  }
+  return response;
+}
+
+async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]) {
+  const unsaved: DetectedSecretDraft[] = [];
+  const errors: Array<{ error: string }> = [];
+  let savedCount = 0;
+  for (const draft of drafts) {
+    const response = await previewDetectedSecret(draft);
+    if (response.ok && response.data?.isSaved) {
+      savedCount += 1;
+      continue;
+    }
+    if (!response.ok) {
+      errors.push({ error: response.error ?? "Unable to preview detected key" });
+    }
+    unsaved.push(draft);
+  }
+  return {
+    ok: true,
+    data: {
+      drafts: unsaved,
+      savedCount,
+      checkedCount: drafts.length,
+      errors
+    }
+  };
 }
 
 async function savePendingDraftBatch(
@@ -344,6 +419,7 @@ async function savePendingDraftBatch(
 ) {
   const saved: Array<{ draftId?: string; entryId?: string }> = [];
   const errors: Array<{ draftId?: string; error: string }> = [];
+  let lockedCount = 0;
   for (const item of draftPatches) {
     const draft = mergePendingDraft(item.draft, item.draftId);
     if (!draft?.apiKey) {
@@ -354,9 +430,16 @@ async function savePendingDraftBatch(
     if (response.ok) {
       saved.push({ draftId: item.draftId, entryId: response.data?.entryId });
       clearPendingDraft(item.draftId);
+    } else if (isLockedResponse(response)) {
+      markPendingDraftForSaveAfterUnlock(draft, item.draftId);
+      lockedCount += 1;
     } else {
       errors.push({ draftId: item.draftId, error: response.error ?? "Unable to save detected key" });
     }
+  }
+  if (lockedCount) {
+    const opened = await openPopupForEdit();
+    return saveRequiresUnlockResponse(lockedCount, opened, saved, errors);
   }
   return {
     ok: errors.length === 0,
@@ -368,19 +451,89 @@ async function savePendingDraftBatch(
 async function saveDetectedDraftBatch(drafts: DetectedSecretDraft[]) {
   const saved: Array<{ entryId?: string }> = [];
   const errors: Array<{ error: string }> = [];
+  let lockedCount = 0;
   for (const draft of drafts) {
     const response = await saveDetectedSecret(draft);
     if (response.ok) {
       saved.push({ entryId: response.data?.entryId });
+    } else if (isLockedResponse(response)) {
+      enqueuePendingDraft(draft, "review", true);
+      lockedCount += 1;
     } else {
       errors.push({ error: response.error ?? "Unable to save detected key" });
     }
+  }
+  if (lockedCount) {
+    const opened = await openPopupForEdit();
+    return saveRequiresUnlockResponse(lockedCount, opened, saved, errors);
   }
   return {
     ok: errors.length === 0,
     error: errors[0]?.error,
     data: { saved, errors }
   };
+}
+
+async function resumePendingSaves() {
+  const records = getPendingDrafts().filter((item) => item.saveAfterUnlock);
+  const saved: Array<{ draftId?: string; entryId?: string }> = [];
+  const errors: Array<{ draftId?: string; error: string }> = [];
+  for (const record of records) {
+    const response = await saveDetectedSecret(record.draft);
+    if (response.ok) {
+      saved.push({ draftId: record.id, entryId: response.data?.entryId });
+      clearPendingDraft(record.id);
+      continue;
+    }
+    if (isLockedResponse(response)) {
+      const opened = await openPopupForEdit();
+      return saveRequiresUnlockResponse(records.length - saved.length, opened, saved, errors);
+    }
+    record.saveAfterUnlock = false;
+    errors.push({ draftId: record.id, error: response.error ?? "Unable to save detected key" });
+  }
+  return {
+    ok: errors.length === 0,
+    error: errors[0]?.error,
+    data: { saved, errors }
+  };
+}
+
+function markPendingDraftForSaveAfterUnlock(draft: DetectedSecretDraft, draftId?: string) {
+  const record = getPendingDraftRecord(draftId);
+  if (!record) {
+    enqueuePendingDraft(draft, "review", true);
+    return;
+  }
+  record.draft = draft;
+  record.expiresAt = Date.now() + PENDING_DRAFT_TTL_MS;
+  record.saveAfterUnlock = true;
+  schedulePendingDraftCleanup();
+  updateActionBadge();
+}
+
+function saveRequiresUnlockResponse(
+  pending: number,
+  opened: boolean,
+  saved: Array<{ draftId?: string; entryId?: string }> | Array<{ entryId?: string }> = [],
+  errors: Array<{ draftId?: string; error: string }> | Array<{ error: string }> = []
+) {
+  return {
+    ok: true,
+    data: {
+      saved,
+      errors,
+      requiresUnlock: true,
+      opened,
+      pending
+    }
+  };
+}
+
+function isLockedResponse(response: { ok?: boolean; error?: string }): boolean {
+  if (response.ok) return false;
+  const error = response.error?.toLowerCase() ?? "";
+  return error.startsWith("locked:") || error.includes("vault is locked");
 }
 
 async function openPopupForEdit(): Promise<boolean> {
@@ -394,6 +547,7 @@ async function openPopupForEdit(): Promise<boolean> {
 }
 
 async function scanActiveTab(tabId: number) {
+  debugLog("scan active tab: start", { tabId });
   try {
     try {
       await chrome.scripting.executeScript({
@@ -401,18 +555,52 @@ async function scanActiveTab(tabId: number) {
         files: ["clipboardBridge.js"],
         world: "MAIN"
       });
-    } catch {
+      debugLog("scan active tab: clipboard bridge injected", { tabId });
+    } catch (err) {
+      debugLog("scan active tab: clipboard bridge injection skipped", {
+        tabId,
+        error: err instanceof Error ? err.message : String(err)
+      });
       // Main-world injection may be blocked on restricted pages; DOM scanning can still run.
     }
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ["content.js"]
     });
+    debugLog("scan active tab: content injected", { tabId });
     return { ok: true, data: { scanned: true } };
   } catch (err) {
+    debugLog("scan active tab: failed", { tabId, error: err instanceof Error ? err.message : String(err) });
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err)
     };
+  }
+}
+
+function debugLog(event: string, data?: Record<string, unknown>) {
+  if (!isDebugEnabled()) return;
+  try {
+    console.debug("[AIPass service worker]", event, data ?? {});
+  } catch {
+    // Debug logging should never change extension behavior.
+  }
+}
+
+function isDebugEnabled(): boolean {
+  if (debugEnabledCache !== undefined) return debugEnabledCache;
+  debugEnabledCache = isUnpackedExtensionBuild();
+  return debugEnabledCache;
+}
+
+function isUnpackedExtensionBuild(): boolean {
+  try {
+    const runtime = chrome.runtime as typeof chrome.runtime & {
+      getManifest?: () => { update_url?: string };
+    };
+    const manifest = runtime.getManifest?.();
+    return Boolean(manifest && !manifest.update_url);
+  } catch {
+    return false;
   }
 }

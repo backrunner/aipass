@@ -5,6 +5,9 @@ type Listener = (message: unknown, sender: unknown, sendResponse: (response: unk
 
 const listeners: Listener[] = [];
 const openPopup = vi.fn().mockResolvedValue(undefined);
+const nativeSaveResponses: unknown[] = [];
+const nativePreviewResponses: unknown[] = [];
+const nativeMessages: Array<Record<string, unknown>> = [];
 
 function installChromeStub() {
   vi.stubGlobal("chrome", {
@@ -15,6 +18,7 @@ function installChromeStub() {
         }
       },
       sendNativeMessage: vi.fn((_host: string, message: Record<string, unknown>, callback: (response: unknown) => void) => {
+        nativeMessages.push(message);
         const type = String(message.type ?? "");
         if (type === "ping") {
           callback({ id: "1", ok: true, data: { protocolVersion: 1, locked: false } });
@@ -29,6 +33,11 @@ function installChromeStub() {
           return;
         }
         if (type === "secret.previewDetected") {
+          const queued = nativePreviewResponses.shift();
+          if (queued) {
+            callback(queued);
+            return;
+          }
           callback({
             id: "1",
             ok: true,
@@ -47,6 +56,11 @@ function installChromeStub() {
           return;
         }
         if (type === "secret.saveDetected") {
+          const queued = nativeSaveResponses.shift();
+          if (queued) {
+            callback(queued);
+            return;
+          }
           callback({ id: "1", ok: true, data: { entryId: crypto.randomUUID() } });
           return;
         }
@@ -78,6 +92,9 @@ describe("service worker pending drafts", () => {
     vi.unstubAllGlobals();
     listeners.length = 0;
     openPopup.mockClear();
+    nativeSaveResponses.length = 0;
+    nativePreviewResponses.length = 0;
+    nativeMessages.length = 0;
     installChromeStub();
   });
 
@@ -134,6 +151,8 @@ describe("service worker pending drafts", () => {
           origin: "https://sub2api.example.test",
           url: "https://sub2api.example.test/keys",
           providerId: "sub2api",
+          secretLabel: "Product A",
+          faviconUrl: "https://sub2api.example.test/favicon.ico",
           endpoint: "https://sub2api.example.test/v1",
           apiKey: "productA_key_1234567890abcdef",
           gateway: { group: "vip", rate: "0.8x" }
@@ -143,6 +162,7 @@ describe("service worker pending drafts", () => {
           origin: "https://sub2api.example.test",
           url: "https://sub2api.example.test/keys",
           providerId: "sub2api",
+          secretLabel: "Product B",
           endpoint: "https://sub2api.example.test/v1",
           apiKey: "productB_key_abcdef1234567890",
           gateway: { group: "default", rate: "1x" }
@@ -152,11 +172,12 @@ describe("service worker pending drafts", () => {
 
     const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
       ok?: boolean;
-      data?: { drafts?: Array<{ draftId?: string; apiKey?: string; gateway?: { group?: string; rate?: string } }> };
+      data?: { drafts?: Array<{ draftId?: string; apiKey?: string; secretLabel?: string; gateway?: { group?: string; rate?: string } }> };
     };
     const drafts = pending.data?.drafts ?? [];
     assert.equal(drafts.length, 2);
     assert.equal(drafts[0]?.apiKey, undefined);
+    assert.equal(drafts[0]?.secretLabel, "Product A");
     assert.equal(drafts[0]?.gateway?.group, "vip");
 
     const saved = (await dispatchMessage({
@@ -168,6 +189,10 @@ describe("service worker pending drafts", () => {
     })) as { ok?: boolean; data?: { saved?: unknown[] } };
     assert.equal(saved.ok, true);
     assert.equal(saved.data?.saved?.length, 2);
+    const saveMessages = nativeMessages.filter((message) => message.type === "secret.saveDetected");
+    assert.equal(saveMessages[0]?.secret_label, "Product A");
+    assert.equal(saveMessages[0]?.favicon_url, "https://sub2api.example.test/favicon.ico");
+    assert.equal(saveMessages[1]?.secret_label, "Product B");
 
     const after = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
       ok?: boolean;
@@ -200,6 +225,126 @@ describe("service worker pending drafts", () => {
       data?: { drafts?: unknown[] };
     };
     assert.equal(pending.data?.drafts?.length, 0);
+  });
+
+  it("filters already-saved detected drafts before the content prompt opens", async () => {
+    await import("./service-worker");
+    nativePreviewResponses.push({
+      id: "1",
+      ok: true,
+      data: {
+        title: "OpenRouter",
+        providerId: "openrouter",
+        endpoint: "https://openrouter.ai/api/v1",
+        interfaceType: "openai_compatible",
+        authScheme: "bearer",
+        maskedSecret: "•••• 1234",
+        fingerprint: "fp",
+        existingEntryId: "existing-entry",
+        isSaved: true,
+        environment: "browser",
+        tags: ["browser"]
+      }
+    });
+
+    const filtered = (await dispatchMessage({
+      type: "aipass.filterUnsavedDetectedDrafts",
+      drafts: [
+        {
+          title: "OpenRouter",
+          origin: "https://openrouter.ai",
+          url: "https://openrouter.ai/settings/keys",
+          providerId: "openrouter",
+          endpoint: "https://openrouter.ai/api/v1",
+          apiKey: "sk-or-v1-direct-secret1234"
+        }
+      ]
+    })) as { ok?: boolean; data?: { drafts?: unknown[]; savedCount?: number; checkedCount?: number } };
+    assert.equal(filtered.ok, true);
+    assert.equal(filtered.data?.drafts?.length, 0);
+    assert.equal(filtered.data?.savedCount, 1);
+    assert.equal(filtered.data?.checkedCount, 1);
+  });
+
+  it("opens the popup and resumes direct saves after unlocking", async () => {
+    await import("./service-worker");
+    nativeSaveResponses.push({ id: "1", ok: false, error: "locked: vault is locked", data: {} });
+
+    const locked = (await dispatchMessage({
+      type: "aipass.saveDetectedDraftsNow",
+      drafts: [
+        {
+          title: "OpenRouter",
+          origin: "https://openrouter.ai",
+          url: "https://openrouter.ai/settings/keys",
+          providerId: "openrouter",
+          endpoint: "https://openrouter.ai/api/v1",
+          apiKey: "sk-or-v1-direct-secret1234"
+        }
+      ]
+    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number } };
+    assert.equal(locked.ok, true);
+    assert.equal(locked.data?.requiresUnlock, true);
+    assert.equal(locked.data?.opened, true);
+    assert.equal(locked.data?.pending, 1);
+    assert.equal(openPopup.mock.calls.length, 1);
+
+    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: Array<{ resumeSave?: boolean; apiKey?: string }> };
+    };
+    assert.equal(pending.data?.drafts?.[0]?.resumeSave, true);
+    assert.equal(pending.data?.drafts?.[0]?.apiKey, undefined);
+
+    nativeSaveResponses.push({ id: "1", ok: true, data: { entryId: "saved-after-unlock" } });
+    const resumed = (await dispatchMessage({ type: "aipass.resumePendingSaves" })) as {
+      ok?: boolean;
+      data?: { saved?: unknown[] };
+    };
+    assert.equal(resumed.ok, true);
+    assert.equal(resumed.data?.saved?.length, 1);
+
+    const after = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: unknown[] };
+    };
+    assert.equal(after.data?.drafts?.length, 0);
+  });
+
+  it("keeps edited pending drafts for save after unlock", async () => {
+    await import("./service-worker");
+    await dispatchMessage({
+      type: "aipass.detectedSecretDraft",
+      draft: {
+        title: "One API",
+        origin: "https://one.example.test",
+        url: "https://one.example.test/token",
+        providerId: "one_api",
+        endpoint: "https://one.example.test/v1",
+        apiKey: "sk-oneapi-pending-secret1234"
+      }
+    });
+    const before = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: Array<{ draftId?: string }> };
+    };
+    const draftId = before.data?.drafts?.[0]?.draftId;
+    nativeSaveResponses.push({ id: "1", ok: false, error: "locked: vault is locked", data: {} });
+
+    const locked = (await dispatchMessage({
+      type: "aipass.savePendingDrafts",
+      draftPatches: [{ draftId, draft: { title: "One API Edited" } }]
+    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean } };
+    assert.equal(locked.ok, true);
+    assert.equal(locked.data?.requiresUnlock, true);
+    assert.equal(locked.data?.opened, true);
+
+    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: Array<{ title?: string; resumeSave?: boolean }> };
+    };
+    assert.equal(pending.data?.drafts?.[0]?.title, "One API Edited");
+    assert.equal(pending.data?.drafts?.[0]?.resumeSave, true);
   });
 
   it("stages a single detected draft for popup editing with its secret", async () => {
@@ -267,5 +412,42 @@ describe("service worker pending drafts", () => {
       data?: { draft?: unknown | null };
     };
     assert.equal(pending.data?.draft ?? null, null);
+  });
+
+  it("forwards provider update and delete actions to the native host", async () => {
+    await import("./service-worker");
+
+    const updated = (await dispatchMessage({
+      type: "aipass.providerUpdate",
+      request: {
+        id: "entry-1",
+        title: "Edited Provider",
+        providerId: "openrouter",
+        domain: ["openrouter.ai"],
+        endpoint: "https://openrouter.ai/api/v1",
+        endpoints: [],
+        consoleEndpoints: ["https://openrouter.ai/settings/keys"],
+        interfaceType: "openai_compatible",
+        authScheme: "bearer",
+        modelAliases: [],
+        headers: [],
+        tags: ["browser"],
+        environment: "browser"
+      }
+    })) as { ok?: boolean };
+    assert.equal(updated.ok, true);
+
+    const deleted = (await dispatchMessage({
+      type: "aipass.providerDelete",
+      entryId: "entry-1"
+    })) as { ok?: boolean };
+    assert.equal(deleted.ok, true);
+
+    const updateMessage = nativeMessages.find((message) => message.type === "provider.update");
+    assert.equal(updateMessage?.entry_id, "entry-1");
+    assert.equal(updateMessage?.title, "Edited Provider");
+
+    const deleteMessage = nativeMessages.find((message) => message.type === "provider.delete");
+    assert.equal(deleteMessage?.entry_id, "entry-1");
   });
 });

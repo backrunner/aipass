@@ -83,8 +83,10 @@ export interface ContextLookupData {
 export interface DetectedSecretDraft {
   providerId?: string;
   title: string;
+  secretLabel?: string;
   origin: string;
   url: string;
+  faviconUrl?: string;
   maskedSecret?: string;
   apiKey?: string;
   endpoint?: string;
@@ -100,7 +102,9 @@ export interface DetectedSecretDraft {
 
 export interface DetectedSecretPreview {
   title: string;
+  secretLabel?: string;
   providerId?: string;
+  faviconUrl?: string;
   endpoint?: string;
   interfaceType: string;
   authScheme: string;
@@ -320,6 +324,13 @@ export function lookupContext(url: string, origin: string): Promise<NativeRespon
   });
 }
 
+export function listEntries(): Promise<NativeResponse<ContextLookupData>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "entries.list"
+  });
+}
+
 export function searchEntries(query: string, origin: string): Promise<NativeResponse<ContextLookupData>> {
   return nativeRequest({
     id: crypto.randomUUID(),
@@ -376,6 +387,12 @@ export interface ProviderAddRequest {
   notes?: string;
 }
 
+export interface ProviderUpdateRequest extends Omit<ProviderAddRequest, "apiKey" | "headers"> {
+  id: string;
+  apiKey?: string;
+  headers?: Array<[string, string]>;
+}
+
 export function addProvider(request: ProviderAddRequest): Promise<NativeResponse<{ entryId: string }>> {
   return nativeRequest({
     id: crypto.randomUUID(),
@@ -401,6 +418,40 @@ export function addProvider(request: ProviderAddRequest): Promise<NativeResponse
   });
 }
 
+export function updateProvider(request: ProviderUpdateRequest): Promise<NativeResponse<{ entryId: string }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "provider.update",
+    entry_id: request.id,
+    title: request.title,
+    provider_id: request.providerId,
+    domain: request.domain,
+    favicon_url: request.faviconUrl,
+    endpoint: request.endpoint,
+    endpoints: request.endpoints,
+    console_endpoints: request.consoleEndpoints,
+    interface_type: request.interfaceType,
+    auth_scheme: request.authScheme,
+    api_key: request.apiKey,
+    default_model: request.defaultModel,
+    model_aliases: request.modelAliases,
+    headers: request.headers,
+    quota: request.quota,
+    gateway: request.gateway,
+    tags: request.tags,
+    environment: request.environment,
+    notes: request.notes
+  });
+}
+
+export function deleteProvider(entryId: string): Promise<NativeResponse<{ entryId: string; deleted: boolean }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "provider.delete",
+    entry_id: entryId
+  });
+}
+
 export function saveDetectedSecret(draft: DetectedSecretDraft): Promise<NativeResponse<{ entryId: string }>> {
   return nativeRequest({
     id: crypto.randomUUID(),
@@ -408,6 +459,8 @@ export function saveDetectedSecret(draft: DetectedSecretDraft): Promise<NativeRe
     origin: draft.origin,
     url: draft.url,
     title: draft.title,
+    secret_label: draft.secretLabel,
+    favicon_url: draft.faviconUrl,
     endpoint: draft.endpoint,
     provider_id: draft.providerId,
     interface_type: draft.interfaceType,
@@ -426,6 +479,8 @@ export function previewDetectedSecret(draft: DetectedSecretDraft): Promise<Nativ
     origin: draft.origin,
     url: draft.url,
     title: draft.title,
+    secret_label: draft.secretLabel,
+    favicon_url: draft.faviconUrl,
     endpoint: draft.endpoint,
     provider_id: draft.providerId,
     interface_type: draft.interfaceType,
