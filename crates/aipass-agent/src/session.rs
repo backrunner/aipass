@@ -185,7 +185,8 @@ pub fn unlock_with_password(
 }
 
 /// On agent start, re-open the vault from a device-sealed password (if the policy
-/// allows and one was stored), so a process restart does not force a manual unlock.
+/// allows and one was stored), so an agent crash or helper restart inside the
+/// same desktop session does not force a manual unlock.
 pub fn try_restore_session(state: &Arc<AgentState>) {
     if !current_policy(state)
         .map(|p| p.persist_unlock)
@@ -323,9 +324,10 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
     if let Ok(mut session) = state.session.lock() {
         *session = SessionState::Locked;
     }
-    // Drop the device-sealed password so a fresh agent start honors the lock. The sole
-    // exception is AgentRestart, which is the reason we persist an unlock in the first
-    // place (process death, not a user/idle lock).
+    // Drop the device-sealed password so a fresh agent start honors explicit
+    // locks and normal app quits. The sole exception is AgentRestart, which is
+    // reserved for unexpected process death or a helper restart inside the same
+    // desktop session.
     if reason != LockReason::AgentRestart {
         let _ = device_secrets::delete_session_unlock(&state.vault_dir);
     }
@@ -480,6 +482,15 @@ pub fn save_policy(vault_dir: &Path, policy: &SessionPolicy) -> Result<()> {
     }
     atomic_write_bytes(&path, &serde_json::to_vec_pretty(policy)?)?;
     Ok(())
+}
+
+pub fn persist_session_unlock_if_allowed(state: &Arc<AgentState>, password: &str) {
+    if current_policy(state)
+        .map(|p| p.persist_unlock)
+        .unwrap_or(false)
+    {
+        let _ = device_secrets::set_session_unlock(&state.vault_dir, password);
+    }
 }
 
 pub fn policy_path(vault_dir: &Path) -> PathBuf {
@@ -904,5 +915,36 @@ mod tests {
         assert!(!manifest_path(&vault_dir).exists());
         assert!(!vault_dir.join("objects").exists());
         assert!(!sync_settings_path(&vault_dir).exists());
+    }
+
+    #[test]
+    fn lock_reason_controls_session_unlock_persistence() {
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let state = Arc::new(AgentState {
+            policy: Mutex::new(SessionPolicy::default()),
+            vault_dir: vault_dir.clone(),
+            namespace: "test".to_string(),
+            auth_token: SensitiveString::from("token"),
+            session: Mutex::new(SessionState::Locked),
+            last_lock_reason: Mutex::new(None),
+            shutdown: AtomicBool::new(false),
+        });
+
+        persist_session_unlock_if_allowed(&state, "correct horse battery staple");
+        lock_session(&state, LockReason::AgentRestart);
+        let restart_secret =
+            device_secrets::get_session_unlock(&vault_dir).expect("read restart secret");
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                restart_secret.as_deref(),
+                Some("correct horse battery staple")
+            );
+        }
+
+        persist_session_unlock_if_allowed(&state, "correct horse battery staple");
+        lock_session(&state, LockReason::AppQuit);
+        let quit_secret = device_secrets::get_session_unlock(&vault_dir).expect("read quit secret");
+        assert!(quit_secret.is_none());
     }
 }

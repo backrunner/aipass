@@ -70,6 +70,7 @@ pub enum LockReason {
     IdleTimeout,
     Manual,
     AgentRestart,
+    AppQuit,
     SystemSleep,
     ScreenLock,
     Import,

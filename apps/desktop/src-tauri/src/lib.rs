@@ -71,6 +71,14 @@ fn agent_status(app: &AppHandle) -> Result<SessionStatus, String> {
     agent_request_no_unlock::<SessionStatus>(app, AgentRequest::SessionStatus)
 }
 
+fn shutdown_agent_for_app_quit(app: &AppHandle) {
+    if let Ok(client) = agent_client(app) {
+        if let Err(err) = client.shutdown() {
+            eprintln!("failed to stop AIPass agent during app quit: {err}");
+        }
+    }
+}
+
 fn agent_error_to_string(err: AgentCommandError) -> String {
     match err.code {
         Some(code) => format!(
@@ -625,8 +633,13 @@ pub fn run() {
             check_for_updates,
             install_update
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                shutdown_agent_for_app_quit(app);
+            }
+        });
 }
 
 #[cfg(test)]

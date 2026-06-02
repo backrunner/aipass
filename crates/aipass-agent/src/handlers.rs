@@ -66,14 +66,19 @@ fn dispatch_request(
         }
         AgentRequest::VaultReset => Ok(AgentResponse::success(reset_vault(state)?)),
         AgentRequest::VaultChangePassword { new_password } => {
-            with_vault_mut(state, false, |vault| {
-                let new_password = SecretString::new(new_password.into_inner());
+            let mut new_password = new_password.into_inner();
+            let result = with_vault_mut(state, false, |vault| {
+                let secret = SecretString::new(new_password.as_str());
                 vault
-                    .change_master_password(&new_password)
+                    .change_master_password(&secret)
                     .map_err(map_vault_error)?;
                 Ok(serde_json::json!({ "ok": true, "epoch": vault.current_epoch() }))
-            })
-            .map(AgentResponse::success)
+            });
+            if result.is_ok() {
+                crate::session::persist_session_unlock_if_allowed(state, &new_password);
+            }
+            new_password.zeroize();
+            result.map(AgentResponse::success)
         }
         AgentRequest::VaultRotate { reason } => with_vault_mut(state, false, |vault| {
             let epoch = vault
@@ -475,7 +480,7 @@ fn dispatch_request(
             Ok(AgentResponse::empty())
         }
         AgentRequest::AgentShutdown => {
-            lock_session(state, LockReason::AgentRestart);
+            lock_session(state, LockReason::AppQuit);
             state.shutdown.store(true, Ordering::SeqCst);
             Ok(AgentResponse::empty())
         }
