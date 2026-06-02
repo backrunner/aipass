@@ -47,9 +47,12 @@
                 on:change={() => onToggleSelection(item.draftId)}
                 aria-label={$t("common.selected")}
               />
-              <ProviderIcon title={item.draft.title} kind={draftKind(item)} size="md" />
+              <ProviderIcon title={item.draft.title} kind={draftKind(item)} faviconUrl={item.draft.faviconUrl} size="md" />
             </label>
             <div class="draft-secret">
+              {#if item.preview?.secretLabel ?? item.safe.secretLabel ?? item.draft.secretLabel}
+                <strong>{item.preview?.secretLabel ?? item.safe.secretLabel ?? item.draft.secretLabel}</strong>
+              {/if}
               <code class="mono">{item.preview?.maskedSecret ?? item.safe.maskedSecret ?? "••••"}</code>
               <span class="mono">
                 {item.preview?.fingerprint ?? (item.previewLoading ? $t("ext.previewing") : $t("ext.pendingPreview"))}
@@ -72,6 +75,10 @@
             <label>
               <span>{$t("providerForm.title")}</span>
               <input bind:value={item.draft.title} on:input={onSchedulePreview} />
+            </label>
+            <label>
+              <span>{$t("providerForm.secretLabel")}</span>
+              <input bind:value={item.draft.secretLabel} placeholder={$t("providerDetail.secretLabelPlaceholder")} on:input={onSchedulePreview} />
             </label>
             <label class="wide">
               <span>{$t("providerForm.endpointUrl")}</span>
@@ -194,6 +201,16 @@
     span {
       color: var(--text-tertiary);
       font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    strong {
+      min-width: 0;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
