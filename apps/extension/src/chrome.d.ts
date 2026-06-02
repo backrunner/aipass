@@ -14,6 +14,7 @@ declare namespace chrome {
     const id: string;
     const lastError: { message?: string } | undefined;
     const connectNative: ((application: string) => Port) | undefined;
+    function getManifest(): { update_url?: string };
     function sendNativeMessage(
       application: string,
       message: unknown,

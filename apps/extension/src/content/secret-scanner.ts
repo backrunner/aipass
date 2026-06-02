@@ -7,23 +7,77 @@ export type SecretCandidate = {
   };
 };
 
-export const SELF_HOSTED_TOKEN_PATH_PATTERN =
-  /\/(console\/token|app\/tokens|token|tokens|key|keys|api-?keys|virtual-keys|api-manager|downstream-keys|settings|user)(\/|$)/i;
+type SecretScanOptions = {
+  providerId?: string;
+  tokenManagementPage?: boolean;
+  allowOpenAiStyle?: boolean;
+  allowCustomKey?: boolean;
+};
 
-const SECRET_PATTERNS = [
-  /sk-[A-Za-z0-9_-]{12,}/,
-  /sk-ant-[A-Za-z0-9_-]{12,}/,
-  /r8_[A-Za-z0-9_-]{20,}/,
-  /AIza[0-9A-Za-z_-]{20,}/,
-  /([A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})/
+type ExtractSecretOptions = {
+  providerId?: string;
+  allowOpenAiStyle?: boolean;
+  allowCustomKey?: boolean;
+};
+
+export const SELF_HOSTED_TOKEN_PATH_PATTERN =
+  /\/(console\/token|app\/tokens|token|tokens|key|keys|api[-_]?keys?|virtual-keys|api-manager|downstream-keys|settings|user)(\/|$)/i;
+
+const PROVIDER_STRICT_PATTERNS: Record<string, RegExp[]> = {
+  anthropic: [/sk-ant-[A-Za-z0-9_-]{12,}/],
+  openrouter: [/sk-or-v1-[A-Za-z0-9_-]{16,}/, /sk-or-[A-Za-z0-9_-]{16,}/],
+  replicate: [/r8_[A-Za-z0-9_-]{37}(?![A-Za-z0-9_-])/],
+  gemini: [/AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/],
+  groq: [/gsk_[A-Za-z0-9_-]{20,}/],
+  fireworks: [/fw_[A-Za-z0-9_-]{20,}/],
+  xai: [/xai-[A-Za-z0-9_-]{16,}/],
+  perplexity: [/pplx-[A-Za-z0-9_-]{12,}/],
+  cerebras: [/csk[-_][A-Za-z0-9_-]{12,}/],
+  nvidia: [/nvapi-[A-Za-z0-9_-]{16,}/],
+  huggingface: [/hf_[A-Za-z0-9]{20,}/]
+};
+const PROVIDER_OPENAI_STYLE_IDS = new Set([
+  "openai",
+  "deepseek",
+  "moonshot",
+  "qwen",
+  "zhipu",
+  "volcengine",
+  "together",
+  "siliconflow",
+  "mistral",
+  "novita",
+  "new_api",
+  "one_api",
+  "litellm",
+  "sub2api",
+  "veloera",
+  "omniroute",
+  "metapi",
+  "custom_openai_compatible"
+]);
+const OPENAI_STYLE_SECRET_PATTERN = /sk-[A-Za-z0-9_-]{12,}/;
+const CUSTOM_KEY_SECRET_PATTERN = /[A-Za-z][A-Za-z0-9_-]{1,64}_key_[A-Za-z0-9_-]{12,}/;
+const GLOBAL_SECRET_PATTERNS = [
+  ...Object.values(PROVIDER_STRICT_PATTERNS).flat(),
+  OPENAI_STYLE_SECRET_PATTERN
 ];
-const CONTEXTUAL_SECRET_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]{15,}/;
+const SECRET_VALUE_ATTRIBUTES = [
+  "data-api-key",
+  "data-token",
+  "data-key",
+  "data-secret",
+  "data-clipboard-text",
+  "data-clipboard",
+  "data-copy-text",
+  "data-copy"
+];
 const INPUT_SCAN_LIMIT = 160;
 const EXPLICIT_KEY_ELEMENT_SCAN_LIMIT = 80;
 const TOKEN_ROW_SCAN_LIMIT = 240;
 const TABLE_CELL_SCAN_LIMIT = 24;
 
-export function findSecretCandidates(doc: Document, options: { tokenManagementPage?: boolean } = {}): SecretCandidate[] {
+export function findSecretCandidates(doc: Document, options: SecretScanOptions = {}): SecretCandidate[] {
   const candidates: SecretCandidate[] = [];
   const inputs = limitedElements<HTMLInputElement | HTMLTextAreaElement>(doc, "input, textarea", INPUT_SCAN_LIMIT);
   for (const input of inputs) {
@@ -40,79 +94,89 @@ export function findSecretCandidates(doc: Document, options: { tokenManagementPa
     const value = input.value.trim();
     if (!value) continue;
     if (hasKeyContext(label)) {
-      for (const secret of extractSecrets(value, true)) {
+      for (const secret of extractSecrets(value, options)) {
         candidates.push({ secret, ...metadataFromElement(input, secret) });
       }
     }
   }
   const explicitKeyElements = limitedElements<HTMLElement>(
     doc,
-    "code, pre, output, [data-api-key], [data-token], [role='textbox'], [aria-label*='key' i], [aria-label*='token' i], [title*='key' i], [title*='token' i]",
+    "code, pre, output, [data-api-key], [data-token], [data-key], [data-secret], [data-clipboard-text], [data-clipboard], [data-copy-text], [data-copy], [role='textbox'], [aria-label*='key' i], [aria-label*='token' i], [title*='key' i], [title*='token' i]",
     EXPLICIT_KEY_ELEMENT_SCAN_LIMIT
   );
   for (const element of explicitKeyElements) {
+    const attributeValues = secretAttributeValues(element);
     const context = [
       element.getAttribute("aria-label") ?? "",
       element.getAttribute("title") ?? "",
-      element.getAttribute("data-api-key") ?? "",
-      element.getAttribute("data-token") ?? "",
+      ...SECRET_VALUE_ATTRIBUTES.filter((attribute) => element.hasAttribute(attribute)),
       element.closest("section, article, form, div, body")?.textContent?.slice(0, 400) ?? ""
     ]
       .join(" ")
       .toLowerCase();
-    if (!hasKeyContext(context)) continue;
-    const value = (element.textContent ?? "").trim();
-    for (const secret of extractSecrets(value, true)) {
+    if (!hasKeyContext(context) && !attributeValues.length) continue;
+    const value = [(element.textContent ?? "").trim(), ...attributeValues].join(" ");
+    for (const secret of extractSecrets(value, options)) {
       candidates.push({ secret, ...metadataFromElement(element, secret) });
     }
   }
   if (options.tokenManagementPage) {
-    candidates.push(...findTokenManagementCandidates(doc));
+    candidates.push(...findTokenManagementCandidates(doc, options.providerId));
   }
   return uniqueCandidates(candidates);
 }
 
-export function extractSecret(value: string, allowContextual: boolean): string | undefined {
-  return extractSecrets(value, allowContextual)[0];
+export function extractSecret(
+  value: string,
+  allowContextualOrOptions: boolean | ExtractSecretOptions
+): string | undefined {
+  const options =
+    typeof allowContextualOrOptions === "boolean"
+      ? { allowOpenAiStyle: true, allowCustomKey: allowContextualOrOptions }
+      : allowContextualOrOptions;
+  return extractSecrets(value, options)[0];
 }
 
 export function hasKeyContext(context: string): boolean {
   return /(api|key|token|secret|credential|密钥|令牌)/i.test(context);
 }
 
-function extractSecrets(value: string, allowContextual: boolean): string[] {
+function secretAttributeValues(element: Element): string[] {
+  return SECRET_VALUE_ATTRIBUTES.map((attribute) => element.getAttribute(attribute)?.trim() ?? "").filter(Boolean);
+}
+
+function extractSecrets(value: string, options: ExtractSecretOptions): string[] {
   const matches: string[] = [];
-  for (const pattern of SECRET_PATTERNS) {
+  for (const pattern of secretPatternsForProvider(options)) {
     const globalPattern = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
     for (const match of value.matchAll(globalPattern)) {
-      const candidate = match[0]?.replace(/[),.;]+$/, "");
+      const candidate = normalizeSecretMatch(match[1] ?? match[0]);
       if (candidate) matches.push(candidate);
     }
-  }
-  if (!allowContextual) return Array.from(new Set(matches));
-  const contextual = new RegExp(CONTEXTUAL_SECRET_PATTERN.source, "g");
-  for (const match of value.matchAll(contextual)) {
-    const candidate = match[0].replace(/[),.;]+$/, "");
-    if (/sk-/i.test(candidate) && !candidate.toLowerCase().startsWith("sk-")) continue;
-    if (matches.some((secret) => secret.includes(candidate))) continue;
-    if (isLikelySecret(candidate)) matches.push(candidate);
   }
   return Array.from(new Set(matches));
 }
 
-function isLikelySecret(candidate: string): boolean {
-  if (/^https?:/i.test(candidate)) return false;
-  if (candidate.includes("@")) return false;
-  if (/^\d+$/.test(candidate)) return false;
-  if (/^[A-F0-9-]{36}$/i.test(candidate)) return false;
-  if (!/[A-Za-z]/.test(candidate) || !/\d/.test(candidate)) return false;
-  return true;
+function secretPatternsForProvider(options: ExtractSecretOptions): RegExp[] {
+  const providerId = options.providerId;
+  if (providerId && PROVIDER_STRICT_PATTERNS[providerId]) return PROVIDER_STRICT_PATTERNS[providerId];
+  if (providerId && PROVIDER_OPENAI_STYLE_IDS.has(providerId)) {
+    return options.allowCustomKey ? [OPENAI_STYLE_SECRET_PATTERN, CUSTOM_KEY_SECRET_PATTERN] : [OPENAI_STYLE_SECRET_PATTERN];
+  }
+  if (providerId) return options.allowCustomKey ? [CUSTOM_KEY_SECRET_PATTERN] : [];
+  const patterns = options.allowOpenAiStyle ? [...GLOBAL_SECRET_PATTERNS] : Object.values(PROVIDER_STRICT_PATTERNS).flat();
+  if (options.allowCustomKey) patterns.push(CUSTOM_KEY_SECRET_PATTERN);
+  return patterns;
 }
 
-function findTokenManagementCandidates(doc: Document): SecretCandidate[] {
+function normalizeSecretMatch(value: string | undefined): string {
+  return value?.replace(/^[("'[{<]+/, "").replace(/[)"'\]},.;:>]+$/, "") ?? "";
+}
+
+function findTokenManagementCandidates(doc: Document, providerId?: string): SecretCandidate[] {
   const rows = limitedElements<HTMLElement>(
     doc,
-    "tr, [role='row'], article, li, section, .ant-table-row, .el-table__row, .semi-table-row, .v-data-table__tr",
+    "tr, [role='row'], article, li, section, [data-row-key], .ant-table-row, .arco-table-tr, .arco-table-row, .el-table__row, .semi-table-row, .v-data-table__tr, .ant-list-item, .semi-list-item",
     TOKEN_ROW_SCAN_LIMIT
   );
   const candidates: SecretCandidate[] = [];
@@ -120,15 +184,28 @@ function findTokenManagementCandidates(doc: Document): SecretCandidate[] {
     const text = normalizedText(row);
     if (text.length < 16 || text.length > 2000) continue;
     if (!hasKeyContext(text) && !/sk-|AIza|r8_|倍率|分组|group|rate/i.test(text)) continue;
-    for (const secret of extractSecrets(text, true)) {
-      candidates.push({ secret, ...metadataFromElement(row, secret) });
+    for (const source of secretSourcesForRow(row, text)) {
+      for (const secret of extractSecrets(source, {
+        providerId,
+        allowOpenAiStyle: true,
+        allowCustomKey: providerId === "sub2api"
+      })) {
+        candidates.push({ secret, ...metadataFromElement(row, secret) });
+      }
     }
   }
   return candidates;
 }
 
+function secretSourcesForRow(row: Element, rowText: string): string[] {
+  const cells = limitedElements<HTMLElement>(row, "td, th, [role='cell'], [role='gridcell']", TABLE_CELL_SCAN_LIMIT)
+    .map((cell) => normalizedText(cell))
+    .filter(Boolean);
+  return cells.length ? cells : [rowText];
+}
+
 function metadataFromElement(element: Element, secret: string): Omit<SecretCandidate, "secret"> {
-  const row = element.closest("tr, [role='row'], article, li, section, .ant-table-row, .el-table__row, .semi-table-row, .v-data-table__tr");
+  const row = element.closest("tr, [role='row'], article, li, section, [data-row-key], .ant-table-row, .arco-table-tr, .arco-table-row, .el-table__row, .semi-table-row, .v-data-table__tr, .ant-list-item, .semi-list-item");
   const contextElement = row ?? element.closest("label, section, article, form, div, body") ?? element;
   const context = normalizedText(contextElement).replace(secret, " ");
   const tableMetadata = row ? metadataFromTableRow(row, secret) : {};

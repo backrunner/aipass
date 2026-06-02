@@ -1,4 +1,5 @@
 import {
+  inferProviderFromEndpoint,
   matchProviderByDomain,
   maskSecret,
   providerDefinitions,
@@ -18,8 +19,10 @@ import {
 export interface DetectedSecretDraft {
   providerId?: string;
   title: string;
+  secretLabel?: string;
   origin: string;
   url: string;
+  faviconUrl?: string;
   maskedSecret?: string;
   apiKey?: string;
   endpoint?: string;
@@ -32,12 +35,14 @@ export interface DetectedSecretDraft {
 }
 
 const ENDPOINT_PATTERN =
-  /\/(?:v1|v3)(?:\/|$)|chat\/completions|messages|embeddings|models|anthropic|generativelanguage|openrouter|openai|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|replicate|veloera|omniroute|metapi|onehub|donehub|anyrouter/i;
+  /\/(?:v1|v2|v3)(?:\/|$)|chat\/completions|messages|embeddings|models|anthropic|generativelanguage|openrouter|openai|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|replicate|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|together|fireworks|groq|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face/i;
 const KEY_PAGE_TEXT_PATTERN =
   /(api\s*key|api\s*keys|token|tokens|secret\s*key|virtual\s+key|令牌|密钥|复制|copy|系统访问令牌|下游密钥|下游\s*api\s*key)/i;
 const AI_GATEWAY_TEXT_PATTERN =
-  /(openai|anthropic|claude|gemini|generativelanguage|chat\s*completions?|base\s*url|api\s*base|gateway|proxy|relay|router|llm|ai\s*provider|virtual\s+key|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|veloera|omniroute|metapi|onehub|donehub|anyrouter|中转|网关|聚合|渠道|模型|下游|上游|分发|倍率|分组|路由)/i;
+  /(openai|anthropic|claude|gemini|generativelanguage|chat\s*completions?|base\s*url|api\s*base|gateway|proxy|relay|router|llm|ai\s*provider|virtual\s+key|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|ark|together|fireworks|groq|xai|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face|中转|网关|聚合|渠道|模型|下游|上游|分发|倍率|分组|路由)/i;
 const CLIPBOARD_SECRET_EVENT = "aipass.clipboardSecret";
+const DEBUG_MODE_EVENT = "aipass.debugMode";
+const FRAMEWORK_SECRET_SCAN_EVENT = "aipass.frameworkSecretScan";
 const TOAST_HOST_ID = "aipass-extension-toast";
 const ENDPOINT_INPUT_SCAN_LIMIT = 160;
 const ENDPOINT_TEXT_SCAN_LIMIT = 80;
@@ -46,6 +51,9 @@ const KEY_PAGE_TEXT_SCAN_LIMIT = 80;
 const FILL_TARGET_SCAN_LIMIT = 120;
 const MUTATION_SCAN_DEBOUNCE_MS = 800;
 const MUTATION_SCAN_MIN_INTERVAL_MS = 2500;
+const FRAMEWORK_SCAN_MIN_INTERVAL_MS = 2500;
+const GENERIC_TITLE_SEGMENT_PATTERN =
+  /^(?:api\s*(?:keys?|密钥)(?:\s*(?:management|settings)|管理|设置)?|keys?|tokens?|secret\s*keys?|virtual\s*keys?|key\s*management|token\s*management|dashboard|console|settings?|management|user\s*settings?|密钥(?:管理|设置)?|令牌(?:管理|设置)?|系统访问令牌|下游密钥|控制台|仪表盘|后台|管理后台)$/i;
 const sentDraftKeys = new Set<string>();
 const shownToastKeys = new Set<string>();
 let toastSequence = 0;
@@ -53,11 +61,14 @@ let draftScanTimer: ReturnType<typeof setTimeout> | undefined;
 let draftScanInFlight = false;
 let draftScanQueued = false;
 let lastDraftScanStartedAt = 0;
+let lastFrameworkScanRequestedAt = 0;
+let debugEnabledCache: boolean | undefined;
 
 type GatewaySignature = {
   id?: string;
   displayName: string;
   brand: RegExp;
+  weakBrand?: boolean;
   routes?: RegExp;
   ui?: RegExp;
 };
@@ -65,6 +76,7 @@ type GatewaySignature = {
 type PageRecognition = {
   provider?: ProviderDefinition;
   gatewayName?: string;
+  siteName?: string;
   knownGateway: boolean;
   tokenPage: boolean;
   aiGatewayEvidence: boolean;
@@ -73,6 +85,7 @@ type PageRecognition = {
 
 type DetectionResult = {
   recognition: PageRecognition;
+  candidateCount: number;
   drafts: DetectedSecretDraft[];
 };
 
@@ -95,15 +108,32 @@ type ToastAction = {
   onClick: (helpers: ToastHelpers) => Promise<void> | void;
 };
 
+type ToastIconTone = "official" | "third" | "self" | "custom";
+
+type ToastIcon = {
+  label?: string;
+  symbol?: "key" | "success";
+  tone?: ToastIconTone;
+};
+
+type ToastOptions = {
+  title: string;
+  detail?: string;
+  keyChip?: string;
+  icon?: ToastIcon;
+  autoDismissMs: number;
+  actions?: ToastAction[];
+};
+
 type PageTheme = "light" | "dark";
 
 const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
   {
     id: "sub2api",
     displayName: "sub2api",
-    brand: /\bsub2api\b|subscription\s*to\s*api/i,
-    routes: /^\/(?:keys|key-usage)(?:\/|$)/i,
-    ui: /\bcustom_key\b|key\s*usage|自定义密钥|subscription\s*to\s*api/i
+    brand: /\bsub2api\b/i,
+    routes: /^\/(?:keys|api[-_]?keys?|key-usage)(?:\/|$)/i,
+    ui: /\bcustom_key\b|custom\s+key|create\s+(?:api\s*)?key|use\s+key|import\s+to\s+ccs|key\s*usage|自定义密钥|创建密钥|使用密钥|导入到\s*CCS|subscription\s*to\s*api/i
   },
   {
     id: "litellm",
@@ -116,14 +146,16 @@ const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
     id: "one_api",
     displayName: "One API",
     brand: /\bone[-_ ]?api\b/i,
-    routes: /^\/(?:token(?:\/|$)|token\/(?:add|edit)(?:\/|$)|user\/setting(?:\/|$))/i,
+    weakBrand: true,
+    routes: /^\/(?:token(?:\/|$)|token\/(?:add|edit)(?:\/|$)|user\/setting(?:\/|$)|keys?(?:\/|$)|api[-_]?keys?(?:\/|$))/i,
     ui: /系统令牌|one[-_ ]?api/i
   },
   {
     id: "new_api",
     displayName: "New API",
     brand: /\bnew[-_ ]?api\b/i,
-    routes: /^\/(?:console\/token(?:\/|$)|token(?:\/|$)|token\/(?:add|edit)(?:\/|$))/i,
+    weakBrand: true,
+    routes: /^\/(?:console\/token(?:\/|$)|token(?:\/|$)|token\/(?:add|edit)(?:\/|$)|keys?(?:\/|$)|api[-_]?keys?(?:\/|$))/i,
     ui: /渠道|兑换码|分组|倍率|复制连接信息|new[-_ ]?api/i
   },
   {
@@ -156,6 +188,7 @@ const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
     brand: /\bdonehub\b/i
   },
   {
+    id: "new_api",
     displayName: "AnyRouter",
     brand: /\banyrouter\b|agentrouter/i,
     routes: /^\/(?:app\/tokens|console\/token|token|keys|dashboard)(?:\/|$)/i,
@@ -181,6 +214,7 @@ function detectDraftsFromDocument(doc: Document): DetectionResult {
     .filter((draft): draft is DetectedSecretDraft => Boolean(draft?.apiKey));
   return {
     recognition,
+    candidateCount: candidates.length,
     drafts: uniqueDrafts(drafts)
   };
 }
@@ -198,12 +232,15 @@ function buildDraft(
     (recognition.tokenPage && recognition.aiGatewayEvidence && (Boolean(secret) || recognition.knownGateway));
   if (!recognized) return null;
   const endpoint = recognition.endpoint ?? inferSelfHostedEndpoint(recognition);
-  const baseTitle = provider?.displayName ?? recognition.gatewayName ?? titleFromEndpoint(endpoint) ?? "Custom AI Provider";
+  const baseTitle = titleFromRecognition(recognition, endpoint);
+  const secretLabel = secretLabelFromCandidate(baseTitle, candidate);
   return {
     providerId: provider?.id,
     title: titleFromCandidate(baseTitle, candidate),
+    secretLabel,
     origin: location.origin,
     url: location.href,
+    faviconUrl: faviconUrlFromDocument(doc),
     maskedSecret: secret ? maskSecret(secret) : undefined,
     apiKey: secret,
     endpoint,
@@ -213,27 +250,164 @@ function buildDraft(
   };
 }
 
+function titleFromRecognition(recognition: PageRecognition, endpoint?: string): string {
+  const provider = recognition.provider;
+  if (provider?.kind === "official" || provider?.kind === "third_party") return provider.displayName;
+  return recognition.siteName ?? provider?.displayName ?? recognition.gatewayName ?? titleFromEndpoint(endpoint) ?? "Custom AI Provider";
+}
+
+function faviconUrlFromDocument(doc: Document): string | undefined {
+  const selector = [
+    "link[rel~='icon' i][href]",
+    "link[rel='shortcut icon' i][href]",
+    "link[rel='apple-touch-icon' i][href]",
+    "link[rel='apple-touch-icon-precomposed' i][href]",
+    "link[rel='mask-icon' i][href]"
+  ].join(", ");
+  const links = Array.from(doc.querySelectorAll<HTMLLinkElement>(selector));
+  const href = links
+    .sort((a, b) => iconScore(b) - iconScore(a))
+    .map((link) => absoluteHttpUrl(link.getAttribute("href") ?? "", doc.baseURI || location.href))
+    .find((value): value is string => Boolean(value));
+  return href ?? absoluteHttpUrl("/favicon.ico", location.origin);
+}
+
+function iconScore(link: HTMLLinkElement): number {
+  const rel = link.rel.toLowerCase();
+  const sizes = link.getAttribute("sizes") ?? "";
+  const sizeScore = Math.max(
+    0,
+    ...Array.from(sizes.matchAll(/(\d+)x(\d+)/gi)).map((match) => {
+      const width = Number(match[1] ?? 0);
+      const height = Number(match[2] ?? 0);
+      return Math.min(width, height);
+    })
+  );
+  if (rel.includes("apple-touch-icon")) return sizeScore + 1000;
+  if (rel.includes("icon")) return sizeScore + 500;
+  return sizeScore;
+}
+
+function absoluteHttpUrl(value: string, base: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || /^(?:data|blob|javascript):/i.test(trimmed)) return undefined;
+  try {
+    const url = new URL(trimmed, base);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function findSecretCandidate(doc: Document, recognition?: PageRecognition): string | undefined {
   return findSecretCandidates(doc, recognition)[0]?.secret;
 }
 
 function findSecretCandidates(doc: Document, recognition: PageRecognition = recognizePage(doc)): SecretCandidate[] {
   return scanSecretCandidates(doc, {
-    tokenManagementPage: isTokenManagementPage(recognition)
+    providerId: recognition.provider?.id,
+    tokenManagementPage: isTokenManagementPage(recognition),
+    allowOpenAiStyle: canUseOpenAiStyleSecrets(recognition),
+    allowCustomKey: canUseCustomKeySecrets(recognition)
   });
 }
 
 function titleFromCandidate(baseTitle: string, candidate?: SecretCandidate): string {
-  const suffix = sanitizeTitleSuffix(candidate?.label) ?? sanitizeTitleSuffix(candidate?.gateway?.group);
+  const suffix = sanitizeTitleSuffix(candidate?.label, baseTitle) ?? sanitizeTitleSuffix(candidate?.gateway?.group, baseTitle);
   return suffix ? `${baseTitle} · ${suffix}` : baseTitle;
 }
 
-function sanitizeTitleSuffix(value: string | undefined): string | undefined {
+function secretLabelFromCandidate(baseTitle: string, candidate?: SecretCandidate): string | undefined {
+  return sanitizeTitleSuffix(candidate?.label, baseTitle) ?? sanitizeTitleSuffix(candidate?.gateway?.group, baseTitle);
+}
+
+function sanitizeTitleSuffix(value: string | undefined, baseTitle?: string): string | undefined {
   const cleaned = value?.trim();
-  if (!cleaned || cleaned.length > 48 || hasKeyContext(cleaned) || AI_GATEWAY_TEXT_PATTERN.test(cleaned)) {
+  if (
+    !cleaned ||
+    cleaned.length > 48 ||
+    normalizeTitleForCompare(cleaned) === normalizeTitleForCompare(baseTitle) ||
+    isAccountNavigationText(cleaned) ||
+    hasKeyContext(cleaned) ||
+    AI_GATEWAY_TEXT_PATTERN.test(cleaned)
+  ) {
     return undefined;
   }
   return cleaned;
+}
+
+function isAccountNavigationText(value: string): boolean {
+  const normalized = value.replace(/[\s_-]+/g, "").toLowerCase();
+  return normalized.includes("signout") || normalized.includes("logout") || /退出登录|退出|登出|注销/i.test(value);
+}
+
+function siteNameFromDocumentTitle(
+  title: string,
+  signature?: GatewaySignature,
+  provider?: ProviderDefinition
+): string | undefined {
+  const cleaned = sanitizeTitleSegment(title);
+  if (!cleaned) return undefined;
+  const parts = splitDocumentTitle(cleaned)
+    .map((part) => sanitizeTitleSegment(part))
+    .filter((part): part is string => Boolean(part));
+  if (!parts.length) return undefined;
+  if (parts.length === 1) {
+    const [only] = parts;
+    return isGenericTitleSegment(only) ? undefined : only;
+  }
+  const siteParts = parts.filter((part) => !isGenericTitleSegment(part));
+  if (!siteParts.length) return undefined;
+  const nonGatewayParts = siteParts.filter((part) => !isKnownGatewayTitle(part, signature, provider));
+  if (nonGatewayParts.length) {
+    return nonGatewayParts[nonGatewayParts.length - 1];
+  }
+  if (isGenericTitleSegment(parts[0] ?? "")) return siteParts[0];
+  if (isGenericTitleSegment(parts[parts.length - 1] ?? "")) return siteParts[siteParts.length - 1];
+  return siteParts[0];
+}
+
+function splitDocumentTitle(title: string): string[] {
+  const spacedParts = title.split(/\s+(?:[-–—|·•:：])\s+/).filter(Boolean);
+  if (spacedParts.length > 1) return spacedParts;
+
+  const genericLabel = "(?:api\\s*(?:keys?|密钥)|keys?|tokens?|密钥|令牌)";
+  const prefixMatch = title.match(new RegExp(`^(${genericLabel})\\s*[-–—|:：]\\s*(.+)$`, "i"));
+  if (prefixMatch?.[1] && prefixMatch[2]) return [prefixMatch[1], prefixMatch[2]];
+  const suffixMatch = title.match(new RegExp(`^(.+?)\\s*[-–—|:：]\\s*(${genericLabel})$`, "i"));
+  if (suffixMatch?.[1] && suffixMatch[2]) return [suffixMatch[1], suffixMatch[2]];
+  return [title];
+}
+
+function sanitizeTitleSegment(value: string | undefined): string | undefined {
+  const cleaned = value
+    ?.replace(/\s+/g, " ")
+    .replace(/^[\s|:：\-–—·•]+|[\s|:：\-–—·•]+$/g, "")
+    .trim();
+  if (!cleaned || cleaned.length > 80) return undefined;
+  return cleaned;
+}
+
+function isGenericTitleSegment(value: string): boolean {
+  return GENERIC_TITLE_SEGMENT_PATTERN.test(value.trim());
+}
+
+function isKnownGatewayTitle(
+  value: string,
+  signature?: GatewaySignature,
+  provider?: ProviderDefinition
+): boolean {
+  const normalized = normalizeTitleForCompare(value);
+  const knownNames = [
+    signature?.displayName,
+    provider?.displayName,
+    ...KNOWN_GATEWAY_SIGNATURES.map((item) => item.displayName)
+  ];
+  return knownNames.some((name) => normalizeTitleForCompare(name) === normalized);
+}
+
+function normalizeTitleForCompare(value: string | undefined): string {
+  return value?.replace(/\s+/g, "").toLowerCase() ?? "";
 }
 
 function uniqueDrafts(drafts: DetectedSecretDraft[]): DetectedSecretDraft[] {
@@ -264,14 +438,18 @@ function findEndpoint(doc: Document): string | undefined {
 function recognizePage(doc: Document): PageRecognition {
   const endpoint = findEndpoint(doc);
   const signature = matchGatewaySignature(doc);
+  const endpointProvider = endpoint ? inferKnownProviderFromEndpoint(endpoint) : undefined;
   const provider =
     matchProviderByDomain(location.hostname) ??
-    (signature?.id ? providerDefinitions.find((item) => item.id === signature.id) : undefined);
+    (signature?.id ? providerDefinitions.find((item) => item.id === signature.id) : undefined) ??
+    endpointProvider;
+  const siteName = siteNameFromDocumentTitle(doc.title, signature, provider);
   const tokenPage = SELF_HOSTED_TOKEN_PATH_PATTERN.test(location.pathname) || hasSelfHostedKeyPageText(doc);
   const aiGatewayEvidence = Boolean(provider) || Boolean(signature) || hasAiGatewayEvidence(doc, endpoint);
   return {
     provider,
     gatewayName: signature?.displayName,
+    siteName,
     knownGateway: Boolean(signature),
     tokenPage,
     aiGatewayEvidence,
@@ -282,10 +460,21 @@ function recognizePage(doc: Document): PageRecognition {
 function matchGatewaySignature(doc: Document): GatewaySignature | undefined {
   const haystack = gatewayHaystack(doc);
   return KNOWN_GATEWAY_SIGNATURES.find((signature) => {
-    if (signature.brand.test(haystack)) return true;
-    if (!signature.routes?.test(location.pathname)) return false;
-    return Boolean(signature.ui?.test(haystack));
+    const brandMatched = signature.brand.test(haystack);
+    const routeMatched = Boolean(signature.routes?.test(location.pathname));
+    const uiMatched = Boolean(signature.ui?.test(haystack));
+    if (brandMatched && !signature.weakBrand) return true;
+    if (signature.weakBrand) return brandMatched && routeMatched;
+    if (brandMatched && (routeMatched || uiMatched)) return true;
+    return routeMatched && uiMatched;
   });
+}
+
+function inferKnownProviderFromEndpoint(endpoint: string): ProviderDefinition | undefined {
+  const provider = inferProviderFromEndpoint(endpoint);
+  return provider?.kind === "official" || provider?.kind === "third_party" || provider?.kind === "self_hosted"
+    ? provider
+    : undefined;
 }
 
 function gatewayHaystack(doc: Document): string {
@@ -333,12 +522,27 @@ function isTokenManagementPage(recognition: PageRecognition): boolean {
   return recognition.tokenPage && recognition.aiGatewayEvidence;
 }
 
+function canUseOpenAiStyleSecrets(recognition: PageRecognition): boolean {
+  if (recognition.provider) return true;
+  if (recognition.knownGateway && recognition.tokenPage) return true;
+  const endpoint = recognition.endpoint;
+  return recognition.tokenPage && Boolean(endpoint && hasAiEndpointEvidence(endpoint));
+}
+
+function canUseCustomKeySecrets(recognition: PageRecognition): boolean {
+  return recognition.provider?.id === "sub2api" || recognition.gatewayName === "sub2api";
+}
+
+function hasAiEndpointEvidence(endpoint: string): boolean {
+  return ENDPOINT_PATTERN.test(endpoint);
+}
+
 function inferInterfaceFromEndpoint(endpoint?: string): InterfaceType | undefined {
   if (!endpoint) return undefined;
-  if (/replicate/i.test(endpoint)) return "custom_http";
+  if (/replicate|cohere|minimax/i.test(endpoint)) return "custom_http";
   if (/generativelanguage|gemini/i.test(endpoint)) return "gemini";
   if (/anthropic/i.test(endpoint)) return "anthropic_messages";
-  if (/openai|\/v1\b|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|openrouter|veloera|omniroute|metapi|onehub|donehub|anyrouter/i.test(endpoint)) return "openai_compatible";
+  if (/openai|\/v1\b|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|openrouter|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|ark|together|fireworks|groq|x\.ai|mistral|perplexity|cerebras|nvidia|nim|novita|huggingface|hugging\s*face/i.test(endpoint)) return "openai_compatible";
   return "custom_http";
 }
 
@@ -350,28 +554,156 @@ function titleFromEndpoint(endpoint?: string): string | undefined {
   return provider?.displayName;
 }
 
+function debugLog(event: string, data?: Record<string, unknown>) {
+  if (!isDebugEnabled()) return;
+  try {
+    console.debug("[AIPass detector]", event, data ?? {});
+  } catch {
+    // Debug logging must never affect the host page.
+  }
+}
+
+function isDebugEnabled(): boolean {
+  if (debugEnabledCache !== undefined) return debugEnabledCache;
+  debugEnabledCache = isUnpackedExtensionBuild();
+  return debugEnabledCache;
+}
+
+function isUnpackedExtensionBuild(): boolean {
+  try {
+    if (typeof chrome === "undefined") return false;
+    const runtime = chrome.runtime as typeof chrome.runtime & {
+      getManifest?: () => { update_url?: string };
+    };
+    const manifest = runtime.getManifest?.();
+    return Boolean(manifest && !manifest.update_url);
+  } catch {
+    return false;
+  }
+}
+
+function pageDebugContext(): Record<string, unknown> {
+  return {
+    host: typeof location === "undefined" ? "" : location.hostname,
+    path: typeof location === "undefined" ? "" : location.pathname,
+    title: typeof document === "undefined" ? "" : sanitizeTitleSegment(document.title) ?? ""
+  };
+}
+
+function recognitionDebugContext(recognition: PageRecognition): Record<string, unknown> {
+  return {
+    providerId: recognition.provider?.id,
+    gatewayName: recognition.gatewayName,
+    siteName: recognition.siteName,
+    tokenPage: recognition.tokenPage,
+    aiGatewayEvidence: recognition.aiGatewayEvidence,
+    knownGateway: recognition.knownGateway,
+    endpointDetected: Boolean(recognition.endpoint)
+  };
+}
+
+function announceDebugModeToPageWorld() {
+  if (!isDebugEnabled() || typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent(DEBUG_MODE_EVENT, {
+        detail: { enabled: true }
+      })
+    );
+  } catch {
+    // Main-world clipboard logging is optional.
+  }
+}
+
+function requestFrameworkSecretScan(recognition: PageRecognition) {
+  if (!canUseContextualClipboardSecret(recognition) || typeof window === "undefined") return;
+  const now = Date.now();
+  if (now - lastFrameworkScanRequestedAt < FRAMEWORK_SCAN_MIN_INTERVAL_MS) return;
+  lastFrameworkScanRequestedAt = now;
+  try {
+    window.dispatchEvent(
+      new CustomEvent(FRAMEWORK_SECRET_SCAN_EVENT, {
+        detail: { enabled: true }
+      })
+    );
+    debugLog("framework scan requested", recognitionDebugContext(recognition));
+  } catch {
+    // Page-world framework scanning is best effort.
+  }
+}
+
 async function sendDraftIfAllowed() {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
+  debugLog("scan: start", pageDebugContext());
   const detection = detectDraftsFromDocument(document);
+  debugLog("scan: result", {
+    ...recognitionDebugContext(detection.recognition),
+    candidateCount: detection.candidateCount,
+    draftCount: detection.drafts.length
+  });
   const drafts = detection.drafts.filter((draft) => draft.apiKey);
-  if (!drafts.length) return;
+  if (!drafts.length) {
+    requestFrameworkSecretScan(detection.recognition);
+    debugLog("scan: no drafts");
+    return;
+  }
   const origin = location.origin;
-  if (!origin || (await isIgnoredOrigin(origin))) return;
+  if (!origin) {
+    debugLog("scan: skipped missing origin");
+    return;
+  }
+  if (await isIgnoredOrigin(origin)) {
+    debugLog("scan: skipped ignored origin", { origin });
+    return;
+  }
   const freshDrafts = takeUnsentDrafts(drafts);
-  if (!freshDrafts.length) return;
-  showDetectedDraftPrompt(freshDrafts);
+  if (!freshDrafts.length) {
+    debugLog("scan: skipped duplicate drafts", { draftCount: drafts.length });
+    return;
+  }
+  const unsavedDrafts = await filterUnsavedDetectedDrafts(freshDrafts);
+  if (!unsavedDrafts.length) {
+    debugLog("scan: skipped saved drafts", { draftCount: freshDrafts.length });
+    return;
+  }
+  debugLog("scan: prompt", { draftCount: unsavedDrafts.length, titles: unsavedDrafts.map((draft) => draft.title) });
+  showDetectedDraftPrompt(unsavedDrafts);
 }
 
 async function sendDraftForClipboardSecret(secret: string) {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
+  debugLog("clipboard: event received", { valueLength: secret.length });
   const recognition = recognizePage(document);
-  const candidate = extractSecret(secret, canUseContextualClipboardSecret(recognition));
-  if (!candidate) return;
+  const candidate = extractSecret(secret, {
+    providerId: recognition.provider?.id,
+    allowOpenAiStyle: canUseOpenAiStyleSecrets(recognition),
+    allowCustomKey: canUseCustomKeySecrets(recognition)
+  });
+  if (!candidate) {
+    debugLog("clipboard: no secret candidate", recognitionDebugContext(recognition));
+    return;
+  }
   const draft = buildDraft(document, { secret: candidate }, recognition);
-  if (!draft?.apiKey || (await isIgnoredOrigin(draft.origin))) return;
+  if (!draft?.apiKey) {
+    debugLog("clipboard: no draft", recognitionDebugContext(recognition));
+    return;
+  }
+  if (await isIgnoredOrigin(draft.origin)) {
+    debugLog("clipboard: skipped ignored origin", { origin: draft.origin });
+    return;
+  }
   const freshDrafts = takeUnsentDrafts([draft]);
-  if (!freshDrafts.length) return;
-  showDetectedDraftPrompt(freshDrafts);
+  if (!freshDrafts.length) {
+    debugLog("clipboard: skipped duplicate draft", { title: draft.title });
+    return;
+  }
+  const unsavedDrafts = await filterUnsavedDetectedDrafts(freshDrafts);
+  if (!unsavedDrafts.length) {
+    debugLog("clipboard: skipped saved draft", { title: draft.title });
+    return;
+  }
+  debugLog("clipboard: prompt", { title: draft.title, endpoint: draft.endpoint });
+  showDetectedDraftPrompt(unsavedDrafts);
 }
 
 function canUseContextualClipboardSecret(recognition: PageRecognition): boolean {
@@ -384,12 +716,16 @@ function showDetectedDraftPrompt(drafts: DetectedSecretDraft[]) {
   const key = `detected:${drafts.map(draftKey).join("||")}`;
   const title = count === 1 ? "Save API key in AIPass?" : `Save ${count} API keys in AIPass?`;
   const detail =
+    count === 1 ? first?.title || "Detected API key" : `AIPass detected ${count} keys on this page.`;
+  const icon: ToastIcon =
     count === 1
-      ? [first?.title, first?.maskedSecret].filter(Boolean).join(" - ")
-      : "AIPass can save the detected keys directly.";
+      ? { label: draftInitials(first), tone: draftIconTone(first) }
+      : { symbol: "key", tone: "custom" };
   showToast(key, {
     title,
     detail,
+    keyChip: count === 1 ? first?.maskedSecret : undefined,
+    icon,
     autoDismissMs: 20000,
     actions: [
       {
@@ -397,13 +733,26 @@ function showDetectedDraftPrompt(drafts: DetectedSecretDraft[]) {
         busyLabel: "Saving",
         tone: "primary",
         dataAction: "save",
-        onClick: async ({ close }) => {
+        onClick: async ({ close, setStatus }) => {
           const response = await sendRuntimeMessage<
-            RuntimeResponse<{ saved?: Array<{ entryId?: string }>; errors?: Array<{ error: string }> }>
+            RuntimeResponse<{
+              saved?: Array<{ entryId?: string }>;
+              errors?: Array<{ error: string }>;
+              requiresUnlock?: boolean;
+              opened?: boolean;
+            }>
           >({
             type: "aipass.saveDetectedDraftsNow",
             drafts
           });
+          if (response?.data?.requiresUnlock) {
+            if (response.data.opened) {
+              close();
+              return;
+            }
+            setStatus("Unlock AIPass from the toolbar to finish saving.", "info");
+            return;
+          }
           if (!response?.ok) {
             throw new Error(response?.error ?? "Unable to save this key");
           }
@@ -437,10 +786,32 @@ function showDetectedDraftPrompt(drafts: DetectedSecretDraft[]) {
 
 function showSavedToast(count: number) {
   showToast(`saved:${Date.now()}`, {
-    title: count === 1 ? "Saved to AIPass." : `Saved ${count} keys to AIPass.`,
-    detail: "You can manage it from the AIPass app.",
+    title: count === 1 ? "Saved to AIPass" : `Saved ${count} keys to AIPass`,
+    detail: "Manage it anytime from the AIPass app.",
+    icon: { symbol: "success", tone: "official" },
     autoDismissMs: 4500
   });
+}
+
+function draftIconTone(draft?: DetectedSecretDraft): ToastIconTone {
+  const kind = draft?.providerId
+    ? providerDefinitions.find((item) => item.id === draft.providerId)?.kind
+    : undefined;
+  if (kind === "official") return "official";
+  if (kind === "third_party") return "third";
+  if (kind === "self_hosted") return "self";
+  return "custom";
+}
+
+function draftInitials(draft?: DetectedSecretDraft): string {
+  const source = draft?.title?.trim();
+  if (!source) return "";
+  return source
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
 }
 
 function takeUnsentDrafts(drafts: DetectedSecretDraft[]): DetectedSecretDraft[] {
@@ -454,15 +825,37 @@ function takeUnsentDrafts(drafts: DetectedSecretDraft[]): DetectedSecretDraft[] 
   return fresh;
 }
 
+async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]): Promise<DetectedSecretDraft[]> {
+  if (!drafts.length) return drafts;
+  const response = await sendRuntimeMessage<
+    RuntimeResponse<{
+      drafts?: DetectedSecretDraft[];
+      savedCount?: number;
+      checkedCount?: number;
+    }>
+  >({
+    type: "aipass.filterUnsavedDetectedDrafts",
+    drafts
+  });
+  if (!response?.ok || !Array.isArray(response.data?.drafts)) {
+    debugLog("saved filter: unavailable", { draftCount: drafts.length, error: response?.error });
+    return drafts;
+  }
+  debugLog("saved filter: result", {
+    checkedCount: response.data.checkedCount ?? drafts.length,
+    savedCount: response.data.savedCount ?? 0,
+    unsavedCount: response.data.drafts.length
+  });
+  return response.data.drafts;
+}
+
 function draftKey(draft: DetectedSecretDraft): string {
   return [
     draft.origin,
     draft.url,
     draft.providerId ?? "",
     draft.endpoint ?? "",
-    draft.apiKey ?? "",
-    draft.gateway?.group ?? "",
-    draft.gateway?.rate ?? ""
+    draft.apiKey ?? ""
   ].join("|");
 }
 
@@ -487,24 +880,214 @@ function sendRuntimeMessage<T>(message: Record<string, unknown>): Promise<T | un
   });
 }
 
-function showToast(
-  key: string,
-  options: {
-    title: string;
-    detail: string;
-    autoDismissMs: number;
-    actions?: ToastAction[];
-  }
-) {
-  if (typeof document === "undefined" || !document.body || shownToastKeys.has(key)) return;
-  shownToastKeys.add(key);
-  const host = ensureToastHost();
-  host.dataset.theme = detectPageTheme();
-  const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
-  root.replaceChildren();
+function toastComponentStyles(): string {
+  return `
+    .card {
+      box-sizing: border-box;
+      width: min(360px, calc(100vw - 32px));
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid var(--aipass-border);
+      border-radius: 14px;
+      background: var(--aipass-surface);
+      color: var(--aipass-text);
+      box-shadow: var(--aipass-shadow);
+      font-size: 13px;
+      line-height: 1.4;
+      font-feature-settings: "ss01", "cv11";
+      transform-origin: top right;
+      animation: aipass-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .card.leaving {
+      animation: aipass-out 150ms cubic-bezier(0.4, 0, 0.85, 0.4) forwards;
+    }
+    @keyframes aipass-in {
+      from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes aipass-out {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .card, .card.leaving { animation: none; }
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--aipass-divider);
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: -0.005em;
+      color: var(--aipass-text);
+    }
+  .brand-mark {
+      width: 18px;
+      height: 18px;
+      display: block;
+      border-radius: 5px;
+      object-fit: cover;
+    }
+    .body {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .provider-icon {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      background: var(--kind-custom-soft);
+      color: var(--kind-custom);
+    }
+    .provider-icon svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+    .provider-icon.tone-official { background: var(--kind-official-soft); color: var(--kind-official); }
+    .provider-icon.tone-third { background: var(--kind-third-soft); color: var(--kind-third); }
+    .provider-icon.tone-self { background: var(--kind-self-soft); color: var(--kind-self); }
+    .provider-icon.tone-custom { background: var(--kind-custom-soft); color: var(--kind-custom); }
+    .copy {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 3px;
+      padding-top: 1px;
+    }
+    .title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--aipass-text);
+    }
+    .detail {
+      color: var(--aipass-text-tertiary);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .key-chip {
+      margin-top: 3px;
+      align-self: flex-start;
+      max-width: 100%;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: var(--aipass-surface-2);
+      color: var(--aipass-text-secondary);
+      font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status {
+      color: var(--aipass-text-tertiary);
+      font-size: 12px;
+    }
+    .status.error { color: var(--aipass-danger); }
+    .status.success { color: var(--aipass-success); }
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--aipass-text-tertiary);
+      cursor: pointer;
+      font: inherit;
+      line-height: 1;
+      transition: background-color 80ms ease, color 120ms ease;
+    }
+    .icon-button svg {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+    .close-button:hover {
+      background: var(--aipass-danger-soft);
+      color: var(--aipass-danger);
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 72px;
+      height: 32px;
+      padding: 0 14px;
+      border: 1px solid var(--aipass-border);
+      border-radius: 8px;
+      background: var(--aipass-surface);
+      color: var(--aipass-text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1;
+      transition: background-color 80ms ease, border-color 120ms ease, color 120ms ease;
+    }
+    .action.secondary:hover {
+      background: var(--aipass-surface-2);
+      border-color: var(--aipass-border);
+    }
+    .action.primary {
+      background: var(--aipass-accent);
+      color: #ffffff;
+      border-color: var(--aipass-accent);
+    }
+    .action.primary:hover {
+      background: var(--aipass-accent-hover);
+      border-color: var(--aipass-accent-hover);
+    }
+    .action:focus-visible {
+      outline: 2px solid var(--aipass-accent-soft);
+      outline-offset: 1px;
+    }
+    .action:disabled {
+      opacity: 0.58;
+      cursor: default;
+    }
+    @media (max-width: 480px) {
+      :host {
+        top: 12px;
+        right: 12px;
+        left: 12px;
+      }
+      .card {
+        width: 100%;
+      }
+    }
+  `;
+}
 
-  const style = document.createElement("style");
-  style.textContent = `
+function toastStyles(): string {
+  return `
     :host {
       all: initial;
       position: fixed;
@@ -517,6 +1100,7 @@ function showToast(
       --aipass-text-secondary: #383f55;
       --aipass-text-tertiary: #636b82;
       --aipass-border: #e1e4ed;
+      --aipass-divider: #edeff5;
       --aipass-accent: #2563eb;
       --aipass-accent-hover: #1f4fd0;
       --aipass-accent-soft: rgba(37, 99, 235, 0.1);
@@ -524,7 +1108,15 @@ function showToast(
       --aipass-danger-soft: rgba(180, 35, 24, 0.08);
       --aipass-success: #18794e;
       --aipass-success-soft: rgba(24, 121, 78, 0.1);
-      --aipass-shadow: 0 4px 16px rgba(15, 17, 16, 0.12);
+      --aipass-shadow: 0 12px 32px rgba(15, 17, 16, 0.16), 0 2px 6px rgba(15, 17, 16, 0.08);
+      --kind-official: #2563eb;
+      --kind-official-soft: rgba(37, 99, 235, 0.1);
+      --kind-third: #b45309;
+      --kind-third-soft: rgba(180, 83, 9, 0.1);
+      --kind-self: #475569;
+      --kind-self-soft: rgba(71, 85, 105, 0.12);
+      --kind-custom: #6b7385;
+      --kind-custom-soft: rgba(107, 115, 133, 0.12);
       color-scheme: light;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text", system-ui, sans-serif;
     }
@@ -535,6 +1127,7 @@ function showToast(
       --aipass-text-secondary: #c8cee0;
       --aipass-text-tertiary: #969eb6;
       --aipass-border: #232b40;
+      --aipass-divider: #1c2336;
       --aipass-accent: #6092ff;
       --aipass-accent-hover: #76a2ff;
       --aipass-accent-soft: rgba(96, 146, 255, 0.16);
@@ -542,173 +1135,106 @@ function showToast(
       --aipass-danger-soft: rgba(241, 166, 160, 0.14);
       --aipass-success: #8ad8be;
       --aipass-success-soft: rgba(138, 216, 190, 0.14);
-      --aipass-shadow: 0 4px 16px rgba(0, 0, 0, 0.36);
+      --aipass-shadow: 0 12px 32px rgba(0, 0, 0, 0.46), 0 2px 6px rgba(0, 0, 0, 0.3);
+      --kind-official: #6c9bff;
+      --kind-official-soft: rgba(108, 155, 255, 0.16);
+      --kind-third: #d0a25e;
+      --kind-third-soft: rgba(208, 162, 94, 0.16);
+      --kind-self: #9aa1b4;
+      --kind-self-soft: rgba(154, 161, 180, 0.16);
+      --kind-custom: #9aa3b8;
+      --kind-custom-soft: rgba(154, 163, 184, 0.16);
       color-scheme: dark;
     }
-    .toast {
-      box-sizing: border-box;
-      width: min(380px, calc(100vw - 32px));
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 12px;
-      padding: 12px;
-      border: 1px solid var(--aipass-border);
-      border-radius: 8px;
-      background: var(--aipass-surface);
-      color: var(--aipass-text);
-      box-shadow: var(--aipass-shadow);
-      font-size: 13px;
-      line-height: 1.35;
-      font-feature-settings: "ss01", "cv11";
-    }
-    .copy {
-      display: flex;
-      min-width: 0;
-      flex-direction: column;
-      gap: 3px;
-    }
-    .actions {
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 6px;
-      grid-column: 1 / -1;
-    }
-    strong {
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0;
-      color: var(--aipass-text);
-    }
-    .detail {
-      color: var(--aipass-text-tertiary);
-      font-size: 12px;
-      overflow-wrap: anywhere;
-    }
-    .status {
-      grid-column: 1 / -1;
-      margin-top: -4px;
-      color: var(--aipass-text-tertiary);
-      font-size: 12px;
-    }
-    .status.error {
-      color: var(--aipass-danger);
-    }
-    .status.success {
-      color: var(--aipass-success);
-    }
-    button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 24px;
-      height: 24px;
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      color: var(--aipass-text-secondary);
-      cursor: pointer;
-      font: inherit;
-      line-height: 1;
-      transition:
-        background-color 80ms ease,
-        border-color 120ms ease,
-        color 120ms ease;
-    }
-    button:hover {
-      background: var(--aipass-accent-soft);
-      color: var(--aipass-text);
-    }
-    .close-button {
-      border: 1px solid transparent;
-    }
-    .close-button:hover {
-      background: var(--aipass-danger-soft);
-      color: var(--aipass-danger);
-    }
-    .close-button svg {
-      width: 14px;
-      height: 14px;
-      display: block;
-    }
-    .action {
-      width: auto;
-      min-width: 64px;
-      height: 28px;
-      padding: 0 10px;
-      border: 1px solid var(--aipass-border);
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 500;
-    }
-    .action.primary {
-      background: var(--aipass-accent);
-      color: #ffffff;
-      border-color: var(--aipass-accent);
-    }
-    .action.primary:hover {
-      background: var(--aipass-accent-hover);
-      border-color: var(--aipass-accent-hover);
-      color: #ffffff;
-    }
-    .action.secondary {
-      background: var(--aipass-surface);
-      color: var(--aipass-text);
-    }
-    .action.secondary:hover {
-      background: var(--aipass-surface-2);
-    }
-    button:disabled {
-      opacity: 0.58;
-      cursor: default;
-    }
-    @media (max-width: 480px) {
-      :host {
-        top: 12px;
-        right: 12px;
-        left: 12px;
-      }
-      .toast {
-        width: 100%;
-      }
-    }
-  `;
+  ` + toastComponentStyles();
+}
 
-  const toast = document.createElement("div");
-  toast.className = "toast";
-  toast.setAttribute("role", "status");
-  toast.setAttribute("aria-live", "polite");
+function showToast(key: string, options: ToastOptions) {
+  if (typeof document === "undefined" || !document.body || shownToastKeys.has(key)) return;
+  shownToastKeys.add(key);
+  const host = ensureToastHost();
+  host.dataset.theme = detectPageTheme();
+  const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+  root.replaceChildren();
 
-  const copy = document.createElement("div");
-  copy.className = "copy";
-  const title = document.createElement("strong");
-  title.textContent = options.title;
-  const detail = document.createElement("span");
-  detail.className = "detail";
-  detail.textContent = options.detail;
-  copy.append(title, detail);
+  const style = document.createElement("style");
+  style.textContent = toastStyles();
 
+  const card = document.createElement("div");
+  card.className = "card";
+  card.setAttribute("role", "status");
+  card.setAttribute("aria-live", "polite");
+
+  const dismiss = () => {
+    if (!host.isConnected) return;
+    card.classList.add("leaving");
+    window.setTimeout(() => host.remove(), 160);
+  };
+
+  // Brand header keeps the injected prompt visually anchored to the popup.
+  const head = document.createElement("div");
+  head.className = "head";
+  const brand = document.createElement("span");
+  brand.className = "brand";
+  brand.append(createBrandMark());
+  const wordmark = document.createElement("span");
+  wordmark.className = "wordmark";
+  wordmark.textContent = "AIPass";
+  brand.append(wordmark);
   const close = document.createElement("button");
   close.type = "button";
-  close.className = "close-button";
+  close.className = "icon-button close-button";
   close.title = "Dismiss";
   close.setAttribute("aria-label", "Dismiss AIPass notification");
   close.append(createCloseIcon());
-  close.addEventListener("click", () => host.remove());
+  close.addEventListener("click", dismiss);
+  head.append(brand, close);
 
-  toast.append(copy, close);
+  const body = document.createElement("div");
+  body.className = "body";
+  const icon = document.createElement("span");
+  icon.className = `provider-icon tone-${options.icon?.tone ?? "custom"}`;
+  if (options.icon?.symbol === "success") {
+    icon.append(createCheckIcon());
+  } else if (options.icon?.label) {
+    icon.textContent = options.icon.label;
+  } else {
+    icon.append(createKeyIcon());
+  }
+  const copy = document.createElement("div");
+  copy.className = "copy";
+  const title = document.createElement("span");
+  title.className = "title";
+  title.textContent = options.title;
+  copy.append(title);
+  if (options.detail) {
+    const detail = document.createElement("span");
+    detail.className = "detail";
+    detail.textContent = options.detail;
+    copy.append(detail);
+  }
+  if (options.keyChip) {
+    const chip = document.createElement("code");
+    chip.className = "key-chip";
+    chip.textContent = options.keyChip;
+    copy.append(chip);
+  }
+  body.append(icon, copy);
+
   const status = document.createElement("span");
   status.className = "status";
   status.hidden = true;
 
   const helpers: ToastHelpers = {
-    close: () => host.remove(),
+    close: dismiss,
     setStatus: (message, tone = "info") => {
       status.textContent = message;
       status.className = `status ${tone}`;
       status.hidden = false;
     }
   };
+
+  card.append(head, body);
 
   if (options.actions?.length) {
     const actions = document.createElement("div");
@@ -739,17 +1265,16 @@ function showToast(
       });
       actions.append(button);
     }
-    toast.append(actions);
+    card.append(actions);
   }
-  toast.append(status);
-  root.append(style, toast);
+  card.append(status);
+  root.append(style, card);
 
   const sequence = ++toastSequence;
   window.setTimeout(() => {
-    if (toastSequence === sequence) host.remove();
+    if (toastSequence === sequence) dismiss();
   }, options.autoDismissMs);
 }
-
 function ensureToastHost(): HTMLElement {
   const existing = document.getElementById(TOAST_HOST_ID);
   if (existing) return existing;
@@ -760,17 +1285,79 @@ function ensureToastHost(): HTMLElement {
 }
 
 function createCloseIcon(): SVGSVGElement {
+  return createSvgIcon(["M18 6 6 18M6 6l12 12"]);
+}
+
+function createKeyIcon(): SVGSVGElement {
+  return createSvgIcon([
+    "M15.5 7.5a3.5 3.5 0 1 0-3.4 3.5L8 15.1v2.4h2.4l.6-.6v-1.5h1.5l1-1v-1.5h1.4l1.1-1.1A3.5 3.5 0 0 0 15.5 7.5Z",
+    "M16.2 8.2h.01"
+  ]);
+}
+
+function createCheckIcon(): SVGSVGElement {
+  return createSvgIcon(["M20 6 9 17l-5-5"]);
+}
+
+function createBrandMark(): HTMLElement | SVGSVGElement {
+  const src = extensionResourceUrl("aipass-logo.png");
+  if (src) {
+    const image = document.createElement("img");
+    image.src = src;
+    image.alt = "";
+    image.className = "brand-mark";
+    image.draggable = false;
+    image.addEventListener("error", () => image.replaceWith(createFallbackBrandMark()), { once: true });
+    return image;
+  }
+  return createFallbackBrandMark();
+}
+
+function createFallbackBrandMark(): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
   svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("brand-mark");
+  const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rect.setAttribute("x", "2");
+  rect.setAttribute("y", "2");
+  rect.setAttribute("width", "20");
+  rect.setAttribute("height", "20");
+  rect.setAttribute("rx", "5");
+  rect.setAttribute("fill", "var(--aipass-accent)");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "M18 6 6 18M6 6l12 12");
-  path.setAttribute("stroke", "currentColor");
-  path.setAttribute("stroke-width", "2");
-  path.setAttribute("stroke-linecap", "round");
-  path.setAttribute("stroke-linejoin", "round");
-  svg.append(path);
+  path.setAttribute("d", "M12 6.5 16 17h-2.1l-.8-2.2h-2.2L10.1 17H8L12 6.5Zm0 3.6-.7 2.1h1.4L12 10.1Z");
+  path.setAttribute("fill", "#ffffff");
+  svg.append(rect, path);
+  return svg;
+}
+
+function extensionResourceUrl(path: string): string | undefined {
+  try {
+    const runtime = chrome.runtime as typeof chrome.runtime & {
+      getURL?: (resourcePath: string) => string;
+    };
+    return runtime.getURL?.(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function createSvgIcon(paths: string[]): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  for (const definition of paths) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", definition);
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "2");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.append(path);
+  }
   return svg;
 }
 
@@ -823,20 +1410,24 @@ function relativeLuminance(color: { r: number; g: number; b: number }): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-void runDraftScan();
+debugLog("content loaded", pageDebugContext());
+announceDebugModeToPageWorld();
 installDraftMutationObserver();
 installClipboardSecretListener();
 installFillMessageListener();
+void runDraftScan();
 
 function installFillMessageListener() {
   if (typeof chrome === "undefined" || typeof document === "undefined" || listenerAlreadyInstalled()) return;
   markListenerInstalled();
+  debugLog("fill listener installed");
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     try {
       const typed = message as { type?: string; secret?: string; endpoint?: string };
       if (typed.type !== "aipass.fillSecret" || !typed.secret) return false;
       const input = findFillTarget(document);
       if (!input) {
+        debugLog("fill: no target");
         sendResponse({ ok: false, error: "No API key field found" });
         return false;
       }
@@ -851,9 +1442,11 @@ function installFillMessageListener() {
           endpointInput.dispatchEvent(new Event("change", { bubbles: true }));
         }
       }
+      debugLog("fill: completed", { filledEndpoint: Boolean(typed.endpoint) });
       sendResponse({ ok: true });
       return false;
     } catch (err) {
+      debugLog("fill: failed", { error: err instanceof Error ? err.message : String(err) });
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
       return false;
     }
@@ -863,6 +1456,7 @@ function installFillMessageListener() {
 function installClipboardSecretListener() {
   if (typeof window === "undefined" || clipboardListenerAlreadyInstalled()) return;
   markClipboardListenerInstalled();
+  debugLog("clipboard listener installed");
   window.addEventListener(CLIPBOARD_SECRET_EVENT, (event) => {
     const detail = (event as CustomEvent<{ text?: string }>).detail;
     if (typeof detail?.text !== "string") return;
@@ -873,6 +1467,7 @@ function installClipboardSecretListener() {
 function installDraftMutationObserver() {
   if (typeof chrome === "undefined" || typeof document === "undefined" || mutationObserverAlreadyInstalled()) return;
   markMutationObserverInstalled();
+  debugLog("mutation observer installing");
   const observer = new MutationObserver(() => scheduleDraftScan());
   const start = () => {
     if (!document.body) return;
@@ -881,6 +1476,7 @@ function installDraftMutationObserver() {
       subtree: true,
       characterData: true
     });
+    debugLog("mutation observer installed");
   };
   if (document.body) {
     start();
@@ -892,11 +1488,13 @@ function installDraftMutationObserver() {
 function scheduleDraftScan() {
   if (draftScanInFlight) {
     draftScanQueued = true;
+    debugLog("scan: queued while running");
     return;
   }
   clearTimeout(draftScanTimer);
   const elapsed = Date.now() - lastDraftScanStartedAt;
   const delay = Math.max(MUTATION_SCAN_DEBOUNCE_MS, MUTATION_SCAN_MIN_INTERVAL_MS - elapsed, 0);
+  debugLog("scan: scheduled", { delayMs: delay });
   draftScanTimer = setTimeout(() => void runDraftScan(), delay);
 }
 
@@ -911,7 +1509,8 @@ async function runDraftScan() {
   lastDraftScanStartedAt = Date.now();
   try {
     await sendDraftIfAllowed();
-  } catch {
+  } catch (err) {
+    debugLog("scan: failed", { error: err instanceof Error ? err.message : String(err) });
     // Ignore detector failures; injected scripts should never destabilize the page.
   } finally {
     draftScanInFlight = false;
