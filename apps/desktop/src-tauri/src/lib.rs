@@ -98,6 +98,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
         api_key: request.api_key.into_inner(),
+        secret_label: None,
         default_model: request.default_model.and_then(non_empty),
         model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,

@@ -417,19 +417,34 @@ pub fn hmac_fingerprint(index_key: &[u8; KEY_LEN], secret: &str) -> String {
 }
 
 pub fn mask_secret(secret: &str) -> String {
-    let suffix: String = secret
-        .chars()
+    let chars: Vec<char> = secret.chars().collect();
+    if chars.is_empty() {
+        return "****".to_string();
+    }
+    if chars.len() <= 8 {
+        let head: String = chars.iter().take(2).copied().collect();
+        let tail: String = chars
+            .iter()
+            .rev()
+            .take(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return format!("{head}...{tail}");
+    }
+    let head: String = chars.iter().take(6).copied().collect();
+    let tail: String = chars
+        .iter()
         .rev()
         .take(4)
-        .collect::<String>()
-        .chars()
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
         .rev()
         .collect();
-    if suffix.is_empty() {
-        "••••".to_string()
-    } else {
-        format!("•••• {suffix}")
-    }
+    format!("{head}...{tail}")
 }
 
 #[cfg(test)]

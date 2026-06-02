@@ -25,6 +25,7 @@ export type Draft = {
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
   apiKey: string;
+  secretLabel: string;
   defaultModel: string;
   modelAlias: string;
   environment: string;

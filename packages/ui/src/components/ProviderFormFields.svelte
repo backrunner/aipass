@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { providerDefinitions } from "@aipass/schemas";
-  import { Plus, X } from "lucide-svelte";
+  import { Eye, EyeOff, Plus, X } from "lucide-svelte";
   import { onMount } from "svelte";
 
   import { t } from "../i18n";
@@ -102,6 +102,7 @@
   ];
 
   let visibleFields: Set<FieldId> = new Set();
+  let showApiKey = false;
 
   onMount(() => {
     const initial = new Set<FieldId>();
@@ -206,13 +207,24 @@
     </Field>
     <slot name="secret">
       <Field label={$t("providerForm.apiKey")}>
-        <input
-          bind:value={draft.apiKey}
-          type="password"
-          placeholder={formMode === "edit" ? $t("providerForm.keepCurrent") : $t("providerForm.pasteApiKey")}
-          autocomplete="off"
-          spellcheck="false"
-        />
+        <div class="secret-input">
+          <input
+            bind:value={draft.apiKey}
+            type={showApiKey ? "text" : "password"}
+            placeholder={formMode === "edit" ? $t("providerForm.keepCurrent") : $t("providerForm.pasteApiKey")}
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button
+            type="button"
+            class="secret-toggle"
+            aria-label={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
+            title={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
+            on:click={() => (showApiKey = !showApiKey)}
+          >
+            {#if showApiKey}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+          </button>
+        </div>
       </Field>
     </slot>
   </div>
@@ -449,6 +461,39 @@
     background: var(--surface);
     border: 1px solid var(--divider);
     border-radius: var(--radius);
+  }
+
+  .secret-input {
+    position: relative;
+  }
+
+  .section-fields .secret-input input {
+    padding-right: 34px;
+  }
+
+  .secret-toggle {
+    position: absolute;
+    right: 5px;
+    top: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    transform: translateY(-50%);
+    transition: background-color 80ms ease, color 120ms ease;
+
+    &:hover {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: 1px;
+    }
   }
 
   .removable-field {

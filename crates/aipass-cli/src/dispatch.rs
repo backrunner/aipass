@@ -350,6 +350,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     interface_type: interface.into(),
                     auth_scheme: auth.into(),
                     api_key,
+                    secret_label: None,
                     default_model,
                     model_aliases: parse_model_aliases(&model_alias)?,
                     headers: parse_headers(&header)?,

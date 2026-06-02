@@ -59,6 +59,7 @@ export const emptyDraft = (): Draft => ({
   interfaceType: "anthropic_messages",
   authScheme: "x_api_key",
   apiKey: "",
+  secretLabel: "",
   defaultModel: "",
   modelAlias: "",
   environment: "work",

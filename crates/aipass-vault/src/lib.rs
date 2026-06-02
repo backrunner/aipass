@@ -147,6 +147,8 @@ pub struct ProviderEntryInput {
     pub interface_type: InterfaceType,
     pub auth_scheme: AuthScheme,
     pub api_key: String,
+    #[serde(default)]
+    pub secret_label: Option<String>,
     pub default_model: Option<String>,
     #[serde(default)]
     pub model_aliases: Vec<(String, String)>,
@@ -243,6 +245,23 @@ pub struct EncryptedVaultExport {
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryKit {
     pub recovery_key: String,
+}
+
+fn clean_secret_label(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty()
+        || value.len() > 64
+        || value.chars().any(char::is_control)
+        || value.eq_ignore_ascii_case("api key")
+        || value.eq_ignore_ascii_case("token")
+        || value.eq_ignore_ascii_case("secret")
+        || value == "密钥"
+        || value == "令牌"
+    {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 pub struct VaultCreation {
@@ -592,6 +611,8 @@ impl Vault {
         let id = Uuid::new_v4();
         let secret_id = Uuid::new_v4().to_string();
         let fingerprint = hmac_fingerprint(&self.index_key, &input.api_key);
+        let secret_label = clean_secret_label(input.secret_label.as_deref())
+            .unwrap_or_else(|| "primary".to_string());
         let entry = ProviderEntry {
             id,
             title: input.title,
@@ -604,7 +625,7 @@ impl Vault {
             auth_scheme: input.auth_scheme,
             secret_refs: vec![SecretRef {
                 id: secret_id.clone(),
-                label: "primary".to_string(),
+                label: secret_label,
                 masked: mask_secret(&input.api_key),
                 fingerprint,
             }],
@@ -1705,6 +1726,7 @@ mod tests {
             interface_type: InterfaceType::AnthropicMessages,
             auth_scheme: AuthScheme::XApiKey,
             api_key: secret.to_string(),
+            secret_label: None,
             default_model: Some("claude-sonnet-4-5".to_string()),
             model_aliases: Vec::new(),
             headers: vec![("anthropic-version".to_string(), "2023-06-01".to_string())],
@@ -1802,7 +1824,7 @@ mod tests {
         assert_eq!(matches.len(), 1);
         let serialized = serde_json::to_string(&matches).unwrap();
         assert!(!serialized.contains("sk-ant-api03-fingerprint-secret-1234"));
-        assert!(serialized.contains("****1234") || serialized.contains("•••• 1234"));
+        assert!(serialized.contains("sk-ant...1234"));
     }
 
     #[test]
