@@ -380,7 +380,7 @@ async function savePendingDraft(draft: DetectedSecretDraft, draftId?: string) {
     clearPendingDraft(draftId);
     return response;
   }
-  if (isLockedResponse(response)) {
+  if (await shouldUnlockForFailedSave(response)) {
     markPendingDraftForSaveAfterUnlock(draft, draftId);
     const opened = await openPopupForEdit();
     return saveRequiresUnlockResponse(1, opened);
@@ -430,7 +430,7 @@ async function savePendingDraftBatch(
     if (response.ok) {
       saved.push({ draftId: item.draftId, entryId: response.data?.entryId });
       clearPendingDraft(item.draftId);
-    } else if (isLockedResponse(response)) {
+    } else if (await shouldUnlockForFailedSave(response)) {
       markPendingDraftForSaveAfterUnlock(draft, item.draftId);
       lockedCount += 1;
     } else {
@@ -456,7 +456,7 @@ async function saveDetectedDraftBatch(drafts: DetectedSecretDraft[]) {
     const response = await saveDetectedSecret(draft);
     if (response.ok) {
       saved.push({ entryId: response.data?.entryId });
-    } else if (isLockedResponse(response)) {
+    } else if (await shouldUnlockForFailedSave(response)) {
       enqueuePendingDraft(draft, "review", true);
       lockedCount += 1;
     } else {
@@ -485,7 +485,7 @@ async function resumePendingSaves() {
       clearPendingDraft(record.id);
       continue;
     }
-    if (isLockedResponse(response)) {
+    if (await shouldUnlockForFailedSave(response)) {
       const opened = await openPopupForEdit();
       return saveRequiresUnlockResponse(records.length - saved.length, opened, saved, errors);
     }
@@ -530,10 +530,22 @@ function saveRequiresUnlockResponse(
   };
 }
 
+async function shouldUnlockForFailedSave(response: { ok?: boolean; error?: string }): Promise<boolean> {
+  if (isLockedResponse(response)) return true;
+  const status = await pingNativeHost();
+  return Boolean(status.ok && status.data?.locked);
+}
+
 function isLockedResponse(response: { ok?: boolean; error?: string }): boolean {
   if (response.ok) return false;
   const error = response.error?.toLowerCase() ?? "";
-  return error.startsWith("locked:") || error.includes("vault is locked");
+  return (
+    error.startsWith("locked:") ||
+    error.includes("vault is locked") ||
+    error.includes("agent locked") ||
+    error.includes("code: locked") ||
+    error.includes('"locked"')
+  );
 }
 
 async function openPopupForEdit(): Promise<boolean> {

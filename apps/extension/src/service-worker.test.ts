@@ -8,6 +8,7 @@ const openPopup = vi.fn().mockResolvedValue(undefined);
 const nativeSaveResponses: unknown[] = [];
 const nativePreviewResponses: unknown[] = [];
 const nativeMessages: Array<Record<string, unknown>> = [];
+let nativePingLocked = false;
 
 function installChromeStub() {
   vi.stubGlobal("chrome", {
@@ -21,7 +22,7 @@ function installChromeStub() {
         nativeMessages.push(message);
         const type = String(message.type ?? "");
         if (type === "ping") {
-          callback({ id: "1", ok: true, data: { protocolVersion: 1, locked: false } });
+          callback({ id: "1", ok: true, data: { protocolVersion: 1, locked: nativePingLocked } });
           return;
         }
         if (type === "settings.isOriginIgnored") {
@@ -95,6 +96,7 @@ describe("service worker pending drafts", () => {
     nativeSaveResponses.length = 0;
     nativePreviewResponses.length = 0;
     nativeMessages.length = 0;
+    nativePingLocked = false;
     installChromeStub();
   });
 
@@ -309,6 +311,32 @@ describe("service worker pending drafts", () => {
       data?: { drafts?: unknown[] };
     };
     assert.equal(after.data?.drafts?.length, 0);
+  });
+
+  it("detects locked state when a save failure looks like a native host error", async () => {
+    await import("./service-worker");
+    nativePingLocked = true;
+    nativeSaveResponses.push({ id: "1", ok: false, error: "Native host unavailable", data: {} });
+
+    const locked = (await dispatchMessage({
+      type: "aipass.saveDetectedDraftsNow",
+      drafts: [
+        {
+          title: "OpenRouter",
+          origin: "https://openrouter.ai",
+          url: "https://openrouter.ai/settings/keys",
+          providerId: "openrouter",
+          endpoint: "https://openrouter.ai/api/v1",
+          apiKey: "sk-or-v1-direct-secret1234"
+        }
+      ]
+    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number } };
+
+    assert.equal(locked.ok, true);
+    assert.equal(locked.data?.requiresUnlock, true);
+    assert.equal(locked.data?.opened, true);
+    assert.equal(locked.data?.pending, 1);
+    assert.equal(openPopup.mock.calls.length, 1);
   });
 
   it("keeps edited pending drafts for save after unlock", async () => {
