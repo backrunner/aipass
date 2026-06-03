@@ -1,6 +1,6 @@
 @use "@aipass/ui/styles/base.scss";
 
-// Browser-popup shell. Fixed width, content-driven height.
+// Browser-popup shell. State-driven width, content-driven height.
 
 html,
 body,
@@ -9,10 +9,20 @@ body,
 }
 
 body {
-  width: 760px;
-  min-width: 760px;
+  --popup-width: 380px;
+
+  width: var(--popup-width);
+  min-width: var(--popup-width);
   max-height: 620px;
   background: var(--bg);
+}
+
+body[data-popup-layout="full"] {
+  --popup-width: 760px;
+}
+
+body[data-popup-layout="compact"] {
+  --popup-width: 380px;
 }
 
 #app {

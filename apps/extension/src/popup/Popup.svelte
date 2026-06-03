@@ -90,6 +90,7 @@
   let selectedEntry: Entry | undefined;
 
   $: unlockBusy = passwordUnlockBusy || desktopUnlockBusy;
+  $: document.body.dataset.popupLayout = connection === "connected" ? "full" : "compact";
 
   // Auto-dismiss transient success messages; errors stay until the next action.
   $: {
