@@ -1390,10 +1390,8 @@
     <section class="vault-shell">
       <aside class="vault-list-pane">
         <div class="vault-list-head">
-          <div>
-            <small>{$t("ext.vaultList")}</small>
-            <strong>{$t("ext.itemCount", { count: entries.length })}</strong>
-          </div>
+          <strong>{$t("ext.vaultList")}</strong>
+          <span class="count-capsule">{$t("ext.itemCount", { count: entries.length })}</span>
         </div>
         <form class="search-box" on:submit|preventDefault={searchSavedEntries}>
           <Search size={14} />
@@ -1414,7 +1412,7 @@
               {@render entryListItem(entry)}
             {/each}
           {:else}
-            <div class="empty-copy compact">
+            <div class="empty-copy compact vault-empty">
               <span class="empty-icon"><Search size={18} /></span>
               <strong>{searchQuery.trim() ? $t("ext.noFilteredItems") : $t("ext.noSavedKey")}</strong>
               <p>{searchQuery.trim() ? $t("ext.noFilteredItemsDesc") : $t("ext.noSavedKeyDesc")}</p>
@@ -1622,24 +1620,56 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 10px 10px 8px;
-
-    div {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 0;
-    }
-
-    small {
-      font-size: 10px;
-      color: var(--text-tertiary);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
+    min-height: 34px;
+    padding: 8px 10px 6px;
 
     strong {
-      font-size: 13px;
+      min-width: 0;
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+  }
+
+  .count-capsule {
+    flex: 0 0 auto;
+    max-width: 96px;
+    padding: 2px 7px;
+    border: 1px solid var(--divider);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vault-empty {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .empty-detail {
+    min-height: 270px;
+  }
+
+  .empty-copy,
+  .empty-detail {
+    strong {
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    p {
+      max-width: 220px;
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.35;
     }
   }
 
@@ -1678,6 +1708,7 @@
   .vault-list {
     display: flex;
     flex-direction: column;
+    flex: 1;
     gap: 4px;
     min-height: 0;
     padding: 0 6px 8px;
@@ -1957,6 +1988,7 @@
   .empty-detail {
     align-items: center;
     justify-content: center;
+    gap: 5px;
     text-align: center;
     color: var(--text-tertiary);
   }
@@ -1969,19 +2001,13 @@
     text-align: center;
     padding: 8px 0;
 
-    strong {
-      font-size: 14px;
-    }
-
     p {
-      font-size: 12px;
       color: var(--text-tertiary);
     }
   }
 
   .empty-copy.compact {
     justify-content: center;
-    min-height: 210px;
     padding: 14px;
   }
 
@@ -1989,8 +2015,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 34px;
+    height: 34px;
     border-radius: 999px;
     background: var(--surface-2);
     color: var(--text-tertiary);
