@@ -26,7 +26,6 @@ const FRAMEWORK_SCAN_STRING_LIMIT = 420;
 const FRAMEWORK_SCAN_DEPTH_LIMIT = 8;
 const FRAMEWORK_SCAN_SECRET_LIMIT = 12;
 let debugEnabled = false;
-let clipboardWritePatched = false;
 let copyListenerInstalled = false;
 let frameworkScanTimer: number | undefined;
 const emittedFrameworkSecrets = new Set<string>();
@@ -40,7 +39,6 @@ function installClipboardBridge() {
     win.__AIPASS_CLIPBOARD_BRIDGE__ = true;
     installDebugModeListener();
     installFrameworkScanListener();
-    patchClipboardWriteText();
     document.addEventListener("copy", emitSelectedSecret, { capture: true, passive: true });
     copyListenerInstalled = true;
   } catch {
@@ -56,7 +54,6 @@ function installDebugModeListener() {
       debugLog("debug enabled", {
         host: location.hostname,
         path: location.pathname,
-        clipboardWritePatched,
         copyListenerInstalled
       });
     } catch {
@@ -75,37 +72,6 @@ function installFrameworkScanListener() {
       // Framework scans are diagnostic best effort and must not affect the page.
     }
   });
-}
-
-function patchClipboardWriteText() {
-  const clipboard = navigator.clipboard;
-  const original = clipboard?.writeText?.bind(clipboard);
-  if (!clipboard || !original) {
-    debugLog("clipboard.writeText unavailable");
-    return;
-  }
-  try {
-    clipboard.writeText = ((text: string) => {
-      const value = String(text);
-      let result: Promise<void>;
-      try {
-        result = original(text);
-      } catch (error) {
-        deferEmitSecret(value);
-        throw error;
-      }
-      void Promise.resolve(result).then(
-        () => deferEmitSecret(value),
-        () => deferEmitSecret(value)
-      );
-      return result;
-    }) as Clipboard["writeText"];
-    clipboardWritePatched = true;
-    debugLog("clipboard.writeText patched");
-  } catch {
-    // Some browsers expose a non-writable Clipboard API; copy events still cover fallback flows.
-    debugLog("clipboard.writeText patch skipped");
-  }
 }
 
 function emitSelectedSecret() {
