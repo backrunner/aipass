@@ -236,6 +236,35 @@ mod imp {
         Ok(())
     }
 
+    pub(super) fn uninstall(vault_dir: &Path) -> Result<WindowsServiceStatus> {
+        let service_name = agent_service_name(vault_dir)?;
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+        let service = match manager.open_service(
+            &service_name,
+            ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS | ServiceAccess::STOP,
+        ) {
+            Ok(service) => service,
+            Err(_) => {
+                return Ok(WindowsServiceStatus {
+                    service_name,
+                    registered: false,
+                    running: false,
+                    state: None,
+                });
+            }
+        };
+        if !matches!(service.query_status()?.current_state, ServiceState::Stopped) {
+            let _ = service.stop();
+        }
+        service.delete()?;
+        Ok(WindowsServiceStatus {
+            service_name,
+            registered: false,
+            running: false,
+            state: None,
+        })
+    }
+
     pub(super) fn query(vault_dir: &Path) -> Result<WindowsServiceStatus> {
         let service_name = agent_service_name(vault_dir)?;
         let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
@@ -279,6 +308,10 @@ mod imp {
         Err(anyhow!("Windows services are only available on Windows"))
     }
 
+    pub(super) fn uninstall(_vault_dir: &Path) -> Result<WindowsServiceStatus> {
+        Err(anyhow!("Windows services are only available on Windows"))
+    }
+
     pub(super) fn query(vault_dir: &Path) -> Result<WindowsServiceStatus> {
         Ok(WindowsServiceStatus {
             service_name: agent_service_name(vault_dir)?,
@@ -303,6 +336,10 @@ pub fn start_service(vault_dir: &Path) -> Result<()> {
 
 pub fn stop_service(vault_dir: &Path) -> Result<()> {
     imp::stop(vault_dir)
+}
+
+pub fn uninstall_service(vault_dir: &Path) -> Result<WindowsServiceStatus> {
+    imp::uninstall(vault_dir)
 }
 
 pub fn query_service(vault_dir: &Path) -> Result<WindowsServiceStatus> {

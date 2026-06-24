@@ -265,6 +265,7 @@ enum NativeHostCommand {
 #[derive(Subcommand)]
 enum AgentSubcommand {
     Install,
+    Uninstall,
     Status,
     Start,
     Stop,
@@ -610,129 +611,78 @@ fn install_agent_service(json: bool, explicit_vault: Option<PathBuf>) -> Result<
     let vault_dir = vault_dir(explicit_vault)?;
     let agent_binary = aipass_agent::agent_binary_path()?;
     let namespace = aipass_agent::namespace_for_vault_dir(&vault_dir)?;
-    #[cfg(target_os = "linux")]
-    let launch_command = format!(
-        "\"{}\" --vault \"{}\"",
-        agent_binary.display(),
-        vault_dir.display()
-    );
-
-    #[cfg(target_os = "macos")]
-    let install_path = {
-        let home = std::env::var_os("HOME").context("HOME is not set")?;
-        let path = PathBuf::from(home)
-            .join("Library")
-            .join("LaunchAgents")
-            .join(format!("dev.aipass.agent.{namespace}.plist"));
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>dev.aipass.agent.{namespace}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{}</string>
-    <string>--vault</string>
-    <string>{}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>
-"#,
-            xml_escape(&agent_binary.display().to_string()),
-            xml_escape(&vault_dir.display().to_string()),
-        );
-        atomic_write_bytes(&path, plist.as_bytes())?;
-        let _ = ProcessCommand::new("launchctl")
-            .args(["unload", path.to_string_lossy().as_ref()])
-            .status();
-        let status = ProcessCommand::new("launchctl")
-            .args(["load", path.to_string_lossy().as_ref()])
-            .status()
-            .context("failed to load LaunchAgent")?;
-        if !status.success() {
-            anyhow::bail!("launchctl load failed");
-        }
-        path
-    };
-
-    #[cfg(target_os = "linux")]
-    let install_path = {
-        let home = std::env::var_os("HOME").context("HOME is not set")?;
-        let path = PathBuf::from(home)
-            .join(".config")
-            .join("systemd")
-            .join("user")
-            .join(format!("aipass-agent-{namespace}.service"));
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let unit = format!(
-            r#"[Unit]
-Description=AIPass Agent ({namespace})
-
-[Service]
-ExecStart={launch_command}
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-"#
-        );
-        atomic_write_bytes(&path, unit.as_bytes())?;
-        let reload = ProcessCommand::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-        if let Ok(status) = reload {
-            if !status.success() {
-                anyhow::bail!("systemctl --user daemon-reload failed");
-            }
-        }
-        let enable = ProcessCommand::new("systemctl")
-            .args([
-                "--user",
-                "enable",
-                "--now",
-                path.file_name()
-                    .and_then(|value| value.to_str())
-                    .context("invalid service name")?,
-            ])
-            .status();
-        if let Ok(status) = enable {
-            if !status.success() {
-                anyhow::bail!("systemctl --user enable --now failed");
-            }
-        }
-        path
-    };
-
-    #[cfg(target_os = "windows")]
-    let install_path = {
-        let status = aipass_agent::install_windows_service(&agent_binary, &vault_dir)
-            .context("failed to register Windows agent service")?;
-        PathBuf::from(format!(r"SCM\{}", status.service_name))
-    };
-
+    let status = aipass_agent::install_agent_autostart(&agent_binary, &vault_dir)
+        .context("failed to install AIPass agent autostart")?;
     output(
         json,
         serde_json::json!({
             "ok": true,
             "vaultDir": vault_dir,
             "agentBinary": agent_binary,
-            "installPath": install_path,
+            "autostart": autostart_status_json(&status),
             "namespace": namespace,
         }),
-        "Agent service installed",
+        "Agent autostart installed",
     )
+}
+
+fn start_agent_service(json: bool, explicit_vault: Option<PathBuf>) -> Result<()> {
+    let vault_dir = vault_dir(explicit_vault)?;
+    let agent_binary = aipass_agent::agent_binary_path()?;
+    let status = aipass_agent::install_agent_autostart(&agent_binary, &vault_dir)
+        .context("failed to start AIPass agent autostart")?;
+    let client = AgentClient::for_vault(vault_dir.clone())?;
+    client.ensure_running()?;
+    output(
+        json,
+        serde_json::json!({
+            "ok": true,
+            "vaultDir": vault_dir,
+            "autostart": autostart_status_json(&status),
+        }),
+        "Agent autostart started",
+    )
+}
+
+fn stop_agent_service(json: bool, explicit_vault: Option<PathBuf>) -> Result<()> {
+    let vault_dir = vault_dir(explicit_vault)?;
+    let status = aipass_agent::stop_agent_autostart(&vault_dir)
+        .context("failed to stop AIPass agent autostart")?;
+    output(
+        json,
+        serde_json::json!({
+            "ok": true,
+            "vaultDir": vault_dir,
+            "autostart": autostart_status_json(&status),
+        }),
+        "Agent autostart stopped",
+    )
+}
+
+fn uninstall_agent_service(json: bool, explicit_vault: Option<PathBuf>) -> Result<()> {
+    let vault_dir = vault_dir(explicit_vault)?;
+    let status = aipass_agent::uninstall_agent_autostart(&vault_dir)
+        .context("failed to uninstall AIPass agent autostart")?;
+    output(
+        json,
+        serde_json::json!({
+            "ok": true,
+            "vaultDir": vault_dir,
+            "autostart": autostart_status_json(&status),
+        }),
+        "Agent autostart uninstalled",
+    )
+}
+
+fn autostart_status_json(status: &aipass_agent::AgentAutostartStatus) -> serde_json::Value {
+    serde_json::json!({
+        "serviceName": &status.service_name,
+        "registered": status.registered,
+        "running": status.running,
+        "installPath": &status.install_path,
+        "supervisorPath": &status.supervisor_path,
+        "agentBinary": &status.agent_binary,
+    })
 }
 
 fn doctor_report(
@@ -912,15 +862,6 @@ fn doctor_text(report: &serde_json::Value, ok: bool) -> String {
         if ok { "ok" } else { "issues found" },
         if agent { "reachable" } else { "not reachable" }
     )
-}
-
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 fn output(json: bool, value: serde_json::Value, text: &str) -> Result<()> {

@@ -129,8 +129,13 @@ fn find_agent_binary() -> AgentBinarySearch {
 
     if let Ok(current) = env::current_exe() {
         add_candidate(&mut search, current.with_file_name(name));
-        if let Some(contents_dir) = current.parent().and_then(Path::parent) {
-            add_candidate(&mut search, contents_dir.join("Resources").join(name));
+        if let Some(exe_dir) = current.parent() {
+            add_candidate(&mut search, exe_dir.join("resources").join(name));
+            add_candidate(&mut search, exe_dir.join("Resources").join(name));
+            if let Some(contents_dir) = exe_dir.parent() {
+                add_candidate(&mut search, contents_dir.join("Resources").join(name));
+                add_candidate(&mut search, contents_dir.join("resources").join(name));
+            }
         }
     }
 

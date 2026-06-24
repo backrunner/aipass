@@ -117,15 +117,30 @@ impl AgentClient {
             }
         }
         #[cfg(not(target_os = "windows"))]
-        let launch = launcher::launch_agent(
-            &self.config.vault_dir,
-            &self.config.namespace,
-            &initial_connection_error,
-        )?;
-        #[cfg(not(target_os = "windows"))]
-        let launched_binary = Some(launch.binary);
-        #[cfg(not(target_os = "windows"))]
-        let binary_candidates = launch.candidates;
+        let (launched_binary, binary_candidates) = match launcher::agent_binary_path() {
+            Ok(agent_binary) => {
+                let candidates = launcher::agent_binary_candidates();
+                match crate::autostart::install_autostart(&agent_binary, &self.config.vault_dir) {
+                    Ok(_) => (Some(agent_binary), candidates),
+                    Err(_) => {
+                        let launch = launcher::launch_agent(
+                            &self.config.vault_dir,
+                            &self.config.namespace,
+                            &initial_connection_error,
+                        )?;
+                        (Some(launch.binary), launch.candidates)
+                    }
+                }
+            }
+            Err(_) => {
+                let launch = launcher::launch_agent(
+                    &self.config.vault_dir,
+                    &self.config.namespace,
+                    &initial_connection_error,
+                )?;
+                (Some(launch.binary), launch.candidates)
+            }
+        };
         let mut last_connection_error = None;
         for _ in 0..40 {
             match self.request_raw(&AgentRequest::SessionStatus) {

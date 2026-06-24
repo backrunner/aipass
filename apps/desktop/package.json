@@ -6,6 +6,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "build": "vite build",
+    "build:agent": "cargo build --release -p aipass-agent -p aipass-native-host",
     "bundle": "tauri build --ci",
     "dev": "tauri dev",
     "dev:agent": "cargo build -p aipass-agent -p aipass-native-host",

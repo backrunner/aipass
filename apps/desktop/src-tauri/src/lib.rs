@@ -24,6 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::process::Command as ProcessCommand;
+use std::thread;
 use tauri::{AppHandle, LogicalSize, Manager, Size};
 
 #[cfg(test)]
@@ -69,14 +70,6 @@ fn agent_request_no_unlock<T: DeserializeOwned>(
 
 fn agent_status(app: &AppHandle) -> Result<SessionStatus, String> {
     agent_request_no_unlock::<SessionStatus>(app, AgentRequest::SessionStatus)
-}
-
-fn shutdown_agent_for_app_quit(app: &AppHandle) {
-    if let Ok(client) = agent_client(app) {
-        if let Err(err) = client.shutdown() {
-            eprintln!("failed to stop AIPass agent during app quit: {err}");
-        }
-    }
 }
 
 fn agent_error_to_string(err: AgentCommandError) -> String {
@@ -403,7 +396,24 @@ fn native_host_binary_path() -> Result<PathBuf, String> {
     } else {
         "aipass-native-host"
     };
-    Ok(exe.with_file_name(host_name))
+    let mut candidates = vec![exe.with_file_name(host_name)];
+    if let Some(exe_dir) = exe.parent() {
+        candidates.push(exe_dir.join("resources").join(host_name));
+        candidates.push(exe_dir.join("Resources").join(host_name));
+        if let Some(contents_dir) = exe_dir.parent() {
+            candidates.push(contents_dir.join("Resources").join(host_name));
+            candidates.push(contents_dir.join("resources").join(host_name));
+        }
+    }
+    if let Some(found) = candidates
+        .iter()
+        .find(|candidate| candidate.is_file())
+        .cloned()
+    {
+        Ok(found)
+    } else {
+        Ok(candidates.remove(0))
+    }
 }
 
 fn default_chrome_native_manifest_path() -> Result<PathBuf, String> {
@@ -538,6 +548,33 @@ fn configure_initial_window(app: &AppHandle) {
     let _ = window.set_focus();
 }
 
+fn ensure_agent_resident_async(app: AppHandle) {
+    thread::spawn(move || {
+        let client = match agent_client(&app) {
+            Ok(client) => client,
+            Err(err) => {
+                eprintln!("failed to resolve AIPass agent config: {err}");
+                return;
+            }
+        };
+        let agent_binary = match aipass_agent::agent_binary_path() {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!("failed to resolve AIPass agent binary: {err}");
+                return;
+            }
+        };
+        if let Err(err) =
+            aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
+        {
+            eprintln!("failed to install AIPass agent autostart: {err}");
+        }
+        if let Err(err) = client.ensure_running() {
+            eprintln!("failed to ensure AIPass agent is running: {err}");
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn configure_window_chrome(window: &tauri::WebviewWindow) {
     const WINDOW_CORNER_RADIUS: f64 = 10.0;
@@ -582,6 +619,7 @@ pub fn run() {
         .setup(|app| {
             configure_initial_window(app.handle());
             tray::setup(app)?;
+            ensure_agent_resident_async(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -635,11 +673,7 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                shutdown_agent_for_app_quit(app);
-            }
-        });
+        .run(|_app, _event| {});
 }
 
 #[cfg(test)]

@@ -6,11 +6,6 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager, WindowEvent};
 
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
-#[cfg(target_os = "macos")]
-use std::process::Command;
-
 const TRAY_ID: &str = "aipass-agent";
 const MENU_STATUS: &str = "tray-status";
 const MENU_OPEN: &str = "tray-open";
@@ -37,21 +32,11 @@ pub(crate) fn setup(app: &App) -> tauri::Result<()> {
     let start_agent = MenuItem::with_id(app, MENU_START_AGENT, "Start Agent", false, None::<&str>)?;
     let lock = MenuItem::with_id(app, MENU_LOCK, "Lock Vault", false, None::<&str>)?;
 
-    #[cfg(target_os = "macos")]
     let install_login_agent = MenuItem::with_id(
         app,
         MENU_INSTALL_LOGIN_AGENT,
-        "Install Login Agent",
+        "Repair Auto-Start Agent",
         true,
-        None::<&str>,
-    )?;
-
-    #[cfg(not(target_os = "macos"))]
-    let install_login_agent = MenuItem::with_id(
-        app,
-        MENU_INSTALL_LOGIN_AGENT,
-        "Login Agent: macOS only",
-        false,
         None::<&str>,
     )?;
 
@@ -225,22 +210,23 @@ fn lock_vault_async(app: AppHandle, items: TrayMenuItems) {
 
 fn install_login_agent_async(app: AppHandle, items: TrayMenuItems) {
     thread::spawn(move || {
-        #[cfg(target_os = "macos")]
-        match install_macos_login_agent() {
+        let result = agent_client(&app).and_then(|client| {
+            let agent_binary = aipass_agent::agent_binary_path().map_err(|err| err.to_string())?;
+            aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
+                .map_err(|err| err.to_string())?;
+            client.ensure_running().map_err(|err| err.to_string())
+        });
+        match result {
             Ok(_) => {
-                let _ = items.install_login_agent.set_text("Repair Login Agent");
+                let _ = items
+                    .install_login_agent
+                    .set_text("Repair Auto-Start Agent");
                 refresh_status(&app, &items);
             }
             Err(err) => {
-                eprintln!("failed to install AIPass login agent: {err}");
-                let _ = items.status.set_text("Agent: login install failed");
+                eprintln!("failed to install AIPass agent autostart: {err}");
+                let _ = items.status.set_text("Agent: autostart failed");
             }
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = app;
-            let _ = items;
         }
     });
 }
@@ -327,112 +313,4 @@ fn short_error(value: &str) -> String {
     } else {
         shortened
     }
-}
-
-#[cfg(target_os = "macos")]
-fn install_macos_login_agent() -> Result<PathBuf, String> {
-    let vault_dir = configured_vault_dir()?;
-    let agent_binary = aipass_agent::agent_binary_path().map_err(|err| err.to_string())?;
-    let namespace =
-        aipass_agent::namespace_for_vault_dir(&vault_dir).map_err(|err| err.to_string())?;
-    let label = format!("dev.aipass.agent.{namespace}");
-    let plist_path = launch_agent_path(&label)?;
-    let home = home_dir()?;
-    let log_dir = home.join("Library").join("Logs").join("AIPass");
-    std::fs::create_dir_all(&log_dir).map_err(|err| err.to_string())?;
-
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{}</string>
-    <string>--vault</string>
-    <string>{}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>{}</string>
-  <key>StandardErrorPath</key>
-  <string>{}</string>
-</dict>
-</plist>
-"#,
-        xml_escape(&label),
-        xml_escape(&agent_binary.display().to_string()),
-        xml_escape(&vault_dir.display().to_string()),
-        xml_escape(
-            &log_dir
-                .join(format!("agent-{namespace}.out.log"))
-                .display()
-                .to_string()
-        ),
-        xml_escape(
-            &log_dir
-                .join(format!("agent-{namespace}.err.log"))
-                .display()
-                .to_string()
-        ),
-    );
-
-    if let Some(parent) = plist_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    aipass_storage::atomic_write_bytes(&plist_path, plist.as_bytes())
-        .map_err(|err| err.to_string())?;
-
-    let path_text = plist_path.to_string_lossy().into_owned();
-    let _ = Command::new("launchctl")
-        .args(["unload", path_text.as_str()])
-        .status();
-    let status = Command::new("launchctl")
-        .args(["load", "-w", path_text.as_str()])
-        .status()
-        .map_err(|err| err.to_string())?;
-    if !status.success() {
-        return Err("launchctl load -w failed".to_string());
-    }
-
-    Ok(plist_path)
-}
-
-#[cfg(target_os = "macos")]
-fn configured_vault_dir() -> Result<PathBuf, String> {
-    if let Some(explicit) = std::env::var_os("AIPASS_VAULT_DIR") {
-        Ok(PathBuf::from(explicit))
-    } else {
-        aipass_agent::default_vault_dir().map_err(|err| err.to_string())
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn launch_agent_path(label: &str) -> Result<PathBuf, String> {
-    Ok(home_dir()?
-        .join("Library")
-        .join("LaunchAgents")
-        .join(format!("{label}.plist")))
-}
-
-#[cfg(target_os = "macos")]
-fn home_dir() -> Result<PathBuf, String> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME is not set".to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }

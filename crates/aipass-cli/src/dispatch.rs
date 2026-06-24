@@ -198,47 +198,18 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
         },
         Command::Agent { command } => match command {
             AgentSubcommand::Install => install_agent_service(json, vault.clone()),
+            AgentSubcommand::Uninstall => uninstall_agent_service(json, vault.clone()),
             AgentSubcommand::Status => {
-                #[cfg(target_os = "windows")]
-                {
-                    let dir = vault_dir(vault.clone())?;
-                    let service = aipass_agent::query_windows_service(&dir)?;
-                    let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                    let status: SessionStatus = agent
-                        .request_no_unlock(AgentRequest::SessionStatus)
-                        .unwrap_or(SessionStatus {
-                            exists: manifest_exists(vault.clone())?,
-                            locked: true,
-                            policy: Default::default(),
-                            last_lock_reason: Some(LockReason::AgentRestart),
-                            vault_namespace: None,
-                        });
-                    return output(
-                        json,
-                        serde_json::json!({
-                            "registered": service.registered,
-                            "running": service.running,
-                            "serviceName": service.service_name,
-                            "serviceState": service.state,
-                            "session": status,
-                        }),
-                        if service.running {
-                            if status.locked {
-                                "Agent service running (locked)"
-                            } else {
-                                "Agent service running (unlocked)"
-                            }
-                        } else if service.registered {
-                            "Agent service registered (stopped)"
-                        } else {
-                            "Agent service not installed"
-                        },
-                    );
-                }
-
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let status: SessionStatus = agent
-                    .request_no_unlock(AgentRequest::SessionStatus)
+                let dir = vault_dir(vault.clone())?;
+                let autostart = aipass_agent::query_agent_autostart(&dir)?;
+                let status: SessionStatus = AgentClientConfig::for_vault(dir.clone())
+                    .ok()
+                    .map(AgentClient::new)
+                    .and_then(|client| {
+                        client
+                            .request::<SessionStatus>(&AgentRequest::SessionStatus)
+                            .ok()
+                    })
                     .unwrap_or(SessionStatus {
                         exists: manifest_exists(vault.clone())?,
                         locked: true,
@@ -248,34 +219,26 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     });
                 output(
                     json,
-                    serde_json::to_value(&status)?,
-                    if status.locked {
-                        "Agent locked"
+                    serde_json::json!({
+                        "vaultDir": dir,
+                        "autostart": autostart_status_json(&autostart),
+                        "session": status,
+                    }),
+                    if autostart.running {
+                        if status.locked {
+                            "Agent autostart running (locked)"
+                        } else {
+                            "Agent autostart running (unlocked)"
+                        }
+                    } else if autostart.registered {
+                        "Agent autostart registered (stopped)"
                     } else {
-                        "Agent unlocked"
+                        "Agent autostart not installed"
                     },
                 )
             }
-            AgentSubcommand::Start => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                agent.ensure_running()?;
-                output(json, serde_json::json!({ "ok": true }), "Agent started")
-            }
-            AgentSubcommand::Stop => {
-                #[cfg(target_os = "windows")]
-                {
-                    let dir = vault_dir(vault.clone())?;
-                    aipass_agent::stop_windows_service(&dir)?;
-                    return output(
-                        json,
-                        serde_json::json!({ "ok": true }),
-                        "Agent service stopped",
-                    );
-                }
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                agent.client.shutdown()?;
-                output(json, serde_json::json!({ "ok": true }), "Agent stopped")
-            }
+            AgentSubcommand::Start => start_agent_service(json, vault.clone()),
+            AgentSubcommand::Stop => stop_agent_service(json, vault.clone()),
         },
         Command::Login => {
             let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;

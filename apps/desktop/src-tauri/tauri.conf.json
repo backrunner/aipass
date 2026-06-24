@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev:agent && pnpm dev:web",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build:agent && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -44,6 +44,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../../../target/release/aipass-agent*": "",
+      "../../../target/release/aipass-native-host*": ""
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/nsis-hooks.nsh"
+      }
+    }
   }
 }
