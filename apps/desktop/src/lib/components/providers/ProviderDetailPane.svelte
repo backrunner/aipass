@@ -255,9 +255,6 @@
           <div class="meta">
             <Badge tone={providerKindTone[selected.providerKind]}>{$t(providerKindLabelKey(selected.providerKind))}</Badge>
             <Badge>{$t(interfaceLabelKey(selected.interfaceType))}</Badge>
-            {#if selected.environment}
-              <Badge>{selected.environment}</Badge>
-            {/if}
           </div>
         </div>
       </div>

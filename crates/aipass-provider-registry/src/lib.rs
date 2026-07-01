@@ -124,7 +124,6 @@ pub struct ProviderEntry {
     pub quota: Option<QuotaInfo>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
-    pub environment: String,
     pub notes: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,

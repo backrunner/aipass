@@ -270,7 +270,6 @@ pub struct BrowserDetectedSecretFields {
     pub interface_type: Option<InterfaceType>,
     pub auth_scheme: Option<AuthScheme>,
     pub api_key: SensitiveString,
-    pub environment: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -295,7 +294,6 @@ pub struct BrowserDetectedSecretPreview {
     pub existing_entry_id: Option<Uuid>,
     #[serde(default)]
     pub is_saved: bool,
-    pub environment: String,
     pub tags: Vec<String>,
     #[serde(default)]
     pub gateway: Option<GatewayMetadata>,
@@ -321,6 +319,7 @@ pub struct BrowserFillResult {
 pub enum SessionUnlockMode {
     Password { password: SensitiveString },
     NativeWindow,
+    NativeWindowWait { timeout_ms: u64 },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

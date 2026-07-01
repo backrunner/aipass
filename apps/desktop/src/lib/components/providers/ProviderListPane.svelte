@@ -33,12 +33,6 @@
 
   $: filterOptions = [
     ...baseFilterOptions,
-    ...unique(filterEntries.map((entry) => entry.environment))
-      .slice(0, 8)
-      .map((environment) => ({
-        value: `environment:${environment}` as ProviderFilter,
-        label: $t("providerList.environment", { value: environment })
-      })),
     ...unique(filterEntries.flatMap((entry) => entry.tags))
       .slice(0, 12)
       .map((tag) => ({

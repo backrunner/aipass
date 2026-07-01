@@ -6,8 +6,8 @@ use crate::session::{
     lock_if_idle, lock_session, map_vault_error, native_host_settings_path, reset_vault,
     save_policy, save_sync_settings, session_status, shutdown_requested, sync_settings_password,
     sync_settings_password_requires_vault, sync_settings_password_without_vault,
-    sync_settings_view, touch_session, unlock_with_password, with_vault, with_vault_mut,
-    AgentState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
+    sync_settings_view, touch_session, unlock_with_password, wait_for_unlock, with_vault,
+    with_vault_mut, AgentState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
 };
 use aipass_agent_protocol::{
     endpoint_url as protocol_endpoint_url, AgentErrorCode, AgentRequest, AgentResponse,
@@ -46,7 +46,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -60,9 +60,27 @@ const CONNECTION_IO_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
     pub vault_dir: PathBuf,
+    pub launch_desktop_tray: bool,
+}
+
+impl ServerOptions {
+    pub fn new(vault_dir: PathBuf) -> Self {
+        Self {
+            vault_dir,
+            launch_desktop_tray: true,
+        }
+    }
+
+    pub fn without_desktop_tray(vault_dir: PathBuf) -> Self {
+        Self {
+            vault_dir,
+            launch_desktop_tray: false,
+        }
+    }
 }
 
 pub fn run_server(options: ServerOptions) -> Result<()> {
+    let launch_desktop_tray = options.launch_desktop_tray;
     let vault_dir = canonical_vault_dir(options.vault_dir)?;
     let namespace = namespace_for_vault_dir(&vault_dir)?;
     let auth_token = ipc::load_or_create_auth_token(&vault_dir)?;
@@ -72,11 +90,12 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         namespace,
         auth_token,
         session: Mutex::new(SessionState::Locked),
+        session_changed: Condvar::new(),
         last_lock_reason: Mutex::new(Some(LockReason::AgentRestart)),
         shutdown: AtomicBool::new(false),
     });
     crate::session::try_restore_session(&state);
-    run_server_with_state(state)
+    run_server_with_state(state, launch_desktop_tray)
 }
 
 #[path = "handlers.rs"]
@@ -84,7 +103,7 @@ mod handlers;
 
 use handlers::handle_request;
 
-fn run_server_with_state(state: Arc<AgentState>) -> Result<()> {
+fn run_server_with_state(state: Arc<AgentState>, launch_desktop_tray: bool) -> Result<()> {
     let listener = ipc::listen(&state.vault_dir).with_context(|| {
         format!(
             "failed to bind agent listener for {}",
@@ -97,6 +116,9 @@ fn run_server_with_state(state: Arc<AgentState>) -> Result<()> {
 
     spawn_idle_lock_watcher(state.clone());
     crate::session::spawn_power_watcher(state.clone());
+    if launch_desktop_tray {
+        ensure_desktop_tray_companion_async(state.vault_dir.clone());
+    }
 
     let active_connections = Arc::new(AtomicUsize::new(0));
     loop {
@@ -130,6 +152,20 @@ fn run_server_with_state(state: Arc<AgentState>) -> Result<()> {
 
     let _ = ipc::clear_auth_token(&state.vault_dir);
     Ok(())
+}
+
+fn ensure_desktop_tray_companion_async(vault_dir: PathBuf) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        if crate::desktop::tray_launch_suppressed() {
+            return;
+        }
+        thread::spawn(move || {
+            if let Err(err) = open_desktop_window(crate::desktop::TRAY_WINDOW_TARGET, &vault_dir) {
+                eprintln!("failed to open AIPass desktop tray companion: {err}");
+            }
+        });
+    }
 }
 
 struct ConnectionGuard {
@@ -406,8 +442,7 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
             quota: None,
             gateway: preview.gateway,
             tags: preview.tags,
-            environment: preview.environment,
-            notes: Some(format!("Captured from {}", fields.origin)),
+            notes: None,
         })
         .map_err(map_vault_error)
 }
@@ -469,18 +504,7 @@ fn detected_secret_preview(
                 .map(|provider| provider.display_name.to_string())
         })
         .unwrap_or_else(|| "Browser Provider".to_string());
-    let environment = fields
-        .environment
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "browser".to_string());
-    let tags = if fields.tags.is_empty() {
-        vec!["browser".to_string()]
-    } else {
-        fields.tags.clone()
-    };
+    let tags = fields.tags.clone();
     let existing_entry_id = vault
         .search(fields.api_key.expose())
         .ok()
@@ -499,7 +523,6 @@ fn detected_secret_preview(
         fingerprint: vault.fingerprint_secret(fields.api_key.expose()),
         existing_entry_id,
         is_saved,
-        environment,
         tags,
         gateway: clean_gateway(fields.gateway.clone()),
     }
@@ -1029,10 +1052,7 @@ mod tests {
             let vault_dir = dir.keep();
             let server_vault_dir = vault_dir.clone();
             let handle = thread::spawn(move || {
-                run_server(ServerOptions {
-                    vault_dir: server_vault_dir,
-                })
-                .expect("server");
+                run_server(ServerOptions::without_desktop_tray(server_vault_dir)).expect("server");
             });
             let client = crate::AgentClient::for_vault(vault_dir.clone()).expect("client");
             for _ in 0..50 {

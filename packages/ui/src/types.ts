@@ -28,7 +28,6 @@ export type Draft = {
   secretLabel: string;
   defaultModel: string;
   modelAlias: string;
-  environment: string;
   tag: string;
   header: string;
   quotaLabel: string;

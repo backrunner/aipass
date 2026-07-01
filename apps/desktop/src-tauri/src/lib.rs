@@ -8,7 +8,10 @@ use commands::*;
 use updates::{check_for_updates, install_update};
 
 use crate::auth_tasks::AuthTasks;
-use crate::models::{AppPreferences, NativeHostStatus, ProviderAddRequest, ProviderUpdateRequest};
+use crate::models::{
+    AppPreferences, BrowserExtensionInstallMode, BrowserExtensionInstallResult,
+    BrowserExtensionStatus, NativeHostStatus, ProviderAddRequest, ProviderUpdateRequest,
+};
 use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{AgentRequest, SessionStatus};
 use aipass_native_host::{
@@ -22,10 +25,12 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "windows")]
 use std::process::Command as ProcessCommand;
 use std::thread;
 use tauri::{AppHandle, LogicalSize, Manager, Size};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[cfg(test)]
 use crate::models::ProbeResult;
@@ -37,6 +42,9 @@ use aipass_vault::EntrySummary;
 use std::time::Duration;
 #[cfg(test)]
 use uuid::Uuid;
+
+#[cfg(target_os = "windows")]
+use std::ffi::OsString;
 
 #[derive(Default)]
 struct AppState {
@@ -55,7 +63,9 @@ fn agent_client(_app: &AppHandle) -> Result<AgentClient, String> {
 
 fn agent_request<T: DeserializeOwned>(app: &AppHandle, request: AgentRequest) -> Result<T, String> {
     let client = agent_client(app)?;
-    client.ensure_running().map_err(|err| err.to_string())?;
+    client
+        .ensure_running_for_desktop_companion()
+        .map_err(|err| err.to_string())?;
     client.request(&request).map_err(agent_error_to_string)
 }
 
@@ -64,7 +74,9 @@ fn agent_request_no_unlock<T: DeserializeOwned>(
     request: AgentRequest,
 ) -> Result<T, String> {
     let client = agent_client(app)?;
-    client.ensure_running().map_err(|err| err.to_string())?;
+    client
+        .ensure_running_for_desktop_companion()
+        .map_err(|err| err.to_string())?;
     client.request(&request).map_err(agent_error_to_string)
 }
 
@@ -106,7 +118,6 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         quota: request.quota,
         gateway: request.gateway,
         tags: clean_strings(request.tags),
-        environment: non_empty(request.environment).unwrap_or_else(|| "personal".to_string()),
         notes: request.notes.and_then(non_empty),
     }
 }
@@ -136,7 +147,6 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         quota: request.quota,
         gateway: request.gateway,
         tags: clean_strings(request.tags),
-        environment: non_empty(request.environment).unwrap_or_else(|| "personal".to_string()),
         notes: request.notes.and_then(non_empty),
     }
 }
@@ -356,15 +366,387 @@ fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("preferences.json"))
 }
 
+fn browser_extension_status_snapshot(app: &AppHandle) -> Result<BrowserExtensionStatus, String> {
+    let package = bundled_extension_package(app)?;
+    let chrome_path = find_chrome_path();
+    let native_host = native_host_status_snapshot()?;
+    let external_install_path = default_chrome_external_extension_path(&package.id)?;
+    let installed_paths = installed_chrome_extension_paths(&package.id);
+    let native_host_configured = native_host.host_usable
+        && native_host.manifest_exists
+        && (native_host
+            .allowed_extension_ids
+            .iter()
+            .any(|id| normalized_extension_id(id) == package.id)
+            || native_host
+                .allowed_origins
+                .iter()
+                .any(|origin| normalized_extension_id(origin) == package.id));
+
+    let crx_exists = package.crx_path.exists()
+        && fs::metadata(&package.crx_path)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false)
+        && package.version != "0.0.0";
+
+    Ok(BrowserExtensionStatus {
+        browser: "chrome".to_string(),
+        chrome_installed: chrome_path.is_some(),
+        chrome_path,
+        extension_id: package.id,
+        extension_version: package.version,
+        crx_exists,
+        crx_path: package.crx_path,
+        extension_installed: !installed_paths.is_empty(),
+        installed_paths,
+        external_install_exists: external_install_path
+            .as_ref()
+            .is_some_and(|path| path.exists()),
+        external_install_path,
+        native_host_configured,
+        install_mode: if cfg!(target_os = "linux") {
+            BrowserExtensionInstallMode::ExternalCrx
+        } else {
+            BrowserExtensionInstallMode::ManualCrx
+        },
+        native_host,
+    })
+}
+
+fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallResult, String> {
+    let package = bundled_extension_package(app)?;
+    if !package.crx_path.exists()
+        || fs::metadata(&package.crx_path)
+            .map(|metadata| metadata.len() == 0)
+            .unwrap_or(true)
+        || package.version == "0.0.0"
+    {
+        return Err(format!(
+            "bundled Chrome extension package is missing: {}",
+            package.crx_path.display()
+        ));
+    }
+    if find_chrome_path().is_none() {
+        return Err("Google Chrome is not installed".to_string());
+    }
+
+    repair_native_host_manifest(vec![package.id.clone()])?;
+
+    let external_install_ok =
+        cfg!(target_os = "linux") && install_chrome_external_crx(&package).is_ok();
+
+    let opened_chrome = open_chrome_extensions_page().is_ok();
+    let opened_package = if cfg!(target_os = "linux") {
+        !external_install_ok && reveal_path(&package.crx_path).is_ok()
+    } else {
+        reveal_path(&package.crx_path).is_ok()
+    };
+    let status = browser_extension_status_snapshot(app)?;
+    Ok(BrowserExtensionInstallResult {
+        status,
+        opened_chrome,
+        opened_package,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct ExtensionPackage {
+    id: String,
+    version: String,
+    crx_path: PathBuf,
+}
+
+fn bundled_extension_package(app: &AppHandle) -> Result<ExtensionPackage, String> {
+    let metadata_path = bundled_extension_metadata_path(app)?;
+    let metadata_text = fs::read_to_string(&metadata_path).map_err(|err| {
+        format!(
+            "failed to read bundled extension metadata at {}: {err}",
+            metadata_path.display()
+        )
+    })?;
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_text).map_err(|err| {
+        format!(
+            "failed to parse bundled extension metadata at {}: {err}",
+            metadata_path.display()
+        )
+    })?;
+    let id = metadata
+        .get("id")
+        .and_then(|value| value.as_str())
+        .map(normalized_extension_id)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "bundled extension metadata is missing id".to_string())?;
+    let version = metadata
+        .get("version")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "bundled extension metadata is missing version".to_string())?;
+    let crx_name = metadata
+        .get("crx")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("aipass-extension.crx");
+    let metadata_dir = metadata_path
+        .parent()
+        .ok_or_else(|| "bundled extension metadata path has no parent".to_string())?;
+    Ok(ExtensionPackage {
+        id,
+        version,
+        crx_path: metadata_dir.join(crx_name),
+    })
+}
+
+fn bundled_extension_metadata_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(
+            resource_dir
+                .join("browser-extension")
+                .join("aipass-extension.json"),
+        );
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidates.push(
+        manifest_dir
+            .join("..")
+            .join("..")
+            .join("extension")
+            .join("build")
+            .join("aipass-extension.json"),
+    );
+    candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .ok_or_else(|| "bundled Chrome extension metadata is missing".to_string())
+}
+
+fn default_chrome_external_extension_path(extension_id: &str) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(Some(
+            PathBuf::from("/opt")
+                .join("google")
+                .join("chrome")
+                .join("extensions")
+                .join(format!("{extension_id}.json")),
+        ))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = extension_id;
+        Ok(None)
+    }
+}
+
+fn install_chrome_external_crx(package: &ExtensionPackage) -> Result<(), String> {
+    let install_path = default_chrome_external_extension_path(&package.id)?
+        .ok_or_else(|| "local CRX external install is only supported on Linux".to_string())?;
+    let copied_crx_path = user_extension_package_path(&package.id)?;
+    if let Some(parent) = copied_crx_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    fs::copy(&package.crx_path, &copied_crx_path).map_err(|err| err.to_string())?;
+    let external = serde_json::json!({
+        "external_crx": copied_crx_path,
+        "external_version": package.version,
+    });
+    write_json_atomic(&install_path, &external)
+}
+
+fn user_extension_package_path(extension_id: &str) -> Result<PathBuf, String> {
+    let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
+        .ok_or_else(|| "cannot determine AIPass project directory".to_string())?;
+    Ok(dirs
+        .data_dir()
+        .join("browser-extension")
+        .join(format!("{extension_id}.crx")))
+}
+
+fn installed_chrome_extension_paths(extension_id: &str) -> Vec<PathBuf> {
+    chrome_profile_roots()
+        .into_iter()
+        .flat_map(|profile_root| {
+            fs::read_dir(profile_root)
+                .ok()
+                .into_iter()
+                .flat_map(|items| items.filter_map(Result::ok))
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .map(|path| path.join("Extensions").join(extension_id))
+                .filter(|path| path.exists())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn chrome_profile_roots() -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| {
+                vec![home
+                    .join("Library")
+                    .join("Application Support")
+                    .join("Google")
+                    .join("Chrome")]
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| vec![home.join(".config").join("google-chrome")])
+            .unwrap_or_default()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|local_app_data| {
+                vec![local_app_data
+                    .join("Google")
+                    .join("Chrome")
+                    .join("User Data")]
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Vec::new()
+    }
+}
+
+fn find_chrome_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("AIPASS_CHROME_PATH").map(PathBuf::from) {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+        ];
+        candidates
+            .iter()
+            .map(PathBuf::from)
+            .find(|path| path.exists())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        [
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+        ]
+        .into_iter()
+        .filter_map(find_executable_in_path)
+        .next()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates = Vec::new();
+        for var in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+            if let Some(root) = std::env::var_os(var) {
+                candidates.push(
+                    PathBuf::from(root)
+                        .join("Google")
+                        .join("Chrome")
+                        .join("Application")
+                        .join("chrome.exe"),
+                );
+            }
+        }
+        candidates.into_iter().find(|path| path.exists())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn find_executable_in_path(name: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+fn open_chrome_extensions_page() -> Result<(), String> {
+    let chrome_path =
+        find_chrome_path().ok_or_else(|| "Google Chrome is not installed".to_string())?;
+    ProcessCommand::new(chrome_path)
+        .arg("chrome://extensions")
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+fn reveal_path(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        ProcessCommand::new("open")
+            .args(["-R"])
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut arg = OsString::from("/select,");
+        arg.push(path.as_os_str());
+        ProcessCommand::new("explorer")
+            .arg(arg)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let target = path.parent().unwrap_or(path);
+        ProcessCommand::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = path;
+        Err("opening the extension package is not supported on this platform".to_string())
+    }
+}
+
 fn native_host_status_snapshot() -> Result<NativeHostStatus, String> {
     let host_path = native_host_binary_path()?;
+    let host_status = native_host_binary_status(&host_path);
     let manifest_path = default_chrome_native_manifest_path()?;
     let allowed_origins = read_manifest_allowed_origins(&manifest_path);
     let settings_path = native_host_settings_path().map_err(|err| err.to_string())?;
     let allowed_extension_ids = load_allowed_extension_ids().map_err(|err| err.to_string())?;
     Ok(NativeHostStatus {
         browser: "chrome".to_string(),
-        host_exists: host_path.exists(),
+        host_exists: host_status.exists,
+        host_usable: host_status.usable,
+        host_error: host_status.error,
         host_path,
         manifest_exists: manifest_path.exists(),
         manifest_path,
@@ -376,6 +758,7 @@ fn native_host_status_snapshot() -> Result<NativeHostStatus, String> {
 
 fn repair_native_host_manifest(extension_ids: Vec<String>) -> Result<NativeHostStatus, String> {
     let host_path = native_host_binary_path()?;
+    ensure_native_host_binary_usable(&host_path)?;
     let manifest_path = default_chrome_native_manifest_path()?;
     let origins = allowed_origins(&extension_ids)?;
     if let Some(parent) = manifest_path.parent() {
@@ -407,12 +790,71 @@ fn native_host_binary_path() -> Result<PathBuf, String> {
     }
     if let Some(found) = candidates
         .iter()
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| native_host_binary_status(candidate).usable)
         .cloned()
     {
         Ok(found)
     } else {
         Ok(candidates.remove(0))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct NativeHostBinaryStatus {
+    exists: bool,
+    usable: bool,
+    error: Option<String>,
+}
+
+fn native_host_binary_status(path: &Path) -> NativeHostBinaryStatus {
+    let Ok(metadata) = fs::metadata(path) else {
+        return NativeHostBinaryStatus {
+            exists: false,
+            usable: false,
+            error: Some("native host binary was not found".to_string()),
+        };
+    };
+    if !metadata.is_file() {
+        return NativeHostBinaryStatus {
+            exists: true,
+            usable: false,
+            error: Some("native host path is not a file".to_string()),
+        };
+    }
+    if metadata.len() == 0 {
+        return NativeHostBinaryStatus {
+            exists: true,
+            usable: false,
+            error: Some("native host binary is empty".to_string()),
+        };
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return NativeHostBinaryStatus {
+            exists: true,
+            usable: false,
+            error: Some("native host binary is not executable".to_string()),
+        };
+    }
+    NativeHostBinaryStatus {
+        exists: true,
+        usable: true,
+        error: None,
+    }
+}
+
+fn ensure_native_host_binary_usable(path: &Path) -> Result<(), String> {
+    let status = native_host_binary_status(path);
+    if status.usable {
+        Ok(())
+    } else {
+        Err(format!(
+            "native host binary is not usable at {}: {}",
+            path.display(),
+            status
+                .error
+                .unwrap_or_else(|| "unknown validation error".to_string())
+        ))
     }
 }
 
@@ -478,6 +920,15 @@ fn allowed_origins(extension_ids: &[String]) -> Result<Vec<String>, String> {
     Ok(origins)
 }
 
+fn normalized_extension_id(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("chrome-extension://")
+        .trim_start_matches("chrome://")
+        .trim_end_matches('/')
+        .to_lowercase()
+}
+
 fn read_manifest_allowed_origins(path: &Path) -> Vec<String> {
     fs::read_to_string(path)
         .ok()
@@ -535,6 +986,16 @@ fn configure_initial_window(app: &AppHandle) {
         return;
     };
     let target = std::env::var("AIPASS_WINDOW_TARGET").unwrap_or_else(|_| "main".to_string());
+    if target == "tray" {
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        let _ = window.hide();
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
     let (title, width, height) = match target.as_str() {
         "unlock" => ("AIPass Unlock", 420.0, 560.0),
         "quick-access" => ("AIPass Quick Access", 520.0, 640.0),
@@ -557,22 +1018,18 @@ fn ensure_agent_resident_async(app: AppHandle) {
                 return;
             }
         };
-        let agent_binary = match aipass_agent::agent_binary_path() {
-            Ok(path) => path,
-            Err(err) => {
-                eprintln!("failed to resolve AIPass agent binary: {err}");
-                return;
-            }
-        };
-        if let Err(err) =
-            aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
-        {
-            eprintln!("failed to install AIPass agent autostart: {err}");
-        }
-        if let Err(err) = client.ensure_running() {
+        if let Err(err) = client.ensure_running_for_desktop_companion() {
             eprintln!("failed to ensure AIPass agent is running: {err}");
         }
+        if let Err(err) = repair_bundled_native_host_manifest(&app) {
+            eprintln!("failed to repair bundled AIPass native host manifest: {err}");
+        }
     });
+}
+
+fn repair_bundled_native_host_manifest(app: &AppHandle) -> Result<NativeHostStatus, String> {
+    let package = bundled_extension_package(app)?;
+    repair_native_host_manifest(vec![package.id])
 }
 
 #[cfg(target_os = "macos")]
@@ -657,6 +1114,8 @@ pub fn run() {
             tool_config_apply,
             native_host_status,
             native_host_repair,
+            browser_extension_status,
+            browser_extension_install,
             vault_export_encrypted,
             vault_import_encrypted,
             sync_settings_load,
@@ -733,7 +1192,6 @@ mod tests {
             quota: None,
             gateway: None,
             tags: Vec::new(),
-            environment: "test".to_string(),
             notes: None,
             header_names: Vec::new(),
             created_at: now,

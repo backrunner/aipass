@@ -18,7 +18,6 @@
   type FieldId =
     | "domain"
     | "defaultModel"
-    | "environment"
     | "tag"
     | "notes"
     | "endpoint"
@@ -68,7 +67,6 @@
     { id: "domain", label: "providerForm.domains", section: "details", hasValue: () => Boolean(draft.domain), clear: () => (draft.domain = "") },
     { id: "endpoint", label: "providerForm.endpointUrl", section: "details", hasValue: () => Boolean(draft.endpoint), clear: () => (draft.endpoint = "") },
     { id: "defaultModel", label: "providerForm.defaultModel", section: "details", hasValue: () => Boolean(draft.defaultModel), clear: () => (draft.defaultModel = "") },
-    { id: "environment", label: "providerForm.environment", section: "details", hasValue: () => Boolean(draft.environment), clear: () => (draft.environment = "") },
     { id: "tag", label: "providerForm.tags", section: "details", hasValue: () => Boolean(draft.tag), clear: () => (draft.tag = "") },
     { id: "notes", label: "providerForm.notes", section: "details", hasValue: () => Boolean(draft.notes), clear: () => (draft.notes = "") },
     { id: "consoleUrl", label: "providerForm.consoleUrl", section: "advanced", hasValue: () => Boolean(draft.consoleUrl), clear: () => (draft.consoleUrl = "") },
@@ -178,7 +176,6 @@
     isVisible("domain") ||
     isVisible("endpoint") ||
     isVisible("defaultModel") ||
-    isVisible("environment") ||
     isVisible("tag") ||
     isVisible("notes");
 
@@ -270,16 +267,6 @@
             <input bind:value={draft.defaultModel} placeholder="gpt-4o" />
           </Field>
           <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.defaultModel") })} on:click={() => removeField("defaultModel")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("environment")}
-        <div class="removable-field">
-          <Field label={$t("providerForm.environment")}>
-            <input bind:value={draft.environment} placeholder="prod" />
-          </Field>
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.environment") })} on:click={() => removeField("environment")}>
             <X size={13} />
           </button>
         </div>

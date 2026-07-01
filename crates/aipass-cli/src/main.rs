@@ -17,9 +17,12 @@ use clap_complete::{generate, Shell};
 use rpassword::prompt_password;
 use std::fs;
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use uuid::Uuid;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 mod dispatch;
 
@@ -104,8 +107,6 @@ enum Command {
         quota_reset_at: Option<String>,
         #[arg(long)]
         notes: Option<String>,
-        #[arg(long, default_value = "personal")]
-        environment: String,
         #[arg(long)]
         tag: Vec<String>,
     },
@@ -153,8 +154,6 @@ enum Command {
         quota_reset_at: Option<String>,
         #[arg(long)]
         notes: Option<String>,
-        #[arg(long)]
-        environment: Option<String>,
         #[arg(long)]
         tag: Vec<String>,
     },
@@ -458,6 +457,12 @@ fn agent_error_to_anyhow(err: AgentCommandError) -> anyhow::Error {
 }
 
 fn native_host_binary_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    let path = native_host_binary_candidate(explicit)?;
+    ensure_native_host_binary_usable(&path)?;
+    Ok(path)
+}
+
+fn native_host_binary_candidate(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return absolute_path(path);
     }
@@ -472,6 +477,65 @@ fn native_host_binary_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
         return absolute_path(sibling);
     }
     absolute_path(PathBuf::from(host_name))
+}
+
+#[derive(Clone, Debug)]
+struct NativeHostBinaryStatus {
+    exists: bool,
+    usable: bool,
+    error: Option<String>,
+}
+
+fn native_host_binary_status(path: &Path) -> NativeHostBinaryStatus {
+    let Ok(metadata) = fs::metadata(path) else {
+        return NativeHostBinaryStatus {
+            exists: false,
+            usable: false,
+            error: Some("native host binary was not found".to_string()),
+        };
+    };
+    if !metadata.is_file() {
+        return NativeHostBinaryStatus {
+            exists: true,
+            usable: false,
+            error: Some("native host path is not a file".to_string()),
+        };
+    }
+    if metadata.len() == 0 {
+        return NativeHostBinaryStatus {
+            exists: true,
+            usable: false,
+            error: Some("native host binary is empty".to_string()),
+        };
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return NativeHostBinaryStatus {
+            exists: true,
+            usable: false,
+            error: Some("native host binary is not executable".to_string()),
+        };
+    }
+    NativeHostBinaryStatus {
+        exists: true,
+        usable: true,
+        error: None,
+    }
+}
+
+fn ensure_native_host_binary_usable(path: &Path) -> Result<()> {
+    let status = native_host_binary_status(path);
+    if status.usable {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "native host binary is not usable at {}: {}",
+            path.display(),
+            status
+                .error
+                .unwrap_or_else(|| "unknown validation error".to_string())
+        )
+    }
 }
 
 fn absolute_path(path: PathBuf) -> Result<PathBuf> {
@@ -700,8 +764,10 @@ fn doctor_report(
                 .request::<SessionStatus>(&AgentRequest::SessionStatus)
                 .ok()
         });
-    let native_host_binary = native_host_binary_path(None)?;
-    let native_host_binary_exists = native_host_binary.exists();
+    let native_host_binary = native_host_binary_candidate(None)?;
+    let native_host_binary_status = native_host_binary_status(&native_host_binary);
+    let native_host_binary_exists = native_host_binary_status.exists;
+    let native_host_binary_usable = native_host_binary_status.usable;
     let native_hosts = native_host_browser_reports();
     let allowed_extension_ids = allowed_extension_ids_from_env();
     let configured_extension_ids =
@@ -732,8 +798,12 @@ fn doctor_report(
         },
         {
             "name": "native_host_binary",
-            "ok": native_host_binary_exists,
-            "message": if native_host_binary_exists { "native host binary found" } else { "native host binary was not found next to aipass" }
+            "ok": native_host_binary_usable,
+            "message": if native_host_binary_usable {
+                "native host binary is usable"
+            } else {
+                native_host_binary_status.error.as_deref().unwrap_or("native host binary is not usable")
+            }
         },
         {
             "name": "native_host_manifest",
@@ -768,6 +838,8 @@ fn doctor_report(
         "nativeHost": {
             "binaryPath": native_host_binary,
             "binaryExists": native_host_binary_exists,
+            "binaryUsable": native_host_binary_usable,
+            "binaryError": native_host_binary_status.error,
             "settingsPath": aipass_native_host::native_host_settings_path().ok(),
             "browsers": native_hosts,
         },
@@ -969,7 +1041,6 @@ fn field_value(item: &aipass_vault::EntrySummary, field: &str) -> Result<String>
         "curl" | "curl_snippet" => Ok(curl_snippet_for_entry(item)),
         "env" | "env_export" => Ok(env_export_for_entry(item)),
         "config" | "config_snippet" => config_snippet_for_entry(item),
-        "environment" => Ok(item.environment.clone()),
         "tags" => Ok(item.tags.join(",")),
         "notes" => Ok(item.notes.clone().unwrap_or_default()),
         "fingerprint" => Ok(item.fingerprint.clone()),

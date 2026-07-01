@@ -13,8 +13,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
+use std::time::Duration as StdDuration;
 use time::OffsetDateTime;
 use zeroize::Zeroize;
 
@@ -76,6 +77,7 @@ pub struct AgentState {
     pub auth_token: SensitiveString,
     pub policy: Mutex<SessionPolicy>,
     pub session: Mutex<SessionState>,
+    pub session_changed: Condvar,
     pub last_lock_reason: Mutex<Option<LockReason>>,
     pub shutdown: AtomicBool,
 }
@@ -167,20 +169,7 @@ pub fn unlock_with_password(
         let _ = device_secrets::set_session_unlock(&state.vault_dir, &password);
     }
     password.zeroize();
-    let now = OffsetDateTime::now_utc();
-    *state
-        .session
-        .lock()
-        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))? =
-        SessionState::Unlocked(Box::new(SessionInfo {
-            vault,
-            unlocked_at: now,
-            last_activity_at: now,
-        }));
-    *state
-        .last_lock_reason
-        .lock()
-        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "lock reason poisoned"))? = None;
+    set_session_vault(state, vault);
     session_status(state)
 }
 
@@ -280,6 +269,7 @@ pub fn reset_vault(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
         .lock()
         .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))? =
         SessionState::Locked;
+    state.session_changed.notify_all();
     *state
         .last_lock_reason
         .lock()
@@ -310,6 +300,7 @@ pub fn set_session_vault(state: &Arc<AgentState>, vault: Vault) {
     if let Ok(mut reason) = state.last_lock_reason.lock() {
         *reason = None;
     }
+    state.session_changed.notify_all();
 }
 
 pub fn touch_session(state: &Arc<AgentState>) {
@@ -324,6 +315,7 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
     if let Ok(mut session) = state.session.lock() {
         *session = SessionState::Locked;
     }
+    state.session_changed.notify_all();
     // Drop the device-sealed password so a fresh agent start honors explicit
     // locks and normal app quits. The sole exception is AgentRestart, which is
     // reserved for unexpected process death or a helper restart inside the same
@@ -333,6 +325,38 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
     }
     if let Ok(mut last_reason) = state.last_lock_reason.lock() {
         *last_reason = Some(reason);
+    }
+}
+
+pub fn wait_for_unlock(
+    state: &Arc<AgentState>,
+    timeout: StdDuration,
+) -> ServiceResult<SessionStatus> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut session = state
+        .session
+        .lock()
+        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))?;
+    loop {
+        if matches!(*session, SessionState::Unlocked(_)) {
+            drop(session);
+            return session_status(state);
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            drop(session);
+            return session_status(state);
+        }
+        let wait_for = deadline.saturating_duration_since(now);
+        let (next_session, result) = state
+            .session_changed
+            .wait_timeout(session, wait_for)
+            .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))?;
+        session = next_session;
+        if result.timed_out() && std::time::Instant::now() >= deadline {
+            drop(session);
+            return session_status(state);
+        }
     }
 }
 
@@ -817,7 +841,54 @@ pub fn shutdown_requested(state: &Arc<AgentState>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use tempfile::tempdir;
+
+    fn test_state(vault_dir: PathBuf) -> Arc<AgentState> {
+        Arc::new(AgentState {
+            policy: Mutex::new(SessionPolicy {
+                persist_unlock: false,
+                ..SessionPolicy::default()
+            }),
+            vault_dir,
+            namespace: "test".to_string(),
+            auth_token: SensitiveString::from("token"),
+            session: Mutex::new(SessionState::Locked),
+            session_changed: Condvar::new(),
+            last_lock_reason: Mutex::new(None),
+            shutdown: AtomicBool::new(false),
+        })
+    }
+
+    #[test]
+    fn wait_for_unlock_returns_when_session_changes() {
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let state = test_state(vault_dir);
+        let wait_state = state.clone();
+        let handle = thread::spawn(move || {
+            wait_for_unlock(&wait_state, StdDuration::from_secs(5)).expect("wait for unlock")
+        });
+
+        thread::sleep(StdDuration::from_millis(50));
+        create_vault(&state, "correct horse battery staple".to_string()).expect("create vault");
+
+        let status = handle.join().expect("wait thread");
+        assert!(status.exists);
+        assert!(!status.locked);
+    }
+
+    #[test]
+    fn wait_for_unlock_returns_locked_on_timeout() {
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let state = test_state(vault_dir);
+
+        let status =
+            wait_for_unlock(&state, StdDuration::from_millis(10)).expect("wait timeout status");
+        assert!(!status.exists);
+        assert!(status.locked);
+    }
 
     #[test]
     fn save_sync_settings_persists_device_marker() {
@@ -888,6 +959,7 @@ mod tests {
             namespace: "test".to_string(),
             auth_token: SensitiveString::from("token"),
             session: Mutex::new(SessionState::Locked),
+            session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
             shutdown: AtomicBool::new(false),
         });
@@ -927,6 +999,7 @@ mod tests {
             namespace: "test".to_string(),
             auth_token: SensitiveString::from("token"),
             session: Mutex::new(SessionState::Locked),
+            session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
             shutdown: AtomicBool::new(false),
         });

@@ -11,7 +11,10 @@ use anyhow::Result;
 use serde::de::DeserializeOwned;
 use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const AGENT_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const AGENT_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug)]
 pub struct AgentClientConfig {
@@ -97,16 +100,29 @@ impl AgentClient {
     }
 
     pub fn ensure_running(&self) -> Result<()> {
+        self.ensure_running_with_mode(AgentStartupMode::Autostart)
+    }
+
+    pub fn ensure_running_for_app(&self) -> Result<()> {
+        self.ensure_running_with_mode(AgentStartupMode::Direct {
+            suppress_desktop_tray: false,
+        })
+    }
+
+    pub fn ensure_running_for_desktop_companion(&self) -> Result<()> {
+        self.ensure_running_with_mode(AgentStartupMode::Direct {
+            suppress_desktop_tray: true,
+        })
+    }
+
+    fn ensure_running_with_mode(&self, mode: AgentStartupMode) -> Result<()> {
         let initial_connection_error = match self.request_raw(&AgentRequest::SessionStatus) {
             Ok(_) => return Ok(()),
             Err(err) => err.to_string(),
         };
         #[cfg(target_os = "windows")]
-        let launched_binary: Option<PathBuf> = None;
-        #[cfg(target_os = "windows")]
-        let binary_candidates = launcher::agent_binary_candidates();
-        #[cfg(target_os = "windows")]
-        {
+        let (launched_binary, binary_candidates) = if mode.install_autostart() {
+            let candidates = launcher::agent_binary_candidates();
             if let Err(err) = windows_service::start_service(&self.config.vault_dir) {
                 anyhow::bail!(launcher::windows_service_start_failure_message(
                     &self.config.vault_dir,
@@ -115,21 +131,42 @@ impl AgentClient {
                     &err.to_string(),
                 ));
             }
-        }
+            (None, candidates)
+        } else {
+            let launch = launcher::launch_agent(
+                &self.config.vault_dir,
+                &self.config.namespace,
+                &initial_connection_error,
+                mode.launch_options(),
+            )?;
+            (Some(launch.binary), launch.candidates)
+        };
         #[cfg(not(target_os = "windows"))]
         let (launched_binary, binary_candidates) = match launcher::agent_binary_path() {
             Ok(agent_binary) => {
                 let candidates = launcher::agent_binary_candidates();
-                match crate::autostart::install_autostart(&agent_binary, &self.config.vault_dir) {
-                    Ok(_) => (Some(agent_binary), candidates),
-                    Err(_) => {
-                        let launch = launcher::launch_agent(
-                            &self.config.vault_dir,
-                            &self.config.namespace,
-                            &initial_connection_error,
-                        )?;
-                        (Some(launch.binary), launch.candidates)
+                if mode.install_autostart() {
+                    match crate::autostart::install_autostart(&agent_binary, &self.config.vault_dir)
+                    {
+                        Ok(_) => (Some(agent_binary), candidates),
+                        Err(_) => {
+                            let launch = launcher::launch_agent(
+                                &self.config.vault_dir,
+                                &self.config.namespace,
+                                &initial_connection_error,
+                                mode.launch_options(),
+                            )?;
+                            (Some(launch.binary), launch.candidates)
+                        }
                     }
+                } else {
+                    let launch = launcher::launch_agent(
+                        &self.config.vault_dir,
+                        &self.config.namespace,
+                        &initial_connection_error,
+                        mode.launch_options(),
+                    )?;
+                    (Some(launch.binary), launch.candidates)
                 }
             }
             Err(_) => {
@@ -137,25 +174,31 @@ impl AgentClient {
                     &self.config.vault_dir,
                     &self.config.namespace,
                     &initial_connection_error,
+                    mode.launch_options(),
                 )?;
                 (Some(launch.binary), launch.candidates)
             }
         };
-        let mut last_connection_error = None;
-        for _ in 0..40 {
+        let deadline = Instant::now() + AGENT_READY_TIMEOUT;
+        let last_connection_error = loop {
             match self.request_raw(&AgentRequest::SessionStatus) {
                 Ok(_) => return Ok(()),
-                Err(err) => last_connection_error = Some(err.to_string()),
+                Err(err) => {
+                    let message = err.to_string();
+                    if Instant::now() >= deadline {
+                        break message;
+                    }
+                }
             }
-            thread::sleep(Duration::from_millis(100));
-        }
+            thread::sleep(AGENT_READY_POLL_INTERVAL);
+        };
         Err(anyhow::anyhow!(launcher::agent_ready_timeout_message(
             &self.config.vault_dir,
             &self.config.namespace,
             launched_binary.as_deref(),
             &binary_candidates,
             &initial_connection_error,
-            last_connection_error.as_deref(),
+            Some(&last_connection_error),
         )))
     }
 
@@ -163,6 +206,29 @@ impl AgentClient {
         self.request::<serde_json::Value>(&AgentRequest::AgentShutdown)
             .map(|_| ())
             .map_err(anyhow::Error::from)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AgentStartupMode {
+    Autostart,
+    Direct { suppress_desktop_tray: bool },
+}
+
+impl AgentStartupMode {
+    fn install_autostart(self) -> bool {
+        matches!(self, Self::Autostart)
+    }
+
+    fn launch_options(self) -> launcher::AgentLaunchOptions {
+        launcher::AgentLaunchOptions {
+            suppress_desktop_tray: matches!(
+                self,
+                Self::Direct {
+                    suppress_desktop_tray: true
+                }
+            ),
+        }
     }
 }
 

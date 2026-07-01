@@ -37,12 +37,8 @@ export const authLabel: Record<AuthScheme, string> = {
 };
 
 export function initials(value: string): string {
-  return value
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
+  const firstToken = value.trim().split(/\s+/).find(Boolean) ?? "";
+  return Array.from(firstToken)[0]?.toUpperCase() ?? "?";
 }
 
 export function classNames(...values: Array<string | false | null | undefined>): string {
@@ -62,7 +58,6 @@ export const emptyDraft = (): Draft => ({
   secretLabel: "",
   defaultModel: "",
   modelAlias: "",
-  environment: "work",
   tag: "",
   header: "",
   quotaLabel: "",

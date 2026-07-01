@@ -9,6 +9,7 @@
     "dev": "turbo dev",
     "lint": "turbo lint",
     "licenses:audit": "node scripts/license-audit.mjs",
+    "native-host:install": "node scripts/install-native-host.mjs",
     "release:metadata": "node scripts/release-metadata.mjs",
     "test": "turbo test",
     "typecheck": "turbo typecheck",

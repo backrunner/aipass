@@ -62,7 +62,6 @@ export interface ProviderEntry {
   quota?: QuotaInfo;
   gateway?: GatewayMetadata;
   tags: string[];
-  environment: string;
   notes?: string;
   headerNames?: string[];
   createdAt?: string;

@@ -1,11 +1,12 @@
 <script lang="ts">
   import { Dialog, Tabs } from "bits-ui";
-  import { Check, Download, RefreshCw, RotateCw, Trash2, Upload, Wifi, X } from "lucide-svelte";
+  import { Check, Chrome, Download, RefreshCw, RotateCw, Trash2, Upload, Wifi, X } from "lucide-svelte";
 
   import { themeStore, setTheme } from "../../stores/appearance";
   import { isLocalizedMessage, localeStore, resolveMessage, setLocale, t } from "../../stores/i18n";
   import type {
     DeviceRecord,
+    BrowserExtensionStatus,
     LocalePreference,
     MaybePromise,
     MessageValue,
@@ -39,6 +40,8 @@
   export let syncConflicts: SyncConflict[] = [];
   export let conflictsLoading = false;
   export let conflictBusy = "";
+  export let browserExtensionStatus: BrowserExtensionStatus | undefined;
+  export let browserExtensionBusy = "";
   export let securityBusy = "";
   export let backupBusy = "";
   export let syncState: SyncReport["status"] = "idle";
@@ -57,6 +60,8 @@
   export let onLoadSyncConflicts: () => MaybePromise = () => {};
   export let onResolveSyncConflict: (conflict: SyncConflict, action: "accept" | "discard") => MaybePromise = () => {};
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
+  export let onLoadBrowserExtensionStatus: () => MaybePromise = () => {};
+  export let onInstallBrowserExtension: () => MaybePromise = () => {};
 
   let activeTab = initialTab || "general";
   let previousInitialTab = initialTab;
@@ -74,6 +79,18 @@
         ? webdavUrl.trim().length > 0
         : true;
   $: syncBusy = syncState === "syncing";
+  $: browserExtensionInstallDisabled =
+    !!browserExtensionBusy ||
+    !browserExtensionStatus?.chromeInstalled ||
+    !browserExtensionStatus?.crxExists;
+  $: browserExtensionActionLabel =
+    browserExtensionBusy === "install"
+      ? $t("settings.extensionInstalling")
+      : browserExtensionStatus?.extensionInstalled
+        ? $t("settings.extensionRepair")
+        : browserExtensionStatus?.installMode === "externalCrx"
+          ? $t("settings.extensionInstall")
+          : $t("settings.extensionOpenInstaller");
 
   const themeOptions: ThemePreference[] = ["system", "light", "dark"];
 
@@ -482,6 +499,80 @@
               </div>
             </Card>
 
+            <Card title={$t("settings.browserExtension")}>
+              <span slot="actions">
+                <button
+                  type="button"
+                  class="link"
+                  disabled={!!browserExtensionBusy}
+                  on:click={() => onLoadBrowserExtensionStatus()}
+                >
+                  {browserExtensionBusy === "status" ? $t("settings.refreshing") : $t("settings.refresh")}
+                </button>
+              </span>
+              <div class="rows">
+                {#if browserExtensionStatus}
+                  <div class="extension-summary">
+                    <div class="extension-icon" aria-hidden="true">
+                      <Chrome size={18} />
+                    </div>
+                    <div class="extension-copy">
+                      <strong>
+                        {#if browserExtensionStatus.extensionInstalled && browserExtensionStatus.nativeHostConfigured}
+                          {$t("settings.extensionReady")}
+                        {:else if !browserExtensionStatus.chromeInstalled}
+                          {$t("settings.extensionChromeMissing")}
+                        {:else if !browserExtensionStatus.crxExists}
+                          {$t("settings.extensionPackageMissing")}
+                        {:else}
+                          {$t("settings.extensionAvailable")}
+                        {/if}
+                      </strong>
+                      <span>
+                        {#if browserExtensionStatus.installMode === "externalCrx"}
+                          {$t("settings.extensionLinuxDesc")}
+                        {:else}
+                          {$t("settings.extensionManualDesc")}
+                        {/if}
+                      </span>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      on:click={() => onInstallBrowserExtension()}
+                      disabled={browserExtensionInstallDisabled}
+                    >
+                      <Chrome size={14} /> {browserExtensionActionLabel}
+                    </Button>
+                  </div>
+
+                  <div class="extension-grid">
+                    <div>
+                      <span class="kv-label">{$t("settings.extensionChrome")}</span>
+                      <span class="text-secondary">
+                        {browserExtensionStatus.chromeInstalled ? $t("settings.detected") : $t("settings.notDetected")}
+                      </span>
+                    </div>
+                    <div>
+                      <span class="kv-label">{$t("settings.extensionPackage")}</span>
+                      <span class="text-secondary">
+                        {browserExtensionStatus.crxExists ? $t("settings.bundled") : $t("settings.notBundled")}
+                      </span>
+                    </div>
+                    <div>
+                      <span class="kv-label">{$t("settings.extensionNativeHost")}</span>
+                      <span class="text-secondary">
+                        {browserExtensionStatus.nativeHostConfigured ? $t("settings.configured") : $t("settings.notConfigured")}
+                      </span>
+                    </div>
+                  </div>
+
+                  <code class="path-chip">{browserExtensionStatus.extensionId}</code>
+                {:else}
+                  <p class="hint">{$t("common.loading")}</p>
+                {/if}
+              </div>
+            </Card>
+
             <Card title={$t("settings.updates")}>
               <div class="rows">
                 {#if updateCheck?.available}
@@ -797,6 +888,12 @@
     &:hover {
       text-decoration: underline;
     }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.55;
+      text-decoration: none;
+    }
   }
 
   .stack {
@@ -889,6 +986,83 @@
     }
   }
 
+  .extension-summary {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+
+  .extension-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--accent);
+  }
+
+  .extension-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    strong {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    span {
+      font-size: 12px;
+      line-height: 1.35;
+      color: var(--text-tertiary);
+    }
+  }
+
+  .extension-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+
+    div {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid var(--divider);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .path-chip {
+    display: block;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .update-summary {
     display: flex;
     align-items: center;
@@ -922,5 +1096,20 @@
     color: var(--text-secondary);
     line-height: 1.5;
     white-space: pre-wrap;
+  }
+
+  @media (max-width: 560px) {
+    .extension-summary {
+      grid-template-columns: 32px minmax(0, 1fr);
+
+      :global(button) {
+        grid-column: 1 / -1;
+        justify-self: stretch;
+      }
+    }
+
+    .extension-grid {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

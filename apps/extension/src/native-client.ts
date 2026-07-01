@@ -9,6 +9,11 @@ export interface NativeResponse<T = unknown> {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const UNLOCK_REQUEST_TIMEOUT_MS = 125_000;
+const REQUEST_RETRY_DELAY_MS = 250;
+const MAX_REQUEST_RETRIES = 1;
+const RECOVERY_REQUEST_TIMEOUT_MS = 8_000;
+const RECOVERY_RETRY_DELAYS_MS = [0, 500, 1_500, 3_000];
 const RECONNECT_INITIAL_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
 const HEARTBEAT_MS = 15_000;
@@ -18,6 +23,10 @@ const RECONNECT_ALARM_PERIOD_MINUTES = 1;
 type PendingNativeRequest = {
   resolve: (response: NativeResponse<unknown>) => void;
   timeout: ReturnType<typeof setTimeout>;
+  message: Record<string, unknown>;
+  timeoutMs: number;
+  startedAt: number;
+  attempts: number;
 };
 
 let nativePort: chrome.runtime.Port | undefined;
@@ -25,6 +34,10 @@ let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
 let reconnectDelay = RECONNECT_INITIAL_MS;
 let lastPortError = "Native host unavailable";
+let nativeRecoveryInProgress = false;
+let nativeRecoveryPromise:
+  | Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>>
+  | undefined;
 const pendingNativeRequests = new Map<string, PendingNativeRequest>();
 
 export interface ProviderSummary {
@@ -58,7 +71,6 @@ export interface ProviderSummary {
     rate?: string;
   };
   tags: string[];
-  environment: string;
   notes?: string;
   headerNames?: string[];
   createdAt?: string;
@@ -92,7 +104,6 @@ export interface DetectedSecretDraft {
   endpoint?: string;
   interfaceType?: string;
   authScheme?: string;
-  environment?: string;
   tags?: string[];
   gateway?: {
     group?: string;
@@ -112,7 +123,6 @@ export interface DetectedSecretPreview {
   fingerprint: string;
   existingEntryId?: string;
   isSaved?: boolean;
-  environment: string;
   tags: string[];
   gateway?: {
     group?: string;
@@ -132,14 +142,22 @@ export function handleNativeReconnectAlarm(alarmName: string) {
   if (nativePort) {
     void pingNativeHost();
   } else {
-    connectNativePort();
+    void recoverNativeHost();
   }
   scheduleNativeHeartbeat();
 }
 
-export function nativeRequest<T>(message: Record<string, unknown>): Promise<NativeResponse<T>> {
+type NativeRequestOptions = {
+  timeoutMs?: number;
+};
+
+export function nativeRequest<T>(
+  message: Record<string, unknown>,
+  options: NativeRequestOptions = {}
+): Promise<NativeResponse<T>> {
   const id = String(message.id ?? crypto.randomUUID());
   const request = withExtensionId({ ...message, id });
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   if (!supportsNativePort()) {
     return sendOneShotNativeMessage<T>(id, request);
   }
@@ -149,27 +167,19 @@ export function nativeRequest<T>(message: Record<string, unknown>): Promise<Nati
       pendingNativeRequests.delete(id);
       resolve(nativeErrorResponse<T>(id, "Native host request timed out"));
       disconnectNativePort();
-      scheduleReconnect();
-    }, REQUEST_TIMEOUT_MS);
+      scheduleReconnectUnlessRecovering();
+    }, timeoutMs);
 
     pendingNativeRequests.set(id, {
       resolve: (response) => resolve(response as NativeResponse<T>),
-      timeout
+      timeout,
+      message: request,
+      timeoutMs,
+      startedAt: Date.now(),
+      attempts: 0
     });
 
-    const port = connectNativePort();
-    if (!port) {
-      failPendingRequest(id, lastPortError);
-      return;
-    }
-
-    try {
-      port.postMessage(request);
-    } catch (err) {
-      failPendingRequest(id, errorMessage(err));
-      disconnectNativePort();
-      scheduleReconnect();
-    }
+    postPendingRequest(id);
   });
 }
 
@@ -196,7 +206,7 @@ function connectNativePort(): chrome.runtime.Port | undefined {
     nativePort = chrome.runtime.connectNative?.(NATIVE_HOST);
   } catch (err) {
     lastPortError = errorMessage(err);
-    scheduleReconnect();
+    scheduleReconnectUnlessRecovering();
     return undefined;
   }
 
@@ -219,10 +229,10 @@ function handleNativeMessage(response: unknown) {
 function handleNativeDisconnect() {
   lastPortError = chrome.runtime.lastError?.message ?? "Native host disconnected";
   nativePort = undefined;
-  for (const id of pendingNativeRequests.keys()) {
-    failPendingRequest(id, lastPortError);
+  for (const id of [...pendingNativeRequests.keys()]) {
+    retryOrFailPendingRequest(id, lastPortError);
   }
-  scheduleReconnect();
+  scheduleReconnectUnlessRecovering();
 }
 
 function disconnectNativePort() {
@@ -233,6 +243,12 @@ function disconnectNativePort() {
   } catch {
     // The port may already be closed by Chrome.
   }
+}
+
+function clearReconnectTimer() {
+  if (!reconnectTimer) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
 }
 
 function scheduleReconnect() {
@@ -246,6 +262,12 @@ function scheduleReconnect() {
   }, delay);
 }
 
+function scheduleReconnectUnlessRecovering() {
+  if (!nativeRecoveryInProgress) {
+    scheduleReconnect();
+  }
+}
+
 function scheduleNativeHeartbeat() {
   if (!supportsNativePort() || heartbeatTimer) return;
   heartbeatTimer = setTimeout(() => {
@@ -257,6 +279,40 @@ function scheduleNativeHeartbeat() {
     }
     scheduleNativeHeartbeat();
   }, HEARTBEAT_MS);
+}
+
+function postPendingRequest(id: string) {
+  const pending = pendingNativeRequests.get(id);
+  if (!pending) return;
+  const port = connectNativePort();
+  if (!port) {
+    failPendingRequest(id, lastPortError);
+    return;
+  }
+
+  try {
+    port.postMessage(pending.message);
+  } catch (err) {
+    failPendingRequest(id, errorMessage(err));
+    disconnectNativePort();
+    scheduleReconnectUnlessRecovering();
+  }
+}
+
+function retryOrFailPendingRequest(id: string, error: string) {
+  const pending = pendingNativeRequests.get(id);
+  if (!pending) return;
+  if (pending.attempts >= MAX_REQUEST_RETRIES) {
+    failPendingRequest(id, error);
+    return;
+  }
+  const remainingMs = pending.timeoutMs - (Date.now() - pending.startedAt);
+  if (remainingMs <= REQUEST_RETRY_DELAY_MS) {
+    failPendingRequest(id, error);
+    return;
+  }
+  pending.attempts += 1;
+  setTimeout(() => postPendingRequest(id), REQUEST_RETRY_DELAY_MS);
 }
 
 function failPendingRequest(id: string, error: string) {
@@ -284,6 +340,10 @@ function errorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err);
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function withExtensionId(message: Record<string, unknown>): Record<string, unknown> {
   return {
     ...message,
@@ -292,19 +352,67 @@ function withExtensionId(message: Record<string, unknown>): Record<string, unkno
 }
 
 export function pingNativeHost(): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
+  return nativePing();
+}
+
+export async function recoverNativeHost(): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
+  if (nativeRecoveryPromise) return nativeRecoveryPromise;
+  nativeRecoveryPromise = recoverNativeHostInner().finally(() => {
+    nativeRecoveryPromise = undefined;
+  });
+  return nativeRecoveryPromise;
+}
+
+async function recoverNativeHostInner(): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
+  nativeRecoveryInProgress = true;
+  let lastResponse = nativeErrorResponse<{ protocolVersion: number; locked?: boolean }>(
+    crypto.randomUUID(),
+    lastPortError
+  );
+  try {
+    for (const delayMs of RECOVERY_RETRY_DELAYS_MS) {
+      if (delayMs > 0) {
+        await delay(delayMs);
+      }
+      clearReconnectTimer();
+      disconnectNativePort();
+      lastResponse = await nativePing({ timeoutMs: RECOVERY_REQUEST_TIMEOUT_MS });
+      if (lastResponse.ok) {
+        reconnectDelay = RECONNECT_INITIAL_MS;
+        return lastResponse;
+      }
+      lastPortError = lastResponse.error ?? lastPortError;
+    }
+    return lastResponse;
+  } finally {
+    nativeRecoveryInProgress = false;
+    if (!lastResponse.ok) {
+      scheduleReconnect();
+    }
+  }
+}
+
+function nativePing(
+  options: NativeRequestOptions = {}
+): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
   return nativeRequest({
     id: crypto.randomUUID(),
     type: "ping",
     protocol_version: 1
-  });
+  }, options);
 }
 
 export function openNativeUnlock(): Promise<NativeResponse<{ locked: boolean; exists?: boolean }>> {
-  return nativeRequest({
-    id: crypto.randomUUID(),
-    type: "session.unlock",
-    interactive: "native_window"
-  });
+  return nativeRequest(
+    {
+      id: crypto.randomUUID(),
+      type: "session.unlock",
+      interactive: "native_window",
+      wait: true,
+      timeout_ms: 120_000
+    },
+    { timeoutMs: UNLOCK_REQUEST_TIMEOUT_MS }
+  );
 }
 
 export function unlockWithPassword(password: string): Promise<NativeResponse<{ locked: boolean; exists?: boolean }>> {
@@ -383,7 +491,6 @@ export interface ProviderAddRequest {
   quota?: { label?: string; limit?: string; remaining?: string; resetAt?: string };
   gateway?: { group?: string; rate?: string };
   tags: string[];
-  environment: string;
   notes?: string;
 }
 
@@ -413,7 +520,6 @@ export function addProvider(request: ProviderAddRequest): Promise<NativeResponse
     quota: request.quota,
     gateway: request.gateway,
     tags: request.tags,
-    environment: request.environment,
     notes: request.notes
   });
 }
@@ -439,7 +545,6 @@ export function updateProvider(request: ProviderUpdateRequest): Promise<NativeRe
     quota: request.quota,
     gateway: request.gateway,
     tags: request.tags,
-    environment: request.environment,
     notes: request.notes
   });
 }
@@ -466,8 +571,7 @@ export function saveDetectedSecret(draft: DetectedSecretDraft): Promise<NativeRe
     interface_type: draft.interfaceType,
     auth_scheme: draft.authScheme,
     api_key: draft.apiKey,
-    environment: draft.environment ?? "browser",
-    tags: draft.tags?.length ? draft.tags : ["browser"],
+    tags: draft.tags?.length ? draft.tags : [],
     gateway: draft.gateway
   });
 }
@@ -486,8 +590,7 @@ export function previewDetectedSecret(draft: DetectedSecretDraft): Promise<Nativ
     interface_type: draft.interfaceType,
     auth_scheme: draft.authScheme,
     api_key: draft.apiKey,
-    environment: draft.environment ?? "browser",
-    tags: draft.tags?.length ? draft.tags : ["browser"],
+    tags: draft.tags?.length ? draft.tags : [],
     gateway: draft.gateway
   });
 }

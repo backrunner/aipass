@@ -156,7 +156,6 @@ pub struct ProviderEntryInput {
     pub quota: Option<QuotaInfo>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
-    pub environment: String,
     pub notes: Option<String>,
 }
 
@@ -179,7 +178,6 @@ pub struct ProviderEntryUpdateInput {
     pub quota: Option<QuotaInfo>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
-    pub environment: String,
     pub notes: Option<String>,
 }
 
@@ -203,7 +201,6 @@ pub struct EntrySummary {
     pub quota: Option<QuotaInfo>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
-    pub environment: String,
     pub notes: Option<String>,
     pub header_names: Vec<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -635,7 +632,6 @@ impl Vault {
             quota: input.quota,
             gateway: input.gateway,
             tags: input.tags,
-            environment: input.environment,
             notes: input.notes,
             created_at: now,
             updated_at: now,
@@ -760,7 +756,6 @@ impl Vault {
             quota: input.quota,
             gateway: input.gateway,
             tags: input.tags,
-            environment: input.environment,
             notes: input.notes,
             created_at: old.entry.created_at,
             updated_at: now,
@@ -1405,7 +1400,6 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
         quota: entry.quota.clone(),
         gateway: entry.gateway.clone(),
         tags: entry.tags.clone(),
-        environment: entry.environment.clone(),
         notes: entry.notes.clone(),
         header_names: entry.headers.iter().map(|(name, _)| name.clone()).collect(),
         created_at: entry.created_at,
@@ -1478,7 +1472,6 @@ fn plaintext_matches_query(
         || entry.model_aliases.iter().any(|(alias, model)| {
             alias.to_lowercase().contains(query) || model.to_lowercase().contains(query)
         })
-        || entry.environment.to_lowercase().contains(query)
         || entry
             .tags
             .iter()
@@ -1733,7 +1726,6 @@ mod tests {
             quota: None,
             gateway: None,
             tags: vec!["prod".to_string()],
-            environment: "work".to_string(),
             notes: Some("sensitive note".to_string()),
         }
     }
@@ -1767,7 +1759,6 @@ mod tests {
             }),
             gateway: None,
             tags: vec!["prod".to_string(), "team".to_string()],
-            environment: "work".to_string(),
             notes: Some("renamed without rotating key".to_string()),
         }
     }

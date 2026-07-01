@@ -28,8 +28,13 @@ fn dispatch_request(
                 Ok(AgentResponse::success(result))
             }
             SessionUnlockMode::NativeWindow => {
-                open_desktop_window("unlock")?;
+                open_desktop_window("unlock", &state.vault_dir)?;
                 Ok(AgentResponse::success(session_status(state)?))
+            }
+            SessionUnlockMode::NativeWindowWait { timeout_ms } => {
+                open_desktop_window("unlock", &state.vault_dir)?;
+                let timeout = std::time::Duration::from_millis(timeout_ms.clamp(1_000, 120_000));
+                Ok(AgentResponse::success(wait_for_unlock(state, timeout)?))
             }
         },
         AgentRequest::SessionLock { reason } => {
@@ -468,15 +473,15 @@ fn dispatch_request(
             }))
         }
         AgentRequest::UiOpenMain => {
-            open_desktop_window("main")?;
+            open_desktop_window("main", &state.vault_dir)?;
             Ok(AgentResponse::empty())
         }
         AgentRequest::UiOpenUnlock => {
-            open_desktop_window("unlock")?;
+            open_desktop_window("unlock", &state.vault_dir)?;
             Ok(AgentResponse::empty())
         }
         AgentRequest::UiOpenQuickAccess => {
-            open_desktop_window("quick-access")?;
+            open_desktop_window("quick-access", &state.vault_dir)?;
             Ok(AgentResponse::empty())
         }
         AgentRequest::AgentShutdown => {

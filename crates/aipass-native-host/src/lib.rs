@@ -41,7 +41,7 @@ mod tests {
             aipass_vault::Vault::create(dir.path(), &SecretString::new(&password)).unwrap();
             let vault_dir = dir.path().to_path_buf();
             let handle = thread::spawn(move || {
-                run_server(ServerOptions { vault_dir }).unwrap();
+                run_server(ServerOptions::without_desktop_tray(vault_dir)).unwrap();
             });
             let client =
                 AgentClient::new(AgentClientConfig::for_vault(dir.path().to_path_buf()).unwrap());
@@ -192,6 +192,8 @@ mod tests {
                 id: Uuid::new_v4(),
                 extension_id: None,
                 interactive: None,
+                wait: false,
+                timeout_ms: None,
                 password: None,
             },
             &config,
@@ -213,6 +215,8 @@ mod tests {
                 id: Uuid::new_v4(),
                 extension_id: None,
                 interactive: None,
+                wait: false,
+                timeout_ms: None,
                 password: Some(password.as_str().into()),
             },
             &config,
@@ -240,7 +244,6 @@ mod tests {
                 interface_type: Some(aipass_provider_registry::InterfaceType::AnthropicMessages),
                 auth_scheme: Some(aipass_provider_registry::AuthScheme::XApiKey),
                 api_key: "sk-ant-api03-browser-secret".into(),
-                environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
                 gateway: None,
             },
@@ -304,7 +307,6 @@ mod tests {
                     interface_type: Some(aipass_provider_registry::InterfaceType::OpenAiCompatible),
                     auth_scheme: Some(aipass_provider_registry::AuthScheme::Bearer),
                     api_key: api_key.into(),
-                    environment: Some("browser".to_string()),
                     tags: vec!["browser".to_string()],
                     gateway: None,
                 },
@@ -382,7 +384,6 @@ mod tests {
                 quota: None,
                 gateway: None,
                 tags: vec!["browser".to_string()],
-                environment: "browser".to_string(),
                 notes: None,
             },
             &config,
@@ -411,7 +412,6 @@ mod tests {
                 quota: None,
                 gateway: None,
                 tags: vec!["browser".to_string(), "edited".to_string()],
-                environment: "browser".to_string(),
                 notes: Some("edited from extension".to_string()),
             },
             &config,
@@ -474,7 +474,6 @@ mod tests {
                 interface_type: None,
                 auth_scheme: None,
                 api_key: "sk-gateway-secret-value".into(),
-                environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
                 gateway: Some(aipass_provider_registry::GatewayMetadata {
                     group: Some("vip".to_string()),
@@ -532,7 +531,6 @@ mod tests {
                 interface_type: None,
                 auth_scheme: None,
                 api_key: "sk-gateway-secret-value".into(),
-                environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
                 gateway: None,
             },
@@ -567,7 +565,6 @@ mod tests {
                 interface_type: None,
                 auth_scheme: None,
                 api_key: "sk-gateway-secret-value".into(),
-                environment: Some("work".to_string()),
                 tags: vec!["browser".to_string()],
                 gateway: None,
             },

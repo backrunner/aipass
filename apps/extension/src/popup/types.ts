@@ -29,7 +29,6 @@ export type Entry = {
     rate?: string;
   };
   tags?: string[];
-  environment?: string;
   notes?: string;
   headerNames?: string[];
   createdAt?: string;
@@ -56,7 +55,6 @@ export type SafeDraft = {
   endpoint?: string;
   interfaceType?: InterfaceType;
   authScheme?: AuthScheme;
-  environment?: string;
   tags?: string[];
   editMode?: boolean;
   resumeSave?: boolean;
@@ -78,7 +76,6 @@ export type DraftPreview = {
   fingerprint: string;
   existingEntryId?: string;
   isSaved?: boolean;
-  environment: string;
   tags: string[];
   gateway?: {
     group?: string;

@@ -98,7 +98,6 @@ export type EntrySummary = {
   quota?: QuotaInfo;
   gateway?: ProviderEntry["gateway"];
   tags: string[];
-  environment: string;
   notes?: string;
   headerNames?: string[];
   createdAt?: string;
@@ -134,7 +133,6 @@ export type ProviderFilter =
   | "quota_low"
   | "expiring"
   | ProviderKind
-  | `environment:${string}`
   | `tag:${string}`;
 
 export type ProviderCounts = Record<"all" | "recent" | ProviderKind, number>;
@@ -184,11 +182,38 @@ export type NativeHostStatus = {
   browser: string;
   hostPath: string;
   hostExists: boolean;
+  hostUsable: boolean;
+  hostError?: string;
   manifestPath: string;
   manifestExists: boolean;
   settingsPath: string;
   allowedExtensionIds: string[];
   allowedOrigins: string[];
+};
+
+export type BrowserExtensionInstallMode = "externalCrx" | "manualCrx";
+
+export type BrowserExtensionStatus = {
+  browser: string;
+  chromeInstalled: boolean;
+  chromePath?: string;
+  extensionId: string;
+  extensionVersion: string;
+  crxPath: string;
+  crxExists: boolean;
+  extensionInstalled: boolean;
+  installedPaths: string[];
+  externalInstallPath?: string;
+  externalInstallExists: boolean;
+  nativeHostConfigured: boolean;
+  installMode: BrowserExtensionInstallMode;
+  nativeHost: NativeHostStatus;
+};
+
+export type BrowserExtensionInstallResult = {
+  status: BrowserExtensionStatus;
+  openedChrome: boolean;
+  openedPackage: boolean;
 };
 
 export type PasswordStrengthLevel =

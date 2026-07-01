@@ -149,6 +149,7 @@ dependencies = [
  "aipass-storage",
  "aipass-sync",
  "aipass-vault",
+ "directories",
  "objc2-app-kit",
  "objc2-quartz-core",
  "reqwest",

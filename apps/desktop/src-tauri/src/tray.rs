@@ -125,12 +125,14 @@ fn handle_menu_event(app: &AppHandle, id: &str, items: &TrayMenuItems) {
         MENU_START_AGENT => start_agent_async(app.clone(), items.clone()),
         MENU_LOCK => lock_vault_async(app.clone(), items.clone()),
         MENU_INSTALL_LOGIN_AGENT => install_login_agent_async(app.clone(), items.clone()),
-        MENU_QUIT => app.exit(0),
+        MENU_QUIT => quit_aipass_async(app.clone()),
         _ => {}
     }
 }
 
 fn show_main_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
     #[cfg(target_os = "macos")]
     let _ = app.show();
 
@@ -182,7 +184,9 @@ fn start_agent_async(app: AppHandle, items: TrayMenuItems) {
         let _ = items.status.set_text("Agent: starting...");
         let _ = items.start_agent.set_enabled(false);
         if let Err(err) = agent_client(&app).and_then(|client| {
-            client.ensure_running().map_err(|err| err.to_string())?;
+            client
+                .ensure_running_for_desktop_companion()
+                .map_err(|err| err.to_string())?;
             Ok(())
         }) {
             eprintln!("failed to start AIPass agent from tray: {err}");
@@ -228,6 +232,15 @@ fn install_login_agent_async(app: AppHandle, items: TrayMenuItems) {
                 let _ = items.status.set_text("Agent: autostart failed");
             }
         }
+    });
+}
+
+fn quit_aipass_async(app: AppHandle) {
+    thread::spawn(move || {
+        if let Ok(client) = agent_client(&app) {
+            let _ = client.shutdown();
+        }
+        app.exit(0);
     });
 }
 

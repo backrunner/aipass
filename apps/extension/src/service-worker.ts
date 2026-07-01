@@ -10,6 +10,7 @@ import {
   openNativeUnlock,
   pingNativeHost,
   previewDetectedSecret,
+  recoverNativeHost,
   saveDetectedSecret,
   searchEntries,
   startNativeConnectionMonitor,
@@ -57,7 +58,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   };
 
   if (typed.type === "aipass.ping") {
-    pingNativeHost().then(sendResponse);
+    pingNativeHost()
+      .then((response) => (response.ok ? response : recoverNativeHost()))
+      .then(sendResponse);
     return true;
   }
 

@@ -159,7 +159,6 @@ pub(crate) struct ProviderAddRequest {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) quota: Option<QuotaInfo>,
     pub(crate) gateway: Option<GatewayMetadata>,
-    pub(crate) environment: String,
     #[serde(default)]
     pub(crate) tags: Vec<String>,
     pub(crate) notes: Option<String>,
@@ -188,7 +187,6 @@ pub(crate) struct ProviderUpdateRequest {
     pub(crate) headers: Option<Vec<(String, String)>>,
     pub(crate) quota: Option<QuotaInfo>,
     pub(crate) gateway: Option<GatewayMetadata>,
-    pub(crate) environment: String,
     #[serde(default)]
     pub(crate) tags: Vec<String>,
     pub(crate) notes: Option<String>,
@@ -360,11 +358,47 @@ pub(crate) struct NativeHostStatus {
     pub(crate) browser: String,
     pub(crate) host_path: PathBuf,
     pub(crate) host_exists: bool,
+    pub(crate) host_usable: bool,
+    pub(crate) host_error: Option<String>,
     pub(crate) manifest_path: PathBuf,
     pub(crate) manifest_exists: bool,
     pub(crate) settings_path: PathBuf,
     pub(crate) allowed_extension_ids: Vec<String>,
     pub(crate) allowed_origins: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserExtensionStatus {
+    pub(crate) browser: String,
+    pub(crate) chrome_installed: bool,
+    pub(crate) chrome_path: Option<PathBuf>,
+    pub(crate) extension_id: String,
+    pub(crate) extension_version: String,
+    pub(crate) crx_path: PathBuf,
+    pub(crate) crx_exists: bool,
+    pub(crate) extension_installed: bool,
+    pub(crate) installed_paths: Vec<PathBuf>,
+    pub(crate) external_install_path: Option<PathBuf>,
+    pub(crate) external_install_exists: bool,
+    pub(crate) native_host_configured: bool,
+    pub(crate) install_mode: BrowserExtensionInstallMode,
+    pub(crate) native_host: NativeHostStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum BrowserExtensionInstallMode {
+    ExternalCrx,
+    ManualCrx,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserExtensionInstallResult {
+    pub(crate) status: BrowserExtensionStatus,
+    pub(crate) opened_chrome: bool,
+    pub(crate) opened_package: bool,
 }
 
 pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> AgentToolConfigRequest {

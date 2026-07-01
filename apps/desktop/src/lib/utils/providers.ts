@@ -30,7 +30,6 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     quota: summary.quota,
     gateway: summary.gateway,
     tags: summary.tags,
-    environment: summary.environment,
     notes: summary.notes,
     headerNames: summary.headerNames,
     createdAt: summary.createdAt,

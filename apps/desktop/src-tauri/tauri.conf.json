@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev:agent && pnpm dev:web",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "pnpm build:agent && pnpm build",
+    "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension build && pnpm build:agent && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -18,6 +18,7 @@
         "height": 820,
         "minWidth": 960,
         "minHeight": 640,
+        "visible": false,
         "decorations": false,
         "transparent": true,
         "shadow": true
@@ -47,7 +48,9 @@
     ],
     "resources": {
       "../../../target/release/aipass-agent*": "",
-      "../../../target/release/aipass-native-host*": ""
+      "../../../target/release/aipass-native-host*": "",
+      "../../extension/build/aipass-extension.crx": "browser-extension/aipass-extension.crx",
+      "../../extension/build/aipass-extension.json": "browser-extension/aipass-extension.json"
     },
     "windows": {
       "nsis": {

@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use std::env;
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "windows"))]
 use std::process::Command;
+use std::process::Stdio;
 
 const AGENT_BINARY_ENV: &str = "AIPASS_AGENT_BINARY";
 const AGENT_PATH_ENV: &str = "AIPASS_AGENT_PATH";
@@ -11,6 +11,11 @@ const AGENT_PATH_ENV: &str = "AIPASS_AGENT_PATH";
 pub struct AgentLaunch {
     pub binary: PathBuf,
     pub candidates: Vec<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AgentLaunchOptions {
+    pub suppress_desktop_tray: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -32,11 +37,11 @@ pub fn agent_binary_candidates() -> Vec<PathBuf> {
     find_agent_binary().candidates
 }
 
-#[cfg(not(target_os = "windows"))]
 pub(crate) fn launch_agent(
     vault_dir: &Path,
     namespace: &str,
     initial_connection_error: &str,
+    options: AgentLaunchOptions,
 ) -> Result<AgentLaunch> {
     let search = find_agent_binary();
     let Some(binary) = search.selected.clone() else {
@@ -49,7 +54,18 @@ pub(crate) fn launch_agent(
         )));
     };
 
-    match Command::new(&binary).arg("--vault").arg(vault_dir).spawn() {
+    let mut command = Command::new(&binary);
+    command
+        .arg("--vault")
+        .arg(vault_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if options.suppress_desktop_tray {
+        command.env(crate::desktop::SUPPRESS_TRAY_ENV, "1");
+    }
+
+    match command.spawn() {
         Ok(_) => Ok(AgentLaunch {
             binary,
             candidates: search.candidates,

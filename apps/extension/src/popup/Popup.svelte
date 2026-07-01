@@ -54,6 +54,7 @@
   let copied = "";
   type RefreshOptions = {
     scanActiveTab?: boolean;
+    assumeUnlocked?: boolean;
   };
   type SavePendingData = {
     saved?: Array<{ draftId?: string; entryId?: string }>;
@@ -82,6 +83,7 @@
   let addDraft: Draft = emptyDraft();
   let editingDraftId = "";
   let editingEntryId = "";
+  let detailEditMode = false;
   let entryMenu: EntryMenuState | null = null;
   let deletingEntryId = "";
   let selectedEntryId = "";
@@ -102,6 +104,7 @@
 
   $: visibleDraftItems = draftItems.filter((item) => !item.saved && !item.preview?.isSaved);
   $: selectedDraftCount = visibleDraftItems.filter((item) => item.selected).length;
+  $: showSiteRow = Boolean(provider || visibleDraftItems.length > 0 || pendingDrafts.some(hasDraftPageSignal));
   $: filteredEntries = filterEntries(entries, searchQuery).sort(sortEntryForPopup);
   $: if (connection === "connected" && filteredEntries.length && !filteredEntries.some((entry) => entry.id === selectedEntryId)) {
     selectedEntryId = filteredEntries[0]?.id ?? "";
@@ -119,14 +122,19 @@
 
   async function refresh(options: RefreshOptions = {}) {
     const scanActiveTab = options.scanActiveTab ?? false;
+    const assumeUnlocked = options.assumeUnlocked ?? false;
     statusText = "";
     statusError = false;
-    const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
-    if (!ping?.ok) {
-      connection = "missing";
-      return;
+    if (!assumeUnlocked) {
+      const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
+      if (!ping?.ok) {
+        connection = "missing";
+        return;
+      }
+      connection = ping.data?.locked ? "locked" : "connected";
+    } else {
+      connection = "connected";
     }
-    connection = ping.data?.locked ? "locked" : "connected";
     if (connection !== "connected") {
       entries = [];
       siteEntries = [];
@@ -139,15 +147,16 @@
       await sendToWorker<{ scanned: boolean }>({ type: "aipass.scanActiveTab", tabId });
       await delay(120);
     }
-    const list = await sendToWorker<LookupData>({ type: "aipass.entriesList" });
+    const listRequest = sendToWorker<LookupData>({ type: "aipass.entriesList" });
+    const lookupRequest =
+      currentUrl && currentOrigin
+        ? sendToWorker<LookupData>({ type: "aipass.lookup", url: currentUrl, origin: currentOrigin })
+        : Promise.resolve(undefined);
+    const draftRequest = sendToWorker<{ drafts: SafeDraft[] }>({ type: "aipass.pendingDrafts" });
+    const [list, lookup, draftResponse] = await Promise.all([listRequest, lookupRequest, draftRequest]);
     const listedEntries = list?.ok ? list.data?.entries ?? [] : [];
-    let contextEntries: Entry[] = [];
-    let contextGrants: Grant[] = [];
-    if (currentUrl && currentOrigin) {
-      const lookup = await sendToWorker<LookupData>({ type: "aipass.lookup", url: currentUrl, origin: currentOrigin });
-      contextEntries = lookup?.ok ? lookup.data?.entries ?? [] : [];
-      contextGrants = lookup?.ok ? lookup.data?.grants ?? [] : [];
-    }
+    const contextEntries = lookup?.ok ? lookup.data?.entries ?? [] : [];
+    const contextGrants = lookup?.ok ? lookup.data?.grants ?? [] : [];
     siteEntries = contextEntries;
     siteEntryIds = new Set(siteEntries.map((entry) => entry.id));
     entries = mergeEntries(listedEntries, contextEntries);
@@ -155,7 +164,6 @@
     if (!entries.some((entry) => entry.id === selectedEntryId)) {
       selectedEntryId = siteEntries[0]?.id ?? entries[0]?.id ?? "";
     }
-    const draftResponse = await sendToWorker<{ drafts: SafeDraft[] }>({ type: "aipass.pendingDrafts" });
     pendingDrafts = draftResponse?.ok ? draftResponse.data?.drafts ?? [] : [];
     syncDrafts();
   }
@@ -177,7 +185,7 @@
       return;
     }
     statusText = $t("ext.finishUnlock");
-    void pollForUnlock();
+    desktopUnlockBusy = false;
   }
 
   async function unlockWithPassword() {
@@ -199,21 +207,6 @@
     }
     await finishUnlockAndResumeSaves();
     passwordUnlockBusy = false;
-  }
-
-  async function pollForUnlock() {
-    try {
-      for (let attempt = 0; attempt < 30; attempt += 1) {
-        await delay(750);
-        const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
-        if (ping?.ok && !ping.data?.locked) {
-          await finishUnlockAndResumeSaves();
-          return;
-        }
-      }
-    } finally {
-      desktopUnlockBusy = false;
-    }
   }
 
   async function useEntry(entry: Entry) {
@@ -346,7 +339,7 @@
 
   async function finishUnlockAndResumeSaves() {
     const resume = await sendToWorker<SavePendingData>({ type: "aipass.resumePendingSaves" });
-    await refresh({ scanActiveTab: false });
+    await refresh({ scanActiveTab: false, assumeUnlocked: true });
     if (resume?.data?.requiresUnlock) {
       handleSaveRequiresUnlock(resume.data);
       return;
@@ -365,7 +358,7 @@
       statusError = false;
       return;
     }
-    statusText = $t("ext.unlocked");
+    statusText = "";
     statusError = false;
   }
 
@@ -462,13 +455,13 @@
     next.secretLabel = pending.secretLabel ?? "";
     next.domain = hostFromOrigin(pending.origin);
     next.consoleUrl = pending.url ?? "";
-    next.faviconUrl = pending.faviconUrl ?? "";
     next.apiKey = pending.apiKey ?? "";
     next.endpoint = pending.endpoint ?? definition?.endpoints.find((item) => item.kind === "api")?.url ?? "";
+    next.faviconUrl = pending.faviconUrl ?? "";
+    next.faviconUrl = resolvedDraftFaviconUrl(next) ?? "";
     next.interfaceType = pending.interfaceType ?? definition?.interfaces[0] ?? "custom_http";
     next.authScheme = pending.authScheme ?? definition?.authSchemes[0] ?? "custom_header";
-    next.environment = pending.environment || "browser";
-    next.tag = pending.tags?.length ? pending.tags.join(", ") : "browser";
+    next.tag = (pending.tags ?? []).join(", ");
     next.gatewayGroup = pending.gateway?.group ?? "";
     next.gatewayRate = pending.gateway?.rate ?? "";
     return next;
@@ -484,19 +477,20 @@
       .map((endpoint) => endpoint.url)
       .filter((url): url is string => Boolean(url))
       .join(", ");
-    next.faviconUrl = entry.faviconUrl ?? "";
     next.apiKey = "";
+    next.secretLabel = entrySecrets(entry)[0]?.label ?? "";
     next.endpoint = entry.endpoints
       .filter((endpoint) => endpoint.kind === "api")
       .map((endpoint) => endpoint.url)
       .filter((url): url is string => Boolean(url))
       .join(", ");
+    next.faviconUrl = entry.faviconUrl ?? "";
+    next.faviconUrl = resolvedDraftFaviconUrl(next) ?? "";
     next.interfaceType = entry.interfaceType;
     next.authScheme = entry.authScheme;
     next.defaultModel = entry.defaultModel ?? "";
     next.modelAlias = (entry.modelAliases ?? []).map(([alias, model]) => `${alias}=${model}`).join(", ");
-    next.environment = entry.environment ?? "browser";
-    next.tag = (entry.tags ?? []).join(", ");
+    next.tag = displayTags(entry).join(", ");
     next.gatewayGroup = entry.gateway?.group ?? "";
     next.gatewayRate = entry.gateway?.rate ?? "";
     next.quotaLabel = entry.quota?.label ?? "";
@@ -523,6 +517,7 @@
       current.interfaceType = detectInterfaceFromProvider(definition.id);
       current.authScheme = detectAuthFromProvider(definition.id);
       current.endpoint ||= definition.endpoints.find((item) => item.kind === "api")?.url ?? "";
+      applyFaviconFromEndpoint(current);
       current.title ||= definition.displayName;
       draftItems = draftItems.map((draftItem) =>
         draftItem.draftId === item.draftId ? { ...draftItem, draft: current } : draftItem
@@ -539,10 +534,11 @@
       current.title ||= match.displayName;
       current.interfaceType = match.interfaces[0] ?? current.interfaceType;
       current.authScheme = match.authSchemes[0] ?? current.authScheme;
-      draftItems = draftItems.map((draftItem) =>
-        draftItem.draftId === item.draftId ? { ...draftItem, draft: current } : draftItem
-      );
     }
+    applyFaviconFromEndpoint(current);
+    draftItems = draftItems.map((draftItem) =>
+      draftItem.draftId === item.draftId ? { ...draftItem, draft: current } : draftItem
+    );
     schedulePreview();
   }
 
@@ -613,13 +609,12 @@
       providerId: draft.providerId || undefined,
       title: draft.title.trim() || "Browser Provider",
       secretLabel: draft.secretLabel.trim() || undefined,
-      faviconUrl: draft.faviconUrl.trim() || undefined,
+      faviconUrl: resolvedDraftFaviconUrl(draft),
       endpoint: draft.endpoint.trim() || undefined,
       interfaceType: draft.interfaceType,
       authScheme: draft.authScheme,
       apiKey: includeApiKey ? draft.apiKey.trim() || undefined : undefined,
-      environment: draft.environment.trim() || "browser",
-      tags: tags.length ? tags : ["browser"],
+      tags: tags.length ? tags : [],
       gateway
     };
   }
@@ -662,11 +657,21 @@
       pending.secretLabel ?? "",
       pending.endpoint ?? "",
       pending.maskedSecret ?? "",
-      pending.environment ?? "",
       pending.gateway?.group ?? "",
       pending.gateway?.rate ?? "",
       (pending.tags ?? []).join(",")
     ].join("|");
+  }
+
+  function hasDraftPageSignal(draft: SafeDraft): boolean {
+    return Boolean(
+      draft.apiKey ||
+        draft.maskedSecret ||
+        draft.endpoint ||
+        draft.providerId ||
+        draft.resumeSave ||
+        draft.editMode
+    );
   }
 
   function providerDefinitionFor(providerId: string | undefined) {
@@ -675,6 +680,10 @@
 
   function entryKind(entry: Entry): ProviderKind {
     return entry.providerKind ?? providerDefinitionFor(entry.providerId)?.kind ?? "unknown";
+  }
+
+  function displayTags(entry: Entry): string[] {
+    return (entry.tags ?? []).filter((tag) => tag.trim().toLowerCase() !== "browser");
   }
 
   function providerKindLabel(kind: ProviderKind): string {
@@ -714,23 +723,6 @@
     }
   }
 
-  function authSchemeLabel(value: Entry["authScheme"]): string {
-    switch (value) {
-      case "bearer":
-        return "Bearer";
-      case "x_api_key":
-        return "x-api-key";
-      case "google_api_key":
-        return "Google API key";
-      case "azure_api_key":
-        return "Azure API key";
-      case "aws_profile":
-        return "AWS profile";
-      case "custom_header":
-        return "Custom header";
-    }
-  }
-
   function entryEndpoint(entry: Entry) {
     return entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? entry.domains[0] ?? "";
   }
@@ -740,7 +732,68 @@
   }
 
   function entrySubtitle(entry: Entry): string {
-    return entryEndpoint(entry) || entry.domains[0] || entry.defaultModel || entry.environment || "";
+    return entry.domains[0] ?? entryEndpoint(entry) ?? entry.defaultModel ?? "";
+  }
+
+  function entryFavicon(entry: Entry): string | undefined {
+    const endpointFavicon = faviconUrlFromEntryEndpoint(entry);
+    if (entry.faviconUrl && (!endpointFavicon || !isRootFavicon(entry.faviconUrl))) return entry.faviconUrl;
+    return endpointFavicon ?? entry.faviconUrl ?? faviconUrlFromDomain(entry.domains[0]);
+  }
+
+  function faviconUrlFromEntryEndpoint(entry: Entry): string | undefined {
+    const endpoint = entry.endpoints.find((item) => item.kind === "api" && item.url)?.url;
+    return faviconUrlFromEndpoint(endpoint);
+  }
+
+  function faviconUrlFromEndpoint(endpoint: string | undefined): string | undefined {
+    for (const value of splitCsv(endpoint ?? "")) {
+      const parsed = parseHttpUrl(value);
+      if (parsed) return `${parsed.origin}/favicon.ico`;
+    }
+    return undefined;
+  }
+
+  function faviconUrlFromDomain(domain: string | undefined): string | undefined {
+    const parsed = parseHttpUrl(domain ?? "");
+    return parsed ? `${parsed.origin}/favicon.ico` : undefined;
+  }
+
+  function parseHttpUrl(value: string): URL | undefined {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    try {
+      const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+      const parsed = new URL(candidate);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function applyFaviconFromEndpoint(draft: Draft) {
+    const inferred = faviconUrlFromEndpoint(draft.endpoint);
+    if (!inferred) return;
+    const current = draft.faviconUrl.trim();
+    if (!current || isRootFavicon(current)) {
+      draft.faviconUrl = inferred;
+    }
+  }
+
+  function resolvedDraftFaviconUrl(draft: Draft): string | undefined {
+    const current = draft.faviconUrl.trim();
+    const inferred = faviconUrlFromEndpoint(draft.endpoint);
+    if (inferred && (!current || isRootFavicon(current))) return inferred;
+    return current || inferred;
+  }
+
+  function isRootFavicon(value: string): boolean {
+    try {
+      const parsed = new URL(value);
+      return parsed.pathname.replace(/\/+$/, "") === "/favicon.ico";
+    } catch {
+      return false;
+    }
   }
 
   function entrySecrets(entry: Entry) {
@@ -749,7 +802,7 @@
       : [
           {
             id: "primary",
-            label: "primary",
+            label: "",
             masked: entry.maskedSecret,
             fingerprint: entry.fingerprint
           }
@@ -790,7 +843,6 @@
       entry.interfaceType,
       entry.authScheme,
       entry.defaultModel ?? "",
-      entry.environment ?? "",
       entry.notes ?? "",
       entry.quota?.label ?? "",
       entry.quota?.limit ?? "",
@@ -824,6 +876,11 @@
   function selectEntry(id: string) {
     selectedEntryId = id;
     showAddForm = false;
+    if (detailEditMode && editingEntryId && editingEntryId !== id) {
+      detailEditMode = false;
+      editingEntryId = "";
+      addDraft = emptyDraft();
+    }
   }
 
   async function copyValue(value: string | undefined, label: string) {
@@ -843,14 +900,14 @@
     addDraft = emptyDraft();
     editingDraftId = "";
     editingEntryId = "";
-    addDraft.environment = "browser";
-    addDraft.tag = "browser";
+    addDraft.tag = "";
     if (currentUrl) {
       const match = matchProviderByDomain(currentUrl);
       if (match) {
         addDraft.providerId = match.id;
         addDraft.title = match.displayName;
         addDraft.endpoint = match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
+        applyFaviconFromEndpoint(addDraft);
         addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
         addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
       }
@@ -865,14 +922,65 @@
     addDraft = draftFromEntry(entry);
     editingDraftId = "";
     editingEntryId = entry.id;
+    detailEditMode = true;
+    showAddForm = false;
     statusText = "";
     statusError = false;
-    showAddForm = true;
+  }
+
+  function cancelDetailEdit() {
+    detailEditMode = false;
+    editingEntryId = "";
+    addDraft = emptyDraft();
+    statusText = "";
+    statusError = false;
+  }
+
+  async function submitDetailEdit() {
+    if (addBusy || !editingEntryId) return;
+    addBusy = true;
+    statusText = "";
+    statusError = false;
+    const response = await sendToWorker<{ entryId?: string }>({
+      type: "aipass.providerUpdate",
+      request: {
+        id: editingEntryId,
+        title: addDraft.title || "Browser Provider",
+        providerId: addDraft.providerId || undefined,
+        domain: splitCsv(addDraft.domain),
+        faviconUrl: resolvedDraftFaviconUrl(addDraft),
+        endpoint: addDraft.endpoint || undefined,
+        endpoints: [],
+        consoleEndpoints: splitCsv(addDraft.consoleUrl),
+        interfaceType: addDraft.interfaceType,
+        authScheme: addDraft.authScheme,
+        apiKey: addDraft.apiKey.trim() || undefined,
+        defaultModel: addDraft.defaultModel || undefined,
+        modelAliases: pairsFromCsv(addDraft.modelAlias),
+        headers: addDraft.header.trim() ? pairsFromCsv(addDraft.header) : undefined,
+        quota: quotaFrom(addDraft),
+        gateway: gatewayFrom(addDraft),
+        tags: splitCsv(addDraft.tag),
+        notes: addDraft.notes || undefined
+      }
+    });
+    addBusy = false;
+    if (!response?.ok) {
+      statusText = response?.error ?? $t("ext.updateProviderFailed");
+      statusError = true;
+      return;
+    }
+    detailEditMode = false;
+    editingEntryId = "";
+    addDraft = emptyDraft();
+    await refresh({ scanActiveTab: false });
+    statusText = $t("ext.providerUpdated");
   }
 
   function closeAddForm() {
     const draftId = editingDraftId;
     showAddForm = false;
+    detailEditMode = false;
     editingDraftId = "";
     editingEntryId = "";
     addDraft = emptyDraft();
@@ -885,6 +993,7 @@
     addDraft.interfaceType = detectInterfaceFromProvider(definition.id);
     addDraft.authScheme = detectAuthFromProvider(definition.id);
     addDraft.endpoint ||= definition.endpoints.find((item) => item.kind === "api")?.url ?? "";
+    applyFaviconFromEndpoint(addDraft);
     addDraft.title ||= definition.displayName;
   }
 
@@ -894,22 +1003,25 @@
     addDraft.providerId = match.id;
     addDraft.title ||= match.displayName;
     addDraft.endpoint ||= match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
+    applyFaviconFromEndpoint(addDraft);
     addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
     addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
   }
 
   function addInferFromEndpoint() {
     const match = inferProviderFromEndpoint(splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint);
-    if (!match) return;
-    addDraft.providerId = match.id;
-    addDraft.title ||= match.displayName;
-    addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
-    addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
+    if (match) {
+      addDraft.providerId = match.id;
+      addDraft.title ||= match.displayName;
+      addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
+      addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
+    }
+    applyFaviconFromEndpoint(addDraft);
   }
 
   async function submitAddProvider() {
     if (addBusy) return;
-    if (!editingEntryId && !addDraft.apiKey.trim()) {
+    if (!editingDraftId && !addDraft.apiKey.trim()) {
       statusText = $t("ext.addProviderFailed");
       statusError = true;
       return;
@@ -938,42 +1050,6 @@
       statusText = $t("ext.saved");
       return;
     }
-    if (editingEntryId) {
-      const response = await sendToWorker<{ entryId?: string }>({
-        type: "aipass.providerUpdate",
-        request: {
-          id: editingEntryId,
-          title: addDraft.title || "Browser Provider",
-          providerId: addDraft.providerId || undefined,
-          domain: splitCsv(addDraft.domain),
-          faviconUrl: addDraft.faviconUrl || undefined,
-          endpoint: addDraft.endpoint || undefined,
-          endpoints: [],
-          consoleEndpoints: splitCsv(addDraft.consoleUrl),
-          interfaceType: addDraft.interfaceType,
-          authScheme: addDraft.authScheme,
-          apiKey: addDraft.apiKey.trim() || undefined,
-          defaultModel: addDraft.defaultModel || undefined,
-          modelAliases: pairsFromCsv(addDraft.modelAlias),
-          headers: addDraft.header.trim() ? pairsFromCsv(addDraft.header) : undefined,
-          quota: quotaFrom(addDraft),
-          gateway: gatewayFrom(addDraft),
-          tags: splitCsv(addDraft.tag),
-          environment: addDraft.environment || "browser",
-          notes: addDraft.notes || undefined
-        }
-      });
-      addBusy = false;
-      if (!response?.ok) {
-        statusText = response?.error ?? $t("ext.updateProviderFailed");
-        statusError = true;
-        return;
-      }
-      closeAddForm();
-      await refresh({ scanActiveTab: false });
-      statusText = $t("ext.providerUpdated");
-      return;
-    }
     const definition = providerDefinitions.find((item) => item.id === addDraft.providerId);
     const response = await sendToWorker<{ entryId: string }>({
       type: "aipass.providerAdd",
@@ -981,7 +1057,7 @@
         title: addDraft.title || definition?.displayName || "Browser Provider",
         providerId: addDraft.providerId || definition?.id,
         domain: splitCsv(addDraft.domain),
-        faviconUrl: addDraft.faviconUrl || undefined,
+        faviconUrl: resolvedDraftFaviconUrl(addDraft),
         endpoint: addDraft.endpoint || undefined,
         endpoints: [],
         consoleEndpoints: splitCsv(addDraft.consoleUrl),
@@ -994,7 +1070,6 @@
         quota: quotaFrom(addDraft),
         gateway: gatewayFrom(addDraft),
         tags: splitCsv(addDraft.tag),
-        environment: addDraft.environment || "browser",
         notes: addDraft.notes || undefined
       }
     });
@@ -1117,33 +1192,28 @@
     on:click={() => selectEntry(entry.id)}
     on:contextmenu={(event) => openEntryMenu(event, entry)}
   >
-    <ProviderIcon title={entry.title} kind={entryKind(entry)} faviconUrl={entry.faviconUrl} size="md" />
-    <span class="vault-entry-copy">
-      <span class="vault-entry-title">
-        <strong>{entry.title}</strong>
-        {#if siteEntryIds.has(entry.id)}
-          <Badge tone="success">{$t("ext.currentSiteMatch")}</Badge>
-        {/if}
-      </span>
-      <span class="endpoint">{entrySubtitle(entry)}</span>
-      <span class="vault-entry-meta">
-        <span>{providerKindLabel(entryKind(entry))}</span>
-        <span>{interfaceLabel(entry.interfaceType)}</span>
-        {#if entry.environment}<span>{entry.environment}</span>{/if}
-      </span>
+    <ProviderIcon
+      title={entry.title}
+      kind={entryKind(entry)}
+      faviconUrl={entryFavicon(entry)}
+      size="md"
+    />
+    <span class="vault-entry-main">
+      <strong class="vault-entry-title">{entry.title}</strong>
+      <span class="vault-entry-subtitle">{entrySubtitle(entry)}</span>
     </span>
   </button>
 {/snippet}
 
-{#snippet valueRow(label: string, value: string | undefined, copyKey: string)}
+{#snippet kvRow(label: string, value: string | undefined, copyKey: string)}
   {#if value}
-    <div class="detail-row">
-      <span>{label}</span>
-      <button type="button" class="copy-line" on:click={() => copyValue(value, copyKey)}>
-        <code class="mono">{value}</code>
+    <button type="button" class="kv-row" on:click={() => copyValue(value, copyKey)}>
+      <span class="kv-label">{label}</span>
+      <code class="kv-value mono">{value}</code>
+      <span class="kv-hint">
         {#if copied === copyKey}<Check size={13} />{:else}<Copy size={13} />{/if}
-      </button>
-    </div>
+      </span>
+    </button>
   {/if}
 {/snippet}
 
@@ -1151,125 +1221,148 @@
   <section class="detail-pane">
     <header class="detail-head">
       <div class="detail-identity">
-        <ProviderIcon title={entry.title} kind={entryKind(entry)} faviconUrl={entry.faviconUrl} size="lg" />
-        <div>
-          <small>{$t("ext.details")}</small>
+        <ProviderIcon
+          title={entry.title}
+          kind={entryKind(entry)}
+          faviconUrl={entryFavicon(entry)}
+          size="lg"
+        />
+        <div class="identity-copy">
           <h1>{entry.title}</h1>
           <div class="meta-row">
             <Badge tone={compactKindTone(entryKind(entry))}>{providerKindLabel(entryKind(entry))}</Badge>
             <Badge>{interfaceLabel(entry.interfaceType)}</Badge>
-            {#if entry.environment}<Badge>{entry.environment}</Badge>{/if}
+            {#each displayTags(entry) as tag}
+              <span class="meta-tag">{tag}</span>
+            {/each}
           </div>
         </div>
       </div>
       <div class="detail-actions">
-        <IconButton label={$t("providerDetail.edit")} on:click={() => openEditEntry(entry)}>
-          <Pencil size={15} />
-        </IconButton>
-        <IconButton
-          label={$t("ext.deleteItem")}
-          tone="danger"
-          disabled={deletingEntryId === entry.id}
-          on:click={() => deleteEntry(entry)}
-        >
-          <Trash2 size={15} />
-        </IconButton>
+        {#if detailEditMode && editingEntryId === entry.id}
+          <Button variant="ghost" size="sm" on:click={cancelDetailEdit}>{$t("common.cancel")}</Button>
+          <Button variant="primary" size="sm" on:click={submitDetailEdit} disabled={addBusy}>
+            {addBusy ? $t("ext.adding") : $t("providerModal.saveChanges")}
+          </Button>
+        {:else}
+          <IconButton label={$t("providerDetail.edit")} on:click={() => openEditEntry(entry)}>
+            <Pencil size={15} />
+          </IconButton>
+          <IconButton
+            label={$t("ext.deleteItem")}
+            tone="danger"
+            disabled={deletingEntryId === entry.id}
+            on:click={() => deleteEntry(entry)}
+          >
+            <Trash2 size={15} />
+          </IconButton>
+        {/if}
       </div>
     </header>
 
-    <Button
-      variant="primary"
-      block
-      on:click={() => useEntry(entry)}
-      loading={usingEntryId === entry.id}
-      disabled={Boolean(usingEntryId)}
-    >
-      {#if copied === entry.id}<Check size={15} />{:else}<KeyRound size={15} />{/if}
-      {$t("ext.use")}
-    </Button>
+    {#if detailEditMode && editingEntryId === entry.id}
+      {#key editingEntryId}
+      <div class="detail-edit-body">
+        <ProviderFormFields
+          formMode="edit"
+          bind:draft={addDraft}
+          onInferDraftFromDomain={addInferFromDomain}
+          onInferDraftFromEndpoint={addInferFromEndpoint}
+          onProviderChanged={addProviderChanged}
+        />
+      </div>
+      {/key}
+    {:else}
+      <Button
+        variant="primary"
+        block
+        on:click={() => useEntry(entry)}
+        loading={usingEntryId === entry.id}
+        disabled={Boolean(usingEntryId)}
+      >
+        {#if copied === entry.id}<Check size={15} />{:else}<KeyRound size={15} />{/if}
+        {$t("ext.use")}
+      </Button>
 
-    <section class="detail-section">
-      <h2>{$t("providerDetail.credentials")}</h2>
-      {#each entrySecrets(entry) as secret (secret.id)}
-        <div class="secret-line">
-          <span>{secret.label || $t("providerDetail.apiKey")}</span>
-          <code class="mono">{secret.masked}</code>
-        </div>
-      {/each}
-      {@render valueRow($t("ext.fingerprint"), entry.fingerprint, `fingerprint:${entry.id}`)}
-    </section>
-
-    <section class="detail-section">
-      <h2>{$t("providerDetail.endpoint")}</h2>
-      {@render valueRow($t("providerDetail.endpoint"), entryEndpoint(entry), `endpoint:${entry.id}`)}
-      {@render valueRow($t("providerDetail.console"), entryConsole(entry), `console:${entry.id}`)}
-      {#if entry.domains.length}
-        <div class="chip-row">
-          {#each entry.domains as domain}
-            <span>{domain}</span>
+      <section class="card">
+        <header class="card-header"><span class="card-title">{$t("providerDetail.credentials")}</span></header>
+        <div class="card-body">
+          {#each entrySecrets(entry) as secret (secret.id)}
+            <div class="kv-row secret">
+              <span class="kv-label">
+                <KeyRound size={13} />
+                {secret.label || $t("providerDetail.apiKey")}
+              </span>
+              <code class="kv-value mono">{secret.masked}</code>
+              <span class="kv-hint"></span>
+            </div>
           {/each}
+          {@render kvRow($t("providerDetail.endpoint"), entryEndpoint(entry), `endpoint:${entry.id}`)}
+          {@render kvRow($t("providerDetail.console"), entryConsole(entry), `console:${entry.id}`)}
+          {@render kvRow($t("providerDetail.defaultModel"), entry.defaultModel, `model:${entry.id}`)}
+          {#if entry.modelAliases?.length}
+            <div class="kv-row">
+              <span class="kv-label">{$t("providerDetail.aliases")}</span>
+              <code class="kv-value mono">
+                {entry.modelAliases.map(([alias, model]) => `${alias} → ${model}`).join(", ")}
+              </code>
+              <span></span>
+            </div>
+          {/if}
+          {#if entry.gateway && (entry.gateway.group || entry.gateway.rate)}
+            <div class="kv-row">
+              <span class="kv-label">{$t("providerDetail.gateway")}</span>
+              <span class="kv-value chips">
+                {#if entry.gateway.group}<span class="chip">{$t("providerDetail.gatewayGroup")}: {entry.gateway.group}</span>{/if}
+                {#if entry.gateway.rate}<span class="chip mono">{$t("providerDetail.gatewayRate")}: {entry.gateway.rate}</span>{/if}
+              </span>
+              <span></span>
+            </div>
+          {/if}
+          {#if entry.headerNames?.length}
+            <div class="kv-row">
+              <span class="kv-label">{$t("providerDetail.headers")}</span>
+              <span class="kv-value chips">
+                {#each entry.headerNames as header}<span class="chip mono">{header}</span>{/each}
+              </span>
+              <span></span>
+            </div>
+          {/if}
         </div>
-      {/if}
-    </section>
-
-    {#if entry.defaultModel || entry.modelAliases?.length}
-      <section class="detail-section">
-        <h2>{$t("providerDetail.defaultModel")}</h2>
-        {@render valueRow($t("providerDetail.defaultModel"), entry.defaultModel, `model:${entry.id}`)}
-        {#if entry.modelAliases?.length}
-          <div class="alias-list">
-            {#each entry.modelAliases as [alias, model]}
-              <span><strong>{alias}</strong><code class="mono">{model}</code></span>
-            {/each}
-          </div>
-        {/if}
       </section>
-    {/if}
 
-    {#if entry.quota || entry.gateway}
-      <section class="detail-section split-section">
-        {#if entry.quota}
-          <div>
-            <h2>{$t("providerDetail.quota")}</h2>
-            <dl>
-              {#if entry.quota.label}<div><dt>{$t("providerForm.quotaLabel")}</dt><dd>{entry.quota.label}</dd></div>{/if}
-              {#if entry.quota.remaining}<div><dt>{$t("providerForm.remaining")}</dt><dd>{entry.quota.remaining}</dd></div>{/if}
-              {#if entry.quota.limit}<div><dt>{$t("providerForm.limit")}</dt><dd>{entry.quota.limit}</dd></div>{/if}
-              {#if entry.quota.resetAt}<div><dt>{$t("providerDetail.resets")}</dt><dd>{entry.quota.resetAt}</dd></div>{/if}
-            </dl>
+      {#if entry.quota && (entry.quota.label || entry.quota.limit || entry.quota.remaining || entry.quota.resetAt)}
+        <section class="card">
+          <header class="card-header"><span class="card-title">{$t("providerDetail.quota")}</span></header>
+          <div class="card-body">
+            <div class="kv-row">
+              <span class="kv-label">{entry.quota.label ?? $t("providerDetail.quota")}</span>
+              <span class="kv-value">
+                <strong class="tabular">{entry.quota.remaining ?? "—"}</strong>
+                <span class="text-tertiary"> / {entry.quota.limit ?? "—"}</span>
+              </span>
+              <span></span>
+            </div>
+            {#if entry.quota.resetAt}
+              <div class="kv-row">
+                <span class="kv-label">{$t("providerDetail.resets")}</span>
+                <code class="kv-value mono">{entry.quota.resetAt}</code>
+                <span></span>
+              </div>
+            {/if}
           </div>
-        {/if}
-        {#if entry.gateway}
-          <div>
-            <h2>{$t("providerDetail.gateway")}</h2>
-            <dl>
-              {#if entry.gateway.group}<div><dt>{$t("providerDetail.gatewayGroup")}</dt><dd>{entry.gateway.group}</dd></div>{/if}
-              {#if entry.gateway.rate}<div><dt>{$t("providerDetail.gatewayRate")}</dt><dd>{entry.gateway.rate}</dd></div>{/if}
-            </dl>
-          </div>
-        {/if}
-      </section>
-    {/if}
-
-    <section class="detail-section">
-      <h2>{$t("providerForm.advanced")}</h2>
-      <dl>
-        <div><dt>{$t("providerForm.auth")}</dt><dd>{authSchemeLabel(entry.authScheme)}</dd></div>
-        {#if entry.headerNames?.length}<div><dt>{$t("providerDetail.headers")}</dt><dd>{entry.headerNames.join(", ")}</dd></div>{/if}
-        {#if entry.lastUsedAt}<div><dt>{$t("sidebar.recent")}</dt><dd>{entry.lastUsedAt}</dd></div>{/if}
-        {#if entry.updatedAt}<div><dt>{$t("settings.current")}</dt><dd>{entry.updatedAt}</dd></div>{/if}
-      </dl>
-      {#if entry.tags?.length}
-        <div class="chip-row">
-          {#each entry.tags as tag}
-            <span>{tag}</span>
-          {/each}
-        </div>
+        </section>
       {/if}
+
       {#if entry.notes}
-        <p class="notes">{entry.notes}</p>
+        <section class="card">
+          <header class="card-header"><span class="card-title">{$t("providerDetail.notes")}</span></header>
+          <div class="card-body padded">
+            <p class="notes">{entry.notes}</p>
+          </div>
+        </section>
       {/if}
-    </section>
+    {/if}
   </section>
 {/snippet}
 
@@ -1277,7 +1370,6 @@
   <header class="popup-header">
     <Brand size="sm" responsive={false} />
     <div class="header-actions">
-      <Badge tone={connectionTone[connection]}>{$t(`ext.state.${connection}`)}</Badge>
       {#if connection === "connected"}
         <IconButton label={$t("providerList.addProvider")} tone="primary" on:click={openAddForm}>
           <Plus size={15} />
@@ -1341,38 +1433,42 @@
       </Button>
     </section>
   {:else}
-    <section class="site-row">
-      <ProviderIcon
-        title={provider?.displayName ?? $t("ext.customProvider")}
-        kind={provider?.kind ?? "unknown"}
-        size="md"
-      />
-      <div class="site-copy">
-        <small>{$t("ext.currentSite")}</small>
-        <strong>{provider?.displayName ?? $t("ext.customProvider")}</strong>
-        <span class="endpoint">{currentUrl || $t("ext.noActiveTab")}</span>
-      </div>
-      <IconButton
-        label={$t("ext.ignoreSite")}
-        tone="danger"
-        size="sm"
-        on:click={ignoreCurrentOrigin}
-        disabled={!currentOrigin}
-      >
-        <Ban size={15} />
-      </IconButton>
-    </section>
+    {#if showSiteRow}
+      <section class="site-row">
+        <ProviderIcon
+          title={provider?.displayName ?? $t("ext.customProvider")}
+          kind={provider?.kind ?? "unknown"}
+          size="md"
+        />
+        <div class="site-copy">
+          <small>{$t("ext.currentSite")}</small>
+          <strong>{provider?.displayName ?? $t("ext.customProvider")}</strong>
+          <span class="endpoint">{currentUrl || $t("ext.noActiveTab")}</span>
+        </div>
+        <IconButton
+          label={$t("ext.ignoreSite")}
+          tone="danger"
+          size="sm"
+          on:click={ignoreCurrentOrigin}
+          disabled={!currentOrigin}
+        >
+          <Ban size={15} />
+        </IconButton>
+      </section>
+    {/if}
 
     {#if showAddForm}
       <section class="add-form">
         <div class="add-head">
-          <strong>{editingEntryId ? $t("providerModal.editProvider") : $t("providerList.addProvider")}</strong>
+          <strong>
+            {editingDraftId ? $t("providerModal.editProvider") : $t("providerList.addProvider")}
+          </strong>
           <IconButton label={$t("common.cancel")} on:click={closeAddForm}>
             <X size={15} />
           </IconButton>
         </div>
         <ProviderFormFields
-          formMode={editingEntryId ? "edit" : "add"}
+          formMode={editingDraftId ? "edit" : "add"}
           bind:draft={addDraft}
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
@@ -1719,78 +1815,89 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    gap: 9px;
+    gap: 10px;
     width: 100%;
-    min-height: 66px;
-    padding: 8px;
-    border: 1px solid transparent;
+    min-height: 52px;
+    padding: 8px 10px;
     border-radius: var(--radius);
+    border: 1px solid transparent;
     text-align: left;
+    transition: background-color 80ms ease;
 
-    &:hover,
-    &.selected {
-      border-color: var(--border-strong);
-      background: var(--surface);
+    &:hover {
+      background: var(--surface-2);
     }
 
     &.selected {
-      border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
-      box-shadow: inset 3px 0 0 var(--accent);
+      background: var(--accent-soft);
+      border-color: color-mix(in oklab, var(--accent) 24%, transparent);
+
+      .vault-entry-title {
+        color: var(--accent);
+      }
     }
   }
 
-  .vault-entry-copy,
-  .vault-entry-title,
-  .vault-entry-meta {
+  .vault-entry-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     min-width: 0;
   }
 
-  .vault-entry-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
   .vault-entry-title {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-
-    strong {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 12px;
-    }
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    transition: color 120ms ease;
   }
 
-  .vault-entry-meta {
-    display: flex;
-    gap: 6px;
-    color: var(--text-tertiary);
-    font-size: 10px;
+  .vault-entry-subtitle {
     overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
-
-    span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
+    font-size: 12px;
+    color: var(--text-tertiary);
   }
 
   .meta-row {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: flex-start;
+    align-self: flex-start;
     gap: 4px;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .meta-tag {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 112px;
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .detail-pane {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     min-width: 0;
     min-height: 0;
-    padding: 12px;
+    padding: 14px;
     overflow: auto;
   }
 
@@ -1807,182 +1914,161 @@
     gap: 10px;
     min-width: 0;
 
-    div {
+    .identity-copy {
       min-width: 0;
-    }
-
-    small {
-      display: block;
-      margin-bottom: 2px;
-      color: var(--text-tertiary);
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
     h1 {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 18px;
+      font-size: 16px;
+      font-weight: 600;
       letter-spacing: 0;
     }
   }
 
   .detail-actions {
     display: flex;
-    gap: 4px;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
   }
 
-  .detail-section {
+  .detail-edit-body {
     display: flex;
     flex-direction: column;
-    gap: 7px;
-    padding-top: 10px;
-    border-top: 1px solid var(--divider);
-
-    h2 {
-      color: var(--text-secondary);
-      font-size: 12px;
-      letter-spacing: 0;
-    }
+    gap: 12px;
+    padding: 2px 0 8px;
+    overflow: auto;
   }
 
-  .detail-row,
-  .secret-line {
-    display: grid;
-    grid-template-columns: 84px minmax(0, 1fr);
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-
-    > span {
-      color: var(--text-tertiary);
-      font-size: 11px;
-    }
-
-    code {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 11px;
-    }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
   }
 
-  .secret-line {
-    min-height: 30px;
-    padding: 0 8px;
-    border-radius: var(--radius);
-    background: var(--surface-2);
-  }
-
-  .copy-line {
+  .card-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    min-width: 0;
-    min-height: 28px;
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-secondary);
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--divider);
+  }
 
-    &:hover {
-      border-color: var(--border-strong);
+  .card-title {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .card-body {
+    padding: 0;
+
+    &.padded {
+      padding: 12px 14px;
+    }
+  }
+
+  .kv-row {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--divider);
+    text-align: left;
+    background: transparent;
+    border-top: 0;
+    border-left: 0;
+    border-right: 0;
+    cursor: default;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    &.secret {
       background: var(--surface-2);
     }
 
-    code {
-      min-width: 0;
+    &:is(button) {
+      cursor: pointer;
+      transition: background-color 80ms ease;
+
+      &:hover {
+        background: var(--surface-2);
+      }
+
+      &:hover .kv-hint {
+        color: var(--accent);
+      }
     }
   }
 
-  .chip-row {
+  .kv-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    min-width: 0;
+  }
+
+  .kv-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text-tertiary);
+
+    &.mono {
+      font-family: var(--font-mono);
+    }
+  }
+
+  .kv-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 5px;
-
-    span {
-      max-width: 100%;
-      padding: 4px 7px;
-      border-radius: 999px;
-      background: var(--surface-2);
-      color: var(--text-secondary);
-      font-size: 11px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+    gap: 4px;
+    overflow: hidden;
   }
 
-  .alias-list {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
+  .chip {
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    font-size: 11px;
 
-    span {
-      display: grid;
-      grid-template-columns: 84px minmax(0, 1fr);
-      gap: 8px;
-      min-width: 0;
-    }
-
-    strong,
-    code {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 11px;
-    }
-
-    strong {
-      color: var(--text-tertiary);
-      font-weight: 500;
-    }
-  }
-
-  .split-section {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  dl {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    margin: 0;
-
-    div {
-      display: grid;
-      grid-template-columns: 84px minmax(0, 1fr);
-      gap: 8px;
-      min-width: 0;
-    }
-
-    dt,
-    dd {
-      margin: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 11px;
-    }
-
-    dt {
-      color: var(--text-tertiary);
+    &.mono {
+      font-family: var(--font-mono);
     }
   }
 
   .notes {
-    padding: 8px;
-    border-radius: var(--radius);
-    background: var(--surface-2);
-    color: var(--text-secondary);
+    margin: 0;
+    color: var(--text);
     font-size: 12px;
-    line-height: 1.4;
+    line-height: 1.5;
+    white-space: pre-wrap;
   }
 
   .empty-detail {

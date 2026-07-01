@@ -21,6 +21,9 @@ Thumbs.db
 npm-debug.log*
 pnpm-debug.log*
 
+chrome-extension.pem
+apps/extension/chrome-extension.pem
+
 .env
 .env.*
 !.env.example

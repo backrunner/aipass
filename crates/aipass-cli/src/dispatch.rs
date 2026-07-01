@@ -292,7 +292,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             quota_remaining,
             quota_reset_at,
             notes,
-            environment,
             tag,
         } => {
             let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
@@ -325,7 +324,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     ),
                     gateway: None,
                     tags: tag,
-                    environment,
                     notes,
                 },
             })?;
@@ -385,7 +383,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             quota_remaining,
             quota_reset_at,
             notes,
-            environment,
             tag,
         } => {
             let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
@@ -428,7 +425,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     .or(existing.quota),
                 gateway: existing.gateway,
                 tags: if tag.is_empty() { existing.tags } else { tag },
-                environment: environment.unwrap_or(existing.environment),
                 notes: notes.or(existing.notes),
             };
             let _: serde_json::Value = agent.request(AgentRequest::ProviderUpdate { id, input })?;

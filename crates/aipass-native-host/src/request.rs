@@ -84,6 +84,8 @@ fn handle_request_inner(
         }
         NativeRequest::SessionUnlock {
             interactive,
+            wait,
+            timeout_ms,
             password,
             ..
         } => {
@@ -95,12 +97,14 @@ fn handle_request_inner(
                     },
                 )?
             } else if interactive.as_deref() == Some("native_window") {
-                request_agent(
-                    config,
-                    &AgentRequest::SessionUnlock {
-                        mode: SessionUnlockMode::NativeWindow,
-                    },
-                )?
+                let mode = if wait {
+                    SessionUnlockMode::NativeWindowWait {
+                        timeout_ms: timeout_ms.unwrap_or(30_000),
+                    }
+                } else {
+                    SessionUnlockMode::NativeWindow
+                };
+                request_agent(config, &AgentRequest::SessionUnlock { mode })?
             } else {
                 bail!("interactive unlock via desktop window is required")
             };
@@ -161,7 +165,6 @@ fn handle_request_inner(
             interface_type,
             auth_scheme,
             api_key,
-            environment,
             tags,
             gateway,
             ..
@@ -180,7 +183,6 @@ fn handle_request_inner(
                         interface_type,
                         auth_scheme,
                         api_key,
-                        environment,
                         tags,
                         gateway,
                     },
@@ -199,7 +201,6 @@ fn handle_request_inner(
             interface_type,
             auth_scheme,
             api_key,
-            environment,
             tags,
             gateway,
             ..
@@ -218,7 +219,6 @@ fn handle_request_inner(
                         interface_type,
                         auth_scheme,
                         api_key,
-                        environment,
                         tags,
                         gateway,
                     },
@@ -243,7 +243,6 @@ fn handle_request_inner(
             quota,
             gateway,
             tags,
-            environment,
             notes,
             ..
         } => {
@@ -279,7 +278,6 @@ fn handle_request_inner(
                 quota,
                 gateway,
                 tags: tags.into_iter().filter_map(non_empty).collect(),
-                environment: non_empty(environment).unwrap_or_else(|| "personal".to_string()),
                 notes: notes.and_then(non_empty),
             };
             let entry_id: Uuid = request_agent(config, &AgentRequest::ProviderAdd { input })?;
@@ -303,7 +301,6 @@ fn handle_request_inner(
             quota,
             gateway,
             tags,
-            environment,
             notes,
             ..
         } => {
@@ -338,7 +335,6 @@ fn handle_request_inner(
                 quota,
                 gateway,
                 tags: tags.into_iter().filter_map(non_empty).collect(),
-                environment: non_empty(environment).unwrap_or_else(|| "personal".to_string()),
                 notes: notes.and_then(non_empty),
             };
             let _: serde_json::Value = request_agent(
@@ -433,7 +429,7 @@ fn request_agent<T: DeserializeOwned>(
     match client.request::<T>(request) {
         Ok(value) => Ok(value),
         Err(err) if matches!(err.code, Some(AgentErrorCode::ServiceUnavailable)) => {
-            client.ensure_running()?;
+            client.ensure_running_for_app()?;
             client.request::<T>(request).map_err(agent_error_to_anyhow)
         }
         Err(err) => Err(agent_error_to_anyhow(err)),

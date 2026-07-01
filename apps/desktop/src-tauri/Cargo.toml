@@ -26,6 +26,7 @@ aipass-provider-registry = { path = "../../../crates/aipass-provider-registry" }
 aipass-storage = { path = "../../../crates/aipass-storage" }
 aipass-sync = { path = "../../../crates/aipass-sync" }
 aipass-vault = { path = "../../../crates/aipass-vault" }
+directories.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

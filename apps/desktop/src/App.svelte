@@ -24,11 +24,12 @@
   import type {
     AppPreferences,
     AuthMode,
+    BrowserExtensionInstallResult,
+    BrowserExtensionStatus,
     DeviceRecord,
     Draft,
     EntrySummary,
     FormMode,
-    NativeHostStatus,
     ProbeResult,
     ProviderCounts,
     ProviderFilter,
@@ -144,7 +145,7 @@
     !(lockTransitioning && !lockCovered);
   $: showWorkspace =
     statusReady && status.exists && !status.locked && !(lockTransitioning && lockCovered);
-  let windowTarget: "main" | "unlock" | "quick-access" = "main";
+  let windowTarget: "main" | "unlock" | "quick-access" | "tray" = "main";
   let password = "";
   let createPassword = "";
   let createPasswordConfirm = "";
@@ -212,11 +213,10 @@
   let syncConflicts: SyncConflict[] = [];
   let conflictsLoading = false;
   let conflictBusy = "";
-  let nativeHostStatus: NativeHostStatus | undefined;
-  let nativeHostBusy = "";
+  let browserExtensionStatus: BrowserExtensionStatus | undefined;
+  let browserExtensionBusy = "";
   let securityBusy = "";
   let backupBusy = "";
-  let extensionIds = "";
   let counts: ProviderCounts = buildProviderCounts([]);
   let trashCount = 0;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -250,7 +250,6 @@
         entry.quota?.limit ?? "",
         entry.quota?.remaining ?? "",
         entry.quota?.resetAt ?? "",
-        entry.environment,
         entry.notes ?? "",
         ...entry.domains,
         ...entry.tags,
@@ -298,7 +297,9 @@
       await refreshStatus();
       if (hasTauriRuntime()) {
         windowTarget =
-          (await invokeTauri<"main" | "unlock" | "quick-access" | null>("window_target")) ?? "main";
+          (await invokeTauri<"main" | "unlock" | "quick-access" | "tray" | null>(
+            "window_target"
+          )) ?? "main";
         if (windowTarget === "unlock") {
           setAuthMode("unlock");
         }
@@ -607,7 +608,6 @@
     if (filter === "recent") return Boolean(entry.lastUsedAt);
     if (filter === "quota_low") return isQuotaLow(entry.quota);
     if (filter === "expiring") return isExpiringSoon(entry.quota);
-    if (filter.startsWith("environment:")) return entry.environment === filter.slice("environment:".length);
     if (filter.startsWith("tag:")) return entry.tags.includes(filter.slice("tag:".length));
     return entry.providerKind === filter;
   }
@@ -697,7 +697,6 @@
       secretLabel: entry.secretRefs[0]?.label ?? "",
       defaultModel: entry.defaultModel ?? "",
       modelAlias: (entry.modelAliases ?? []).map(([alias, model]) => `${alias}=${model}`).join(", "),
-      environment: entry.environment,
       tag: entry.tags.join(", "),
       header: "",
       quotaLabel: entry.quota?.label ?? "",
@@ -743,7 +742,6 @@
       headers: headerPairs(draft.header),
       quota: quotaFromDraft(),
       gateway: gatewayFromDraft(),
-      environment: draft.environment || "personal",
       tags: splitCsv(draft.tag),
       notes: draft.notes || undefined
     };
@@ -929,7 +927,7 @@
   async function openSettings(tab: string = "general") {
     settingsInitialTab = tab;
     showSettings = true;
-    void Promise.allSettled([loadSyncSettings(), loadDevices(), loadSyncConflicts(), loadNativeHostStatus()]);
+    void Promise.allSettled([loadSyncSettings(), loadDevices(), loadSyncConflicts(), loadBrowserExtensionStatus()]);
   }
 
   async function closeSettings() {
@@ -1039,38 +1037,29 @@
     }
   }
 
-  async function loadNativeHostStatus() {
-    nativeHostBusy = "status";
+  async function loadBrowserExtensionStatus() {
+    browserExtensionBusy = "status";
     try {
-      nativeHostStatus = await invokeTauri<NativeHostStatus>("native_host_status");
-      if (!extensionIds.trim()) {
-        const ids = nativeHostStatus.allowedExtensionIds.length
-          ? nativeHostStatus.allowedExtensionIds
-          : nativeHostStatus.allowedOrigins.map((origin) =>
-              origin.replace(/^chrome-extension:\/\//, "").replace(/\/$/, "")
-            );
-        extensionIds = ids.join(", ");
-      }
+      browserExtensionStatus = await invokeTauri<BrowserExtensionStatus>("browser_extension_status");
     } catch (err) {
       error = String(err);
     } finally {
-      nativeHostBusy = "";
+      browserExtensionBusy = "";
     }
   }
 
-  async function repairNativeHost() {
-    nativeHostBusy = "repair";
+  async function installBrowserExtension() {
+    browserExtensionBusy = "install";
     error = "";
     try {
-      nativeHostStatus = await invokeTauri<NativeHostStatus>("native_host_repair", {
-        request: { extensionIds: splitCsv(extensionIds) }
-      });
-      notice = localizedMessage("notice.nativeHostRepaired");
-      setTimeout(() => (notice = ""), 1800);
+      const result = await invokeTauri<BrowserExtensionInstallResult>("browser_extension_install");
+      browserExtensionStatus = result.status;
+      notice = localizedMessage("notice.browserExtensionInstallStarted");
+      setTimeout(() => (notice = ""), 2400);
     } catch (err) {
       error = String(err);
     } finally {
-      nativeHostBusy = "";
+      browserExtensionBusy = "";
     }
   }
 
@@ -1535,6 +1524,8 @@
     {syncConflicts}
     {conflictsLoading}
     {conflictBusy}
+    {browserExtensionStatus}
+    {browserExtensionBusy}
     {securityBusy}
     {backupBusy}
     {syncState}
@@ -1552,6 +1543,8 @@
     onLoadSyncConflicts={loadSyncConflicts}
     onResolveSyncConflict={resolveSyncConflict}
     onRevokeDevice={revokeDevice}
+    onLoadBrowserExtensionStatus={loadBrowserExtensionStatus}
+    onInstallBrowserExtension={installBrowserExtension}
   />
 {/if}
 

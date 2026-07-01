@@ -7,13 +7,13 @@ use crate::models::{
     from_agent_sync_conflict_response, from_agent_sync_settings, from_agent_tool_config_apply,
     from_agent_tool_config_preview, into_agent_cloud_sync_provider,
     into_agent_sync_conflict_request, into_agent_sync_settings_update,
-    into_agent_tool_config_request, AppPreferences, ChangePasswordRequest, CreateVaultRequest,
-    NativeHostRepairRequest, NativeHostStatus, ProbeResult, ProviderAddRequest,
-    ProviderUpdateRequest, RecoveryVaultRequest, SavePreferencesRequest, SaveSyncSettingsRequest,
-    SyncCloudRequest, SyncConflictActionRequest, SyncConflictResponse, SyncConflictsRequest,
-    SyncLocalRequest, SyncSettings, SyncWebDavRequest, ToolConfigApplyResponse,
-    ToolConfigPreviewResponse, ToolConfigRequest, UnlockVaultRequest, VaultExportRequest,
-    VaultImportRequest, VaultStatus,
+    into_agent_tool_config_request, AppPreferences, BrowserExtensionInstallResult,
+    BrowserExtensionStatus, ChangePasswordRequest, CreateVaultRequest, NativeHostRepairRequest,
+    NativeHostStatus, ProbeResult, ProviderAddRequest, ProviderUpdateRequest, RecoveryVaultRequest,
+    SavePreferencesRequest, SaveSyncSettingsRequest, SyncCloudRequest, SyncConflictActionRequest,
+    SyncConflictResponse, SyncConflictsRequest, SyncLocalRequest, SyncSettings, SyncWebDavRequest,
+    ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest, UnlockVaultRequest,
+    VaultExportRequest, VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
     AgentRequest, LockReason, ProbeResult as AgentProbeResult, SecretValue, SensitiveString,
@@ -29,9 +29,9 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::{
-    agent_request, agent_request_no_unlock, agent_status, load_preferences,
-    native_host_status_snapshot, provider_add_input, provider_update_input,
-    repair_native_host_manifest, run_blocking, save_preferences, AppState,
+    agent_request, agent_request_no_unlock, agent_status, browser_extension_status_snapshot,
+    install_browser_extension, load_preferences, native_host_status_snapshot, provider_add_input,
+    provider_update_input, repair_native_host_manifest, run_blocking, save_preferences, AppState,
 };
 
 async fn agent_request_async<T: DeserializeOwned + Send + 'static>(
@@ -53,7 +53,7 @@ pub(crate) fn window_target() -> Option<String> {
     std::env::var("AIPASS_WINDOW_TARGET")
         .ok()
         .map(|value| value.trim().to_string())
-        .filter(|value| matches!(value.as_str(), "main" | "unlock" | "quick-access"))
+        .filter(|value| matches!(value.as_str(), "main" | "unlock" | "quick-access" | "tray"))
 }
 
 #[tauri::command]
@@ -528,6 +528,20 @@ pub(crate) async fn native_host_repair(
     request: NativeHostRepairRequest,
 ) -> Result<NativeHostStatus, String> {
     run_blocking(move || repair_native_host_manifest(request.extension_ids)).await
+}
+
+#[tauri::command]
+pub(crate) async fn browser_extension_status(
+    app: AppHandle,
+) -> Result<BrowserExtensionStatus, String> {
+    run_blocking(move || browser_extension_status_snapshot(&app)).await
+}
+
+#[tauri::command]
+pub(crate) async fn browser_extension_install(
+    app: AppHandle,
+) -> Result<BrowserExtensionInstallResult, String> {
+    run_blocking(move || install_browser_extension(&app)).await
 }
 
 #[tauri::command]

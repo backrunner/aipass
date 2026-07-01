@@ -9,6 +9,7 @@ describe("@aipass/ui labels", () => {
   });
 
   it("derives initials", () => {
-    expect(initials("Google Gemini")).toBe("GG");
+    expect(initials("Google Gemini")).toBe("G");
+    expect(initials("天梯 API")).toBe("天");
   });
 });

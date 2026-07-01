@@ -21,7 +21,15 @@ fn ensure_debug_bundle_resource_placeholders() {
         return;
     }
     for name in [agent_binary_name(), native_host_binary_name()] {
-        let path = release_dir.join(name);
+        let exact_binary_path = release_dir.join(name);
+        if std::fs::metadata(&exact_binary_path)
+            .map(|metadata| metadata.len() == 0)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&exact_binary_path);
+        }
+
+        let path = release_dir.join(format!("{name}.resource-placeholder"));
         if path.exists() {
             continue;
         }
@@ -33,6 +41,29 @@ fn ensure_debug_bundle_resource_placeholders() {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
         }
+    }
+
+    let extension_build_dir = workspace_root.join("apps").join("extension").join("build");
+    if std::fs::create_dir_all(&extension_build_dir).is_err() {
+        return;
+    }
+    let crx_path = extension_build_dir.join("aipass-extension.crx");
+    if !crx_path.exists() {
+        let _ = std::fs::write(&crx_path, []);
+    }
+    let metadata_path = extension_build_dir.join("aipass-extension.json");
+    if !metadata_path.exists() {
+        let _ = std::fs::write(
+            &metadata_path,
+            r#"{
+  "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "name": "AIPass",
+  "version": "0.0.0",
+  "crx": "aipass-extension.crx",
+  "zip": "aipass-extension.zip"
+}
+"#,
+        );
     }
 }
 

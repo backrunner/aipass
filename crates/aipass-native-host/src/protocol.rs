@@ -73,7 +73,6 @@ pub enum NativeRequest {
         interface_type: Option<InterfaceType>,
         auth_scheme: Option<AuthScheme>,
         api_key: SensitiveString,
-        environment: Option<String>,
         tags: Vec<String>,
         gateway: Option<GatewayMetadata>,
     },
@@ -92,7 +91,6 @@ pub enum NativeRequest {
         interface_type: Option<InterfaceType>,
         auth_scheme: Option<AuthScheme>,
         api_key: SensitiveString,
-        environment: Option<String>,
         tags: Vec<String>,
         gateway: Option<GatewayMetadata>,
     },
@@ -122,7 +120,6 @@ pub enum NativeRequest {
         gateway: Option<GatewayMetadata>,
         #[serde(default)]
         tags: Vec<String>,
-        environment: String,
         notes: Option<String>,
     },
     #[serde(rename = "provider.update")]
@@ -152,7 +149,6 @@ pub enum NativeRequest {
         gateway: Option<GatewayMetadata>,
         #[serde(default)]
         tags: Vec<String>,
-        environment: String,
         notes: Option<String>,
     },
     #[serde(rename = "provider.delete")]
@@ -172,6 +168,10 @@ pub enum NativeRequest {
         id: Uuid,
         extension_id: Option<String>,
         interactive: Option<String>,
+        #[serde(default)]
+        wait: bool,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
         #[serde(default)]
         password: Option<SensitiveString>,
     },
@@ -272,8 +272,7 @@ mod tests {
                 "interface_type": "openai_compatible",
                 "auth_scheme": "bearer",
                 "api_key": "sk-test",
-                "endpoints": ["https://gw.example.com/v1"],
-                "environment": "work"
+                "endpoints": ["https://gw.example.com/v1"]
             }"#,
         )
         .unwrap();
@@ -319,8 +318,7 @@ mod tests {
                 "title": "Edited Gateway",
                 "interface_type": "openai_compatible",
                 "auth_scheme": "bearer",
-                "api_key": "sk-updated",
-                "environment": "work"
+                "api_key": "sk-updated"
             }"#,
         )
         .unwrap();
