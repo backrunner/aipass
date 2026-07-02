@@ -26,8 +26,11 @@ aipass-provider-registry = { path = "../../../crates/aipass-provider-registry" }
 aipass-storage = { path = "../../../crates/aipass-storage" }
 aipass-sync = { path = "../../../crates/aipass-sync" }
 aipass-vault = { path = "../../../crates/aipass-vault" }
+anyhow.workspace = true
 directories.workspace = true
+interprocess.workspace = true
 reqwest.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11.2", features = ["image-png", "macos-private-api", "tray-icon"] }

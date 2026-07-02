@@ -1,0 +1,272 @@
+use aipass_agent_protocol::{read_frame, write_frame};
+use anyhow::{Context, Result};
+#[cfg(not(target_os = "windows"))]
+use directories::ProjectDirs;
+#[cfg(not(target_os = "windows"))]
+use interprocess::local_socket::GenericFilePath;
+#[cfg(target_os = "windows")]
+use interprocess::local_socket::GenericNamespaced;
+use interprocess::local_socket::{prelude::*, Listener, ListenerOptions, Stream};
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+use interprocess::os::unix::local_socket::ListenerOptionsExt;
+use semver::Version;
+use serde::{Deserialize, Serialize};
+#[cfg(not(target_os = "windows"))]
+use std::fs;
+use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(not(target_os = "windows"))]
+use std::path::PathBuf;
+use std::thread;
+use std::time::{Duration, Instant};
+use tauri::AppHandle;
+
+#[cfg(target_os = "windows")]
+const DESKTOP_SINGLETON_NAME: &str = "dev.aipass.desktop.tray";
+const REPLACEMENT_BIND_TIMEOUT: Duration = Duration::from_secs(8);
+const REPLACEMENT_BIND_INTERVAL: Duration = Duration::from_millis(100);
+const REPLACEMENT_EXIT_DELAY: Duration = Duration::from_millis(150);
+
+pub(crate) enum SingletonDecision {
+    Run(DesktopSingleton),
+    Exit,
+}
+
+pub(crate) struct DesktopSingleton {
+    listener: Listener,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SingletonRequest {
+    version: String,
+    target: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SingletonResponse {
+    version: String,
+    action: SingletonAction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum SingletonAction {
+    UseExisting,
+    ReplaceExisting,
+}
+
+pub(crate) fn acquire(current_version: &str, target: &str) -> Result<SingletonDecision> {
+    let request = SingletonRequest {
+        version: current_version.to_string(),
+        target: target.to_string(),
+    };
+
+    match connect_existing_instance() {
+        Ok(mut stream) => {
+            write_frame(&mut stream, &request)
+                .context("failed to send desktop singleton request")?;
+            let response: SingletonResponse =
+                read_frame(&mut stream).context("failed to read desktop singleton response")?;
+
+            match response.action {
+                SingletonAction::UseExisting => {
+                    eprintln!(
+                        "AIPass desktop {} is already running; exiting this instance",
+                        response.version
+                    );
+                    Ok(SingletonDecision::Exit)
+                }
+                SingletonAction::ReplaceExisting => {
+                    eprintln!(
+                        "replacing older AIPass desktop {} with {}",
+                        response.version, current_version
+                    );
+                    Ok(SingletonDecision::Run(DesktopSingleton {
+                        listener: wait_for_replacement_listener()?,
+                    }))
+                }
+            }
+        }
+        Err(_) => Ok(SingletonDecision::Run(DesktopSingleton {
+            listener: listen_for_instances()?,
+        })),
+    }
+}
+
+pub(crate) fn spawn_server(app: AppHandle, singleton: DesktopSingleton, current_version: String) {
+    thread::spawn(move || loop {
+        match singleton.listener.accept() {
+            Ok(stream) => {
+                let app = app.clone();
+                let current_version = current_version.clone();
+                thread::spawn(move || {
+                    if let Err(err) = handle_connection(stream, app, &current_version) {
+                        eprintln!("desktop singleton request failed: {err}");
+                    }
+                });
+            }
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) => {
+                eprintln!("desktop singleton accept failed: {err}");
+                thread::sleep(REPLACEMENT_BIND_INTERVAL);
+            }
+        }
+    });
+}
+
+fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) -> Result<()> {
+    let request: SingletonRequest =
+        read_frame(&mut stream).context("failed to read desktop singleton request")?;
+
+    let action = if incoming_version_replaces_current(&request.version, current_version) {
+        SingletonAction::ReplaceExisting
+    } else {
+        SingletonAction::UseExisting
+    };
+
+    write_frame(
+        &mut stream,
+        &SingletonResponse {
+            version: current_version.to_string(),
+            action,
+        },
+    )
+    .context("failed to send desktop singleton response")?;
+
+    match action {
+        SingletonAction::UseExisting => crate::activate_window_target(&app, &request.target),
+        SingletonAction::ReplaceExisting => {
+            thread::spawn(move || {
+                thread::sleep(REPLACEMENT_EXIT_DELAY);
+                app.exit(0);
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn incoming_version_replaces_current(incoming: &str, current: &str) -> bool {
+    match (parse_version(incoming), parse_version(current)) {
+        (Some(incoming), Some(current)) => incoming > current,
+        _ => false,
+    }
+}
+
+fn parse_version(value: &str) -> Option<Version> {
+    Version::parse(value.trim().trim_start_matches('v')).ok()
+}
+
+fn wait_for_replacement_listener() -> Result<Listener> {
+    let deadline = Instant::now() + REPLACEMENT_BIND_TIMEOUT;
+    loop {
+        match listen_for_instances() {
+            Ok(listener) => return Ok(listener),
+            Err(err) if Instant::now() < deadline => {
+                let _ = err;
+                thread::sleep(REPLACEMENT_BIND_INTERVAL);
+            }
+            Err(err) => return Err(err).context("older desktop instance did not exit in time"),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn connect_existing_instance() -> Result<Stream> {
+    let name = DESKTOP_SINGLETON_NAME.to_ns_name::<GenericNamespaced>()?;
+    Ok(Stream::connect(name)?)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn connect_existing_instance() -> Result<Stream> {
+    let name = singleton_socket_path()?.to_fs_name::<GenericFilePath>()?;
+    Ok(Stream::connect(name)?)
+}
+
+#[cfg(target_os = "windows")]
+fn listen_for_instances() -> Result<Listener> {
+    let name = DESKTOP_SINGLETON_NAME.to_ns_name::<GenericNamespaced>()?;
+    Ok(ListenerOptions::new()
+        .name(name)
+        .try_overwrite(true)
+        .reclaim_name(true)
+        .create_sync()?)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn listen_for_instances() -> Result<Listener> {
+    let path = singleton_socket_path()?;
+    let name = path.clone().to_fs_name::<GenericFilePath>()?;
+    #[allow(unused_mut)]
+    let mut options = ListenerOptions::new()
+        .name(name)
+        .try_overwrite(true)
+        .reclaim_name(true);
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+    {
+        options = options.mode(0o600);
+    }
+    let listener = options.create_sync()?;
+    #[cfg(unix)]
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn singleton_socket_path() -> Result<PathBuf> {
+    Ok(desktop_runtime_dir()?.join("desktop-tray.sock"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn desktop_runtime_dir() -> Result<PathBuf> {
+    let dirs =
+        ProjectDirs::from("dev", "aipass", "desktop").context("cannot determine project dir")?;
+    let dir = if let Some(explicit) = std::env::var_os("AIPASS_DESKTOP_RUNTIME_DIR") {
+        PathBuf::from(explicit)
+    } else {
+        let root = if cfg!(target_os = "macos") {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .context("HOME is not set")?
+                .join(".aipass")
+                .join("run")
+        } else {
+            std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| dirs.data_local_dir().join("runtime"))
+        };
+        root.join("aipass-desktop")
+    };
+    fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::incoming_version_replaces_current;
+
+    #[test]
+    fn newer_semver_replaces_current() {
+        assert!(incoming_version_replaces_current("1.2.4", "1.2.3"));
+        assert!(incoming_version_replaces_current("2.0.0", "1.9.9"));
+        assert!(incoming_version_replaces_current("1.0.0", "1.0.0-beta.1"));
+    }
+
+    #[test]
+    fn same_or_older_semver_uses_existing() {
+        assert!(!incoming_version_replaces_current("1.2.3", "1.2.3"));
+        assert!(!incoming_version_replaces_current("1.2.3", "1.2.4"));
+        assert!(!incoming_version_replaces_current("1.0.0-beta.1", "1.0.0"));
+    }
+
+    #[test]
+    fn invalid_versions_do_not_replace_existing() {
+        assert!(!incoming_version_replaces_current("nightly", "1.0.0"));
+        assert!(!incoming_version_replaces_current("1.0.1", "dev"));
+    }
+}

@@ -1,6 +1,7 @@
 mod auth_tasks;
 mod commands;
 mod models;
+mod singleton;
 mod tray;
 mod updates;
 
@@ -981,11 +982,18 @@ fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> 
     atomic_write_bytes(path, &bytes).map_err(|err| err.to_string())
 }
 
-fn configure_initial_window(app: &AppHandle) {
+fn launch_window_target() -> String {
+    std::env::var("AIPASS_WINDOW_TARGET")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| matches!(value.as_str(), "main" | "unlock" | "quick-access" | "tray"))
+        .unwrap_or_else(|| "main".to_string())
+}
+
+fn configure_window_target(app: &AppHandle, target: &str) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let target = std::env::var("AIPASS_WINDOW_TARGET").unwrap_or_else(|_| "main".to_string());
     if target == "tray" {
         #[cfg(target_os = "macos")]
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -996,7 +1004,7 @@ fn configure_initial_window(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
-    let (title, width, height) = match target.as_str() {
+    let (title, width, height) = match target {
         "unlock" => ("AIPass Unlock", 420.0, 560.0),
         "quick-access" => ("AIPass Quick Access", 520.0, 640.0),
         _ => ("AIPass", 1280.0, 820.0),
@@ -1007,6 +1015,13 @@ fn configure_initial_window(app: &AppHandle) {
     let _ = window.center();
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+pub(crate) fn activate_window_target(app: &AppHandle, target: &str) {
+    if target == "tray" {
+        return;
+    }
+    configure_window_target(app, target);
 }
 
 fn ensure_agent_resident_async(app: AppHandle) {
@@ -1070,11 +1085,26 @@ fn round_macos_view(view: &objc2_app_kit::NSView, radius: f64) {
 }
 
 pub fn run() {
+    let version = env!("CARGO_PKG_VERSION");
+    let launch_target = launch_window_target();
+    let singleton = match singleton::acquire(version, &launch_target) {
+        Ok(singleton::SingletonDecision::Run(singleton)) => singleton,
+        Ok(singleton::SingletonDecision::Exit) => return,
+        Err(err) => {
+            eprintln!("failed to acquire AIPass desktop singleton: {err}");
+            return;
+        }
+    };
+    let mut singleton = Some(singleton);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
-        .setup(|app| {
-            configure_initial_window(app.handle());
+        .setup(move |app| {
+            configure_window_target(app.handle(), &launch_target);
+            if let Some(singleton) = singleton.take() {
+                singleton::spawn_server(app.handle().clone(), singleton, version.to_string());
+            }
             tray::setup(app)?;
             ensure_agent_resident_async(app.handle().clone());
             Ok(())

@@ -1,5 +1,6 @@
 use crate::{agent_client, agent_error_to_string, agent_request_no_unlock};
 use aipass_agent_protocol::{AgentRequest, LockReason, SessionStatus};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -15,6 +16,9 @@ const MENU_START_AGENT: &str = "tray-start-agent";
 const MENU_LOCK: &str = "tray-lock";
 const MENU_INSTALL_LOGIN_AGENT: &str = "tray-install-login-agent";
 const MENU_QUIT: &str = "tray-quit";
+const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
+static AGENT_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone)]
 struct TrayMenuItems {
@@ -155,21 +159,27 @@ fn refresh_status_async(app: AppHandle, items: TrayMenuItems) {
 
 fn spawn_status_refresher(app: AppHandle, items: TrayMenuItems) {
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(30));
-        refresh_status(&app, &items);
+        thread::sleep(STATUS_REFRESH_INTERVAL);
+        recover_agent_and_refresh_status(&app, &items);
     });
 }
 
 fn refresh_status(app: &AppHandle, items: &TrayMenuItems) {
-    let status = agent_client(app)
+    apply_tray_status(app, items, current_tray_status(app));
+}
+
+fn current_tray_status(app: &AppHandle) -> TrayStatus {
+    agent_client(app)
         .and_then(|client| {
             client
                 .request::<SessionStatus>(&AgentRequest::SessionStatus)
                 .map_err(agent_error_to_string)
         })
         .map(TrayStatus::Running)
-        .unwrap_or_else(TrayStatus::Unavailable);
+        .unwrap_or_else(TrayStatus::Unavailable)
+}
 
+fn apply_tray_status(app: &AppHandle, items: &TrayMenuItems, status: TrayStatus) {
     let _ = items.status.set_text(status.menu_text());
     let _ = items.start_agent.set_enabled(status.can_start());
     let _ = items.lock.set_enabled(status.can_lock());
@@ -179,16 +189,41 @@ fn refresh_status(app: &AppHandle, items: &TrayMenuItems) {
     }
 }
 
+fn recover_agent_and_refresh_status(app: &AppHandle, items: &TrayMenuItems) {
+    let status = current_tray_status(app);
+    if !status.can_start() {
+        apply_tray_status(app, items, status);
+        return;
+    }
+
+    let _ = items.status.set_text("Agent: starting...");
+    let _ = items.start_agent.set_enabled(false);
+
+    match ensure_agent_running_for_tray(app) {
+        Ok(_) => refresh_status(app, items),
+        Err(err) => {
+            eprintln!("failed to auto-start AIPass agent from tray watchdog: {err}");
+            apply_tray_status(app, items, TrayStatus::Unavailable(err));
+        }
+    }
+}
+
+fn ensure_agent_running_for_tray(app: &AppHandle) -> Result<(), String> {
+    let _guard = AGENT_START_LOCK
+        .lock()
+        .map_err(|_| "agent start lock is poisoned".to_string())?;
+    agent_client(app).and_then(|client| {
+        client
+            .ensure_running_for_desktop_companion()
+            .map_err(|err| err.to_string())
+    })
+}
+
 fn start_agent_async(app: AppHandle, items: TrayMenuItems) {
     thread::spawn(move || {
         let _ = items.status.set_text("Agent: starting...");
         let _ = items.start_agent.set_enabled(false);
-        if let Err(err) = agent_client(&app).and_then(|client| {
-            client
-                .ensure_running_for_desktop_companion()
-                .map_err(|err| err.to_string())?;
-            Ok(())
-        }) {
+        if let Err(err) = ensure_agent_running_for_tray(&app) {
             eprintln!("failed to start AIPass agent from tray: {err}");
             let _ = items.status.set_text("Agent: start failed");
         }
