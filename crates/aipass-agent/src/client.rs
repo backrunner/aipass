@@ -224,9 +224,10 @@ impl AgentStartupMode {
         launcher::AgentLaunchOptions {
             suppress_desktop_tray: matches!(
                 self,
-                Self::Direct {
-                    suppress_desktop_tray: true
-                }
+                Self::Autostart
+                    | Self::Direct {
+                        suppress_desktop_tray: true
+                    }
             ),
         }
     }
@@ -263,7 +264,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_companion_startup_suppresses_tray_launch() {
+    fn resident_agent_startup_suppresses_tray_launch() {
         let companion = AgentStartupMode::Direct {
             suppress_desktop_tray: true,
         }
@@ -276,6 +277,6 @@ mod tests {
 
         assert!(companion.suppress_desktop_tray);
         assert!(!app.suppress_desktop_tray);
-        assert!(!autostart.suppress_desktop_tray);
+        assert!(autostart.suppress_desktop_tray);
     }
 }

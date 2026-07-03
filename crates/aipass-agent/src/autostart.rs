@@ -20,6 +20,16 @@ pub struct AgentAutostartStatus {
     pub agent_binary: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug)]
+pub struct TrayAutostartStatus {
+    pub service_name: String,
+    pub registered: bool,
+    pub running: bool,
+    pub install_path: Option<PathBuf>,
+    pub supervisor_path: Option<PathBuf>,
+    pub desktop_binary: Option<PathBuf>,
+}
+
 pub fn install_autostart(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAutostartStatus> {
     imp::install(agent_binary, vault_dir)
 }
@@ -36,10 +46,36 @@ pub fn query_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {
     imp::query(vault_dir)
 }
 
+pub fn install_tray_autostart(
+    desktop_binary: &Path,
+    vault_dir: &Path,
+) -> Result<TrayAutostartStatus> {
+    imp::install_tray(desktop_binary, vault_dir)
+}
+
+pub fn uninstall_tray_autostart(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+    imp::uninstall_tray(vault_dir)
+}
+
+pub fn stop_tray_autostart(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+    imp::stop_tray(vault_dir)
+}
+
+pub fn query_tray_autostart(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+    imp::query_tray(vault_dir)
+}
+
 fn shutdown_agent(vault_dir: &Path) {
     if let Ok(client) = crate::client::AgentClient::for_vault(vault_dir.to_path_buf()) {
         let _ = client.shutdown();
     }
+}
+
+fn tray_service_name(vault_dir: &Path) -> Result<String> {
+    Ok(format!(
+        "dev.aipass.desktop.tray.{}",
+        crate::paths::namespace_for_vault_dir(vault_dir)?
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -141,6 +177,104 @@ mod imp {
             install_path: Some(paths.plist_path),
             supervisor_path: Some(paths.supervisor_path),
             agent_binary: None,
+        })
+    }
+
+    pub(super) fn install_tray(
+        desktop_binary: &Path,
+        vault_dir: &Path,
+    ) -> Result<TrayAutostartStatus> {
+        let service_name = tray_service_name(vault_dir)?;
+        let paths = macos_paths(&service_name)?;
+        let desktop_binary = absolute_path(desktop_binary);
+        let vault_dir = absolute_path(vault_dir);
+
+        fs::create_dir_all(
+            paths
+                .supervisor_path
+                .parent()
+                .context("invalid tray supervisor path")?,
+        )?;
+        fs::create_dir_all(paths.log_dir.as_path())?;
+        write_supervisor(
+            &paths.supervisor_path,
+            &macos_tray_supervisor_script(
+                &service_name,
+                &paths.plist_path,
+                &desktop_binary,
+                &vault_dir,
+                &paths.out_log,
+                &paths.err_log,
+            )?,
+        )?;
+
+        fs::create_dir_all(
+            paths
+                .plist_path
+                .parent()
+                .context("invalid tray LaunchAgent path")?,
+        )?;
+        let plist = macos_plist(
+            &service_name,
+            &paths.supervisor_path,
+            &paths.supervisor_log,
+            &paths.supervisor_err_log,
+        );
+        atomic_write_bytes(&paths.plist_path, plist.as_bytes())?;
+
+        let _ = unload_launch_agent(&service_name, &paths.plist_path);
+        load_launch_agent(&service_name, &paths.plist_path)?;
+
+        Ok(TrayAutostartStatus {
+            service_name: service_name.clone(),
+            registered: paths.plist_path.exists(),
+            running: launch_agent_running(&service_name),
+            install_path: Some(paths.plist_path),
+            supervisor_path: Some(paths.supervisor_path),
+            desktop_binary: Some(desktop_binary),
+        })
+    }
+
+    pub(super) fn uninstall_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        let service_name = tray_service_name(vault_dir)?;
+        let paths = macos_paths(&service_name)?;
+        let _ = unload_launch_agent(&service_name, &paths.plist_path);
+        let _ = fs::remove_file(&paths.plist_path);
+        let _ = fs::remove_file(&paths.supervisor_path);
+        Ok(TrayAutostartStatus {
+            service_name,
+            registered: false,
+            running: false,
+            install_path: Some(paths.plist_path),
+            supervisor_path: Some(paths.supervisor_path),
+            desktop_binary: None,
+        })
+    }
+
+    pub(super) fn stop_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        let service_name = tray_service_name(vault_dir)?;
+        let paths = macos_paths(&service_name)?;
+        let _ = unload_launch_agent(&service_name, &paths.plist_path);
+        Ok(TrayAutostartStatus {
+            service_name,
+            registered: paths.plist_path.exists(),
+            running: false,
+            install_path: Some(paths.plist_path),
+            supervisor_path: Some(paths.supervisor_path),
+            desktop_binary: None,
+        })
+    }
+
+    pub(super) fn query_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        let service_name = tray_service_name(vault_dir)?;
+        let paths = macos_paths(&service_name)?;
+        Ok(TrayAutostartStatus {
+            service_name: service_name.clone(),
+            registered: paths.plist_path.exists(),
+            running: launch_agent_running(&service_name),
+            install_path: Some(paths.plist_path),
+            supervisor_path: Some(paths.supervisor_path),
+            desktop_binary: None,
         })
     }
 
@@ -250,7 +384,7 @@ if [ ! -x "$AGENT" ]; then
 fi
 
 while [ -x "$AGENT" ]; do
-  "$AGENT" --vault "$VAULT" >>"$OUT_LOG" 2>>"$ERR_LOG" &
+  AIPASS_AGENT_SUPPRESS_TRAY=1 "$AGENT" --vault "$VAULT" >>"$OUT_LOG" 2>>"$ERR_LOG" &
   child=$!
   while kill -0 "$child" >/dev/null 2>&1; do
     if [ ! -x "$AGENT" ]; then
@@ -275,6 +409,98 @@ cleanup
             shell_quote(&out_log.display().to_string()),
             shell_quote(&err_log.display().to_string()),
         )
+    }
+
+    fn macos_tray_supervisor_script(
+        service_name: &str,
+        plist_path: &Path,
+        desktop_binary: &Path,
+        vault_dir: &Path,
+        out_log: &Path,
+        err_log: &Path,
+    ) -> Result<String> {
+        let desktop_runtime_dir = desktop_runtime_dir()?;
+        let singleton_socket = desktop_runtime_dir.join("desktop-tray.sock");
+        Ok(format!(
+            r#"#!/bin/sh
+set -u
+
+LABEL={}
+PLIST={}
+DESKTOP={}
+VAULT={}
+OUT_LOG={}
+ERR_LOG={}
+SINGLETON_SOCKET={}
+child=""
+
+cleanup() {{
+  rm -f "$PLIST" "$0"
+  launchctl remove "$LABEL" >/dev/null 2>&1 || true
+}}
+
+terminate() {{
+  exit 0
+}}
+
+desktop_running() {{
+  pgrep -f "$DESKTOP" >/dev/null 2>&1
+}}
+
+wait_for_existing_desktop() {{
+  while desktop_running; do
+    sleep 2
+  done
+}}
+
+trap terminate TERM INT
+
+if [ ! -x "$DESKTOP" ]; then
+  cleanup
+  exit 0
+fi
+
+mkdir -p "$(dirname "$SINGLETON_SOCKET")" >/dev/null 2>&1 || true
+
+while [ -x "$DESKTOP" ]; do
+  wait_for_existing_desktop
+  AIPASS_WINDOW_TARGET=tray AIPASS_VAULT_DIR="$VAULT" "$DESKTOP" >>"$OUT_LOG" 2>>"$ERR_LOG" &
+  child=$!
+  while kill -0 "$child" >/dev/null 2>&1; do
+    if [ ! -x "$DESKTOP" ]; then
+      kill "$child" >/dev/null 2>&1 || true
+      wait "$child" >/dev/null 2>&1 || true
+      cleanup
+      exit 0
+    fi
+    sleep 10
+  done
+  wait "$child" >/dev/null 2>&1 || true
+  child=""
+  sleep 2
+done
+
+cleanup
+"#,
+            shell_quote(service_name),
+            shell_quote(&plist_path.display().to_string()),
+            shell_quote(&desktop_binary.display().to_string()),
+            shell_quote(&vault_dir.display().to_string()),
+            shell_quote(&out_log.display().to_string()),
+            shell_quote(&err_log.display().to_string()),
+            shell_quote(&singleton_socket.display().to_string()),
+        ))
+    }
+
+    fn desktop_runtime_dir() -> Result<PathBuf> {
+        if let Some(explicit) = std::env::var_os("AIPASS_DESKTOP_RUNTIME_DIR") {
+            Ok(PathBuf::from(explicit))
+        } else {
+            Ok(home_dir()?
+                .join(".aipass")
+                .join("run")
+                .join("aipass-desktop"))
+        }
     }
 
     fn load_launch_agent(service_name: &str, plist_path: &Path) -> Result<()> {
@@ -339,6 +565,43 @@ cleanup
         }
         let uid = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(format!("gui/{uid}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn macos_agent_supervisor_suppresses_tray_launch() {
+            let script = macos_supervisor_script(
+                "dev.aipass.agent.test",
+                Path::new("/tmp/dev.aipass.agent.test.plist"),
+                Path::new("/tmp/aipass-agent"),
+                Path::new("/tmp/aipass-vault"),
+                Path::new("/tmp/agent.out.log"),
+                Path::new("/tmp/agent.err.log"),
+            );
+
+            assert!(script.contains("AIPASS_AGENT_SUPPRESS_TRAY=1 \"$AGENT\" --vault \"$VAULT\""));
+        }
+
+        #[test]
+        fn macos_tray_supervisor_launches_tray_target_and_waits_for_existing_desktop() {
+            let script = macos_tray_supervisor_script(
+                "dev.aipass.desktop.tray.test",
+                Path::new("/tmp/dev.aipass.desktop.tray.test.plist"),
+                Path::new("/tmp/aipass-desktop"),
+                Path::new("/tmp/aipass-vault"),
+                Path::new("/tmp/tray.out.log"),
+                Path::new("/tmp/tray.err.log"),
+            )
+            .expect("tray supervisor script");
+
+            assert!(script.contains("pgrep -f \"$DESKTOP\""));
+            assert!(script.contains("wait_for_existing_desktop"));
+            assert!(script
+                .contains("AIPASS_WINDOW_TARGET=tray AIPASS_VAULT_DIR=\"$VAULT\" \"$DESKTOP\""));
+        }
     }
 }
 
@@ -439,6 +702,36 @@ mod imp {
             install_path: Some(paths.unit_path),
             supervisor_path: Some(paths.supervisor_path),
             agent_binary: None,
+        })
+    }
+
+    pub(super) fn install_tray(
+        _desktop_binary: &Path,
+        vault_dir: &Path,
+    ) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn uninstall_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn stop_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn query_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    fn unsupported_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        Ok(TrayAutostartStatus {
+            service_name: tray_service_name(vault_dir)?,
+            registered: false,
+            running: false,
+            install_path: None,
+            supervisor_path: None,
+            desktop_binary: None,
         })
     }
 
@@ -632,6 +925,36 @@ mod imp {
             agent_binary: None,
         })
     }
+
+    pub(super) fn install_tray(
+        _desktop_binary: &Path,
+        vault_dir: &Path,
+    ) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn uninstall_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn stop_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn query_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    fn unsupported_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        Ok(TrayAutostartStatus {
+            service_name: tray_service_name(vault_dir)?,
+            registered: false,
+            running: false,
+            install_path: None,
+            supervisor_path: None,
+            desktop_binary: None,
+        })
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -654,6 +977,25 @@ mod imp {
         unsupported(vault_dir)
     }
 
+    pub(super) fn install_tray(
+        _desktop_binary: &Path,
+        vault_dir: &Path,
+    ) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn uninstall_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn stop_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
+    pub(super) fn query_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        unsupported_tray(vault_dir)
+    }
+
     fn unsupported(vault_dir: &Path) -> Result<AgentAutostartStatus> {
         Ok(AgentAutostartStatus {
             service_name: crate::paths::agent_service_name(vault_dir)?,
@@ -662,6 +1004,17 @@ mod imp {
             install_path: None,
             supervisor_path: None,
             agent_binary: None,
+        })
+    }
+
+    fn unsupported_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        Ok(TrayAutostartStatus {
+            service_name: tray_service_name(vault_dir)?,
+            registered: false,
+            running: false,
+            install_path: None,
+            supervisor_path: None,
+            desktop_binary: None,
         })
     }
 }

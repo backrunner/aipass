@@ -39,7 +39,7 @@ pub(crate) fn setup(app: &App) -> tauri::Result<()> {
     let install_login_agent = MenuItem::with_id(
         app,
         MENU_INSTALL_LOGIN_AGENT,
-        "Repair Auto-Start Agent",
+        "Repair Auto-Start",
         true,
         None::<&str>,
     )?;
@@ -251,15 +251,18 @@ fn install_login_agent_async(app: AppHandle, items: TrayMenuItems) {
     thread::spawn(move || {
         let result = agent_client(&app).and_then(|client| {
             let agent_binary = aipass_agent::agent_binary_path().map_err(|err| err.to_string())?;
+            let desktop_binary = std::env::current_exe().map_err(|err| err.to_string())?;
             aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
                 .map_err(|err| err.to_string())?;
-            client.ensure_running().map_err(|err| err.to_string())
+            aipass_agent::install_tray_autostart(&desktop_binary, &client.config.vault_dir)
+                .map_err(|err| err.to_string())?;
+            client
+                .ensure_running_for_desktop_companion()
+                .map_err(|err| err.to_string())
         });
         match result {
             Ok(_) => {
-                let _ = items
-                    .install_login_agent
-                    .set_text("Repair Auto-Start Agent");
+                let _ = items.install_login_agent.set_text("Repair Auto-Start");
                 refresh_status(&app, &items);
             }
             Err(err) => {
@@ -272,10 +275,10 @@ fn install_login_agent_async(app: AppHandle, items: TrayMenuItems) {
 
 fn quit_aipass_async(app: AppHandle) {
     thread::spawn(move || {
+        #[cfg(target_os = "macos")]
         if let Ok(client) = agent_client(&app) {
-            if let Err(err) = aipass_agent::stop_agent_autostart(&client.config.vault_dir) {
-                eprintln!("failed to stop AIPass agent autostart before quit: {err}");
-                let _ = client.shutdown();
+            if let Err(err) = aipass_agent::stop_tray_autostart(&client.config.vault_dir) {
+                eprintln!("failed to stop AIPass tray autostart before quit: {err}");
             }
         }
         app.exit(0);

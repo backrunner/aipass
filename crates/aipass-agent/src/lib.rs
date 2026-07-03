@@ -11,9 +11,11 @@ pub mod session;
 pub mod windows_service;
 
 pub use autostart::{
-    install_autostart as install_agent_autostart, query_autostart as query_agent_autostart,
-    stop_autostart as stop_agent_autostart, uninstall_autostart as uninstall_agent_autostart,
-    AgentAutostartStatus,
+    install_autostart as install_agent_autostart, install_tray_autostart,
+    query_autostart as query_agent_autostart, query_tray_autostart,
+    stop_autostart as stop_agent_autostart, stop_tray_autostart,
+    uninstall_autostart as uninstall_agent_autostart, uninstall_tray_autostart,
+    AgentAutostartStatus, TrayAutostartStatus,
 };
 pub use client::{AgentClient, AgentClientConfig, AgentCommandError};
 pub use launcher::{agent_binary_candidates, agent_binary_path};
