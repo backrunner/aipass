@@ -91,6 +91,9 @@
         : browserExtensionStatus?.installMode === "externalCrx"
           ? $t("settings.extensionInstall")
           : $t("settings.extensionOpenInstaller");
+  $: detectedBrowserLabel = browserExtensionStatus?.detectedBrowsers?.length
+    ? browserExtensionStatus.detectedBrowsers.join(", ")
+    : $t("settings.notDetected");
 
   const themeOptions: ThemePreference[] = ["system", "light", "dark"];
 
@@ -521,7 +524,7 @@
                         {#if browserExtensionStatus.extensionInstalled && browserExtensionStatus.nativeHostConfigured}
                           {$t("settings.extensionReady")}
                         {:else if !browserExtensionStatus.chromeInstalled}
-                          {$t("settings.extensionChromeMissing")}
+                          {$t("settings.extensionBrowserMissing")}
                         {:else if !browserExtensionStatus.crxExists}
                           {$t("settings.extensionPackageMissing")}
                         {:else}
@@ -547,9 +550,9 @@
 
                   <div class="extension-grid">
                     <div>
-                      <span class="kv-label">{$t("settings.extensionChrome")}</span>
+                      <span class="kv-label">{$t("settings.extensionBrowser")}</span>
                       <span class="text-secondary">
-                        {browserExtensionStatus.chromeInstalled ? $t("settings.detected") : $t("settings.notDetected")}
+                        {detectedBrowserLabel}
                       </span>
                     </div>
                     <div>

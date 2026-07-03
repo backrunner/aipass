@@ -188,6 +188,21 @@
     desktopUnlockBusy = false;
   }
 
+  async function openDesktopApp() {
+    if (desktopUnlockBusy) return;
+    desktopUnlockBusy = true;
+    statusText = "";
+    statusError = false;
+    const response = await sendToWorker<{ opened?: boolean }>({ type: "aipass.openDesktop" });
+    desktopUnlockBusy = false;
+    if (!response?.ok) {
+      statusText = response?.error ?? $t("ext.openAppFailed");
+      statusError = true;
+      return;
+    }
+    statusText = $t("ext.openAppStarted");
+  }
+
   async function unlockWithPassword() {
     if (unlockBusy || !unlockPassword) return;
     passwordUnlockBusy = true;
@@ -1389,9 +1404,14 @@
   {:else if connection === "missing"}
     <section class="state-panel">
       <Banner tone="danger">
-        <div class="banner-copy">
-          <strong>{$t("ext.missing.title")}</strong>
-          <span>{$t("ext.missing.desc")}</span>
+        <div class="missing-banner">
+          <div class="banner-copy">
+            <strong>{$t("ext.missing.title")}</strong>
+            <span>{$t("ext.missing.desc")}</span>
+          </div>
+          <Button variant="secondary" size="sm" on:click={openDesktopApp} loading={desktopUnlockBusy}>
+            {$t("ext.openApp")}
+          </Button>
         </div>
       </Banner>
     </section>
@@ -1652,6 +1672,20 @@
 
     strong {
       font-size: 13px;
+    }
+  }
+
+  .missing-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    width: 100%;
+
+    .banner-copy {
+      min-width: 0;
+      flex: 1 1 220px;
     }
   }
 

@@ -356,6 +356,7 @@ pub(crate) struct NativeHostRepairRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NativeHostStatus {
     pub(crate) browser: String,
+    pub(crate) browser_label: String,
     pub(crate) host_path: PathBuf,
     pub(crate) host_exists: bool,
     pub(crate) host_usable: bool,
@@ -371,9 +372,11 @@ pub(crate) struct NativeHostStatus {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BrowserExtensionStatus {
     pub(crate) browser: String,
+    pub(crate) detected_browsers: Vec<String>,
     pub(crate) chrome_installed: bool,
     pub(crate) chrome_path: Option<PathBuf>,
     pub(crate) extension_id: String,
+    pub(crate) discovered_extension_ids: Vec<String>,
     pub(crate) extension_version: String,
     pub(crate) crx_path: PathBuf,
     pub(crate) crx_exists: bool,
@@ -384,6 +387,7 @@ pub(crate) struct BrowserExtensionStatus {
     pub(crate) native_host_configured: bool,
     pub(crate) install_mode: BrowserExtensionInstallMode,
     pub(crate) native_host: NativeHostStatus,
+    pub(crate) native_hosts: Vec<NativeHostStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::Stdio;
 
+use crate::logging::{write_component_log, AGENT_LOG};
+
 const AGENT_BINARY_ENV: &str = "AIPASS_AGENT_BINARY";
 const AGENT_PATH_ENV: &str = "AIPASS_AGENT_PATH";
 
@@ -45,6 +47,17 @@ pub(crate) fn launch_agent(
 ) -> Result<AgentLaunch> {
     let search = find_agent_binary();
     let Some(binary) = search.selected.clone() else {
+        write_component_log(
+            AGENT_LOG,
+            "ERROR",
+            &format!(
+                "agent launch failed before spawn vault={} namespace={} initial_error={} candidates={}",
+                vault_dir.display(),
+                namespace,
+                initial_connection_error,
+                format_path_list(&search.candidates)
+            ),
+        );
         return Err(anyhow!(agent_launch_failure_message(
             vault_dir,
             namespace,
@@ -65,18 +78,54 @@ pub(crate) fn launch_agent(
         command.env(crate::desktop::SUPPRESS_TRAY_ENV, "1");
     }
 
-    match command.spawn() {
-        Ok(_) => Ok(AgentLaunch {
-            binary,
-            candidates: search.candidates,
-        }),
-        Err(err) => Err(anyhow!(agent_launch_failure_message(
-            vault_dir,
+    write_component_log(
+        AGENT_LOG,
+        "INFO",
+        &format!(
+            "spawning agent binary={} vault={} namespace={} suppress_desktop_tray={}",
+            binary.display(),
+            vault_dir.display(),
             namespace,
-            &search,
-            Some((&binary, &err.to_string())),
-            initial_connection_error,
-        ))),
+            options.suppress_desktop_tray
+        ),
+    );
+
+    match command.spawn() {
+        Ok(child) => {
+            write_component_log(
+                AGENT_LOG,
+                "INFO",
+                &format!(
+                    "spawned agent pid={} binary={} namespace={}",
+                    child.id(),
+                    binary.display(),
+                    namespace
+                ),
+            );
+            Ok(AgentLaunch {
+                binary,
+                candidates: search.candidates,
+            })
+        }
+        Err(err) => {
+            write_component_log(
+                AGENT_LOG,
+                "ERROR",
+                &format!(
+                    "agent spawn failed binary={} vault={} namespace={} error={err}",
+                    binary.display(),
+                    vault_dir.display(),
+                    namespace
+                ),
+            );
+            Err(anyhow!(agent_launch_failure_message(
+                vault_dir,
+                namespace,
+                &search,
+                Some((&binary, &err.to_string())),
+                initial_connection_error,
+            )))
+        }
     }
 }
 

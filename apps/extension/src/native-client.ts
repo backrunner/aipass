@@ -415,6 +415,13 @@ export function openNativeUnlock(): Promise<NativeResponse<{ locked: boolean; ex
   );
 }
 
+export function openDesktopApp(): Promise<NativeResponse<{ opened: boolean }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "ui.open_main"
+  });
+}
+
 export function unlockWithPassword(password: string): Promise<NativeResponse<{ locked: boolean; exists?: boolean }>> {
   return nativeRequest({
     id: crypto.randomUUID(),

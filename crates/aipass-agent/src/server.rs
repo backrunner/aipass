@@ -1,5 +1,6 @@
 use crate::desktop::open_desktop_window;
 use crate::ipc;
+use crate::logging::{write_component_log, AGENT_LOG};
 use crate::paths::{canonical_vault_dir, cloud_sync_dir, namespace_for_vault_dir};
 use crate::session::{
     apply_sync_settings_update, clamp_policy, current_policy, load_policy, load_sync_settings,
@@ -83,6 +84,15 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
     let launch_desktop_tray = options.launch_desktop_tray;
     let vault_dir = canonical_vault_dir(options.vault_dir)?;
     let namespace = namespace_for_vault_dir(&vault_dir)?;
+    write_component_log(
+        AGENT_LOG,
+        "INFO",
+        &format!(
+            "server starting vault={} namespace={} launch_desktop_tray={launch_desktop_tray}",
+            vault_dir.display(),
+            namespace
+        ),
+    );
     let auth_token = ipc::load_or_create_auth_token(&vault_dir)?;
     let state = Arc::new(AgentState {
         policy: Mutex::new(load_policy(&vault_dir)?),
@@ -110,6 +120,15 @@ fn run_server_with_state(state: Arc<AgentState>, launch_desktop_tray: bool) -> R
             state.vault_dir.display()
         )
     })?;
+    write_component_log(
+        AGENT_LOG,
+        "INFO",
+        &format!(
+            "listener bound vault={} namespace={}",
+            state.vault_dir.display(),
+            state.namespace
+        ),
+    );
     listener
         .set_nonblocking(ListenerNonblockingMode::Accept)
         .context("failed to set agent listener to nonblocking accept mode")?;
@@ -135,6 +154,11 @@ fn run_server_with_state(state: Arc<AgentState>, launch_desktop_tray: bool) -> R
                 thread::spawn(move || {
                     let _guard = guard;
                     if let Err(err) = handle_connection(conn, state) {
+                        write_component_log(
+                            AGENT_LOG,
+                            "ERROR",
+                            &format!("agent connection failed: {err}"),
+                        );
                         eprintln!("agent connection failed: {err}");
                     }
                 });
@@ -144,6 +168,7 @@ fn run_server_with_state(state: Arc<AgentState>, launch_desktop_tray: bool) -> R
             }
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
             Err(err) => {
+                write_component_log(AGENT_LOG, "ERROR", &format!("agent accept failed: {err}"));
                 eprintln!("agent accept failed: {err}");
                 thread::sleep(Duration::from_millis(250));
             }
@@ -162,6 +187,11 @@ fn ensure_desktop_tray_companion_async(vault_dir: PathBuf) {
         }
         thread::spawn(move || {
             if let Err(err) = open_desktop_window(crate::desktop::TRAY_WINDOW_TARGET, &vault_dir) {
+                write_component_log(
+                    AGENT_LOG,
+                    "ERROR",
+                    &format!("failed to open AIPass desktop tray companion: {err}"),
+                );
                 eprintln!("failed to open AIPass desktop tray companion: {err}");
             }
         });

@@ -115,6 +115,10 @@ fn handle_request_inner(
                 "vaultNamespace": status.vault_namespace,
             }))
         }
+        NativeRequest::UiOpenMain { .. } => {
+            let _: serde_json::Value = request_agent(config, &AgentRequest::UiOpenMain)?;
+            Ok(json!({ "opened": true }))
+        }
         NativeRequest::IsOriginIgnored { origin, .. } => {
             let result: BrowserIgnoredStatus =
                 request_agent(config, &AgentRequest::BrowserIsOriginIgnored { origin })?;
@@ -374,7 +378,8 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::ProviderUpdate { id, .. }
         | NativeRequest::ProviderDelete { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
-        | NativeRequest::SessionUnlock { id, .. } => *id,
+        | NativeRequest::SessionUnlock { id, .. }
+        | NativeRequest::UiOpenMain { id, .. } => *id,
     }
 }
 
@@ -393,7 +398,8 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::ProviderUpdate { extension_id, .. }
         | NativeRequest::ProviderDelete { extension_id, .. }
         | NativeRequest::UnlockRequest { extension_id, .. }
-        | NativeRequest::SessionUnlock { extension_id, .. } => extension_id.as_deref(),
+        | NativeRequest::SessionUnlock { extension_id, .. }
+        | NativeRequest::UiOpenMain { extension_id, .. } => extension_id.as_deref(),
     }
 }
 

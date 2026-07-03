@@ -4,6 +4,7 @@ pub mod desktop;
 pub mod device_secrets;
 pub mod ipc;
 pub mod launcher;
+pub mod logging;
 pub mod paths;
 pub mod server;
 pub mod session;

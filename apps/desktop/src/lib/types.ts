@@ -180,6 +180,7 @@ export type ToolConfigApplyResult = {
 
 export type NativeHostStatus = {
   browser: string;
+  browserLabel: string;
   hostPath: string;
   hostExists: boolean;
   hostUsable: boolean;
@@ -195,9 +196,11 @@ export type BrowserExtensionInstallMode = "externalCrx" | "manualCrx";
 
 export type BrowserExtensionStatus = {
   browser: string;
+  detectedBrowsers: string[];
   chromeInstalled: boolean;
   chromePath?: string;
   extensionId: string;
+  discoveredExtensionIds: string[];
   extensionVersion: string;
   crxPath: string;
   crxExists: boolean;
@@ -208,6 +211,7 @@ export type BrowserExtensionStatus = {
   nativeHostConfigured: boolean;
   installMode: BrowserExtensionInstallMode;
   nativeHost: NativeHostStatus;
+  nativeHosts: NativeHostStatus[];
 };
 
 export type BrowserExtensionInstallResult = {

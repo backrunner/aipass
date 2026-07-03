@@ -1,4 +1,8 @@
-use aipass_agent::{agent_service_name, default_vault_dir, run_server, ServerOptions};
+use aipass_agent::{
+    agent_service_name, default_vault_dir,
+    logging::{init_component_logging, install_panic_logger, write_component_log, AGENT_LOG},
+    run_server, ServerOptions,
+};
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
@@ -19,6 +23,20 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    let log_path = init_component_logging(AGENT_LOG).ok();
+    install_panic_logger(AGENT_LOG);
+    write_component_log(
+        AGENT_LOG,
+        "INFO",
+        &format!(
+            "agent process starting pid={} log_path={}",
+            std::process::id(),
+            log_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unavailable".to_string())
+        ),
+    );
     let cli = Cli::parse();
     let vault_dir = cli.vault.unwrap_or(default_vault_dir()?);
     let service_name = cli.service_name.unwrap_or(agent_service_name(&vault_dir)?);

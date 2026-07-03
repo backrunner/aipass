@@ -7,6 +7,7 @@ import {
   isOriginIgnored,
   listEntries,
   lookupContext,
+  openDesktopApp,
   openNativeUnlock,
   pingNativeHost,
   previewDetectedSecret,
@@ -86,6 +87,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.openUnlock") {
     openNativeUnlock().then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.openDesktop") {
+    openDesktopApp().then(sendResponse);
     return true;
   }
 

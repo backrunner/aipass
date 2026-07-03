@@ -175,6 +175,11 @@ pub enum NativeRequest {
         #[serde(default)]
         password: Option<SensitiveString>,
     },
+    #[serde(rename = "ui.open_main")]
+    UiOpenMain {
+        id: Uuid,
+        extension_id: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
