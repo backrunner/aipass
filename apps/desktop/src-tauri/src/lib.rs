@@ -63,11 +63,22 @@ fn agent_client(_app: &AppHandle) -> Result<AgentClient, String> {
     Ok(AgentClient::new(config))
 }
 
+pub(crate) fn ensure_agent_running_for_desktop(client: &AgentClient) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        client.ensure_running().map_err(|err| err.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        client
+            .ensure_running_for_desktop_companion()
+            .map_err(|err| err.to_string())
+    }
+}
+
 fn agent_request<T: DeserializeOwned>(app: &AppHandle, request: AgentRequest) -> Result<T, String> {
     let client = agent_client(app)?;
-    client
-        .ensure_running_for_desktop_companion()
-        .map_err(|err| err.to_string())?;
+    ensure_agent_running_for_desktop(&client)?;
     client.request(&request).map_err(agent_error_to_string)
 }
 
@@ -76,9 +87,7 @@ fn agent_request_no_unlock<T: DeserializeOwned>(
     request: AgentRequest,
 ) -> Result<T, String> {
     let client = agent_client(app)?;
-    client
-        .ensure_running_for_desktop_companion()
-        .map_err(|err| err.to_string())?;
+    ensure_agent_running_for_desktop(&client)?;
     client.request(&request).map_err(agent_error_to_string)
 }
 
@@ -1521,7 +1530,7 @@ fn ensure_agent_resident_async(app: AppHandle) {
                 return;
             }
         };
-        if let Err(err) = client.ensure_running_for_desktop_companion() {
+        if let Err(err) = ensure_agent_running_for_desktop(&client) {
             eprintln!("failed to ensure AIPass agent is running: {err}");
         }
         if let Err(err) = repair_bundled_native_host_manifest(&app) {

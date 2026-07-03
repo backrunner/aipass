@@ -1,4 +1,6 @@
-use crate::{agent_client, agent_error_to_string, agent_request_no_unlock};
+use crate::{
+    agent_client, agent_error_to_string, agent_request_no_unlock, ensure_agent_running_for_desktop,
+};
 use aipass_agent_protocol::{AgentRequest, LockReason, SessionStatus};
 use std::sync::Mutex;
 use std::thread;
@@ -212,11 +214,7 @@ fn ensure_agent_running_for_tray(app: &AppHandle) -> Result<(), String> {
     let _guard = AGENT_START_LOCK
         .lock()
         .map_err(|_| "agent start lock is poisoned".to_string())?;
-    agent_client(app).and_then(|client| {
-        client
-            .ensure_running_for_desktop_companion()
-            .map_err(|err| err.to_string())
-    })
+    agent_client(app).and_then(|client| ensure_agent_running_for_desktop(&client))
 }
 
 fn start_agent_async(app: AppHandle, items: TrayMenuItems) {
@@ -256,9 +254,7 @@ fn install_login_agent_async(app: AppHandle, items: TrayMenuItems) {
                 .map_err(|err| err.to_string())?;
             aipass_agent::install_tray_autostart(&desktop_binary, &client.config.vault_dir)
                 .map_err(|err| err.to_string())?;
-            client
-                .ensure_running_for_desktop_companion()
-                .map_err(|err| err.to_string())
+            ensure_agent_running_for_desktop(&client)
         });
         match result {
             Ok(_) => {
