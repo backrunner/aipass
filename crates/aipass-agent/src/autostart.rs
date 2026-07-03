@@ -82,6 +82,8 @@ fn tray_service_name(vault_dir: &Path) -> Result<String> {
 mod imp {
     use super::*;
     use crate::paths::agent_service_name;
+    use aipass_agent_protocol::{read_frame, write_frame};
+    use interprocess::local_socket::{prelude::*, GenericFilePath, Stream};
 
     pub(super) fn install(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAutostartStatus> {
         let service_name = agent_service_name(vault_dir)?;
@@ -205,6 +207,7 @@ mod imp {
                 &vault_dir,
                 &paths.out_log,
                 &paths.err_log,
+                &paths.stop_child_path,
             )?,
         )?;
 
@@ -222,6 +225,7 @@ mod imp {
         );
         atomic_write_bytes(&paths.plist_path, plist.as_bytes())?;
 
+        let _ = fs::remove_file(&paths.stop_child_path);
         let _ = unload_launch_agent(&service_name, &paths.plist_path);
         load_launch_agent(&service_name, &paths.plist_path)?;
 
@@ -238,7 +242,9 @@ mod imp {
     pub(super) fn uninstall_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
         let service_name = tray_service_name(vault_dir)?;
         let paths = macos_paths(&service_name)?;
+        let _ = write_stop_child_flag(&paths.stop_child_path);
         let _ = unload_launch_agent(&service_name, &paths.plist_path);
+        request_tray_exit();
         let _ = fs::remove_file(&paths.plist_path);
         let _ = fs::remove_file(&paths.supervisor_path);
         Ok(TrayAutostartStatus {
@@ -254,7 +260,9 @@ mod imp {
     pub(super) fn stop_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
         let service_name = tray_service_name(vault_dir)?;
         let paths = macos_paths(&service_name)?;
+        let _ = write_stop_child_flag(&paths.stop_child_path);
         let _ = unload_launch_agent(&service_name, &paths.plist_path);
+        request_tray_exit();
         Ok(TrayAutostartStatus {
             service_name,
             registered: paths.plist_path.exists(),
@@ -286,6 +294,7 @@ mod imp {
         err_log: PathBuf,
         supervisor_log: PathBuf,
         supervisor_err_log: PathBuf,
+        stop_child_path: PathBuf,
     }
 
     fn macos_paths(service_name: &str) -> Result<MacosAutostartPaths> {
@@ -304,6 +313,10 @@ mod imp {
             err_log: log_dir.join(format!("{service_name}.err.log")),
             supervisor_log: log_dir.join(format!("{service_name}.supervisor.out.log")),
             supervisor_err_log: log_dir.join(format!("{service_name}.supervisor.err.log")),
+            stop_child_path: home
+                .join(".aipass")
+                .join("autostart")
+                .join(format!("{service_name}.stop-child")),
             log_dir,
         })
     }
@@ -418,6 +431,7 @@ cleanup
         vault_dir: &Path,
         out_log: &Path,
         err_log: &Path,
+        stop_child_path: &Path,
     ) -> Result<String> {
         let desktop_runtime_dir = desktop_runtime_dir()?;
         let singleton_socket = desktop_runtime_dir.join("desktop-tray.sock");
@@ -432,14 +446,22 @@ VAULT={}
 OUT_LOG={}
 ERR_LOG={}
 SINGLETON_SOCKET={}
+STOP_CHILD={}
 child=""
 
 cleanup() {{
-  rm -f "$PLIST" "$0"
+  rm -f "$PLIST" "$0" "$STOP_CHILD"
   launchctl remove "$LABEL" >/dev/null 2>&1 || true
 }}
 
 terminate() {{
+  if [ -f "$STOP_CHILD" ]; then
+    rm -f "$STOP_CHILD"
+    if [ -n "$child" ]; then
+      kill "$child" >/dev/null 2>&1 || true
+      wait "$child" >/dev/null 2>&1 || true
+    fi
+  fi
   exit 0
 }}
 
@@ -489,7 +511,35 @@ cleanup
             shell_quote(&out_log.display().to_string()),
             shell_quote(&err_log.display().to_string()),
             shell_quote(&singleton_socket.display().to_string()),
+            shell_quote(&stop_child_path.display().to_string()),
         ))
+    }
+
+    fn write_stop_child_flag(path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(atomic_write_bytes(path, b"stop\n")?)
+    }
+
+    fn request_tray_exit() {
+        let Ok(socket_path) = desktop_runtime_dir().map(|dir| dir.join("desktop-tray.sock")) else {
+            return;
+        };
+        let Ok(name) = socket_path.to_fs_name::<GenericFilePath>() else {
+            return;
+        };
+        let Ok(mut stream) = Stream::connect(name) else {
+            return;
+        };
+        let request = serde_json::json!({
+            "version": "0.0.0",
+            "target": "tray",
+            "command": "quit",
+        });
+        if write_frame(&mut stream, &request).is_ok() {
+            let _: Result<serde_json::Value> = read_frame(&mut stream);
+        }
     }
 
     fn desktop_runtime_dir() -> Result<PathBuf> {
@@ -594,6 +644,7 @@ cleanup
                 Path::new("/tmp/aipass-vault"),
                 Path::new("/tmp/tray.out.log"),
                 Path::new("/tmp/tray.err.log"),
+                Path::new("/tmp/tray.stop-child"),
             )
             .expect("tray supervisor script");
 
@@ -601,6 +652,8 @@ cleanup
             assert!(script.contains("wait_for_existing_desktop"));
             assert!(script
                 .contains("AIPASS_WINDOW_TARGET=tray AIPASS_VAULT_DIR=\"$VAULT\" \"$DESKTOP\""));
+            assert!(script.contains("STOP_CHILD="));
+            assert!(script.contains("if [ -f \"$STOP_CHILD\" ]; then"));
         }
     }
 }

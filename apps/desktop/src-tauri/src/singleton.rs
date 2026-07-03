@@ -42,6 +42,8 @@ pub(crate) struct DesktopSingleton {
 struct SingletonRequest {
     version: String,
     target: String,
+    #[serde(default)]
+    command: Option<SingletonCommand>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,10 +60,17 @@ enum SingletonAction {
     ReplaceExisting,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum SingletonCommand {
+    Quit,
+}
+
 pub(crate) fn acquire(current_version: &str, target: &str) -> Result<SingletonDecision> {
     let request = SingletonRequest {
         version: current_version.to_string(),
         target: target.to_string(),
+        command: None,
     };
 
     if let Ok(decision) = request_existing_instance(&request, current_version) {
@@ -99,6 +108,23 @@ pub(crate) fn spawn_server(app: AppHandle, singleton: DesktopSingleton, current_
 fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) -> Result<()> {
     let request: SingletonRequest =
         read_frame(&mut stream).context("failed to read desktop singleton request")?;
+
+    if request.command == Some(SingletonCommand::Quit) {
+        write_frame(
+            &mut stream,
+            &SingletonResponse {
+                version: current_version.to_string(),
+                action: SingletonAction::UseExisting,
+            },
+        )
+        .context("failed to send desktop singleton response")?;
+
+        thread::spawn(move || {
+            thread::sleep(REPLACEMENT_EXIT_DELAY);
+            app.exit(0);
+        });
+        return Ok(());
+    }
 
     let action = if incoming_version_replaces_current(&request.version, current_version) {
         SingletonAction::ReplaceExisting
@@ -279,7 +305,7 @@ fn desktop_runtime_dir() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::incoming_version_replaces_current;
+    use super::{incoming_version_replaces_current, SingletonCommand, SingletonRequest};
 
     #[test]
     fn newer_semver_replaces_current() {
@@ -299,5 +325,17 @@ mod tests {
     fn invalid_versions_do_not_replace_existing() {
         assert!(!incoming_version_replaces_current("nightly", "1.0.0"));
         assert!(!incoming_version_replaces_current("1.0.1", "dev"));
+    }
+
+    #[test]
+    fn singleton_request_accepts_optional_quit_command() {
+        let legacy: SingletonRequest =
+            serde_json::from_str(r#"{"version":"1.0.0","target":"tray"}"#).unwrap();
+        assert_eq!(legacy.command, None);
+
+        let quit: SingletonRequest =
+            serde_json::from_str(r#"{"version":"0.0.0","target":"tray","command":"quit"}"#)
+                .unwrap();
+        assert_eq!(quit.command, Some(SingletonCommand::Quit));
     }
 }
