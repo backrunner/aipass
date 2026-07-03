@@ -273,7 +273,10 @@ fn install_login_agent_async(app: AppHandle, items: TrayMenuItems) {
 fn quit_aipass_async(app: AppHandle) {
     thread::spawn(move || {
         if let Ok(client) = agent_client(&app) {
-            let _ = client.shutdown();
+            if let Err(err) = aipass_agent::stop_agent_autostart(&client.config.vault_dir) {
+                eprintln!("failed to stop AIPass agent autostart before quit: {err}");
+                let _ = client.shutdown();
+            }
         }
         app.exit(0);
     });

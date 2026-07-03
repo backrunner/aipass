@@ -13,7 +13,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_os = "windows"))]
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(not(target_os = "windows"))]
@@ -64,35 +64,14 @@ pub(crate) fn acquire(current_version: &str, target: &str) -> Result<SingletonDe
         target: target.to_string(),
     };
 
-    match connect_existing_instance() {
-        Ok(mut stream) => {
-            write_frame(&mut stream, &request)
-                .context("failed to send desktop singleton request")?;
-            let response: SingletonResponse =
-                read_frame(&mut stream).context("failed to read desktop singleton response")?;
+    if let Ok(decision) = request_existing_instance(&request, current_version) {
+        return Ok(decision);
+    }
 
-            match response.action {
-                SingletonAction::UseExisting => {
-                    eprintln!(
-                        "AIPass desktop {} is already running; exiting this instance",
-                        response.version
-                    );
-                    Ok(SingletonDecision::Exit)
-                }
-                SingletonAction::ReplaceExisting => {
-                    eprintln!(
-                        "replacing older AIPass desktop {} with {}",
-                        response.version, current_version
-                    );
-                    Ok(SingletonDecision::Run(DesktopSingleton {
-                        listener: wait_for_replacement_listener()?,
-                    }))
-                }
-            }
-        }
-        Err(_) => Ok(SingletonDecision::Run(DesktopSingleton {
-            listener: listen_for_instances()?,
-        })),
+    match listen_for_instances() {
+        Ok(listener) => Ok(SingletonDecision::Run(DesktopSingleton { listener })),
+        Err(err) if is_addr_in_use(&err) => request_existing_instance(&request, current_version),
+        Err(err) => Err(err),
     }
 }
 
@@ -149,6 +128,35 @@ fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) 
     Ok(())
 }
 
+fn request_existing_instance(
+    request: &SingletonRequest,
+    current_version: &str,
+) -> Result<SingletonDecision> {
+    let mut stream = connect_existing_instance()?;
+    write_frame(&mut stream, request).context("failed to send desktop singleton request")?;
+    let response: SingletonResponse =
+        read_frame(&mut stream).context("failed to read desktop singleton response")?;
+
+    match response.action {
+        SingletonAction::UseExisting => {
+            eprintln!(
+                "AIPass desktop {} is already running; exiting this instance",
+                response.version
+            );
+            Ok(SingletonDecision::Exit)
+        }
+        SingletonAction::ReplaceExisting => {
+            eprintln!(
+                "replacing older AIPass desktop {} with {}",
+                response.version, current_version
+            );
+            Ok(SingletonDecision::Run(DesktopSingleton {
+                listener: wait_for_replacement_listener()?,
+            }))
+        }
+    }
+}
+
 fn incoming_version_replaces_current(incoming: &str, current: &str) -> bool {
     match (parse_version(incoming), parse_version(current)) {
         (Some(incoming), Some(current)) => incoming > current,
@@ -189,22 +197,32 @@ fn connect_existing_instance() -> Result<Stream> {
 #[cfg(target_os = "windows")]
 fn listen_for_instances() -> Result<Listener> {
     let name = DESKTOP_SINGLETON_NAME.to_ns_name::<GenericNamespaced>()?;
-    Ok(ListenerOptions::new()
-        .name(name)
-        .try_overwrite(true)
-        .reclaim_name(true)
-        .create_sync()?)
+    Ok(ListenerOptions::new().name(name).create_sync()?)
 }
 
 #[cfg(not(target_os = "windows"))]
 fn listen_for_instances() -> Result<Listener> {
     let path = singleton_socket_path()?;
+    listen_at_path(&path)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn listen_at_path(path: &PathBuf) -> Result<Listener> {
+    match create_listener_at_path(path) {
+        Ok(listener) => Ok(listener),
+        Err(err) if err.kind() == ErrorKind::AddrInUse && stale_socket_path(path) => {
+            let _ = fs::remove_file(path);
+            Ok(create_listener_at_path(path)?)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn create_listener_at_path(path: &PathBuf) -> io::Result<Listener> {
     let name = path.clone().to_fs_name::<GenericFilePath>()?;
     #[allow(unused_mut)]
-    let mut options = ListenerOptions::new()
-        .name(name)
-        .try_overwrite(true)
-        .reclaim_name(true);
+    let mut options = ListenerOptions::new().name(name);
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
     {
         options = options.mode(0o600);
@@ -213,6 +231,19 @@ fn listen_for_instances() -> Result<Listener> {
     #[cfg(unix)]
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     Ok(listener)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn stale_socket_path(path: &PathBuf) -> bool {
+    let Ok(name) = path.clone().to_fs_name::<GenericFilePath>() else {
+        return false;
+    };
+    Stream::connect(name).is_err()
+}
+
+fn is_addr_in_use(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<io::Error>()
+        .is_some_and(|err| err.kind() == ErrorKind::AddrInUse)
 }
 
 #[cfg(not(target_os = "windows"))]

@@ -36,31 +36,49 @@ pub fn listen(vault_dir: impl AsRef<Path>) -> Result<Listener> {
     #[cfg(target_os = "windows")]
     {
         let name = format!("dev.aipass.agent.{namespace}").to_ns_name::<GenericNamespaced>()?;
-        Ok(ListenerOptions::new()
-            .name(name)
-            .try_overwrite(true)
-            .reclaim_name(true)
-            .create_sync()?)
+        Ok(ListenerOptions::new().name(name).create_sync()?)
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let path = agent_runtime_dir()?.join(format!("{namespace}.sock"));
-        let name = path.clone().to_fs_name::<GenericFilePath>()?;
-        #[allow(unused_mut)]
-        let mut options = ListenerOptions::new()
-            .name(name)
-            .try_overwrite(true)
-            .reclaim_name(true);
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
-        {
-            options = options.mode(0o600);
-        }
-        let listener = options.create_sync()?;
-        #[cfg(unix)]
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        Ok(listener)
+        listen_at_path(&path)
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn listen_at_path(path: &Path) -> Result<Listener> {
+    match create_listener_at_path(path) {
+        Ok(listener) => Ok(listener),
+        Err(err) if err.kind() == ErrorKind::AddrInUse && stale_socket_path(path) => {
+            let _ = fs::remove_file(path);
+            Ok(create_listener_at_path(path)?)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn create_listener_at_path(path: &Path) -> std::io::Result<Listener> {
+    let name = path.to_path_buf().to_fs_name::<GenericFilePath>()?;
+    #[allow(unused_mut)]
+    let mut options = ListenerOptions::new().name(name);
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+    {
+        options = options.mode(0o600);
+    }
+    let listener = options.create_sync()?;
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn stale_socket_path(path: &Path) -> bool {
+    let Ok(name) = path.to_path_buf().to_fs_name::<GenericFilePath>() else {
+        return false;
+    };
+    Stream::connect(name).is_err()
 }
 
 pub fn load_or_create_auth_token(vault_dir: impl AsRef<Path>) -> Result<SensitiveString> {
@@ -169,5 +187,20 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn listener_does_not_overwrite_live_agent_socket() {
+        let runtime = tempdir().expect("runtime");
+        let path = runtime.path().join("agent.sock");
+
+        let first = listen_at_path(&path).expect("first listener");
+        let err = listen_at_path(&path).unwrap_err();
+
+        drop(first);
+        assert!(err
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|err| err.kind() == ErrorKind::AddrInUse));
     }
 }

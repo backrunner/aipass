@@ -435,7 +435,7 @@ fn request_agent<T: DeserializeOwned>(
     match client.request::<T>(request) {
         Ok(value) => Ok(value),
         Err(err) if matches!(err.code, Some(AgentErrorCode::ServiceUnavailable)) => {
-            client.ensure_running_for_app()?;
+            client.ensure_running_for_desktop_companion()?;
             client.request::<T>(request).map_err(agent_error_to_anyhow)
         }
         Err(err) => Err(agent_error_to_anyhow(err)),

@@ -257,3 +257,25 @@ fn decode_response<T: DeserializeOwned>(
     }
     serde_json::from_value(response.data).map_err(AgentCommandError::internal)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_companion_startup_suppresses_tray_launch() {
+        let companion = AgentStartupMode::Direct {
+            suppress_desktop_tray: true,
+        }
+        .launch_options();
+        let app = AgentStartupMode::Direct {
+            suppress_desktop_tray: false,
+        }
+        .launch_options();
+        let autostart = AgentStartupMode::Autostart.launch_options();
+
+        assert!(companion.suppress_desktop_tray);
+        assert!(!app.suppress_desktop_tray);
+        assert!(!autostart.suppress_desktop_tray);
+    }
+}
