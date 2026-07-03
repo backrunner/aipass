@@ -1,4 +1,6 @@
 import { svelte, vitePreprocess } from "@sveltejs/vite-plugin-svelte";
+import { createPublicKey } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { build, type Plugin } from "vite";
 import { defineConfig } from "vitest/config";
@@ -59,8 +61,37 @@ function classicContentScriptBuild(): Plugin {
   };
 }
 
+function extensionManifestKey(): Plugin {
+  return {
+    name: "aipass-extension-manifest-key",
+    apply: "build",
+    async closeBundle() {
+      const manifestPath = resolve(__dirname, "dist", "manifest.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+      const key = await extensionPublicKey();
+      if (manifest.key === key) return;
+      await writeFile(manifestPath, `${JSON.stringify({ ...manifest, key }, null, 2)}\n`);
+    }
+  };
+}
+
+async function extensionPublicKey() {
+  const privateKey = process.env.AIPASS_EXTENSION_PRIVATE_KEY
+    ? process.env.AIPASS_EXTENSION_PRIVATE_KEY.replaceAll(String.raw`\n`, "\n")
+    : await readFile(
+        resolve(process.env.AIPASS_EXTENSION_KEY_PATH ?? resolve(__dirname, "chrome-extension.pem")),
+        "utf8"
+      );
+  return createPublicKey(privateKey)
+    .export({
+      type: "spki",
+      format: "der"
+    })
+    .toString("base64");
+}
+
 export default defineConfig({
-  plugins: [svelte({ preprocess: vitePreprocess() }), classicContentScriptBuild()],
+  plugins: [svelte({ preprocess: vitePreprocess() }), classicContentScriptBuild(), extensionManifestKey()],
   resolve: {
     dedupe: ["svelte", "bits-ui"]
   },
