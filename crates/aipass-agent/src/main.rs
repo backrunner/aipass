@@ -54,7 +54,7 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-    let options = ServerOptions::new(vault_dir);
+    let options = ServerOptions::for_current_process(vault_dir);
     #[cfg(target_os = "windows")]
     {
         if cli.service {

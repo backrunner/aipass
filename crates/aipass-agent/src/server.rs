@@ -72,6 +72,14 @@ impl ServerOptions {
         }
     }
 
+    pub fn for_current_process(vault_dir: PathBuf) -> Self {
+        if crate::desktop::tray_launch_suppressed() {
+            Self::without_desktop_tray(vault_dir)
+        } else {
+            Self::new(vault_dir)
+        }
+    }
+
     pub fn without_desktop_tray(vault_dir: PathBuf) -> Self {
         Self {
             vault_dir,
@@ -1062,8 +1070,37 @@ mod tests {
     use aipass_agent_protocol::SessionStatus;
     use aipass_crypto::SecretString;
     use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
     use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvRestore {
+        name: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvRestore {
+        fn capture(name: &'static str) -> Self {
+            Self {
+                name,
+                previous: std::env::var_os(name),
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
 
     struct RunningAgent {
         vault_dir: PathBuf,
@@ -1118,6 +1155,22 @@ mod tests {
         assert!(!constant_time_eq(b"same", b"some"));
         assert!(!constant_time_eq(b"same", b"same-longer"));
         assert!(!constant_time_eq(b"same-longer", b"same"));
+    }
+
+    #[test]
+    fn current_process_options_respect_tray_suppression_env() {
+        let _guard = env_lock().lock().unwrap();
+        let _restore = EnvRestore::capture(crate::desktop::SUPPRESS_TRAY_ENV);
+        let vault_dir = PathBuf::from("/tmp/aipass-test-vault");
+
+        std::env::remove_var(crate::desktop::SUPPRESS_TRAY_ENV);
+        assert!(ServerOptions::for_current_process(vault_dir.clone()).launch_desktop_tray);
+
+        std::env::set_var(crate::desktop::SUPPRESS_TRAY_ENV, "1");
+        assert!(!ServerOptions::for_current_process(vault_dir.clone()).launch_desktop_tray);
+
+        std::env::set_var(crate::desktop::SUPPRESS_TRAY_ENV, "0");
+        assert!(ServerOptions::for_current_process(vault_dir).launch_desktop_tray);
     }
 
     #[test]
