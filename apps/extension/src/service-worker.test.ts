@@ -268,6 +268,45 @@ describe("service worker pending drafts", () => {
     assert.equal(filtered.data?.checkedCount, 1);
   });
 
+  it("keeps detected drafts promptable when the vault is locked", async () => {
+    await import("./service-worker");
+    nativePingLocked = true;
+    nativePreviewResponses.push({
+      id: "1",
+      ok: true,
+      data: {
+        title: "OpenRouter",
+        fingerprint: "fp",
+        existingEntryId: "existing-entry",
+        isSaved: true
+      }
+    });
+
+    const filtered = (await dispatchMessage({
+      type: "aipass.filterUnsavedDetectedDrafts",
+      drafts: [
+        {
+          title: "OpenRouter",
+          origin: "https://openrouter.ai",
+          url: "https://openrouter.ai/settings/keys",
+          providerId: "openrouter",
+          endpoint: "https://openrouter.ai/api/v1",
+          apiKey: "sk-or-v1-direct-secret1234"
+        }
+      ]
+    })) as {
+      ok?: boolean;
+      data?: { drafts?: unknown[]; savedCount?: number; checkedCount?: number; locked?: boolean };
+    };
+
+    assert.equal(filtered.ok, true);
+    assert.equal(filtered.data?.drafts?.length, 1);
+    assert.equal(filtered.data?.savedCount, 0);
+    assert.equal(filtered.data?.checkedCount, 1);
+    assert.equal(filtered.data?.locked, true);
+    assert.equal(nativeMessages.some((message) => message.type === "secret.previewDetected"), false);
+  });
+
   it("opens the popup and resumes direct saves after unlocking", async () => {
     await import("./service-worker");
     nativeSaveResponses.push({ id: "1", ok: false, error: "locked: vault is locked", data: {} });
@@ -337,6 +376,39 @@ describe("service worker pending drafts", () => {
     assert.equal(locked.data?.opened, true);
     assert.equal(locked.data?.pending, 1);
     assert.equal(openPopup.mock.calls.length, 1);
+  });
+
+  it("stages direct detected saves immediately when ping reports the vault is locked", async () => {
+    await import("./service-worker");
+    nativePingLocked = true;
+
+    const locked = (await dispatchMessage({
+      type: "aipass.saveDetectedDraftsNow",
+      drafts: [
+        {
+          title: "OpenRouter",
+          origin: "https://openrouter.ai",
+          url: "https://openrouter.ai/settings/keys",
+          providerId: "openrouter",
+          endpoint: "https://openrouter.ai/api/v1",
+          apiKey: "sk-or-v1-direct-secret1234"
+        }
+      ]
+    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number } };
+
+    assert.equal(locked.ok, true);
+    assert.equal(locked.data?.requiresUnlock, true);
+    assert.equal(locked.data?.opened, true);
+    assert.equal(locked.data?.pending, 1);
+    assert.equal(openPopup.mock.calls.length, 1);
+    assert.equal(nativeMessages.some((message) => message.type === "secret.saveDetected"), false);
+
+    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      ok?: boolean;
+      data?: { drafts?: Array<{ resumeSave?: boolean; apiKey?: string }> };
+    };
+    assert.equal(pending.data?.drafts?.[0]?.resumeSave, true);
+    assert.equal(pending.data?.drafts?.[0]?.apiKey, undefined);
   });
 
   it("keeps edited pending drafts for save after unlock", async () => {

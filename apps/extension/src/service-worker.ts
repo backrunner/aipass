@@ -398,6 +398,18 @@ async function savePendingDraft(draft: DetectedSecretDraft, draftId?: string) {
 }
 
 async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]) {
+  if (await isVaultLocked()) {
+    return {
+      ok: true,
+      data: {
+        drafts,
+        savedCount: 0,
+        checkedCount: drafts.length,
+        locked: true
+      }
+    };
+  }
+
   const unsaved: DetectedSecretDraft[] = [];
   const errors: Array<{ error: string }> = [];
   let savedCount = 0;
@@ -461,6 +473,14 @@ async function saveDetectedDraftBatch(drafts: DetectedSecretDraft[]) {
   const saved: Array<{ entryId?: string }> = [];
   const errors: Array<{ error: string }> = [];
   let lockedCount = 0;
+  if (await isVaultLocked()) {
+    for (const draft of drafts) {
+      enqueuePendingDraft(draft, "review", true);
+    }
+    const opened = await openPopupForEdit();
+    return saveRequiresUnlockResponse(drafts.length, opened, saved, errors);
+  }
+
   for (const draft of drafts) {
     const response = await saveDetectedSecret(draft);
     if (response.ok) {
@@ -541,8 +561,7 @@ function saveRequiresUnlockResponse(
 
 async function shouldUnlockForFailedSave(response: { ok?: boolean; error?: string }): Promise<boolean> {
   if (isLockedResponse(response)) return true;
-  const status = await pingNativeHost();
-  return Boolean(status.ok && status.data?.locked);
+  return isVaultLocked();
 }
 
 function isLockedResponse(response: { ok?: boolean; error?: string }): boolean {
@@ -555,6 +574,11 @@ function isLockedResponse(response: { ok?: boolean; error?: string }): boolean {
     error.includes("code: locked") ||
     error.includes('"locked"')
   );
+}
+
+async function isVaultLocked(): Promise<boolean> {
+  const status = await pingNativeHost();
+  return Boolean(status.ok && status.data?.locked);
 }
 
 async function openPopupForEdit(): Promise<boolean> {

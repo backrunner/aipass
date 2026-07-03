@@ -12,7 +12,7 @@ function setLocation(hostname: string, path = "/settings/keys") {
   });
 }
 
-function installChromeStub(options: { localBuild?: boolean; savedDetectedDrafts?: boolean } = {}) {
+function installChromeStub(options: { localBuild?: boolean; savedDetectedDrafts?: boolean; lockedVault?: boolean } = {}) {
   sentMessages.length = 0;
   vi.stubGlobal("chrome", {
     runtime: {
@@ -31,7 +31,8 @@ function installChromeStub(options: { localBuild?: boolean; savedDetectedDrafts?
             data: {
               drafts: options.savedDetectedDrafts ? [] : drafts,
               savedCount: options.savedDetectedDrafts ? drafts.length : 0,
-              checkedCount: drafts.length
+              checkedCount: drafts.length,
+              locked: options.lockedVault
             }
           });
           return;
@@ -547,6 +548,25 @@ describe("content detector", () => {
     assert.equal(
       sentMessages.some((message) => (message as { type?: string }).type === "aipass.saveDetectedDraftsNow"),
       false
+    );
+  });
+
+  it("still prompts for saveable detected keys when the vault is locked", async () => {
+    setLocation("openrouter.ai", "/settings/keys");
+    document.title = "OpenRouter";
+    document.body.innerHTML = `<label>API Key</label><input aria-label="API Key" value="sk-or-v1-lockedSecret1234567890abcdef" />`;
+    installChromeStub({ lockedVault: true });
+    vi.resetModules();
+    await import("./detector");
+    await flushTimers();
+
+    assert.ok(document.getElementById("aipass-extension-toast"));
+    clickPromptAction("save");
+    await flushTimers();
+
+    assert.equal(
+      sentMessages.some((message) => (message as { type?: string }).type === "aipass.saveDetectedDraftsNow"),
+      true
     );
   });
 
