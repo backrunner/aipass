@@ -62,7 +62,13 @@ Desktop bundle:
 pnpm --filter @aipass/desktop bundle
 ```
 
-Release artifacts are produced by the `Release` GitHub Actions workflow on `v*` tags or manual dispatch. The workflow builds desktop bundles, CLI/native-host archives, and the Chrome Web Store zip; final signing, notarization, and store publishing require the release secrets and store credentials.
+Release artifacts are produced by the `Release` GitHub Actions workflow on stable `vX.Y.Z` tags or manual dispatch with an existing tag. The desktop release path fully supports macOS first: it builds a universal Tauri app, signs and notarizes the `.app`/DMG, creates Tauri updater artifacts, and uploads `latest.json` plus the versioned bundles to GitHub Releases. Publishing the draft GitHub Release makes `https://github.com/<owner>/<repo>/releases/latest/download/latest.json` available to the in-app updater.
+
+Required macOS release secrets:
+
+- `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` for the Developer ID Application certificate. `CSC_LINK` and `CSC_KEY_PASSWORD` are accepted as fallbacks for compatibility with the Iconwiz release setup.
+- `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER` for Apple notarization.
+- `TAURI_SIGNING_PRIVATE_KEY`, optional `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and `TAURI_SIGNING_PUBLIC_KEY` for updater artifact signatures.
 
 CLI example:
 

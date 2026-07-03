@@ -2,29 +2,77 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v-prefixed release tag, for example v1.2.3"
+        required: true
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
 
 permissions:
   contents: write
 
 jobs:
-  desktop:
-    name: Desktop ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            name: macos
-          - os: ubuntu-22.04
-            name: linux
-          - os: windows-latest
-            name: windows
+  resolve-release:
+    name: Resolve release
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      build_number: ${{ steps.release.outputs.build_number }}
+      update_endpoint: ${{ steps.release.outputs.update_endpoint }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Validate release tag and versions
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tags must use stable semver, for example v1.2.3."
+            exit 1
+          fi
+
+          root_version="$(node -p "require('./package.json').version")"
+          desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
+          tauri_version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
+          cargo_version="$(node -e "const fs = require('fs'); const text = fs.readFileSync('Cargo.toml', 'utf8'); const match = /\\[workspace\\.package\\][\\s\\S]*?^version\\s*=\\s*\"([^\"]+)\"/m.exec(text); console.log(match?.[1] ?? '')")"
+
+          for pair in \
+            "package.json:${root_version}" \
+            "apps/desktop/package.json:${desktop_version}" \
+            "apps/desktop/src-tauri/tauri.conf.json:${tauri_version}" \
+            "Cargo.toml workspace.package:${cargo_version}"; do
+            name="${pair%%:*}"
+            found="${pair#*:}"
+            if [[ "${found}" != "${version}" ]]; then
+              echo "::error::${name} version ${found} does not match tag ${tag}."
+              exit 1
+            fi
+          done
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "build_number=${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+          echo "update_endpoint=https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" >> "${GITHUB_OUTPUT}"
+
+  macos-desktop:
+    name: macOS desktop
+    needs: resolve-release
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.tag }}
 
       - uses: pnpm/action-setup@v4
 
@@ -34,25 +82,154 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux desktop dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - run: pnpm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@v1
+      - name: Validate signing and updater secrets
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PUBLIC_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing ${name}. Configure the matching GitHub secret before publishing a macOS desktop release."
+              exit 1
+            fi
+          done
+
+      - name: Prepare Apple notarization API key
+        id: apple-notarization
+        shell: bash
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          set -euo pipefail
+
+          api_key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "${APPLE_API_KEY_BASE64}" | base64 -D > "${api_key_path}"
+          chmod 600 "${api_key_path}"
+
+          if [[ ! -s "${api_key_path}" ]]; then
+            echo "::error::Decoded Apple notarization API key is empty."
+            exit 1
+          fi
+
+          echo "api_key_path=${api_key_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Import Apple Developer ID certificate
+        id: apple-certificate
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          keychain_path="${RUNNER_TEMP}/aipass-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          certificate_path="${RUNNER_TEMP}/apple-certificate.p12"
+
+          printf '%s' "${APPLE_CERTIFICATE}" | base64 -D > "${certificate_path}"
+          if [[ ! -s "${certificate_path}" ]]; then
+            echo "::error::Decoded Apple signing certificate is empty."
+            exit 1
+          fi
+
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security default-keychain -s "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security import "${certificate_path}" -k "${keychain_path}" -P "${APPLE_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
+
+          identity="$(security find-identity -v -p codesigning "${keychain_path}" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n 1)"
+          if [[ -z "${identity}" ]]; then
+            echo "::error::No Developer ID Application identity found in imported certificate."
+            security find-identity -v -p codesigning "${keychain_path}"
+            exit 1
+          fi
+
+          echo "identity=${identity}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare Tauri release config
+        env:
+          AIPASS_DESKTOP_BUILD_NUMBER: ${{ needs.resolve-release.outputs.build_number }}
+          AIPASS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.resolve-release.outputs.update_endpoint }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: node scripts/prepare-tauri-macos-release-config.mjs
+
+      - name: Build signed and notarized macOS desktop app
+        env:
+          CI: true
+          AIPASS_MACOS_UNIVERSAL: true
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-certificate.outputs.identity }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_PATH: ${{ steps.apple-notarization.outputs.api_key_path }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm --dir apps/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.generated.json
+
+      - name: Verify macOS signing and notarization
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_candidates="$(find target apps/desktop/src-tauri/target -path "*/release/bundle/*" -type d -name "AIPass.app" 2>/dev/null || true)"
+          dmg_candidates="$(find target apps/desktop/src-tauri/target -path "*/release/bundle/*" -type f -name "*.dmg" 2>/dev/null || true)"
+          app_path="$(printf '%s\n' "${app_candidates}" | awk '/\/universal-apple-darwin\// { print; found=1; exit } END { if (!found) exit 0 }')"
+          dmg_path="$(printf '%s\n' "${dmg_candidates}" | awk '/\/universal-apple-darwin\// { print; found=1; exit } END { if (!found) exit 0 }')"
+          if [[ -z "${app_path}" ]]; then
+            app_path="$(printf '%s\n' "${app_candidates}" | sort | head -n 1)"
+          fi
+          if [[ -z "${dmg_path}" ]]; then
+            dmg_path="$(printf '%s\n' "${dmg_candidates}" | sort | head -n 1)"
+          fi
+
+          if [[ -z "${app_path}" || -z "${dmg_path}" ]]; then
+            echo "::error::Missing built AIPass.app or DMG bundle."
+            find target apps/desktop/src-tauri/target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
+            exit 1
+          fi
+
+          lipo -verify_arch arm64 x86_64 target/release/aipass-agent
+          lipo -verify_arch arm64 x86_64 target/release/aipass-native-host
+          codesign --verify --deep --strict --verbose=2 "${app_path}"
+          spctl --assess --type execute --verbose=4 "${app_path}"
+          xcrun stapler validate "${app_path}"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "${dmg_path}"
+          xcrun stapler validate "${dmg_path}"
+
+      - name: Prepare release artifacts
+        env:
+          AIPASS_RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+          AIPASS_RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/prepare-macos-release-artifacts.mjs release-artifacts
+
+      - uses: actions/upload-artifact@v4
         with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          uploadWorkflowArtifacts: true
-          uploadUpdaterJson: false
-          workflowArtifactNamePattern: aipass-desktop-${{ matrix.name }}-[platform]-[arch]-[bundle]
+          name: aipass-desktop-macos-${{ needs.resolve-release.outputs.tag }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 30
 
   cli:
     name: CLI ${{ matrix.name }}
+    needs: resolve-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -69,6 +246,8 @@ jobs:
             archive: aipass-cli-windows.zip
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.tag }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -102,9 +281,12 @@ jobs:
 
   extension:
     name: Chrome extension
+    needs: resolve-release
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.tag }}
 
       - uses: pnpm/action-setup@v4
 
@@ -133,13 +315,15 @@ jobs:
   github-release:
     name: Publish draft release
     needs:
-      - desktop
+      - resolve-release
+      - macos-desktop
       - cli
       - extension
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.tag }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -152,6 +336,7 @@ jobs:
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
         run: |
           set -euo pipefail
           mapfile -d '' files < <(find release-artifacts -type f -print0)
@@ -159,12 +344,12 @@ jobs:
             echo "No release artifacts found" >&2
             exit 1
           fi
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            gh release create "${RELEASE_TAG}" "${files[@]}" \
               --draft \
               --verify-tag \
-              --title "AIPass ${GITHUB_REF_NAME}" \
-              --notes "AIPass release candidate artifacts."
+              --title "AIPass ${RELEASE_TAG}" \
+              --notes "Signed and notarized macOS desktop artifacts, updater manifest, CLI archives, and extension package. Publish this draft to make latest.json available to the in-app updater."
           fi

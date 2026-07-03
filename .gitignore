@@ -8,11 +8,13 @@ coverage/
 playwright-report/
 test-results/
 artifacts/
+release-artifacts/
 target/
 **/target/
 apps/**/dist/
 apps/**/build/
 apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/tauri.release.generated.json
 apps/desktop/src-tauri/target/
 
 .DS_Store
