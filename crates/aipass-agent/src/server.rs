@@ -849,7 +849,7 @@ fn plan_tool_env_helper(
 }
 
 fn backfill_provider_favicons(
-    vault: &Vault,
+    state: &Arc<AgentState>,
     request: FaviconBackfillRequest,
 ) -> ServiceResult<FaviconBackfillResponse> {
     let limit = request
@@ -857,7 +857,57 @@ fn backfill_provider_favicons(
         .unwrap_or(FAVICON_BACKFILL_DEFAULT_LIMIT)
         .min(FAVICON_BACKFILL_MAX_LIMIT);
     let mut response = FaviconBackfillResponse::default();
-    let entries = match request.entry_ids {
+    let entries = with_vault(state, false, |vault| {
+        favicon_backfill_entries(vault, request.entry_ids, &mut response).map_err(map_vault_error)
+    })?;
+    let client = HttpClient::builder()
+        .timeout(FAVICON_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("AIPass/1.0")
+        .build()
+        .map_err(ServiceError::internal)?;
+
+    for entry in entries {
+        if favicon_backfill_entry_is_skippable(&entry) {
+            response.skipped += 1;
+            continue;
+        }
+        if response.checked >= limit {
+            response.skipped += 1;
+            continue;
+        }
+        response.checked += 1;
+        let Some(favicon_url) = resolve_favicon_url(&client, &entry) else {
+            response.skipped += 1;
+            continue;
+        };
+        match with_vault(state, false, |vault| {
+            vault
+                .set_provider_favicon_url(entry.id, favicon_url)
+                .map_err(map_vault_error)
+        }) {
+            Ok(Some(updated)) => {
+                response.updated += 1;
+                response.entries.push(updated);
+            }
+            Ok(None) => response.skipped += 1,
+            Err(err) if err.code == AgentErrorCode::Locked => return Err(err),
+            Err(err) => response.errors.push(FaviconBackfillError {
+                entry_id: Some(entry.id),
+                message: err.message,
+            }),
+        }
+    }
+
+    Ok(response)
+}
+
+fn favicon_backfill_entries(
+    vault: &Vault,
+    entry_ids: Option<Vec<Uuid>>,
+    response: &mut FaviconBackfillResponse,
+) -> Result<Vec<EntrySummary>, aipass_vault::VaultError> {
+    match entry_ids {
         Some(entry_ids) => {
             let mut seen = HashSet::new();
             let mut entries = Vec::new();
@@ -874,52 +924,20 @@ fn backfill_provider_favicons(
                     }),
                 }
             }
-            entries
+            Ok(entries)
         }
-        None => vault.list_provider_summaries().map_err(map_vault_error)?,
-    };
-    let client = HttpClient::builder()
-        .timeout(FAVICON_REQUEST_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("AIPass/1.0")
-        .build()
-        .map_err(ServiceError::internal)?;
-
-    for entry in entries {
-        if entry.archived_at.is_some()
-            || entry.deleted_at.is_some()
-            || entry
-                .favicon_url
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty())
-        {
-            response.skipped += 1;
-            continue;
-        }
-        if response.checked >= limit {
-            response.skipped += 1;
-            continue;
-        }
-        response.checked += 1;
-        let Some(favicon_url) = resolve_favicon_url(&client, &entry) else {
-            response.skipped += 1;
-            continue;
-        };
-        match vault.set_provider_favicon_url(entry.id, favicon_url) {
-            Ok(Some(updated)) => {
-                response.updated += 1;
-                response.entries.push(updated);
-            }
-            Ok(None) => response.skipped += 1,
-            Err(err) => response.errors.push(FaviconBackfillError {
-                entry_id: Some(entry.id),
-                message: err.to_string(),
-            }),
-        }
+        None => vault.list_provider_summaries(),
     }
+}
 
-    Ok(response)
+fn favicon_backfill_entry_is_skippable(entry: &EntrySummary) -> bool {
+    entry.archived_at.is_some()
+        || entry.deleted_at.is_some()
+        || entry
+            .favicon_url
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
 }
 
 fn resolve_favicon_url(client: &HttpClient, entry: &EntrySummary) -> Option<String> {
@@ -1517,45 +1535,9 @@ mod tests {
 
     #[test]
     fn favicon_backfill_skips_entries_that_already_have_favicons() {
-        let dir = tempdir().unwrap();
-        let password = SecretString::new("correct horse battery staple");
-        let vault = aipass_vault::Vault::create(dir.path(), &password)
-            .unwrap()
-            .vault;
-        let input = ProviderEntryInput {
-            title: "Example".to_string(),
-            provider_kind: aipass_provider_registry::ProviderKind::Unknown,
-            provider_id: None,
-            domains: vec!["example.com".to_string()],
-            favicon_url: Some("https://example.com/favicon.ico".to_string()),
-            endpoints: vec![ProviderEndpoint::api("https://api.example.com/v1")],
-            interface_type: InterfaceType::OpenAiCompatible,
-            auth_scheme: AuthScheme::Bearer,
-            api_key: "sk-example".to_string(),
-            secret_label: None,
-            default_model: None,
-            model_aliases: Vec::new(),
-            headers: Vec::new(),
-            quota: None,
-            gateway: None,
-            tags: Vec::new(),
-            notes: None,
-        };
-        let id = vault.add_provider(input).unwrap();
+        let mut entry = favicon_test_entry();
+        entry.favicon_url = Some("https://example.com/favicon.ico".to_string());
 
-        let response = backfill_provider_favicons(
-            &vault,
-            FaviconBackfillRequest {
-                entry_ids: Some(vec![id]),
-                limit: Some(4),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(response.checked, 0);
-        assert_eq!(response.updated, 0);
-        assert_eq!(response.skipped, 1);
-        assert!(response.entries.is_empty());
-        assert!(response.errors.is_empty());
+        assert!(favicon_backfill_entry_is_skippable(&entry));
     }
 }

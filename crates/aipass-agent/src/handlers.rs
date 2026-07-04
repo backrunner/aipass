@@ -252,10 +252,9 @@ fn dispatch_request(
                 timeout_seconds.max(1),
             )))
         }
-        AgentRequest::ProviderFaviconBackfill { request } => with_vault(state, false, |vault| {
-            backfill_provider_favicons(vault, request)
-        })
-        .map(AgentResponse::success),
+        AgentRequest::ProviderFaviconBackfill { request } => {
+            backfill_provider_favicons(state, request).map(AgentResponse::success)
+        }
         AgentRequest::ToolConfigPreview { request } => with_vault(state, true, |vault| {
             let (entry, plan, _) = build_tool_config_plan(vault, &request)?;
             Ok(ToolConfigPreviewResponse {
