@@ -14,7 +14,8 @@ use aipass_agent_protocol::{
     endpoint_url as protocol_endpoint_url, AgentErrorCode, AgentRequest, AgentResponse,
     AuthenticatedAgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
     BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
-    BrowserIgnoredStatus, ConflictScope, LockReason, ProbeResult, SaveDetectedResult, SecretValue,
+    BrowserIgnoredStatus, ConflictScope, FaviconBackfillError, FaviconBackfillRequest,
+    FaviconBackfillResponse, LockReason, ProbeResult, SaveDetectedResult, SecretValue,
     SensitiveString, SessionUnlockMode, SyncConflictActionRequest, SyncConflictResponse, SyncMode,
     ToolConfigApplyResponse, ToolConfigMode, ToolConfigPreviewResponse, ToolConfigRequest,
     ToolConfigTool, VaultCreateResponse, AGENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
@@ -39,11 +40,15 @@ use aipass_vault::{
 };
 use anyhow::{bail, Context, Result};
 use interprocess::local_socket::{prelude::*, ListenerNonblockingMode, Stream};
-use reqwest::blocking::RequestBuilder;
+use reqwest::blocking::{Client as HttpClient, RequestBuilder};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, RANGE};
+use reqwest::Url;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -57,6 +62,9 @@ use zeroize::Zeroize;
 
 const MAX_ACTIVE_CONNECTIONS: usize = 32;
 const CONNECTION_IO_TIMEOUT: Duration = Duration::from_secs(5);
+const FAVICON_BACKFILL_DEFAULT_LIMIT: usize = 4;
+const FAVICON_BACKFILL_MAX_LIMIT: usize = 8;
+const FAVICON_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
@@ -840,6 +848,233 @@ fn plan_tool_env_helper(
     Ok((plan, content))
 }
 
+fn backfill_provider_favicons(
+    vault: &Vault,
+    request: FaviconBackfillRequest,
+) -> ServiceResult<FaviconBackfillResponse> {
+    let limit = request
+        .limit
+        .unwrap_or(FAVICON_BACKFILL_DEFAULT_LIMIT)
+        .min(FAVICON_BACKFILL_MAX_LIMIT);
+    let mut response = FaviconBackfillResponse::default();
+    let entries = match request.entry_ids {
+        Some(entry_ids) => {
+            let mut seen = HashSet::new();
+            let mut entries = Vec::new();
+            for entry_id in entry_ids {
+                if !seen.insert(entry_id) {
+                    response.skipped += 1;
+                    continue;
+                }
+                match vault.get_provider_summary(entry_id) {
+                    Ok(entry) => entries.push(entry),
+                    Err(err) => response.errors.push(FaviconBackfillError {
+                        entry_id: Some(entry_id),
+                        message: err.to_string(),
+                    }),
+                }
+            }
+            entries
+        }
+        None => vault.list_provider_summaries().map_err(map_vault_error)?,
+    };
+    let client = HttpClient::builder()
+        .timeout(FAVICON_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("AIPass/1.0")
+        .build()
+        .map_err(ServiceError::internal)?;
+
+    for entry in entries {
+        if entry.archived_at.is_some()
+            || entry.deleted_at.is_some()
+            || entry
+                .favicon_url
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+        {
+            response.skipped += 1;
+            continue;
+        }
+        if response.checked >= limit {
+            response.skipped += 1;
+            continue;
+        }
+        response.checked += 1;
+        let Some(favicon_url) = resolve_favicon_url(&client, &entry) else {
+            response.skipped += 1;
+            continue;
+        };
+        match vault.set_provider_favicon_url(entry.id, favicon_url) {
+            Ok(Some(updated)) => {
+                response.updated += 1;
+                response.entries.push(updated);
+            }
+            Ok(None) => response.skipped += 1,
+            Err(err) => response.errors.push(FaviconBackfillError {
+                entry_id: Some(entry.id),
+                message: err.to_string(),
+            }),
+        }
+    }
+
+    Ok(response)
+}
+
+fn resolve_favicon_url(client: &HttpClient, entry: &EntrySummary) -> Option<String> {
+    favicon_url_candidates(entry)
+        .into_iter()
+        .find(|candidate| favicon_candidate_is_valid(client, candidate))
+}
+
+fn favicon_url_candidates(entry: &EntrySummary) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(provider_id) = entry.provider_id.as_deref() {
+        for provider in default_provider_definitions()
+            .into_iter()
+            .filter(|provider| provider.id == provider_id)
+        {
+            for (_, kind, url) in provider.endpoints {
+                if kind == &EndpointKind::Console {
+                    push_favicon_candidate(&mut candidates, &mut seen, url);
+                }
+            }
+        }
+    }
+
+    for endpoint in &entry.endpoints {
+        if endpoint.kind == EndpointKind::Console {
+            if let Some(url) = endpoint.url.as_deref() {
+                push_favicon_candidate(&mut candidates, &mut seen, url);
+            }
+        }
+    }
+
+    for domain in &entry.domains {
+        push_favicon_candidate(&mut candidates, &mut seen, domain);
+    }
+
+    for endpoint in &entry.endpoints {
+        if endpoint.kind == EndpointKind::Api {
+            if let Some(url) = endpoint.url.as_deref() {
+                push_favicon_candidate(&mut candidates, &mut seen, url);
+            }
+        }
+    }
+
+    candidates
+}
+
+fn push_favicon_candidate(candidates: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
+    if let Some(candidate) = favicon_url_from_origin_candidate(value) {
+        if seen.insert(candidate.clone()) {
+            candidates.push(candidate);
+        }
+    }
+}
+
+fn favicon_url_from_origin_candidate(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let candidate = if value.starts_with("https://") || value.starts_with("http://") {
+        value.to_string()
+    } else {
+        format!("https://{value}")
+    };
+    let mut url = Url::parse(&candidate).ok()?;
+    if !matches!(url.scheme(), "https" | "http") || favicon_host_is_blocked(&url) {
+        return None;
+    }
+    url.set_path("/favicon.ico");
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
+fn favicon_host_is_blocked(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .map(ip_addr_is_blocked_for_favicon)
+        .unwrap_or(false)
+}
+
+fn ip_addr_is_blocked_for_favicon(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+        }
+        IpAddr::V6(ip) => {
+            let first = ip.segments()[0];
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+fn favicon_candidate_is_valid(client: &HttpClient, candidate: &str) -> bool {
+    let response = client
+        .get(candidate)
+        .header(
+            ACCEPT,
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        )
+        .header(RANGE, "bytes=0-0")
+        .send();
+    let Ok(response) = response else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    favicon_response_looks_like_image(candidate, content_type)
+}
+
+fn favicon_response_looks_like_image(url: &str, content_type: Option<&str>) -> bool {
+    if content_type.is_some_and(favicon_content_type_is_image) {
+        return true;
+    }
+    favicon_url_has_image_extension(url)
+}
+
+fn favicon_content_type_is_image(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.starts_with("image/") || value.contains("svg") || value.contains("icon")
+}
+
+fn favicon_url_has_image_extension(url: &str) -> bool {
+    let path = Url::parse(url)
+        .map(|url| url.path().to_ascii_lowercase())
+        .unwrap_or_else(|_| url.to_ascii_lowercase());
+    [".ico", ".png", ".svg", ".jpg", ".jpeg", ".webp"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+}
+
 fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> ProbeResult {
     let endpoint = endpoint_url(&entry.endpoints);
     let Some(endpoint) = endpoint.clone() else {
@@ -1190,5 +1425,137 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "status request was blocked behind incomplete connection"
         );
+    }
+
+    fn favicon_test_entry() -> EntrySummary {
+        EntrySummary {
+            id: Uuid::new_v4(),
+            title: "Example".to_string(),
+            provider_id: None,
+            provider_kind: aipass_provider_registry::ProviderKind::Unknown,
+            domains: vec!["example.com".to_string()],
+            favicon_url: None,
+            endpoints: vec![ProviderEndpoint::api("https://api.example.com/v1")],
+            interface_type: InterfaceType::OpenAiCompatible,
+            auth_scheme: AuthScheme::Bearer,
+            masked_secret: "****".to_string(),
+            fingerprint: "fp".to_string(),
+            secret_refs: Vec::new(),
+            default_model: None,
+            model_aliases: Vec::new(),
+            quota: None,
+            gateway: None,
+            tags: Vec::new(),
+            notes: None,
+            header_names: Vec::new(),
+            created_at: OffsetDateTime::now_utc(),
+            updated_at: OffsetDateTime::now_utc(),
+            last_used_at: None,
+            archived_at: None,
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn favicon_candidates_follow_expected_source_order() {
+        let mut entry = favicon_test_entry();
+        entry.provider_id = Some("anthropic".to_string());
+        entry.domains = vec!["domain.example".to_string()];
+        entry.endpoints = vec![
+            ProviderEndpoint::console("https://portal.example/settings"),
+            ProviderEndpoint::api("https://api.example/v1"),
+        ];
+
+        let candidates = favicon_url_candidates(&entry);
+
+        assert_eq!(
+            candidates,
+            vec![
+                "https://console.anthropic.com/favicon.ico".to_string(),
+                "https://portal.example/favicon.ico".to_string(),
+                "https://domain.example/favicon.ico".to_string(),
+                "https://api.example/favicon.ico".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn favicon_candidates_skip_localhost_and_private_ip_literals() {
+        for value in [
+            "localhost",
+            "http://localhost:3000/app",
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.1.1",
+            "http://[::1]/",
+            "http://[fe80::1]/",
+            "http://[fc00::1]/",
+        ] {
+            assert_eq!(favicon_url_from_origin_candidate(value), None, "{value}");
+        }
+        assert_eq!(
+            favicon_url_from_origin_candidate("example.com/path").as_deref(),
+            Some("https://example.com/favicon.ico")
+        );
+    }
+
+    #[test]
+    fn favicon_response_accepts_image_content_or_obvious_extension() {
+        assert!(favicon_response_looks_like_image(
+            "https://example.com/icon",
+            Some("image/svg+xml; charset=utf-8")
+        ));
+        assert!(favicon_response_looks_like_image(
+            "https://example.com/favicon.ico",
+            Some("text/plain")
+        ));
+        assert!(!favicon_response_looks_like_image(
+            "https://example.com/icon",
+            Some("text/html")
+        ));
+    }
+
+    #[test]
+    fn favicon_backfill_skips_entries_that_already_have_favicons() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = aipass_vault::Vault::create(dir.path(), &password)
+            .unwrap()
+            .vault;
+        let input = ProviderEntryInput {
+            title: "Example".to_string(),
+            provider_kind: aipass_provider_registry::ProviderKind::Unknown,
+            provider_id: None,
+            domains: vec!["example.com".to_string()],
+            favicon_url: Some("https://example.com/favicon.ico".to_string()),
+            endpoints: vec![ProviderEndpoint::api("https://api.example.com/v1")],
+            interface_type: InterfaceType::OpenAiCompatible,
+            auth_scheme: AuthScheme::Bearer,
+            api_key: "sk-example".to_string(),
+            secret_label: None,
+            default_model: None,
+            model_aliases: Vec::new(),
+            headers: Vec::new(),
+            quota: None,
+            gateway: None,
+            tags: Vec::new(),
+            notes: None,
+        };
+        let id = vault.add_provider(input).unwrap();
+
+        let response = backfill_provider_favicons(
+            &vault,
+            FaviconBackfillRequest {
+                entry_ids: Some(vec![id]),
+                limit: Some(4),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(response.checked, 0);
+        assert_eq!(response.updated, 0);
+        assert_eq!(response.skipped, 1);
+        assert!(response.entries.is_empty());
+        assert!(response.errors.is_empty());
     }
 }

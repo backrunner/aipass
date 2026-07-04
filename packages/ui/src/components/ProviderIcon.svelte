@@ -9,7 +9,12 @@
   export let size: "sm" | "md" | "lg" = "md";
 
   let faviconBroken = false;
+  let lastFaviconUrl: string | undefined = faviconUrl;
   $: tone = providerKindTone[kind];
+  $: if (faviconUrl !== lastFaviconUrl) {
+    lastFaviconUrl = faviconUrl;
+    faviconBroken = false;
+  }
   $: showFavicon = Boolean(faviconUrl) && !faviconBroken;
 </script>
 

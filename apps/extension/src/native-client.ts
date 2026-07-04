@@ -36,9 +36,16 @@ let reconnectDelay = RECONNECT_INITIAL_MS;
 let lastPortError = "Native host unavailable";
 let nativeRecoveryInProgress = false;
 let nativeRecoveryPromise:
-  | Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>>
+  | Promise<NativeResponse<NativeSessionStatus>>
   | undefined;
 const pendingNativeRequests = new Map<string, PendingNativeRequest>();
+
+export interface NativeSessionStatus {
+  protocolVersion?: number;
+  locked?: boolean;
+  exists?: boolean;
+  vaultNamespace?: string;
+}
 
 export interface ProviderSummary {
   id: string;
@@ -59,7 +66,9 @@ export interface ProviderSummary {
   authScheme: string;
   maskedSecret: string;
   fingerprint: string;
+  secretRefs?: Array<{ id: string; label: string; masked: string; fingerprint: string }>;
   defaultModel?: string;
+  modelAliases?: Array<[string, string]>;
   quota?: {
     label?: string;
     limit?: string;
@@ -77,6 +86,7 @@ export interface ProviderSummary {
   updatedAt?: string;
   lastUsedAt?: string;
   archivedAt?: string;
+  deletedAt?: string;
 }
 
 export interface FillGrant {
@@ -90,6 +100,14 @@ export interface FillGrant {
 export interface ContextLookupData {
   entries: ProviderSummary[];
   grants: FillGrant[];
+}
+
+export interface FaviconBackfillResult {
+  checked: number;
+  updated: number;
+  skipped: number;
+  entries: ProviderSummary[];
+  errors: Array<{ entryId?: string; message: string }>;
 }
 
 export interface DetectedSecretDraft {
@@ -351,11 +369,11 @@ function withExtensionId(message: Record<string, unknown>): Record<string, unkno
   };
 }
 
-export function pingNativeHost(): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
+export function pingNativeHost(): Promise<NativeResponse<NativeSessionStatus>> {
   return nativePing();
 }
 
-export async function recoverNativeHost(): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
+export async function recoverNativeHost(): Promise<NativeResponse<NativeSessionStatus>> {
   if (nativeRecoveryPromise) return nativeRecoveryPromise;
   nativeRecoveryPromise = recoverNativeHostInner().finally(() => {
     nativeRecoveryPromise = undefined;
@@ -363,9 +381,9 @@ export async function recoverNativeHost(): Promise<NativeResponse<{ protocolVers
   return nativeRecoveryPromise;
 }
 
-async function recoverNativeHostInner(): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
+async function recoverNativeHostInner(): Promise<NativeResponse<NativeSessionStatus>> {
   nativeRecoveryInProgress = true;
-  let lastResponse = nativeErrorResponse<{ protocolVersion: number; locked?: boolean }>(
+  let lastResponse = nativeErrorResponse<NativeSessionStatus>(
     crypto.randomUUID(),
     lastPortError
   );
@@ -392,9 +410,7 @@ async function recoverNativeHostInner(): Promise<NativeResponse<{ protocolVersio
   }
 }
 
-function nativePing(
-  options: NativeRequestOptions = {}
-): Promise<NativeResponse<{ protocolVersion: number; locked?: boolean }>> {
+function nativePing(options: NativeRequestOptions = {}): Promise<NativeResponse<NativeSessionStatus>> {
   return nativeRequest({
     id: crypto.randomUUID(),
     type: "ping",
@@ -402,7 +418,7 @@ function nativePing(
   }, options);
 }
 
-export function openNativeUnlock(): Promise<NativeResponse<{ locked: boolean; exists?: boolean }>> {
+export function openNativeUnlock(): Promise<NativeResponse<NativeSessionStatus>> {
   return nativeRequest(
     {
       id: crypto.randomUUID(),
@@ -422,7 +438,7 @@ export function openDesktopApp(): Promise<NativeResponse<{ opened: boolean }>> {
   });
 }
 
-export function unlockWithPassword(password: string): Promise<NativeResponse<{ locked: boolean; exists?: boolean }>> {
+export function unlockWithPassword(password: string): Promise<NativeResponse<NativeSessionStatus>> {
   return nativeRequest({
     id: crypto.randomUUID(),
     type: "session.unlock",
@@ -443,6 +459,18 @@ export function listEntries(): Promise<NativeResponse<ContextLookupData>> {
   return nativeRequest({
     id: crypto.randomUUID(),
     type: "entries.list"
+  });
+}
+
+export function backfillFavicons(
+  entryIds: string[],
+  limit = 4
+): Promise<NativeResponse<FaviconBackfillResult>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "provider.faviconBackfill",
+    entry_ids: entryIds,
+    limit
   });
 }
 

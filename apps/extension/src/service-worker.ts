@@ -1,5 +1,6 @@
 import {
   addProvider,
+  backfillFavicons,
   deleteProvider,
   fillSecret,
   handleNativeReconnectAlarm,
@@ -17,8 +18,11 @@ import {
   startNativeConnectionMonitor,
   updateProvider,
   unlockWithPassword,
+  type ContextLookupData,
   type DetectedSecretDraft,
+  type NativeResponse,
   type ProviderAddRequest,
+  type ProviderSummary,
   type ProviderUpdateRequest
 } from "./native-client";
 
@@ -31,10 +35,31 @@ type PendingDraftRecord = {
   saveAfterUnlock?: boolean;
 };
 
+type EntryCacheSnapshotV1 = {
+  schemaVersion: 1;
+  vaultNamespace: string;
+  updatedAt: number;
+  entries: ProviderSummary[];
+};
+
+type CachedEntriesData = {
+  entries: ProviderSummary[];
+  grants: [];
+  updatedAt?: number;
+  stale: boolean;
+};
+
 let pendingDrafts: PendingDraftRecord[] = [];
 let pendingDraftTimer: ReturnType<typeof setTimeout> | undefined;
 let debugEnabledCache: boolean | undefined;
+let activeVaultNamespace = "";
+let activeVaultUnlocked = false;
+let refreshEntryCachePromise: Promise<NativeResponse<ContextLookupData>> | undefined;
+let entryCacheMutationVersion = 0;
 const PENDING_DRAFT_TTL_MS = 5 * 60 * 1000;
+const ENTRY_CACHE_SCHEMA_VERSION = 1;
+const ENTRY_CACHE_KEY_PREFIX = `aipass.entries.v${ENTRY_CACHE_SCHEMA_VERSION}.`;
+const memoryEntryCache = new Map<string, EntryCacheSnapshotV1>();
 
 startNativeConnectionMonitor();
 chrome.runtime.onStartup?.addListener(startNativeConnectionMonitor);
@@ -53,14 +78,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     drafts?: Array<Partial<DetectedSecretDraft>> | null;
     draftId?: string;
     draftPatches?: Array<{ draftId?: string; draft?: Partial<DetectedSecretDraft> | null }>;
+    entryIds?: string[];
+    limit?: number;
     tabId?: number;
     password?: string;
     request?: ProviderAddRequest | ProviderUpdateRequest;
   };
 
   if (typed.type === "aipass.ping") {
-    pingNativeHost()
-      .then((response) => (response.ok ? response : recoverNativeHost()))
+    pingWithSessionTracking()
       .then(sendResponse);
     return true;
   }
@@ -71,7 +97,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.entriesList") {
-    listEntries().then(sendResponse);
+    refreshEntryCache("entries.list").then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.backfillFavicons" && Array.isArray(typed.entryIds)) {
+    backfillFaviconsAndPatchCache(typed.entryIds, typed.limit).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.cachedEntriesList") {
+    cachedEntriesList().then(sendResponse);
     return true;
   }
 
@@ -86,7 +122,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.openUnlock") {
-    openNativeUnlock().then(sendResponse);
+    openNativeUnlockWithSessionTracking().then(sendResponse);
     return true;
   }
 
@@ -96,7 +132,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.unlockPassword" && typeof typed.password === "string") {
-    unlockWithPassword(typed.password).then(sendResponse);
+    unlockWithPasswordWithSessionTracking(typed.password).then(sendResponse);
     return true;
   }
 
@@ -237,22 +273,287 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.providerAdd" && typed.request) {
-    addProvider(typed.request as ProviderAddRequest).then(sendResponse);
+    addProviderAndRefreshCache(typed.request as ProviderAddRequest).then(sendResponse);
     return true;
   }
 
   if (typed.type === "aipass.providerUpdate" && typed.request) {
-    updateProvider(typed.request as ProviderUpdateRequest).then(sendResponse);
+    updateProviderAndRefreshCache(typed.request as ProviderUpdateRequest).then(sendResponse);
     return true;
   }
 
   if (typed.type === "aipass.providerDelete" && typed.entryId) {
-    deleteProvider(typed.entryId).then(sendResponse);
+    deleteProviderAndRefreshCache(typed.entryId).then(sendResponse);
     return true;
   }
 
   return false;
 });
+
+async function pingWithSessionTracking() {
+  const response = await pingNativeHost();
+  const recovered = response.ok ? response : await recoverNativeHost();
+  rememberSessionStatus(recovered);
+  return recovered;
+}
+
+async function openNativeUnlockWithSessionTracking() {
+  const response = await openNativeUnlock();
+  rememberSessionStatus(response);
+  return response;
+}
+
+async function unlockWithPasswordWithSessionTracking(password: string) {
+  const response = await unlockWithPassword(password);
+  rememberSessionStatus(response);
+  return response;
+}
+
+function rememberSessionStatus(response: NativeResponse<{ locked?: boolean; vaultNamespace?: string }>) {
+  if (!response.ok) {
+    activeVaultUnlocked = false;
+    return;
+  }
+  const vaultNamespace = response.data?.vaultNamespace;
+  if (vaultNamespace) {
+    activeVaultNamespace = vaultNamespace;
+  }
+  activeVaultUnlocked = Boolean(vaultNamespace && !response.data?.locked);
+}
+
+async function cachedEntriesList(): Promise<{ ok: true; data: CachedEntriesData }> {
+  if (!activeVaultUnlocked || !activeVaultNamespace) {
+    return cachedEntriesResponse();
+  }
+  const snapshot = await readEntryCache(activeVaultNamespace);
+  if (!snapshot) {
+    return cachedEntriesResponse();
+  }
+  return cachedEntriesResponse(snapshot.entries, snapshot.updatedAt, true);
+}
+
+function cachedEntriesResponse(
+  entries: ProviderSummary[] = [],
+  updatedAt?: number,
+  stale = false
+): { ok: true; data: CachedEntriesData } {
+  return {
+    ok: true,
+    data: {
+      entries,
+      grants: [],
+      updatedAt,
+      stale
+    }
+  };
+}
+
+async function refreshEntryCache(reason: string): Promise<NativeResponse<ContextLookupData>> {
+  if (refreshEntryCachePromise) return refreshEntryCachePromise;
+  refreshEntryCachePromise = refreshEntryCacheInner(reason).finally(() => {
+    refreshEntryCachePromise = undefined;
+  });
+  return refreshEntryCachePromise;
+}
+
+async function refreshEntryCacheInner(reason: string): Promise<NativeResponse<ContextLookupData>> {
+  if (!activeVaultNamespace || !activeVaultUnlocked) {
+    await pingWithSessionTracking();
+  }
+  const refreshVersion = entryCacheMutationVersion;
+  const response = await listEntries();
+  if (response.ok && activeVaultUnlocked && activeVaultNamespace && refreshVersion === entryCacheMutationVersion) {
+    await writeEntryCache(activeVaultNamespace, response.data?.entries ?? []);
+    debugLog("entry cache refreshed", { reason, count: response.data?.entries?.length ?? 0 });
+  }
+  return response;
+}
+
+async function backfillFaviconsAndPatchCache(entryIds: string[], limit?: number) {
+  const response = await backfillFavicons(entryIds, limit);
+  if (response.ok && response.data?.entries?.length) {
+    const updated = response.data.entries;
+    await mutateEntryCache((entries) => mergeProviderSummaries(entries, updated));
+  }
+  return response;
+}
+
+function mergeProviderSummaries(
+  current: ProviderSummary[],
+  updated: ProviderSummary[]
+): ProviderSummary[] {
+  const byId = new Map(updated.map((entry) => [entry.id, entry]));
+  return current.map((entry) => {
+    const next = byId.get(entry.id);
+    return next
+      ? {
+          ...entry,
+          ...next,
+          secretRefs: next.secretRefs ?? entry.secretRefs
+        }
+      : entry;
+  });
+}
+
+async function addProviderAndRefreshCache(request: ProviderAddRequest) {
+  const response = await addProvider(request);
+  if (response.ok) {
+    entryCacheMutationVersion += 1;
+    scheduleEntryCacheRefresh("provider.add");
+  }
+  return response;
+}
+
+async function updateProviderAndRefreshCache(request: ProviderUpdateRequest) {
+  const response = await updateProvider(request);
+  if (response.ok) {
+    entryCacheMutationVersion += 1;
+    await patchCachedEntryFromUpdate(request);
+    scheduleEntryCacheRefresh("provider.update");
+  }
+  return response;
+}
+
+async function deleteProviderAndRefreshCache(entryId: string) {
+  const response = await deleteProvider(entryId);
+  if (response.ok) {
+    entryCacheMutationVersion += 1;
+    await mutateEntryCache((entries) => entries.filter((entry) => entry.id !== entryId));
+    scheduleEntryCacheRefresh("provider.delete");
+  }
+  return response;
+}
+
+function scheduleEntryCacheRefresh(reason: string) {
+  void refreshEntryCacheAfterCurrent(reason);
+}
+
+async function refreshEntryCacheAfterCurrent(reason: string) {
+  const inFlight = refreshEntryCachePromise;
+  if (inFlight) {
+    await inFlight.catch(() => undefined);
+  }
+  await refreshEntryCache(reason).catch((err) => {
+    debugLog("entry cache refresh failed", {
+      reason,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
+}
+
+async function patchCachedEntryFromUpdate(request: ProviderUpdateRequest) {
+  await mutateEntryCache((entries) =>
+    entries.map((entry) =>
+      entry.id === request.id
+        ? {
+            ...entry,
+            title: request.title || entry.title,
+            providerId: request.providerId,
+            domains: request.domain,
+            faviconUrl: request.faviconUrl,
+            endpoints: entryEndpointsFromRequest(entry.endpoints, request),
+            interfaceType: request.interfaceType,
+            authScheme: request.authScheme,
+            defaultModel: request.defaultModel,
+            modelAliases: request.modelAliases,
+            quota: request.quota,
+            gateway: request.gateway,
+            tags: request.tags,
+            notes: request.notes,
+            headerNames: request.headers?.map(([name]) => name) ?? entry.headerNames,
+            updatedAt: new Date().toISOString()
+          }
+        : entry
+    )
+  );
+}
+
+function entryEndpointsFromRequest(
+  existing: ProviderSummary["endpoints"],
+  request: ProviderUpdateRequest
+): ProviderSummary["endpoints"] {
+  const apiUrls = [...request.endpoints, request.endpoint].filter((url): url is string => Boolean(url?.trim()));
+  const consoleUrls = request.consoleEndpoints.filter((url) => Boolean(url.trim()));
+  const apiEndpoints = apiUrls.map((url, index) => ({
+    id: existing.find((item) => item.kind === "api" && item.url === url)?.id ?? `api-${index}`,
+    kind: "api",
+    url
+  }));
+  const consoleEndpoints = consoleUrls.map((url, index) => ({
+    id: existing.find((item) => item.kind === "console" && item.url === url)?.id ?? `console-${index}`,
+    kind: "console",
+    url
+  }));
+  return [...apiEndpoints, ...consoleEndpoints];
+}
+
+async function mutateEntryCache(mutator: (entries: ProviderSummary[]) => ProviderSummary[]) {
+  if (!activeVaultNamespace) return;
+  const snapshot = await readEntryCache(activeVaultNamespace);
+  if (!snapshot) return;
+  await writeEntryCacheSnapshot({
+    ...snapshot,
+    updatedAt: Date.now(),
+    entries: mutator(snapshot.entries)
+  });
+}
+
+async function readEntryCache(vaultNamespace: string): Promise<EntryCacheSnapshotV1 | undefined> {
+  const key = entryCacheKey(vaultNamespace);
+  const snapshot = await storageGet<EntryCacheSnapshotV1>(key);
+  if (!isEntryCacheSnapshot(snapshot, vaultNamespace)) return undefined;
+  return snapshot;
+}
+
+async function writeEntryCache(vaultNamespace: string, entries: ProviderSummary[]) {
+  await writeEntryCacheSnapshot({
+    schemaVersion: ENTRY_CACHE_SCHEMA_VERSION,
+    vaultNamespace,
+    updatedAt: Date.now(),
+    entries
+  });
+}
+
+async function writeEntryCacheSnapshot(snapshot: EntryCacheSnapshotV1) {
+  const key = entryCacheKey(snapshot.vaultNamespace);
+  await storageSet(key, snapshot);
+}
+
+function isEntryCacheSnapshot(value: unknown, vaultNamespace: string): value is EntryCacheSnapshotV1 {
+  const snapshot = value as Partial<EntryCacheSnapshotV1> | undefined;
+  return Boolean(
+    snapshot &&
+      snapshot.schemaVersion === ENTRY_CACHE_SCHEMA_VERSION &&
+      snapshot.vaultNamespace === vaultNamespace &&
+      typeof snapshot.updatedAt === "number" &&
+      Array.isArray(snapshot.entries)
+  );
+}
+
+function entryCacheKey(vaultNamespace: string): string {
+  return `${ENTRY_CACHE_KEY_PREFIX}${vaultNamespace}`;
+}
+
+async function storageGet<T>(key: string): Promise<T | undefined> {
+  const storage = chrome.storage?.session;
+  if (!storage) {
+    return memoryEntryCache.get(key) as T | undefined;
+  }
+  return new Promise((resolve) => {
+    storage.get(key, (items) => resolve(items[key] as T | undefined));
+  });
+}
+
+async function storageSet<T>(key: string, value: T): Promise<void> {
+  const storage = chrome.storage?.session;
+  if (!storage) {
+    memoryEntryCache.set(key, value as EntryCacheSnapshotV1);
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    storage.set({ [key]: value }, () => resolve());
+  });
+}
 
 function getPendingDraft(): DetectedSecretDraft | null {
   pruneExpiredPendingDrafts();
@@ -386,7 +687,9 @@ function pendingDraftKey(draft: DetectedSecretDraft): string {
 async function savePendingDraft(draft: DetectedSecretDraft, draftId?: string) {
   const response = await saveDetectedSecret(draft);
   if (response.ok) {
+    entryCacheMutationVersion += 1;
     clearPendingDraft(draftId);
+    scheduleEntryCacheRefresh("secret.savePendingDraft");
     return response;
   }
   if (await shouldUnlockForFailedSave(response)) {
@@ -449,6 +752,7 @@ async function savePendingDraftBatch(
     }
     const response = await saveDetectedSecret(draft);
     if (response.ok) {
+      entryCacheMutationVersion += 1;
       saved.push({ draftId: item.draftId, entryId: response.data?.entryId });
       clearPendingDraft(item.draftId);
     } else if (await shouldUnlockForFailedSave(response)) {
@@ -459,8 +763,14 @@ async function savePendingDraftBatch(
     }
   }
   if (lockedCount) {
+    if (saved.length) {
+      scheduleEntryCacheRefresh("secret.savePendingDrafts.partial");
+    }
     const opened = await openPopupForEdit();
     return saveRequiresUnlockResponse(lockedCount, opened, saved, errors);
+  }
+  if (saved.length) {
+    scheduleEntryCacheRefresh("secret.savePendingDrafts");
   }
   return {
     ok: errors.length === 0,
@@ -484,6 +794,7 @@ async function saveDetectedDraftBatch(drafts: DetectedSecretDraft[]) {
   for (const draft of drafts) {
     const response = await saveDetectedSecret(draft);
     if (response.ok) {
+      entryCacheMutationVersion += 1;
       saved.push({ entryId: response.data?.entryId });
     } else if (await shouldUnlockForFailedSave(response)) {
       enqueuePendingDraft(draft, "review", true);
@@ -493,8 +804,14 @@ async function saveDetectedDraftBatch(drafts: DetectedSecretDraft[]) {
     }
   }
   if (lockedCount) {
+    if (saved.length) {
+      scheduleEntryCacheRefresh("secret.saveDetectedBatch.partial");
+    }
     const opened = await openPopupForEdit();
     return saveRequiresUnlockResponse(lockedCount, opened, saved, errors);
+  }
+  if (saved.length) {
+    scheduleEntryCacheRefresh("secret.saveDetectedBatch");
   }
   return {
     ok: errors.length === 0,
@@ -510,16 +827,23 @@ async function resumePendingSaves() {
   for (const record of records) {
     const response = await saveDetectedSecret(record.draft);
     if (response.ok) {
+      entryCacheMutationVersion += 1;
       saved.push({ draftId: record.id, entryId: response.data?.entryId });
       clearPendingDraft(record.id);
       continue;
     }
     if (await shouldUnlockForFailedSave(response)) {
+      if (saved.length) {
+        scheduleEntryCacheRefresh("secret.resumePendingSaves.partial");
+      }
       const opened = await openPopupForEdit();
       return saveRequiresUnlockResponse(records.length - saved.length, opened, saved, errors);
     }
     record.saveAfterUnlock = false;
     errors.push({ draftId: record.id, error: response.error ?? "Unable to save detected key" });
+  }
+  if (saved.length) {
+    scheduleEntryCacheRefresh("secret.resumePendingSaves");
   }
   return {
     ok: errors.length === 0,

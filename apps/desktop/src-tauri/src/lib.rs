@@ -1622,6 +1622,7 @@ pub fn run() {
             vault_rotate,
             entries_list,
             entries_search,
+            provider_favicon_backfill,
             provider_add,
             provider_update,
             provider_archive,

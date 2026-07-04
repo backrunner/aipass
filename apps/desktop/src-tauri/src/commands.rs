@@ -16,10 +16,10 @@ use crate::models::{
     VaultExportRequest, VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
-    AgentRequest, LockReason, ProbeResult as AgentProbeResult, SecretValue, SensitiveString,
-    SessionPolicy, SessionStatus, SessionUnlockMode,
-    SyncConflictResponse as AgentSyncConflictResponse, SyncSettings as AgentSyncSettings,
-    ToolConfigApplyResponse as AgentToolConfigApplyResponse,
+    AgentRequest, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
+    ProbeResult as AgentProbeResult, SecretValue, SensitiveString, SessionPolicy, SessionStatus,
+    SessionUnlockMode, SyncConflictResponse as AgentSyncConflictResponse,
+    SyncSettings as AgentSyncSettings, ToolConfigApplyResponse as AgentToolConfigApplyResponse,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
 };
 use aipass_sync::SyncReport;
@@ -341,6 +341,14 @@ pub(crate) async fn entries_search(
     query: String,
 ) -> Result<Vec<EntrySummary>, String> {
     agent_request_async(app, AgentRequest::EntriesSearch { query }).await
+}
+
+#[tauri::command]
+pub(crate) async fn provider_favicon_backfill(
+    app: AppHandle,
+    request: FaviconBackfillRequest,
+) -> Result<FaviconBackfillResponse, String> {
+    agent_request_async(app, AgentRequest::ProviderFaviconBackfill { request }).await
 }
 
 #[tauri::command]

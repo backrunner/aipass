@@ -256,6 +256,35 @@ pub struct ProbeResult {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FaviconBackfillRequest {
+    #[serde(default)]
+    pub entry_ids: Option<Vec<Uuid>>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaviconBackfillError {
+    #[serde(default)]
+    pub entry_id: Option<Uuid>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FaviconBackfillResponse {
+    pub checked: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    #[serde(default)]
+    pub entries: Vec<EntrySummary>,
+    #[serde(default)]
+    pub errors: Vec<FaviconBackfillError>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserDetectedSecretFields {
@@ -414,6 +443,8 @@ pub enum AgentRequest {
     DeviceRevoke { id: Uuid },
     #[serde(rename = "provider.probe")]
     ProviderProbe { id: Uuid, timeout_seconds: u64 },
+    #[serde(rename = "provider.favicon_backfill")]
+    ProviderFaviconBackfill { request: FaviconBackfillRequest },
     #[serde(rename = "tool_config.preview")]
     ToolConfigPreview { request: ToolConfigRequest },
     #[serde(rename = "tool_config.apply")]
@@ -662,5 +693,20 @@ mod tests {
             serde_json::json!(AGENT_PROTOCOL_VERSION)
         );
         assert!(value.get("protocol_version").is_none());
+    }
+
+    #[test]
+    fn favicon_backfill_request_uses_camel_case_payload() {
+        let request = AgentRequest::ProviderFaviconBackfill {
+            request: FaviconBackfillRequest {
+                entry_ids: Some(vec![Uuid::nil()]),
+                limit: Some(4),
+            },
+        };
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["type"], "provider.favicon_backfill");
+        assert_eq!(value["request"]["entryIds"][0], Uuid::nil().to_string());
+        assert_eq!(value["request"]["limit"], 4);
+        assert!(value["request"].get("entry_ids").is_none());
     }
 }

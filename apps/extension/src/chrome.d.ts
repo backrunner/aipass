@@ -51,4 +51,13 @@ declare namespace chrome {
   namespace scripting {
     function executeScript(details: { target: { tabId: number }; files: string[]; world?: "ISOLATED" | "MAIN" }): Promise<unknown[]>;
   }
+  namespace storage {
+    interface StorageArea {
+      get(keys: string | string[] | Record<string, unknown> | null, callback: (items: Record<string, unknown>) => void): void;
+      set(items: Record<string, unknown>, callback?: () => void): void;
+      remove?(keys: string | string[], callback?: () => void): void;
+    }
+
+    const session: StorageArea | undefined;
+  }
 }

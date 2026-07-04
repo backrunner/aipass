@@ -7,7 +7,9 @@ const listeners: Listener[] = [];
 const openPopup = vi.fn().mockResolvedValue(undefined);
 const nativeSaveResponses: unknown[] = [];
 const nativePreviewResponses: unknown[] = [];
+const nativeListResponses: unknown[] = [];
 const nativeMessages: Array<Record<string, unknown>> = [];
+const storageSessionData = new Map<string, unknown>();
 let nativePingLocked = false;
 
 function installChromeStub() {
@@ -22,7 +24,29 @@ function installChromeStub() {
         nativeMessages.push(message);
         const type = String(message.type ?? "");
         if (type === "ping") {
-          callback({ id: "1", ok: true, data: { protocolVersion: 1, locked: nativePingLocked } });
+          callback({
+            id: "1",
+            ok: true,
+            data: { protocolVersion: 1, locked: nativePingLocked, vaultNamespace: "test-vault" }
+          });
+          return;
+        }
+        if (type === "entries.list") {
+          const queued = nativeListResponses.shift();
+          if (queued) {
+            callback(queued);
+            return;
+          }
+          callback({ id: "1", ok: true, data: { entries: [], grants: [] } });
+          return;
+        }
+        if (type === "session.unlock") {
+          nativePingLocked = false;
+          callback({
+            id: "1",
+            ok: true,
+            data: { locked: false, exists: true, vaultNamespace: "test-vault" }
+          });
           return;
         }
         if (type === "settings.isOriginIgnored") {
@@ -65,6 +89,20 @@ function installChromeStub() {
           callback({ id: "1", ok: true, data: { entryId: crypto.randomUUID() } });
           return;
         }
+        if (type === "provider.faviconBackfill") {
+          callback({
+            id: "1",
+            ok: true,
+            data: {
+              checked: 1,
+              updated: 1,
+              skipped: 0,
+              entries: [{ id: "entry-1", faviconUrl: "https://example.com/favicon.ico" }],
+              errors: []
+            }
+          });
+          return;
+        }
         callback({ id: "1", ok: true, data: {} });
       })
     },
@@ -75,6 +113,44 @@ function installChromeStub() {
     },
     scripting: {
       executeScript: vi.fn().mockResolvedValue([])
+    },
+    storage: {
+      session: {
+        get(keys: string | string[] | Record<string, unknown> | null, callback: (items: Record<string, unknown>) => void) {
+          if (typeof keys === "string") {
+            callback({ [keys]: storageSessionData.get(keys) });
+            return;
+          }
+          if (Array.isArray(keys)) {
+            callback(Object.fromEntries(keys.map((key) => [key, storageSessionData.get(key)])));
+            return;
+          }
+          if (keys && typeof keys === "object") {
+            callback(
+              Object.fromEntries(
+                Object.entries(keys).map(([key, fallback]) => [
+                  key,
+                  storageSessionData.has(key) ? storageSessionData.get(key) : fallback
+                ])
+              )
+            );
+            return;
+          }
+          callback(Object.fromEntries(storageSessionData.entries()));
+        },
+        set(items: Record<string, unknown>, callback?: () => void) {
+          for (const [key, value] of Object.entries(items)) {
+            storageSessionData.set(key, value);
+          }
+          callback?.();
+        },
+        remove(keys: string | string[], callback?: () => void) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) {
+            storageSessionData.delete(key);
+          }
+          callback?.();
+        }
+      }
     }
   });
 }
@@ -87,6 +163,32 @@ async function dispatchMessage(message: Record<string, unknown>) {
   });
 }
 
+async function settleAsyncWork() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function providerEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "entry-1",
+    title: "OpenRouter",
+    providerId: "openrouter",
+    providerKind: "official",
+    domains: ["openrouter.ai"],
+    faviconUrl: "https://openrouter.ai/favicon.ico",
+    endpoints: [{ id: "api-1", kind: "api", url: "https://openrouter.ai/api/v1" }],
+    interfaceType: "openai_compatible",
+    authScheme: "bearer",
+    maskedSecret: "•••• 1234",
+    fingerprint: "fp-1234",
+    tags: ["browser"],
+    ...overrides
+  };
+}
+
+function listResponse(entries: unknown[]) {
+  return { id: "1", ok: true, data: { entries, grants: [] } };
+}
+
 describe("service worker pending drafts", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -95,9 +197,142 @@ describe("service worker pending drafts", () => {
     openPopup.mockClear();
     nativeSaveResponses.length = 0;
     nativePreviewResponses.length = 0;
+    nativeListResponses.length = 0;
     nativeMessages.length = 0;
+    storageSessionData.clear();
     nativePingLocked = false;
     installChromeStub();
+  });
+
+  it("serves cached entries after an unlocked ping and reloads them from session storage", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry()]));
+    const fresh = (await dispatchMessage({ type: "aipass.entriesList" })) as { ok?: boolean };
+    assert.equal(fresh.ok, true);
+
+    const cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      ok?: boolean;
+      data?: { entries?: Array<{ id?: string }>; stale?: boolean };
+    };
+    assert.equal(cached.ok, true);
+    assert.equal(cached.data?.entries?.[0]?.id, "entry-1");
+    assert.equal(cached.data?.stale, true);
+
+    vi.resetModules();
+    listeners.length = 0;
+    await import("./service-worker");
+    await dispatchMessage({ type: "aipass.ping" });
+    const reloaded = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      data?: { entries?: Array<{ id?: string }> };
+    };
+    assert.equal(reloaded.data?.entries?.[0]?.id, "entry-1");
+  });
+
+  it("does not expose cached entries after the vault reports locked", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry()]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+
+    nativePingLocked = true;
+    await dispatchMessage({ type: "aipass.ping" });
+    const cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      data?: { entries?: unknown[]; stale?: boolean };
+    };
+    assert.equal(cached.data?.entries?.length, 0);
+    assert.equal(cached.data?.stale, false);
+  });
+
+  it("makes cached entries visible again after an unlock response updates session state", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry()]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+
+    nativePingLocked = true;
+    await dispatchMessage({ type: "aipass.ping" });
+    let cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      data?: { entries?: Array<{ id?: string }> };
+    };
+    assert.equal(cached.data?.entries?.length, 0);
+
+    await dispatchMessage({ type: "aipass.unlockPassword", password: "correct horse battery staple" });
+    cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      data?: { entries?: Array<{ id?: string }> };
+    };
+    assert.equal(cached.data?.entries?.[0]?.id, "entry-1");
+  });
+
+  it("keeps stale cache data when a fresh refresh fails", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry()]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+
+    nativeListResponses.push({ id: "1", ok: false, error: "boom", data: {} });
+    const failedRefresh = (await dispatchMessage({ type: "aipass.entriesList" })) as { ok?: boolean };
+    assert.equal(failedRefresh.ok, false);
+
+    const cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      data?: { entries?: Array<{ id?: string }> };
+    };
+    assert.equal(cached.data?.entries?.[0]?.id, "entry-1");
+  });
+
+  it("patches cached entries after provider update and delete mutations", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry(), providerEntry({ id: "entry-2", title: "Anthropic" })]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+
+    nativeListResponses.push(
+      listResponse([
+        providerEntry({ title: "Edited Provider" }),
+        providerEntry({ id: "entry-2", title: "Anthropic" })
+      ])
+    );
+    const updated = (await dispatchMessage({
+      type: "aipass.providerUpdate",
+      request: {
+        id: "entry-1",
+        title: "Edited Provider",
+        providerId: "openrouter",
+        domain: ["openrouter.ai"],
+        endpoint: "https://openrouter.ai/api/v1",
+        endpoints: [],
+        consoleEndpoints: ["https://openrouter.ai/settings/keys"],
+        interfaceType: "openai_compatible",
+        authScheme: "bearer",
+        modelAliases: [],
+        headers: [],
+        tags: ["browser"]
+      }
+    })) as { ok?: boolean };
+    assert.equal(updated.ok, true);
+    await settleAsyncWork();
+
+    let cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      data?: { entries?: Array<{ id?: string; title?: string }> };
+    };
+    assert.equal(cached.data?.entries?.find((entry) => entry.id === "entry-1")?.title, "Edited Provider");
+
+    nativeListResponses.push(listResponse([providerEntry({ id: "entry-2", title: "Anthropic" })]));
+    const deleted = (await dispatchMessage({
+      type: "aipass.providerDelete",
+      entryId: "entry-1"
+    })) as { ok?: boolean };
+    assert.equal(deleted.ok, true);
+
+    cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+      data?: { entries?: Array<{ id?: string }> };
+    };
+    assert.equal(cached.data?.entries?.some((entry) => entry.id === "entry-1"), false);
   });
 
   it("queues multiple detected drafts instead of overwriting them", async () => {
@@ -227,6 +462,23 @@ describe("service worker pending drafts", () => {
       data?: { drafts?: unknown[] };
     };
     assert.equal(pending.data?.drafts?.length, 0);
+  });
+
+  it("forwards favicon backfill requests to the native host", async () => {
+    await import("./service-worker");
+
+    const response = (await dispatchMessage({
+      type: "aipass.backfillFavicons",
+      entryIds: ["entry-1"],
+      limit: 4
+    })) as { ok?: boolean; data?: { updated?: number } };
+
+    assert.equal(response.ok, true);
+    assert.equal(response.data?.updated, 1);
+    const backfillMessage = nativeMessages.find((message) => message.type === "provider.faviconBackfill");
+    assert.ok(backfillMessage);
+    assert.deepEqual(backfillMessage.entry_ids, ["entry-1"]);
+    assert.equal(backfillMessage.limit, 4);
   });
 
   it("filters already-saved detected drafts before the content prompt opens", async () => {

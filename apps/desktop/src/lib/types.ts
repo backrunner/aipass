@@ -107,6 +107,14 @@ export type EntrySummary = {
   deletedAt?: string;
 };
 
+export type FaviconBackfillResult = {
+  checked: number;
+  updated: number;
+  skipped: number;
+  entries: EntrySummary[];
+  errors: Array<{ entryId?: string; message: string }>;
+};
+
 export type SyncObject = {
   objectId?: string;
   objectType: string;

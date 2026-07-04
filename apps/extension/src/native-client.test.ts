@@ -267,6 +267,43 @@ describe("native client connection monitor", () => {
     assert.equal(response.error, "Native host request timed out");
     assert.equal(disconnect.mock.calls.length, 1);
   });
+
+  it("sends favicon backfill requests through the native host", async () => {
+    const successPort = makeRespondingPort({
+      checked: 1,
+      updated: 1,
+      skipped: 0,
+      entries: [{ id: "entry-1", faviconUrl: "https://example.com/favicon.ico" }],
+      errors: []
+    });
+    const connectNative = vi.fn(() => successPort.port);
+    vi.stubGlobal("chrome", {
+      runtime: {
+        id: "test-extension-id",
+        lastError: undefined,
+        connectNative,
+        sendNativeMessage: vi.fn()
+      },
+      alarms: {
+        create: vi.fn(),
+        onAlarm: {
+          addListener: vi.fn()
+        }
+      }
+    });
+
+    const { backfillFavicons } = await import("./native-client");
+    const response = await backfillFavicons(["11111111-1111-1111-1111-111111111111"], 4);
+
+    assert.equal(response.ok, true);
+    assert.equal(response.data.updated, 1);
+    assert.equal(successPort.postMessage.mock.calls.length, 1);
+    const message = successPort.postMessage.mock.calls[0][0];
+    assert.equal(message.type, "provider.faviconBackfill");
+    assert.deepEqual(message.entry_ids, ["11111111-1111-1111-1111-111111111111"]);
+    assert.equal(message.limit, 4);
+    assert.equal(message.extension_id, "test-extension-id");
+  });
 });
 
 function makeDisconnectingPort(runtime: { lastError?: { message?: string } }) {

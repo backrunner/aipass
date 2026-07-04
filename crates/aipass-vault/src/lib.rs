@@ -770,6 +770,34 @@ impl Vault {
         Ok(())
     }
 
+    pub fn set_provider_favicon_url(
+        &self,
+        id: Uuid,
+        favicon_url: impl Into<String>,
+    ) -> Result<Option<EntrySummary>, VaultError> {
+        let favicon_url = favicon_url.into();
+        let favicon_url = favicon_url.trim();
+        if favicon_url.is_empty() {
+            return Ok(None);
+        }
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        if plaintext
+            .entry
+            .favicon_url
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Ok(None);
+        }
+        plaintext.entry.favicon_url = Some(favicon_url.to_string());
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("provider.favicon_backfill", Some(id), None)?;
+        Ok(Some(summary_from_plaintext(&plaintext)))
+    }
+
     pub fn get_provider_summary(&self, id: Uuid) -> Result<EntrySummary, VaultError> {
         let path = self.record_path(id);
         let plaintext = self.decrypt_provider_path(&path)?;
@@ -1866,6 +1894,40 @@ mod tests {
             .iter()
             .any(|name| name == "anthropic-version"));
         assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-original");
+    }
+
+    #[test]
+    fn favicon_backfill_only_sets_missing_url_and_preserves_record_fields() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-favicon")).unwrap();
+
+        let updated = vault
+            .set_provider_favicon_url(id, "https://console.anthropic.com/favicon.ico")
+            .unwrap()
+            .expect("missing favicon should update");
+        assert_eq!(
+            updated.favicon_url.as_deref(),
+            Some("https://console.anthropic.com/favicon.ico")
+        );
+        assert!(updated
+            .header_names
+            .iter()
+            .any(|name| name == "anthropic-version"));
+        assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-favicon");
+
+        assert!(vault
+            .set_provider_favicon_url(id, "https://example.com/favicon.ico")
+            .unwrap()
+            .is_none());
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        let summary = reopened.get_provider_summary(id).unwrap();
+        assert_eq!(
+            summary.favicon_url.as_deref(),
+            Some("https://console.anthropic.com/favicon.ico")
+        );
+        assert_eq!(reopened.reveal_secret(id).unwrap(), "sk-ant-api03-favicon");
     }
 
     #[test]

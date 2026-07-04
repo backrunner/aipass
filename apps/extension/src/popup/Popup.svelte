@@ -23,7 +23,7 @@
   import { Ban, Check, Copy, Eye, EyeOff, KeyRound, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-svelte";
 
   import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
-  import type { DraftItem, DraftPreview, Entry, Grant, LookupData, NativeResponse, SafeDraft } from "./types";
+  import type { DraftItem, DraftPreview, Entry, FaviconBackfillResult, Grant, LookupData, NativeResponse, SafeDraft } from "./types";
 
   type Connection = "checking" | "connected" | "locked" | "missing";
 
@@ -49,12 +49,18 @@
   let searchGrants: Grant[] = [];
   let pendingDrafts: SafeDraft[] = [];
   let draftItems: DraftItem[] = [];
+  let faviconBackfillBusy = false;
+  const faviconBackfillAttemptedIds = new Set<string>();
   let statusText = "";
   let statusError = false;
   let copied = "";
   type RefreshOptions = {
     scanActiveTab?: boolean;
     assumeUnlocked?: boolean;
+  };
+  type CachedEntriesData = LookupData & {
+    updatedAt?: number;
+    stale?: boolean;
   };
   type SavePendingData = {
     saved?: Array<{ draftId?: string; entryId?: string }>;
@@ -88,6 +94,7 @@
   let deletingEntryId = "";
   let selectedEntryId = "";
   let usingEntryId = "";
+  let entriesLoading = false;
   let filteredEntries: Entry[] = [];
   let selectedEntry: Entry | undefined;
 
@@ -128,6 +135,7 @@
     if (!assumeUnlocked) {
       const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
       if (!ping?.ok) {
+        entriesLoading = false;
         connection = "missing";
         return;
       }
@@ -136,6 +144,7 @@
       connection = "connected";
     }
     if (connection !== "connected") {
+      entriesLoading = false;
       entries = [];
       siteEntries = [];
       siteEntryIds = new Set();
@@ -143,6 +152,8 @@
       clearPendingDraftUi();
       return;
     }
+    entriesLoading = true;
+    await hydrateCachedEntries();
     if (scanActiveTab && tabId && currentUrl) {
       await sendToWorker<{ scanned: boolean }>({ type: "aipass.scanActiveTab", tabId });
       await delay(120);
@@ -159,13 +170,55 @@
     const contextGrants = lookup?.ok ? lookup.data?.grants ?? [] : [];
     siteEntries = contextEntries;
     siteEntryIds = new Set(siteEntries.map((entry) => entry.id));
-    entries = mergeEntries(listedEntries, contextEntries);
+    entries = mergeEntries(list?.ok ? listedEntries : entries, contextEntries);
     grants = contextGrants;
     if (!entries.some((entry) => entry.id === selectedEntryId)) {
       selectedEntryId = siteEntries[0]?.id ?? entries[0]?.id ?? "";
     }
     pendingDrafts = draftResponse?.ok ? draftResponse.data?.drafts ?? [] : [];
     syncDrafts();
+    entriesLoading = false;
+    scheduleFaviconBackfill(entries);
+  }
+
+  function scheduleFaviconBackfill(currentEntries: Entry[]) {
+    if (faviconBackfillBusy) return;
+    const missing = currentEntries
+      .filter((entry) => !entry.faviconUrl?.trim() && !faviconBackfillAttemptedIds.has(entry.id))
+      .slice(0, 4);
+    if (!missing.length) return;
+    for (const entry of missing) {
+      faviconBackfillAttemptedIds.add(entry.id);
+    }
+    void backfillFavicons(missing.map((entry) => entry.id));
+  }
+
+  async function backfillFavicons(entryIds: string[]) {
+    faviconBackfillBusy = true;
+    try {
+      const response = await sendToWorker<FaviconBackfillResult>({
+        type: "aipass.backfillFavicons",
+        entryIds,
+        limit: 4
+      });
+      if (!response?.ok || !response.data?.entries?.length) return;
+      entries = mergeEntries(entries, response.data.entries);
+      siteEntries = mergeEntries(siteEntries, response.data.entries.filter((entry) => siteEntryIds.has(entry.id)));
+    } catch (err) {
+      console.warn("favicon backfill failed", err);
+    } finally {
+      faviconBackfillBusy = false;
+    }
+  }
+
+  async function hydrateCachedEntries() {
+    const cached = await sendToWorker<CachedEntriesData>({ type: "aipass.cachedEntriesList" });
+    const cachedEntries = cached?.ok ? cached.data?.entries ?? [] : [];
+    if (!cachedEntries.length) return;
+    entries = mergeEntries(cachedEntries, entries);
+    if (!entries.some((entry) => entry.id === selectedEntryId)) {
+      selectedEntryId = entries[0]?.id ?? "";
+    }
   }
 
   async function openDesktopUnlock() {
@@ -1527,6 +1580,11 @@
             {#each filteredEntries as entry (entry.id)}
               {@render entryListItem(entry)}
             {/each}
+          {:else if entriesLoading}
+            <div class="empty-copy compact vault-empty">
+              <span class="empty-icon"><RefreshCw class="spin" size={18} /></span>
+              <strong>{$t("ext.state.checking")}</strong>
+            </div>
           {:else}
             <div class="empty-copy compact vault-empty">
               <span class="empty-icon"><Search size={18} /></span>

@@ -29,6 +29,7 @@
     DeviceRecord,
     Draft,
     EntrySummary,
+    FaviconBackfillResult,
     FormMode,
     ProbeResult,
     ProviderCounts,
@@ -221,6 +222,8 @@
   let trashCount = 0;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchRequestId = 0;
+  let faviconBackfillBusy = false;
+  const faviconBackfillAttemptedIds = new Set<string>();
 
   async function refreshTrashCount() {
     if (status.locked) {
@@ -567,6 +570,48 @@
     } else {
       trashCount = entries.length;
     }
+    if (!archived && !trash) {
+      scheduleFaviconBackfill(entries);
+    }
+  }
+
+  function scheduleFaviconBackfill(currentEntries: ProviderEntry[]) {
+    if (faviconBackfillBusy) return;
+    const missing = currentEntries
+      .filter((entry) => !entry.faviconUrl?.trim() && !faviconBackfillAttemptedIds.has(entry.id))
+      .slice(0, 4);
+    if (!missing.length) return;
+    for (const entry of missing) {
+      faviconBackfillAttemptedIds.add(entry.id);
+    }
+    void backfillFavicons(missing.map((entry) => entry.id));
+  }
+
+  async function backfillFavicons(entryIds: string[]) {
+    faviconBackfillBusy = true;
+    try {
+      const result = await invokeTauri<FaviconBackfillResult>("provider_favicon_backfill", {
+        request: { entryIds, limit: 4 }
+      });
+      if (showArchived || showTrash) return;
+      mergeBackfilledEntries(result.entries ?? []);
+    } catch (err) {
+      console.warn("favicon backfill failed", err);
+    } finally {
+      faviconBackfillBusy = false;
+    }
+  }
+
+  function mergeBackfilledEntries(summaries: EntrySummary[]) {
+    if (!summaries.length) return;
+    const currentIds = new Set(entries.map((entry) => entry.id));
+    const updatedById = new Map(
+      summaries
+        .filter((summary) => currentIds.has(summary.id))
+        .map((summary) => [summary.id, summaryToEntry(summary)] as const)
+    );
+    if (!updatedById.size) return;
+    entries = entries.map((entry) => updatedById.get(entry.id) ?? entry);
   }
 
   async function runSearch() {

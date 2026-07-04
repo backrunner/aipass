@@ -6,7 +6,8 @@ use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{
     AgentErrorCode, AgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
     BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
-    BrowserIgnoredStatus, SaveDetectedResult, SessionStatus, SessionUnlockMode,
+    BrowserIgnoredStatus, FaviconBackfillRequest, FaviconBackfillResponse, SaveDetectedResult,
+    SessionStatus, SessionUnlockMode,
 };
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
 use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
@@ -65,6 +66,7 @@ fn handle_request_inner(
                 "protocolVersion": 1,
                 "locked": status.locked,
                 "exists": status.exists,
+                "vaultNamespace": status.vault_namespace,
             }))
         }
         NativeRequest::Ping { .. } => bail!("unsupported protocol version"),
@@ -350,6 +352,17 @@ fn handle_request_inner(
             )?;
             Ok(json!({ "entryId": entry_id }))
         }
+        NativeRequest::ProviderFaviconBackfill {
+            entry_ids, limit, ..
+        } => {
+            let result: FaviconBackfillResponse = request_agent(
+                config,
+                &AgentRequest::ProviderFaviconBackfill {
+                    request: FaviconBackfillRequest { entry_ids, limit },
+                },
+            )?;
+            Ok(serde_json::to_value(result)?)
+        }
         NativeRequest::ProviderDelete { entry_id, .. } => {
             let _: serde_json::Value =
                 request_agent(config, &AgentRequest::ProviderDelete { id: entry_id })?;
@@ -376,6 +389,7 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::PreviewDetected { id, .. }
         | NativeRequest::ProviderAdd { id, .. }
         | NativeRequest::ProviderUpdate { id, .. }
+        | NativeRequest::ProviderFaviconBackfill { id, .. }
         | NativeRequest::ProviderDelete { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
         | NativeRequest::SessionUnlock { id, .. }
@@ -396,6 +410,7 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::PreviewDetected { extension_id, .. }
         | NativeRequest::ProviderAdd { extension_id, .. }
         | NativeRequest::ProviderUpdate { extension_id, .. }
+        | NativeRequest::ProviderFaviconBackfill { extension_id, .. }
         | NativeRequest::ProviderDelete { extension_id, .. }
         | NativeRequest::UnlockRequest { extension_id, .. }
         | NativeRequest::SessionUnlock { extension_id, .. }

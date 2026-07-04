@@ -103,6 +103,7 @@ fn native_request_id(request: &NativeRequest) -> uuid::Uuid {
         | NativeRequest::PreviewDetected { id, .. }
         | NativeRequest::ProviderAdd { id, .. }
         | NativeRequest::ProviderUpdate { id, .. }
+        | NativeRequest::ProviderFaviconBackfill { id, .. }
         | NativeRequest::ProviderDelete { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
         | NativeRequest::SessionUnlock { id, .. }
@@ -123,6 +124,7 @@ fn native_request_type(request: &NativeRequest) -> &'static str {
         NativeRequest::PreviewDetected { .. } => "secret.previewDetected",
         NativeRequest::ProviderAdd { .. } => "provider.add",
         NativeRequest::ProviderUpdate { .. } => "provider.update",
+        NativeRequest::ProviderFaviconBackfill { .. } => "provider.faviconBackfill",
         NativeRequest::ProviderDelete { .. } => "provider.delete",
         NativeRequest::UnlockRequest { .. } => "unlock.request",
         NativeRequest::SessionUnlock { .. } => "session.unlock",

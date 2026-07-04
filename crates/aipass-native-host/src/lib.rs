@@ -181,6 +181,9 @@ mod tests {
         );
         assert!(response.ok);
         assert_eq!(response.data["locked"], true);
+        assert!(response.data["vaultNamespace"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
     }
 
     #[test]
@@ -453,6 +456,54 @@ mod tests {
         );
         assert!(after_delete.ok, "{after_delete:?}");
         assert_eq!(after_delete.data["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn provider_favicon_backfill_forwards_to_agent() {
+        let agent = RunningAgent::start();
+        agent.unlock();
+        let config = agent.config();
+        let add = handle_request_with_config(
+            NativeRequest::ProviderAdd {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                title: "OpenRouter".to_string(),
+                provider_id: Some("openrouter".to_string()),
+                domain: vec!["openrouter.ai".to_string()],
+                favicon_url: Some("https://openrouter.ai/favicon.ico".to_string()),
+                endpoint: Some("https://openrouter.ai/api/v1".to_string()),
+                endpoints: vec![],
+                console_endpoints: vec!["https://openrouter.ai".to_string()],
+                interface_type: aipass_provider_registry::InterfaceType::OpenAiCompatible,
+                auth_scheme: aipass_provider_registry::AuthScheme::Bearer,
+                api_key: "sk-or-v1-native-host-secret".into(),
+                default_model: None,
+                model_aliases: vec![],
+                headers: vec![],
+                quota: None,
+                gateway: None,
+                tags: vec![],
+                notes: None,
+            },
+            &config,
+        );
+        assert!(add.ok, "{add:?}");
+        let entry_id = Uuid::parse_str(add.data["entryId"].as_str().unwrap()).unwrap();
+
+        let backfill = handle_request_with_config(
+            NativeRequest::ProviderFaviconBackfill {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                entry_ids: Some(vec![entry_id]),
+                limit: Some(4),
+            },
+            &config,
+        );
+
+        assert!(backfill.ok, "{backfill:?}");
+        assert_eq!(backfill.data["checked"], 0);
+        assert_eq!(backfill.data["updated"], 0);
+        assert_eq!(backfill.data["skipped"], 1);
     }
 
     #[test]

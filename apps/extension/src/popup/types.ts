@@ -42,6 +42,14 @@ export type Grant = { id: string; entryId?: string; expiresAt: string };
 
 export type LookupData = { entries: Entry[]; grants: Grant[] };
 
+export type FaviconBackfillResult = {
+  checked: number;
+  updated: number;
+  skipped: number;
+  entries: Entry[];
+  errors: Array<{ entryId?: string; message: string }>;
+};
+
 export type SafeDraft = {
   draftId: string;
   providerId?: string;

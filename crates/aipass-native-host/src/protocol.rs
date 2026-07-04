@@ -151,6 +151,15 @@ pub enum NativeRequest {
         tags: Vec<String>,
         notes: Option<String>,
     },
+    #[serde(rename = "provider.faviconBackfill")]
+    ProviderFaviconBackfill {
+        id: Uuid,
+        extension_id: Option<String>,
+        #[serde(default)]
+        entry_ids: Option<Vec<Uuid>>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     #[serde(rename = "provider.delete")]
     ProviderDelete {
         id: Uuid,
@@ -308,6 +317,28 @@ mod tests {
         match request {
             NativeRequest::EntriesList { id, .. } => {
                 assert_eq!(id.to_string(), "00000000-0000-0000-0000-000000000000");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn favicon_backfill_deserializes_entry_ids_and_limit() {
+        let request: NativeRequest = serde_json::from_str(
+            r#"{
+                "type": "provider.faviconBackfill",
+                "id": "00000000-0000-0000-0000-000000000000",
+                "entry_ids": ["11111111-1111-1111-1111-111111111111"],
+                "limit": 4
+            }"#,
+        )
+        .unwrap();
+        match request {
+            NativeRequest::ProviderFaviconBackfill {
+                entry_ids, limit, ..
+            } => {
+                assert_eq!(entry_ids.unwrap().len(), 1);
+                assert_eq!(limit, Some(4));
             }
             other => panic!("unexpected variant: {other:?}"),
         }
