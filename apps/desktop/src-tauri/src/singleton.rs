@@ -17,7 +17,7 @@ use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(not(target_os = "windows"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -245,8 +245,8 @@ fn listen_at_path(path: &PathBuf) -> Result<Listener> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn create_listener_at_path(path: &PathBuf) -> io::Result<Listener> {
-    let name = path.clone().to_fs_name::<GenericFilePath>()?;
+fn create_listener_at_path(path: &Path) -> io::Result<Listener> {
+    let name = path.to_path_buf().to_fs_name::<GenericFilePath>()?;
     #[allow(unused_mut)]
     let mut options = ListenerOptions::new().name(name);
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
@@ -255,13 +255,13 @@ fn create_listener_at_path(path: &PathBuf) -> io::Result<Listener> {
     }
     let listener = options.create_sync()?;
     #[cfg(unix)]
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(listener)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn stale_socket_path(path: &PathBuf) -> bool {
-    let Ok(name) = path.clone().to_fs_name::<GenericFilePath>() else {
+fn stale_socket_path(path: &Path) -> bool {
+    let Ok(name) = path.to_path_buf().to_fs_name::<GenericFilePath>() else {
         return false;
     };
     Stream::connect(name).is_err()

@@ -123,7 +123,10 @@ fn install_close_to_tray(app: &App) {
 fn handle_menu_event(app: &AppHandle, id: &str, items: &TrayMenuItems) {
     match id {
         MENU_OPEN => {
-            show_main_window(app);
+            if let Err(err) = open_main_window(app) {
+                eprintln!("failed to open AIPass from tray: {err}");
+                let _ = items.status.set_text("Agent: open failed");
+            }
             refresh_status_async(app.clone(), items.clone());
         }
         MENU_HIDE => hide_main_window(app),
@@ -136,23 +139,37 @@ fn handle_menu_event(app: &AppHandle, id: &str, items: &TrayMenuItems) {
     }
 }
 
-fn show_main_window(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-    #[cfg(target_os = "macos")]
-    let _ = app.show();
+fn open_main_window(app: &AppHandle) -> Result<(), String> {
+    if show_existing_main_window(app) {
+        return Ok(());
+    }
 
+    let client = agent_client(app)?;
+    aipass_agent::desktop::open_desktop_window("main", &client.config.vault_dir)
+        .map_err(|err| err.to_string())
+}
+
+fn show_existing_main_window(app: &AppHandle) -> bool {
     if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        #[cfg(target_os = "macos")]
+        let _ = app.show();
+
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        return true;
     }
+    false
 }
 
 fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
 fn refresh_status_async(app: AppHandle, items: TrayMenuItems) {
