@@ -8,6 +8,7 @@ pub mod logging;
 pub mod paths;
 pub mod server;
 pub mod session;
+pub(crate) mod usage_probe;
 pub mod windows_service;
 
 pub use autostart::{

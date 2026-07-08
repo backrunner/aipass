@@ -1,4 +1,6 @@
-use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, ProviderEndpoint};
+use aipass_provider_registry::{
+    AuthScheme, GatewayMetadata, InterfaceType, ProviderEndpoint, QuotaInfo,
+};
 use aipass_sync::SyncObject;
 use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, ProviderEntryUpdateInput, RecoveryKit,
@@ -256,6 +258,51 @@ pub struct ProbeResult {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageProbeMode {
+    #[default]
+    Auto,
+    NewApi,
+    SubApi,
+    NewApiAdvanced,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageProbeSource {
+    NewApiTokenUsage,
+    NewApiUserSelf,
+    SubApiV1Usage,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProbeQuota {
+    pub label: Option<String>,
+    pub limit: Option<String>,
+    pub used: Option<String>,
+    pub remaining: Option<String>,
+    pub reset_at: Option<String>,
+    pub unit: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProbeResult {
+    pub ok: bool,
+    pub provider_id: Option<String>,
+    pub source: UsageProbeSource,
+    pub endpoint: Option<String>,
+    pub status: Option<u16>,
+    pub quota: Option<UsageProbeQuota>,
+    pub gateway: Option<GatewayMetadata>,
+    pub plan_name: Option<String>,
+    pub message: Option<String>,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FaviconBackfillRequest {
@@ -443,6 +490,25 @@ pub enum AgentRequest {
     DeviceRevoke { id: Uuid },
     #[serde(rename = "provider.probe")]
     ProviderProbe { id: Uuid, timeout_seconds: u64 },
+    #[serde(rename = "provider.usage_probe")]
+    ProviderUsageProbe {
+        id: Uuid,
+        #[serde(default)]
+        mode: UsageProbeMode,
+        timeout_seconds: u64,
+        #[serde(default)]
+        base_url: Option<String>,
+        #[serde(default)]
+        access_token: Option<SensitiveString>,
+        #[serde(default)]
+        user_id: Option<String>,
+    },
+    #[serde(rename = "provider.usage_apply")]
+    ProviderUsageApply {
+        id: Uuid,
+        quota: Option<QuotaInfo>,
+        gateway: Option<GatewayMetadata>,
+    },
     #[serde(rename = "provider.favicon_backfill")]
     ProviderFaviconBackfill { request: FaviconBackfillRequest },
     #[serde(rename = "tool_config.preview")]

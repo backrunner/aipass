@@ -42,6 +42,8 @@
     ToolConfigMode,
     ToolConfigPreview,
     ToolConfigTarget,
+    UsageProbeRequest,
+    UsageProbeResult,
     VaultAuthTaskStartResponse,
     VaultAuthTaskStatus,
     VaultStatus
@@ -207,6 +209,8 @@
   let secretBusy = "";
   let probeResult: ProbeResult | undefined;
   let probing = false;
+  let usageProbeResult: UsageProbeResult | undefined;
+  let usageProbing = false;
   let exportPath = "";
   let exportPassword = "";
   let importPath = "";
@@ -280,6 +284,7 @@
     activeDetailId = selected?.id ?? "";
     revealedSecrets = {};
     probeResult = undefined;
+    usageProbeResult = undefined;
   }
   $: createPasswordStrength = passwordStrength(createPassword, $t);
   $: recoveryPasswordStrength = passwordStrength(recoveryPassword, $t);
@@ -533,6 +538,7 @@
     selectedId = "";
     revealedSecrets = {};
     probeResult = undefined;
+    usageProbeResult = undefined;
     showSettings = false;
     password = "";
     createPassword = "";
@@ -1053,6 +1059,80 @@
     }
   }
 
+  async function probeUsageSelected(request: UsageProbeRequest): Promise<UsageProbeResult> {
+    if (!selected) {
+      throw new Error($t("providerDetail.noneSelected"));
+    }
+    usageProbing = true;
+    usageProbeResult = undefined;
+    error = "";
+    try {
+      const result = await invokeTauri<UsageProbeResult>("provider_usage_probe", {
+        id: selected.id,
+        mode: request.mode,
+        timeoutSeconds: 15,
+        baseUrl: request.baseUrl?.trim() || undefined,
+        accessToken: request.accessToken?.trim() || undefined,
+        userId: request.userId?.trim() || undefined
+      });
+      usageProbeResult = result;
+      return result;
+    } catch (err) {
+      const result: UsageProbeResult = {
+        ok: false,
+        providerId: selected.providerId,
+        source: "unknown",
+        error: String(err)
+      };
+      usageProbeResult = result;
+      return result;
+    } finally {
+      usageProbing = false;
+    }
+  }
+
+  async function applyUsageProbe(result: UsageProbeResult) {
+    if (!selected) return;
+    const quota = mergeQuota(selected.quota, result.quota);
+    const gateway = mergeGateway(selected.gateway, result.gateway);
+    if (!quota && !gateway) return;
+    error = "";
+    try {
+      await invokeTauri("provider_usage_apply", {
+        id: selected.id,
+        quota,
+        gateway
+      });
+      await loadEntries();
+      notice = localizedMessage("notice.usageProbeApplied");
+      setTimeout(() => (notice = ""), 1800);
+    } catch (err) {
+      error = String(err);
+      throw err;
+    }
+  }
+
+  function mergeQuota(current: QuotaInfo | undefined, probed: UsageProbeResult["quota"]): QuotaInfo | undefined {
+    const next = {
+      label: probed?.label ?? current?.label,
+      limit: probed?.limit ?? current?.limit,
+      remaining: probed?.remaining ?? current?.remaining,
+      resetAt: probed?.resetAt ?? current?.resetAt
+    };
+    return next.label || next.limit || next.remaining || next.resetAt ? next : undefined;
+  }
+
+  function mergeGateway(
+    current: ProviderEntry["gateway"] | undefined,
+    probed: UsageProbeResult["gateway"]
+  ): ProviderEntry["gateway"] | undefined {
+    const next = {
+      group: probed?.group ?? current?.group,
+      rate: probed?.rate ?? current?.rate
+    };
+    return next.group || next.rate ? next : undefined;
+  }
+
   async function previewToolConfig(request: {
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
@@ -1280,6 +1360,7 @@
         selectedId = "";
         revealedSecrets = {};
         probeResult = undefined;
+        usageProbeResult = undefined;
         showSettings = false;
         setAuthMode("unlock");
       } else {
@@ -1518,12 +1599,16 @@
         {secretBusy}
         {probeResult}
         {probing}
+        {usageProbeResult}
+        {usageProbing}
         notice={noticeText}
         error={errorText}
         editMode={detailEditMode}
         formMode="edit"
         bind:draft
         onProbe={probeSelected}
+        onUsageProbe={probeUsageSelected}
+        onApplyUsageProbe={applyUsageProbe}
         onEditStart={openEdit}
         onEditCancel={cancelDetailEdit}
         onEditSave={saveDetailEdit}

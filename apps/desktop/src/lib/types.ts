@@ -165,6 +165,43 @@ export type ProbeResult = {
   error?: string;
 };
 
+export type UsageProbeMode = "auto" | "new_api" | "sub_api" | "new_api_advanced";
+
+export type UsageProbeSource =
+  | "new_api_token_usage"
+  | "new_api_user_self"
+  | "sub_api_v1_usage"
+  | "unknown";
+
+export type UsageProbeQuota = {
+  label?: string;
+  limit?: string;
+  used?: string;
+  remaining?: string;
+  resetAt?: string;
+  unit?: string;
+};
+
+export type UsageProbeResult = {
+  ok: boolean;
+  providerId?: string;
+  source: UsageProbeSource;
+  endpoint?: string;
+  status?: number;
+  quota?: UsageProbeQuota;
+  gateway?: ProviderEntry["gateway"];
+  planName?: string;
+  message?: string;
+  error?: string;
+};
+
+export type UsageProbeRequest = {
+  mode: UsageProbeMode;
+  baseUrl?: string;
+  accessToken?: string;
+  userId?: string;
+};
+
 export type ToolConfigPreview = {
   tool: ToolConfigTarget;
   mode: ToolConfigMode;

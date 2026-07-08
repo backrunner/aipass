@@ -252,6 +252,42 @@ fn dispatch_request(
                 timeout_seconds.max(1),
             )))
         }
+        AgentRequest::ProviderUsageProbe {
+            id,
+            mode,
+            timeout_seconds,
+            base_url,
+            access_token,
+            user_id,
+        } => {
+            let (entry, secret) = with_vault(state, true, |vault| {
+                Ok((
+                    vault.get_provider_summary(id).map_err(map_vault_error)?,
+                    vault.reveal_secret(id).map_err(map_vault_error)?,
+                ))
+            })?;
+            Ok(AgentResponse::success(
+                crate::usage_probe::probe_provider_usage(
+                    entry,
+                    secret,
+                    crate::usage_probe::UsageProbeOptions {
+                        mode,
+                        timeout_seconds: timeout_seconds.max(1),
+                        base_url,
+                        access_token,
+                        user_id,
+                    },
+                ),
+            ))
+        }
+        AgentRequest::ProviderUsageApply { id, quota, gateway } => {
+            with_vault(state, false, |vault| {
+                vault
+                    .update_provider_usage(id, quota, gateway)
+                    .map_err(map_vault_error)
+            })
+            .map(|_| AgentResponse::empty())
+        }
         AgentRequest::ProviderFaviconBackfill { request } => {
             backfill_provider_favicons(state, request).map(AgentResponse::success)
         }

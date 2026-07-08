@@ -1638,6 +1638,8 @@ pub fn run() {
             devices_list,
             device_revoke,
             provider_probe,
+            provider_usage_probe,
+            provider_usage_apply,
             tool_config_preview,
             tool_config_apply,
             native_host_status,

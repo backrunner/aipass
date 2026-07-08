@@ -20,8 +20,10 @@ use aipass_agent_protocol::{
     ProbeResult as AgentProbeResult, SecretValue, SensitiveString, SessionPolicy, SessionStatus,
     SessionUnlockMode, SyncConflictResponse as AgentSyncConflictResponse,
     SyncSettings as AgentSyncSettings, ToolConfigApplyResponse as AgentToolConfigApplyResponse,
-    ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
+    ToolConfigPreviewResponse as AgentToolConfigPreviewResponse, UsageProbeMode,
+    UsageProbeResult as AgentUsageProbeResult,
 };
+use aipass_provider_registry::{GatewayMetadata, QuotaInfo};
 use aipass_sync::SyncReport;
 use aipass_vault::{DeviceRecord, EntrySummary};
 use serde::de::DeserializeOwned;
@@ -494,6 +496,42 @@ pub(crate) async fn provider_probe(
         model_count: result.model_count,
         error: result.error,
     })
+}
+
+#[tauri::command]
+pub(crate) async fn provider_usage_probe(
+    app: AppHandle,
+    id: Uuid,
+    mode: Option<UsageProbeMode>,
+    timeout_seconds: Option<u64>,
+    base_url: Option<String>,
+    access_token: Option<SensitiveString>,
+    user_id: Option<String>,
+) -> Result<AgentUsageProbeResult, String> {
+    agent_request_async(
+        app,
+        AgentRequest::ProviderUsageProbe {
+            id,
+            mode: mode.unwrap_or_default(),
+            timeout_seconds: timeout_seconds.unwrap_or(15),
+            base_url,
+            access_token,
+            user_id,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn provider_usage_apply(
+    app: AppHandle,
+    id: Uuid,
+    quota: Option<QuotaInfo>,
+    gateway: Option<GatewayMetadata>,
+) -> Result<(), String> {
+    let _: serde_json::Value =
+        agent_request_async(app, AgentRequest::ProviderUsageApply { id, quota, gateway }).await?;
+    Ok(())
 }
 
 #[tauri::command]

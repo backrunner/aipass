@@ -16,6 +16,7 @@
     Copy,
     Eye,
     EyeOff,
+    Gauge,
     KeyRound,
     MoreHorizontal,
     Pencil,
@@ -35,7 +36,9 @@
     ToolConfigApplyResult,
     ToolConfigMode,
     ToolConfigPreview,
-    ToolConfigTarget
+    ToolConfigTarget,
+    UsageProbeRequest,
+    UsageProbeResult
   } from "../../types";
   import { isLocalizedMessage, localizedMessage, resolveMessage, t } from "../../stores/i18n";
   import {
@@ -43,7 +46,9 @@
     type IntegrationToolDefinition
   } from "../../utils/integrations";
   import { detectLang, highlightPreview } from "../../utils/highlight";
+  import { usageSourceLabelKey } from "../../utils/usageProbe";
   import Card from "../shared/Card.svelte";
+  import ProviderUsageProbeDialog from "./ProviderUsageProbeDialog.svelte";
 
   export let selected: ProviderEntry | undefined;
   export let showArchived = false;
@@ -55,12 +60,18 @@
   export let secretBusy = "";
   export let probeResult: ProbeResult | undefined;
   export let probing = false;
+  export let usageProbeResult: UsageProbeResult | undefined;
+  export let usageProbing = false;
   export let notice = "";
   export let error = "";
   export let editMode = false;
   export let formMode: FormMode = "edit";
   export let draft: Draft;
   export let onProbe: () => MaybePromise = () => {};
+  export let onUsageProbe: (request: UsageProbeRequest) => Promise<UsageProbeResult> = async () => {
+    throw localizedMessage("error.usageProbeUnavailable");
+  };
+  export let onApplyUsageProbe: (result: UsageProbeResult) => MaybePromise = () => {};
   export let onEditStart: (entry: ProviderEntry) => MaybePromise = () => {};
   export let onEditCancel: () => MaybePromise = () => {};
   export let onEditSave: () => MaybePromise = () => {};
@@ -91,6 +102,7 @@
   };
 
   let showAddSecret = false;
+  let usageDialogOpen = false;
 
   $: primaryLabel = selected?.secretRefs[0]?.label ?? "primary";
   $: hasQuota = Boolean(
@@ -125,6 +137,10 @@
 
   $: if (selected?.id) {
     integrationState = initialIntegrationState();
+  }
+
+  $: if (selected?.id) {
+    usageDialogOpen = false;
   }
 
   async function previewIntegration(tool: IntegrationToolDefinition) {
@@ -201,6 +217,11 @@
 
   function consoleDisplay(entry: ProviderEntry): string {
     return entry.endpoints.find((endpoint) => endpoint.kind === "console")?.url ?? "";
+  }
+
+  function openUsageProbe() {
+    if (!selected) return;
+    usageDialogOpen = true;
   }
 
   function startEdit() {
@@ -295,6 +316,10 @@
                 <DropdownMenu.Item class="dropdown-item" onSelect={() => onProbe()} disabled={probing}>
                   <Wifi size={14} />
                   <span>{probing ? $t("providerDetail.probing") : $t("providerDetail.probeEndpoint")}</span>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item class="dropdown-item" onSelect={openUsageProbe} disabled={usageProbing}>
+                  <Gauge size={14} />
+                  <span>{usageProbing ? $t("providerDetail.usageProbing") : $t("providerDetail.refreshUsage")}</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator class="dropdown-separator" />
                 <DropdownMenu.Item class="dropdown-item" onSelect={() => onArchive()}>
@@ -506,6 +531,23 @@
               <span></span>
             </div>
           {/if}
+          {#if usageProbeResult}
+            <div class="kv-row">
+              <span class="kv-label">{$t("providerDetail.usage")}</span>
+              <span class="kv-value">
+                <span class={`probe-dot ${usageProbeResult.ok ? "ok" : "fail"}`}></span>
+                {usageProbeResult.ok ? $t(usageSourceLabelKey(usageProbeResult.source)) : $t("providerDetail.checkFailed")}
+                {#if usageProbeResult.quota?.remaining !== undefined}
+                  · {$t("providerDetail.remaining")}: {usageProbeResult.quota.remaining}
+                {/if}
+                {#if usageProbeResult.gateway?.group}
+                  · {$t("providerDetail.gatewayGroup")}: {usageProbeResult.gateway.group}
+                {/if}
+                {#if usageProbeResult.error} · <span class="probe-error">{usageProbeResult.error}</span>{/if}
+              </span>
+              <span></span>
+            </div>
+          {/if}
         </Card>
 
         {#if hasQuota}
@@ -581,6 +623,18 @@
       {/if}
     </div>
   </section>
+
+  <ProviderUsageProbeDialog
+    open={usageDialogOpen}
+    {selected}
+    {usageProbeResult}
+    {usageProbing}
+    onOpenChange={(next) => {
+      usageDialogOpen = next;
+    }}
+    {onUsageProbe}
+    {onApplyUsageProbe}
+  />
   {/key}
 {:else}
   <section class="detail empty">
@@ -1229,5 +1283,6 @@
     .actions {
       justify-content: flex-end;
     }
+
   }
 </style>

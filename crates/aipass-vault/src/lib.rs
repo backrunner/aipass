@@ -770,6 +770,22 @@ impl Vault {
         Ok(())
     }
 
+    pub fn update_provider_usage(
+        &self,
+        id: Uuid,
+        quota: Option<QuotaInfo>,
+        gateway: Option<GatewayMetadata>,
+    ) -> Result<(), VaultError> {
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        plaintext.entry.quota = quota;
+        plaintext.entry.gateway = gateway;
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("provider.usage.update", Some(id), None)?;
+        Ok(())
+    }
+
     pub fn set_provider_favicon_url(
         &self,
         id: Uuid,
@@ -1894,6 +1910,45 @@ mod tests {
             .iter()
             .any(|name| name == "anthropic-version"));
         assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-original");
+    }
+
+    #[test]
+    fn update_provider_usage_only_changes_quota_and_gateway() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-usage")).unwrap();
+        let before = vault.get_provider_summary(id).unwrap();
+
+        vault
+            .update_provider_usage(
+                id,
+                Some(QuotaInfo {
+                    label: Some("vip".to_string()),
+                    limit: Some("20".to_string()),
+                    remaining: Some("7.5".to_string()),
+                    reset_at: Some("2026-07-31T00:00:00Z".to_string()),
+                }),
+                Some(GatewayMetadata {
+                    group: Some("vip".to_string()),
+                    rate: Some("0.8x".to_string()),
+                }),
+            )
+            .unwrap();
+
+        let after = vault.get_provider_summary(id).unwrap();
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.endpoints, before.endpoints);
+        assert_eq!(after.header_names, before.header_names);
+        assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-usage");
+        assert_eq!(
+            after.quota.and_then(|quota| quota.remaining).as_deref(),
+            Some("7.5")
+        );
+        assert_eq!(
+            after.gateway.and_then(|gateway| gateway.group).as_deref(),
+            Some("vip")
+        );
     }
 
     #[test]
