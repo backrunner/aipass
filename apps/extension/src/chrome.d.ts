@@ -40,7 +40,10 @@ declare namespace chrome {
     };
   }
   namespace tabs {
-    function query(queryInfo: { active: boolean; currentWindow: boolean }, callback: (tabs: Array<{ id?: number; url?: string }>) => void): void;
+    function query(
+      queryInfo: { active: boolean; currentWindow: boolean },
+      callback: (tabs: Array<{ id?: number; url?: string; title?: string }>) => void
+    ): void;
     function sendMessage(tabId: number, message: unknown, callback?: (response: unknown) => void): void;
   }
   namespace action {

@@ -6,6 +6,7 @@
     matchProviderByDomain,
     providerDefinitions,
     type InterfaceType,
+    type ProviderDefinition,
     type ProviderKind
   } from "@aipass/schemas";
   import {
@@ -37,6 +38,7 @@
   let connection: Connection = "checking";
   let currentUrl = "";
   let currentOrigin = "";
+  let currentTitle = "";
   let tabId: number | undefined;
   let provider = matchProviderByDomain("");
   let entries: Entry[] = [];
@@ -123,7 +125,8 @@
     tabId = tab?.id;
     currentUrl = tab?.url ?? "";
     currentOrigin = originFromUrl(currentUrl);
-    provider = matchProviderByDomain(currentUrl);
+    currentTitle = tab?.title ?? "";
+    provider = providerFromCurrentContext();
     await refresh({ scanActiveTab: false });
   });
 
@@ -839,6 +842,87 @@
     }
   }
 
+  function httpOriginFromUrl(value: string): string | undefined {
+    const trimmed = value.trim();
+    if (!/^https?:\/\//i.test(trimmed)) return undefined;
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function endpointForProvider(
+    definition: ProviderDefinition | undefined,
+    origin: string,
+    currentEndpoint: string
+  ): string {
+    const existing = currentEndpoint.trim();
+    if (existing && !isCurrentOriginEndpoint(existing, origin) && !isKnownProviderApiEndpoint(existing)) return existing;
+    const defaultEndpoint = definition?.endpoints.find((endpoint) => endpoint.kind === "api")?.url;
+    if (defaultEndpoint) return defaultEndpoint;
+    if (!origin) return existing;
+    if (!definition || definition.kind === "self_hosted" || definition.id === "custom_openai_compatible") {
+      return `${origin}/v1`;
+    }
+    if (definition.id === "custom_http") return origin;
+    return existing;
+  }
+
+  function isKnownProviderApiEndpoint(value: string): boolean {
+    const parsed = parseHttpUrl(value);
+    if (!parsed) return false;
+    return providerDefinitions.some((provider) =>
+      provider.endpoints.some((endpoint) => endpoint.kind === "api" && endpoint.url && parseHttpUrl(endpoint.url)?.href === parsed.href)
+    );
+  }
+
+  function isCurrentOriginEndpoint(value: string, origin: string): boolean {
+    if (!origin) return false;
+    const parsed = parseHttpUrl(value);
+    return Boolean(parsed && parsed.origin === origin && /^\/v\d+\/?$/i.test(parsed.pathname));
+  }
+
+  function siteNameFromTabTitle(title: string, definition?: ProviderDefinition): string | undefined {
+    const cleaned = cleanTitleSegment(title);
+    if (!cleaned) return undefined;
+    const parts = splitTitleSegments(cleaned)
+      .map((part) => cleanTitleSegment(part))
+      .filter((part): part is string => Boolean(part));
+    const candidates = parts.filter((part) => !isGenericTitlePart(part) && !isProviderTitlePart(part, definition));
+    return candidates[candidates.length - 1] ?? undefined;
+  }
+
+  function splitTitleSegments(title: string): string[] {
+    const spaced = title.split(/\s+(?:[-–—|·•:：])\s+/).filter(Boolean);
+    return spaced.length > 1 ? spaced : [title];
+  }
+
+  function cleanTitleSegment(value: string | undefined): string | undefined {
+    const cleaned = value
+      ?.replace(/\s+/g, " ")
+      .replace(/^[\s|:：\-–—·•]+|[\s|:：\-–—·•]+$/g, "")
+      .trim();
+    if (!cleaned || cleaned.length > 80) return undefined;
+    return cleaned;
+  }
+
+  function isGenericTitlePart(value: string): boolean {
+    return /^(?:api\s*(?:keys?|密钥)(?:\s*(?:management|settings)|管理|设置)?|keys?|tokens?|secret\s*keys?|virtual\s*keys?|key\s*management|token\s*management|dashboard|console|settings?|management|user\s*settings?|密钥(?:管理|设置)?|令牌(?:管理|设置)?|系统访问令牌|下游密钥|控制台|仪表盘|后台|管理后台)$/i.test(value.trim());
+  }
+
+  function isProviderTitlePart(value: string, definition?: ProviderDefinition): boolean {
+    const normalized = normalizeName(value);
+    return [definition?.displayName, ...providerDefinitions.map((item) => item.displayName)].some(
+      (name) => normalizeName(name) === normalized
+    );
+  }
+
+  function normalizeName(value: string | undefined): string {
+    return value?.replace(/[\s_-]+/g, "").toLowerCase() ?? "";
+  }
+
   function applyFaviconFromEndpoint(draft: Draft) {
     const inferred = faviconUrlFromEndpoint(draft.endpoint);
     if (!inferred) return;
@@ -965,24 +1049,85 @@
   }
 
   function openAddForm() {
-    addDraft = emptyDraft();
+    addDraft = draftFromCurrentContext();
     editingDraftId = "";
     editingEntryId = "";
-    addDraft.tag = "";
-    if (currentUrl) {
-      const match = matchProviderByDomain(currentUrl);
-      if (match) {
-        addDraft.providerId = match.id;
-        addDraft.title = match.displayName;
-        addDraft.endpoint = match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
-        applyFaviconFromEndpoint(addDraft);
-        addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
-        addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
-      }
-    }
     statusText = "";
     statusError = false;
     showAddForm = true;
+  }
+
+  function draftFromCurrentContext(): Draft {
+    const next = emptyDraft();
+    const origin = httpOriginFromUrl(currentUrl) ?? httpOriginFromUrl(currentOrigin) ?? "";
+    const host = origin ? hostFromOrigin(origin) : hostFromOrigin(currentOrigin || currentUrl);
+    const definition = providerFromCurrentContext() ?? providerDefinitions.find((item) => item.id === "custom_openai_compatible");
+    const siteName = currentSiteName(definition);
+    next.providerId = definition?.id ?? "custom_openai_compatible";
+    next.title = draftTitleFromCurrentContext(definition, siteName, host);
+    next.secretLabel = draftSecretLabelFromCurrentContext(definition, siteName, host);
+    next.domain = host;
+    next.consoleUrl = /^https?:\/\//i.test(currentUrl) ? currentUrl : "";
+    next.endpoint = endpointForProvider(definition, origin, "");
+    next.faviconUrl = origin ? `${origin}/favicon.ico` : "";
+    next.interfaceType = definition?.interfaces[0] ?? "openai_compatible";
+    next.authScheme = definition?.authSchemes[0] ?? "bearer";
+    applyFaviconFromEndpoint(next);
+    return next;
+  }
+
+  function providerFromCurrentContext(): ProviderDefinition | undefined {
+    if (!currentUrl) return undefined;
+    const direct = matchProviderByDomain(currentUrl);
+    if (direct) return direct;
+    const routeMatch = selfHostedProviderFromCurrentRoute();
+    if (routeMatch) return routeMatch;
+    const inferred = inferProviderFromEndpoint(currentUrl);
+    if (inferred?.id && inferred.id !== "custom_http") return inferred;
+    return undefined;
+  }
+
+  function selfHostedProviderFromCurrentRoute(): ProviderDefinition | undefined {
+    const parsed = parseHttpUrl(currentUrl);
+    const path = parsed?.pathname ?? "";
+    const haystack = `${currentUrl} ${currentTitle}`.toLowerCase();
+    if (/sub2api|subscription\s*to\s*api/i.test(haystack)) return providerById("sub2api");
+    if (/litellm/i.test(haystack)) return providerById("litellm");
+    if (/one[-_ ]?api|oneapi/i.test(haystack)) return providerById("one_api");
+    if (/new[-_ ]?api|newapi/i.test(haystack) || /^\/console\/token(?:\/|$)/i.test(path)) return providerById("new_api");
+    if (/veloera/i.test(haystack) || /^\/app\/tokens(?:\/|$)/i.test(path)) return providerById("veloera");
+    if (/omniroute/i.test(haystack) || /^\/dashboard\/api-manager(?:\/|$)/i.test(path)) return providerById("omniroute");
+    if (/metapi/i.test(haystack) || /^\/(?:api\/)?downstream-keys(?:\/|$)/i.test(path)) return providerById("metapi");
+    return undefined;
+  }
+
+  function providerById(id: string): ProviderDefinition | undefined {
+    return providerDefinitions.find((item) => item.id === id);
+  }
+
+  function currentSiteName(definition?: ProviderDefinition): string | undefined {
+    const fromTitle = siteNameFromTabTitle(currentTitle, definition);
+    if (fromTitle) return fromTitle;
+    const host = hostFromOrigin(currentOrigin || currentUrl);
+    return host || undefined;
+  }
+
+  function draftTitleFromCurrentContext(
+    definition: ProviderDefinition | undefined,
+    siteName: string | undefined,
+    host: string
+  ): string {
+    if (definition?.kind === "official" || definition?.kind === "third_party") return definition.displayName;
+    return siteName || definition?.displayName || host || "Browser Provider";
+  }
+
+  function draftSecretLabelFromCurrentContext(
+    definition: ProviderDefinition | undefined,
+    siteName: string | undefined,
+    host: string
+  ): string {
+    if (siteName && normalizeName(siteName) !== normalizeName(definition?.displayName)) return siteName;
+    return host || siteName || "default";
   }
 
   function openEditEntry(entry: Entry) {
@@ -1060,9 +1205,14 @@
     if (!definition) return;
     addDraft.interfaceType = detectInterfaceFromProvider(definition.id);
     addDraft.authScheme = detectAuthFromProvider(definition.id);
-    addDraft.endpoint ||= definition.endpoints.find((item) => item.kind === "api")?.url ?? "";
+    addDraft.endpoint = endpointForProvider(definition, httpOriginFromUrl(currentUrl) ?? "", addDraft.endpoint);
     applyFaviconFromEndpoint(addDraft);
-    addDraft.title ||= definition.displayName;
+    addDraft.title ||= draftTitleFromCurrentContext(definition, currentSiteName(definition), hostFromOrigin(currentOrigin || currentUrl));
+    addDraft.secretLabel ||= draftSecretLabelFromCurrentContext(
+      definition,
+      currentSiteName(definition),
+      hostFromOrigin(currentOrigin || currentUrl)
+    );
   }
 
   function addInferFromDomain() {
@@ -1070,7 +1220,7 @@
     if (!match) return;
     addDraft.providerId = match.id;
     addDraft.title ||= match.displayName;
-    addDraft.endpoint ||= match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
+    addDraft.endpoint = endpointForProvider(match, httpOriginFromUrl(currentUrl) ?? "", addDraft.endpoint);
     applyFaviconFromEndpoint(addDraft);
     addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
     addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
@@ -1334,6 +1484,7 @@
         <ProviderFormFields
           formMode="edit"
           bind:draft={addDraft}
+          compactProviderSelect
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
           onProviderChanged={addProviderChanged}
@@ -1543,6 +1694,7 @@
         <ProviderFormFields
           formMode={editingDraftId ? "edit" : "add"}
           bind:draft={addDraft}
+          compactProviderSelect
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
           onProviderChanged={addProviderChanged}

@@ -12,7 +12,7 @@ describe("clipboard bridge", () => {
     document.body.innerHTML = "";
   });
 
-  it("does not patch navigator.clipboard.writeText", async () => {
+  it("observes navigator.clipboard.writeText without changing the write result", async () => {
     const clipboard = {
       writeText: vi.fn().mockResolvedValue(undefined)
     };
@@ -21,11 +21,41 @@ describe("clipboard bridge", () => {
       value: clipboard
     });
     const originalWriteText = clipboard.writeText;
+    const observed: string[] = [];
+    window.addEventListener("aipass.clipboardSecret", (event) => {
+      observed.push((event as CustomEvent<{ text?: string }>).detail?.text ?? "");
+    });
 
     // @ts-expect-error Dynamic import is used here only to execute the script in Vitest.
     await import("./clipboard-bridge");
+    const result = await navigator.clipboard.writeText("sk-written1234567890");
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(navigator.clipboard.writeText, originalWriteText);
+    assert.notEqual(navigator.clipboard.writeText, originalWriteText);
+    assert.equal(result, undefined);
+    assert.equal(originalWriteText.mock.calls[0]?.[0], "sk-written1234567890");
+    assert.deepEqual(observed, ["sk-written1234567890"]);
+  });
+
+  it("does not emit clipboard secrets when navigator.clipboard.writeText fails", async () => {
+    const clipboard = {
+      writeText: vi.fn().mockRejectedValue(new Error("denied"))
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard
+    });
+    const observed: string[] = [];
+    window.addEventListener("aipass.clipboardSecret", (event) => {
+      observed.push((event as CustomEvent<{ text?: string }>).detail?.text ?? "");
+    });
+
+    // @ts-expect-error Dynamic import is used here only to execute the script in Vitest.
+    await import("./clipboard-bridge");
+    await assert.rejects(() => navigator.clipboard.writeText("sk-denied1234567890"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(observed, []);
   });
 
   it("observes copy events without cancelling the page copy flow", async () => {

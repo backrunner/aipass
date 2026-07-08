@@ -525,6 +525,7 @@ function isTokenManagementPage(recognition: PageRecognition): boolean {
 function canUseOpenAiStyleSecrets(recognition: PageRecognition): boolean {
   if (recognition.provider) return true;
   if (recognition.knownGateway && recognition.tokenPage) return true;
+  if (recognition.tokenPage && recognition.aiGatewayEvidence) return true;
   const endpoint = recognition.endpoint;
   return recognition.tokenPage && Boolean(endpoint && hasAiEndpointEvidence(endpoint));
 }

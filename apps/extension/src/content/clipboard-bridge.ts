@@ -40,6 +40,7 @@ function installClipboardBridge() {
     installDebugModeListener();
     installFrameworkScanListener();
     document.addEventListener("copy", emitSelectedSecret, { capture: true, passive: true });
+    patchClipboardWriteText();
     copyListenerInstalled = true;
   } catch {
     // The bridge runs in the page world; never let it affect page scripts.
@@ -86,6 +87,31 @@ function emitSelectedSecret() {
     deferEmitSecret(window.getSelection()?.toString() ?? "");
   } catch {
     // Ignore bridge failures so native copy handlers continue normally.
+  }
+}
+
+function patchClipboardWriteText() {
+  try {
+    const clipboard = navigator.clipboard as
+      | (Clipboard & { writeText?: Clipboard["writeText"] & { __AIPASS_WRAPPED_WRITE_TEXT__?: boolean } })
+      | undefined;
+    if (!clipboard?.writeText || clipboard.writeText.__AIPASS_WRAPPED_WRITE_TEXT__) return;
+    const originalWriteText = clipboard.writeText;
+    const patchedWriteText = function patchedWriteText(this: Clipboard, text: string): Promise<void> {
+      const result = Reflect.apply(originalWriteText, this || clipboard, [text]) as Promise<void>;
+      Promise.resolve(result).then(
+        () => deferEmitSecret(String(text ?? "")),
+        () => undefined
+      );
+      return result;
+    } as Clipboard["writeText"] & { __AIPASS_WRAPPED_WRITE_TEXT__?: boolean };
+    Object.defineProperty(patchedWriteText, "__AIPASS_WRAPPED_WRITE_TEXT__", {
+      value: true
+    });
+    clipboard.writeText = patchedWriteText;
+    debugLog("clipboard writeText patched");
+  } catch (err) {
+    debugLog("clipboard writeText patch skipped", { error: err instanceof Error ? err.message : String(err) });
   }
 }
 

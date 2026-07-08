@@ -646,6 +646,33 @@ describe("content detector", () => {
     assert.equal(detection?.drafts?.[0]?.endpoint, "https://one.example.test/v1");
   });
 
+  it("prompts before saving copied New API keys on custom domains", async () => {
+    setLocation("relay.example.test", "/console/token");
+    document.title = "API Keys - Acme Gateway";
+    document.body.innerHTML = "<h1>令牌</h1><span>渠道</span><span>分组</span><button>复制</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-newApiCopiedSecret1234567890" }
+      })
+    );
+    await flushTimers();
+    clickPromptAction("save");
+    await flushTimers();
+
+    const detection = sentMessages.find((message) => {
+      const typed = message as { type?: string };
+      return typed.type === "aipass.saveDetectedDraftsNow";
+    }) as { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string; title?: string }> } | undefined;
+    assert.equal(detection?.drafts?.[0]?.providerId, "new_api");
+    assert.equal(detection?.drafts?.[0]?.apiKey, "sk-newApiCopiedSecret1234567890");
+    assert.equal(detection?.drafts?.[0]?.endpoint, "https://relay.example.test/v1");
+    assert.equal(detection?.drafts?.[0]?.title, "Acme Gateway");
+  });
+
   it("prompts before saving copied sub2api custom keys", async () => {
     setLocation("relay.example.test", "/keys");
     document.title = "API Keys - Relay Site";
