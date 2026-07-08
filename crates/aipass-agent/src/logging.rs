@@ -50,7 +50,7 @@ pub fn write_component_log(component: &str, level: &str, message: &str) {
             .unwrap_or_else(|_| "unknown-time".to_string()),
         sanitize_log_message(message)
     );
-    let line_len = line.as_bytes().len() as u64;
+    let line_len = line.len() as u64;
     let current_len = fs::metadata(&path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
