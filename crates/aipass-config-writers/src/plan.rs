@@ -1,7 +1,7 @@
 use crate::models::{ConfigPlan, PlannedWrite, ToolEntry, ToolId};
 use crate::utils::{
-    diff_preview, dotenv_quote, ensure_json_object, ensure_table, new_plan, read_json_object,
-    read_json_value, read_toml, redacted_diff_preview, resolve_codex_dir, slug,
+    config_backup_path, diff_preview, dotenv_quote, ensure_json_object, ensure_table, new_plan,
+    read_json_object, read_json_value, read_toml, redacted_diff_preview, resolve_codex_dir, slug,
 };
 use aipass_provider_registry::{AuthScheme, InterfaceType};
 use anyhow::{Context, Result};
@@ -81,8 +81,8 @@ pub fn plan_codex_plaintext(home: &Path, entry: &ToolEntry) -> Result<(ConfigPla
         ]),
     );
     plan.extra_writes.push(PlannedWrite {
+        backup_path: config_backup_path(&auth_target),
         target_path: auth_target,
-        backup_path: sibling_backup_path(&plan.backup_path, "auth"),
         content: auth_content,
     });
     Ok((plan, content))
@@ -384,12 +384,4 @@ fn combine_previews<const N: usize>(sections: [(&Path, String); N]) -> String {
         .map(|(path, preview)| format!("# {}\n{}", path.display(), preview))
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-fn sibling_backup_path(primary_backup: &Path, suffix: &str) -> std::path::PathBuf {
-    let stem = primary_backup
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("config");
-    primary_backup.with_file_name(format!("{stem}-{suffix}.aipbackup"))
 }

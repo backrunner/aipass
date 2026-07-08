@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use time::OffsetDateTime;
 use toml_edit::{DocumentMut, Item, Table};
 use uuid::Uuid;
 
@@ -34,15 +33,7 @@ pub(crate) fn new_plan(
     preview: String,
 ) -> ConfigPlan {
     let operation_id = Uuid::new_v4();
-    let backup_path = target_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".aipass-backups")
-        .join(format!(
-            "{}-{}.aipbackup",
-            operation_id,
-            OffsetDateTime::now_utc().unix_timestamp()
-        ));
+    let backup_path = config_backup_path(&target_path);
     ConfigPlan {
         operation_id,
         tool,
@@ -52,6 +43,19 @@ pub(crate) fn new_plan(
         preview,
         extra_writes: Vec::new(),
     }
+}
+
+pub fn config_backup_path(target_path: &Path) -> PathBuf {
+    let file_name = target_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("config");
+    target_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".aipass-backups")
+        .join(format!("{file_name}.aipbackup"))
 }
 
 pub(crate) fn write_json(path: impl AsRef<Path>, value: &impl Serialize) -> Result<()> {

@@ -3,6 +3,7 @@ use crate::utils::{backup_aad, read_json, resolve_codex_dir, write_json};
 use aipass_crypto::{decrypt_bytes, encrypt_bytes, KEY_LEN};
 use aipass_storage::atomic_write_bytes;
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -57,7 +58,6 @@ pub fn rollback_encrypted(backup_path: &Path, backup_key: &[u8; KEY_LEN]) -> Res
 }
 
 pub fn find_backup_by_operation(home: &Path, operation_id: Uuid) -> Result<PathBuf> {
-    let prefix = operation_id.to_string();
     let codex_dir = resolve_codex_dir(home);
     for root in [
         codex_dir.join(".aipass-backups"),
@@ -71,13 +71,12 @@ pub fn find_backup_by_operation(home: &Path, operation_id: Uuid) -> Result<PathB
         if !root.exists() {
             continue;
         }
-        for entry in fs::read_dir(root)? {
-            let path = entry?.path();
-            if path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".aipbackup"))
-            {
+        let mut paths = fs::read_dir(root)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        paths.sort();
+        for path in paths {
+            if backup_matches_operation(&path, operation_id) {
                 return Ok(path);
             }
         }
@@ -150,6 +149,7 @@ fn write_encrypted_backups(
         };
         write_json(&write.backup_path, &backup)?;
     }
+    prune_replaced_encrypted_backups(writes)?;
     Ok(())
 }
 
@@ -162,6 +162,7 @@ fn write_plain_backups(writes: &[PreparedWrite]) -> Result<()> {
             atomic_write_bytes(&write.backup_path, b"")?;
         }
     }
+    prune_replaced_encrypted_backups(writes)?;
     Ok(())
 }
 
@@ -236,15 +237,10 @@ fn backup_group_paths(backup_path: &Path, operation_id: Uuid) -> Result<Vec<Path
     let Some(parent) = backup_path.parent() else {
         return Ok(vec![backup_path.to_path_buf()]);
     };
-    let prefix = operation_id.to_string();
     let mut paths = Vec::new();
     for entry in fs::read_dir(parent)? {
         let path = entry?.path();
-        if path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".aipbackup"))
-        {
+        if backup_matches_operation(&path, operation_id) {
             paths.push(path);
         }
     }
@@ -253,6 +249,70 @@ fn backup_group_paths(backup_path: &Path, operation_id: Uuid) -> Result<Vec<Path
         paths.push(backup_path.to_path_buf());
     }
     Ok(paths)
+}
+
+fn prune_replaced_encrypted_backups(writes: &[PreparedWrite]) -> Result<()> {
+    let keep_paths = writes
+        .iter()
+        .map(|write| write.backup_path.clone())
+        .collect::<HashSet<_>>();
+    for write in writes {
+        prune_replaced_encrypted_backups_for_target(
+            &write.backup_path,
+            &write.target_path,
+            &keep_paths,
+        )?;
+    }
+    Ok(())
+}
+
+fn prune_replaced_encrypted_backups_for_target(
+    backup_path: &Path,
+    target_path: &Path,
+    keep_paths: &HashSet<PathBuf>,
+) -> Result<()> {
+    let Some(parent) = backup_path.parent() else {
+        return Ok(());
+    };
+    if !parent.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(parent)? {
+        let path = entry?.path();
+        if keep_paths.contains(&path) || !is_aipbackup_file(&path) {
+            continue;
+        }
+        if encrypted_backup_matches_target(&path, target_path) {
+            fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn encrypted_backup_matches_target(path: &Path, target_path: &Path) -> bool {
+    read_json::<EncryptedBackup>(path)
+        .map(|backup| backup.target_path == target_path)
+        .unwrap_or(false)
+}
+
+fn backup_matches_operation(path: &Path, operation_id: Uuid) -> bool {
+    backup_name_matches_operation(path, operation_id)
+        || read_json::<EncryptedBackup>(path)
+            .map(|backup| backup.operation_id == operation_id)
+            .unwrap_or(false)
+}
+
+fn backup_name_matches_operation(path: &Path, operation_id: Uuid) -> bool {
+    let prefix = operation_id.to_string();
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".aipbackup"))
+}
+
+fn is_aipbackup_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name.ends_with(".aipbackup"))
 }
 
 fn apply_result(plan: &ConfigPlan) -> ApplyResult {

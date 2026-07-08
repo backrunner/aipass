@@ -12,7 +12,7 @@ pub use plan::{
     plan_claude_code, plan_claude_code_plaintext, plan_codex, plan_codex_plaintext,
     plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
 };
-pub use utils::endpoint_url;
+pub use utils::{config_backup_path, endpoint_url};
 
 #[cfg(test)]
 mod tests {
@@ -121,6 +121,12 @@ mod tests {
             plan.backup_path.parent().unwrap(),
             codex_home.join(".aipass-backups")
         );
+        assert_eq!(
+            plan.backup_path,
+            codex_home
+                .join(".aipass-backups")
+                .join("config.toml.aipbackup")
+        );
     }
 
     #[test]
@@ -189,5 +195,89 @@ mod tests {
         assert!(std::fs::read_to_string(&target)
             .unwrap()
             .contains("sk-ant-api03-plaintext-in-original"));
+    }
+
+    #[test]
+    fn codex_plaintext_uses_one_stable_backup_per_config_file() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("https://api.openai.com".to_string());
+        entry.api_key = Some("sk-test-codex".to_string());
+
+        let (plan, content) = plan_codex_plaintext(dir.path(), &entry).unwrap();
+        assert_eq!(
+            plan.backup_path,
+            codex_dir
+                .join(".aipass-backups")
+                .join("config.toml.aipbackup")
+        );
+        assert_eq!(
+            plan.extra_writes[0].backup_path,
+            codex_dir
+                .join(".aipass-backups")
+                .join("auth.json.aipbackup")
+        );
+
+        apply_plan_encrypted(&plan, &content, &[9_u8; aipass_crypto::KEY_LEN]).unwrap();
+        assert_eq!(
+            find_backup_by_operation(dir.path(), plan.operation_id).unwrap(),
+            plan.extra_writes[0].backup_path
+        );
+        rollback_encrypted(&plan.backup_path, &[9_u8; aipass_crypto::KEY_LEN]).unwrap();
+        assert!(!codex_dir.join("config.toml").exists());
+        assert!(!codex_dir.join("auth.json").exists());
+    }
+
+    #[test]
+    fn encrypted_apply_prunes_legacy_backups_for_same_target() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join(".claude").join("settings.json");
+        let backup_dir = target.parent().unwrap().join(".aipass-backups");
+        let legacy_plan = ConfigPlan {
+            operation_id: uuid::Uuid::new_v4(),
+            tool: ToolId::ClaudeCode,
+            target_path: target.clone(),
+            backup_path: backup_dir.join(format!("{}-123.aipbackup", uuid::Uuid::new_v4())),
+            summary: "legacy backup".to_string(),
+            preview: "{}".to_string(),
+            extra_writes: Vec::new(),
+        };
+        apply_plan_encrypted(
+            &legacy_plan,
+            r#"{"env":{"ANTHROPIC_MODEL":"old"}}"#,
+            &[7_u8; aipass_crypto::KEY_LEN],
+        )
+        .unwrap();
+        assert!(legacy_plan.backup_path.exists());
+
+        let (plan, content) = plan_claude_code(
+            dir.path(),
+            &entry(InterfaceType::AnthropicMessages, AuthScheme::XApiKey),
+        )
+        .unwrap();
+        apply_plan_encrypted(&plan, &content, &[7_u8; aipass_crypto::KEY_LEN]).unwrap();
+
+        assert_eq!(plan.backup_path, backup_dir.join("settings.json.aipbackup"));
+        assert!(plan.backup_path.exists());
+        assert_eq!(
+            find_backup_by_operation(dir.path(), plan.operation_id).unwrap(),
+            plan.backup_path
+        );
+        assert!(!legacy_plan.backup_path.exists());
+        let backup_count = std::fs::read_dir(&backup_dir)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    == Some("aipbackup")
+            })
+            .count();
+        assert_eq!(backup_count, 1);
     }
 }
