@@ -40,6 +40,10 @@ declare namespace chrome {
     };
   }
   namespace tabs {
+    function create(
+      createProperties: { url: string; active?: boolean },
+      callback?: (tab: { id?: number; url?: string; title?: string }) => void
+    ): void;
     function query(
       queryInfo: { active: boolean; currentWindow: boolean },
       callback: (tabs: Array<{ id?: number; url?: string; title?: string }>) => void

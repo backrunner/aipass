@@ -425,6 +425,7 @@ const en: Record<string, string> = {
   "ext.ignoreSite": "Ignore site",
   "ext.siteIgnored": "This site is ignored",
   "ext.ignoreFailed": "Unable to ignore this site",
+  "ext.openSite": "Open site in new tab",
   "ext.use": "Use",
   "ext.grantExpired": "Grant expired. Refresh and try again.",
   "ext.fillFailed": "Unable to retrieve key",
@@ -468,6 +469,7 @@ const en: Record<string, string> = {
   "ext.providerUpdated": "Provider updated",
   "ext.providerDeleted": "Provider deleted",
   "ext.addProviderFailed": "Could not add provider",
+  "ext.invalidEndpoint": "Enter a valid HTTP or HTTPS endpoint",
   "ext.updateProviderFailed": "Could not update provider",
   "ext.deleteProviderFailed": "Could not delete provider",
 
@@ -898,6 +900,7 @@ const zhCN: Record<string, string> = {
   "ext.ignoreSite": "忽略此网站",
   "ext.siteIgnored": "已忽略此网站",
   "ext.ignoreFailed": "无法忽略此网站",
+  "ext.openSite": "在新标签页中打开网站",
   "ext.use": "使用",
   "ext.grantExpired": "授权已过期，请刷新后重试。",
   "ext.fillFailed": "无法获取密钥",
@@ -941,6 +944,7 @@ const zhCN: Record<string, string> = {
   "ext.providerUpdated": "提供商已更新",
   "ext.providerDeleted": "提供商已删除",
   "ext.addProviderFailed": "无法添加提供商",
+  "ext.invalidEndpoint": "请输入有效的 HTTP 或 HTTPS 端点",
   "ext.updateProviderFailed": "无法更新提供商",
   "ext.deleteProviderFailed": "无法删除提供商",
 

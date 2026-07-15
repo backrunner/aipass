@@ -101,6 +101,22 @@ describe("content detector", () => {
     assert.equal(draft?.authScheme, "bearer");
   });
 
+  it("captures and normalizes the endpoint displayed by Sub2API", async () => {
+    setLocation("relay.example.test", "/keys");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>API Keys - Relay</title>
+       <h1>Sub2API API Keys</h1>
+       <label>API Base URL</label><code>https://api.relay.example.test</code>
+       <label>Custom Key</label><input name="custom_key" value="productA_key_1234567890abcdef" />`,
+      "text/html"
+    );
+
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, "sub2api");
+    assert.equal(draft?.endpoint, "https://api.relay.example.test/v1");
+  });
+
   it("detects New API resolved full keys in popover inputs", async () => {
     setLocation("newapi.example.test", "/keys");
     const { detectFromDocument } = await import("./detector");
@@ -644,6 +660,69 @@ describe("content detector", () => {
     assert.equal(detection?.drafts?.[0]?.providerId, "one_api");
     assert.equal(detection?.drafts?.[0]?.apiKey, "sk-oneApiCopiedSecret1234567890");
     assert.equal(detection?.drafts?.[0]?.endpoint, "https://one.example.test/v1");
+  });
+
+  it("accepts clipboard bridge messages across extension worlds", async () => {
+    setLocation("one.example.test", "/token");
+    document.title = "One API";
+    document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: window,
+        data: {
+          source: "aipass.clipboardBridge",
+          type: "aipass.clipboardSecret",
+          text: "sk-crossWorldSecret1234567890"
+        }
+      })
+    );
+    await flushTimers();
+    clickPromptAction("save");
+    await flushTimers();
+
+    const detection = sentMessages.find((message) => {
+      const typed = message as { type?: string };
+      return typed.type === "aipass.saveDetectedDraftsNow";
+    }) as { drafts?: Array<{ apiKey?: string }> } | undefined;
+    assert.equal(detection?.drafts?.[0]?.apiKey, "sk-crossWorldSecret1234567890");
+  });
+
+  it("prompts again when the user copies a dismissed key", async () => {
+    setLocation("one.example.test", "/token");
+    document.title = "One API";
+    document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    const copy = () =>
+      window.dispatchEvent(
+        new CustomEvent("aipass.clipboardSecret", {
+          detail: { text: "sk-repeatCopiedSecret1234567890" }
+        })
+      );
+    copy();
+    await flushTimers();
+    const firstHost = document.getElementById("aipass-extension-toast");
+    const close = firstHost?.shadowRoot?.querySelector<HTMLButtonElement>(".close-button");
+    assert.ok(close);
+    close.click();
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    copy();
+    await flushTimers();
+    clickPromptAction("save");
+    await flushTimers();
+
+    const filters = sentMessages.filter((message) => {
+      const typed = message as { type?: string };
+      return typed.type === "aipass.filterUnsavedDetectedDrafts";
+    });
+    assert.equal(filters.length, 2);
   });
 
   it("prompts before saving copied New API keys on custom domains", async () => {

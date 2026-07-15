@@ -15,6 +15,7 @@
   export let onInferDraftFromEndpoint: () => MaybePromise = () => {};
   export let onProviderChanged: () => MaybePromise = () => {};
   export let compactProviderSelect = false;
+  export let showSecretLabel = true;
 
   type FieldId =
     | "domain"
@@ -61,8 +62,14 @@
 
   $: providerOptions = providerDefinitions.map((provider) => ({
     value: provider.id,
-    label: provider.displayName
+    label: compactProviderSelect ? compactProviderLabel(provider.id, provider.displayName) : provider.displayName
   }));
+
+  function compactProviderLabel(providerId: string, displayName: string): string {
+    if (providerId === "custom_openai_compatible") return "OpenAI-compatible";
+    if (providerId === "custom_http") return "HTTP API";
+    return displayName;
+  }
 
   const optionalFields: OptionalField[] = [
     { id: "domain", label: "providerForm.domains", section: "details", hasValue: () => Boolean(draft.domain), clear: () => (draft.domain = "") },
@@ -193,7 +200,7 @@
 
 <section class="form-section">
   <h3 class="section-title">{$t("providerForm.identity")}</h3>
-  <div class="section-fields identity-fields" class:compact={compactProviderSelect}>
+  <div class="section-fields identity-fields">
     <div class="provider-control">
       <SelectField
         label={$t("providerForm.provider")}
@@ -205,9 +212,11 @@
     <Field label={$t("providerForm.title")} class="title-field">
       <input bind:value={draft.title} placeholder={$t("providerForm.titlePlaceholder")} />
     </Field>
-    <Field label={$t("providerForm.secretLabel")} class="secret-label-field">
-      <input bind:value={draft.secretLabel} placeholder={$t("providerForm.secretLabelPlaceholder")} />
-    </Field>
+    {#if showSecretLabel}
+      <Field label={$t("providerForm.secretLabel")} class="secret-label-field">
+        <input bind:value={draft.secretLabel} placeholder={$t("providerForm.secretLabelPlaceholder")} />
+      </Field>
+    {/if}
     <slot name="secret">
       <Field label={$t("providerForm.apiKey")} class="api-key-field">
         <div class="secret-input">
@@ -454,28 +463,6 @@
     background: var(--surface);
     border: 1px solid var(--divider);
     border-radius: var(--radius);
-  }
-
-  .identity-fields.compact {
-    display: grid;
-    grid-template-columns: minmax(132px, 168px) minmax(0, 1fr);
-    align-items: end;
-    gap: 12px 10px;
-  }
-
-  .identity-fields.compact .provider-control {
-    min-width: 0;
-  }
-
-  .identity-fields.compact :global(.title-field),
-  .identity-fields.compact :global(.secret-label-field),
-  .identity-fields.compact :global(.api-key-field) {
-    min-width: 0;
-  }
-
-  .identity-fields.compact :global(.secret-label-field),
-  .identity-fields.compact :global(.api-key-field) {
-    grid-column: 1 / -1;
   }
 
   .secret-input {

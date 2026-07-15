@@ -15,6 +15,7 @@ import {
   SELF_HOSTED_TOKEN_PATH_PATTERN,
   type SecretCandidate
 } from "./secret-scanner";
+import { endpointForProvider } from "../provider-endpoint";
 
 export interface DetectedSecretDraft {
   providerId?: string;
@@ -36,11 +37,15 @@ export interface DetectedSecretDraft {
 
 const ENDPOINT_PATTERN =
   /\/(?:v1|v2|v3)(?:\/|$)|chat\/completions|messages|embeddings|models|anthropic|generativelanguage|openrouter|openai|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|replicate|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|together|fireworks|groq|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face/i;
+const ENDPOINT_CONTEXT_PATTERN =
+  /(?:api\s*(?:base|endpoint|url)|base\s*url|endpoint|接口(?:地址|端点)|端点|中转地址|请求地址|入口地址)/i;
+const HTTP_URL_PATTERN = /https?:\/\/[^\s"'<>`)\]}]+/gi;
 const KEY_PAGE_TEXT_PATTERN =
   /(api\s*key|api\s*keys|token|tokens|secret\s*key|virtual\s+key|令牌|密钥|复制|copy|系统访问令牌|下游密钥|下游\s*api\s*key)/i;
 const AI_GATEWAY_TEXT_PATTERN =
   /(openai|anthropic|claude|gemini|generativelanguage|chat\s*completions?|base\s*url|api\s*base|gateway|proxy|relay|router|llm|ai\s*provider|virtual\s+key|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|ark|together|fireworks|groq|xai|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face|中转|网关|聚合|渠道|模型|下游|上游|分发|倍率|分组|路由)/i;
 const CLIPBOARD_SECRET_EVENT = "aipass.clipboardSecret";
+const CLIPBOARD_SECRET_MESSAGE_SOURCE = "aipass.clipboardBridge";
 const DEBUG_MODE_EVENT = "aipass.debugMode";
 const FRAMEWORK_SECRET_SCAN_EVENT = "aipass.frameworkSecretScan";
 const TOAST_HOST_ID = "aipass-extension-toast";
@@ -52,10 +57,12 @@ const FILL_TARGET_SCAN_LIMIT = 120;
 const MUTATION_SCAN_DEBOUNCE_MS = 800;
 const MUTATION_SCAN_MIN_INTERVAL_MS = 2500;
 const FRAMEWORK_SCAN_MIN_INTERVAL_MS = 2500;
+const CLIPBOARD_EVENT_DEDUP_MS = 100;
 const GENERIC_TITLE_SEGMENT_PATTERN =
   /^(?:api\s*(?:keys?|密钥)(?:\s*(?:management|settings)|管理|设置)?|keys?|tokens?|secret\s*keys?|virtual\s*keys?|key\s*management|token\s*management|dashboard|console|settings?|management|user\s*settings?|密钥(?:管理|设置)?|令牌(?:管理|设置)?|系统访问令牌|下游密钥|控制台|仪表盘|后台|管理后台)$/i;
 const sentDraftKeys = new Set<string>();
 const shownToastKeys = new Set<string>();
+const recentClipboardSecrets = new Set<string>();
 let toastSequence = 0;
 let draftScanTimer: ReturnType<typeof setTimeout> | undefined;
 let draftScanInFlight = false;
@@ -420,29 +427,59 @@ function uniqueDrafts(drafts: DetectedSecretDraft[]): DetectedSecretDraft[] {
 }
 
 function findEndpoint(doc: Document): string | undefined {
-  const candidates = limitedElements<HTMLInputElement | HTMLTextAreaElement>(
+  const fieldCandidates = limitedElements<HTMLInputElement | HTMLTextAreaElement>(
     doc,
     "input, textarea",
     ENDPOINT_INPUT_SCAN_LIMIT
   )
-    .map((input) => input.value || input.placeholder || input.textContent || "")
-    .filter((value) => /^https?:\/\//.test(value));
-  const explicit = candidates.find((value) => ENDPOINT_PATTERN.test(value));
-  if (explicit) return explicit;
-  const textCandidates = limitedElements<HTMLElement>(doc, "code, pre, output", ENDPOINT_TEXT_SCAN_LIMIT)
-    .map((element) => element.textContent?.trim() ?? "")
-    .filter((value) => /^https?:\/\//.test(value));
-  return textCandidates.find((value) => ENDPOINT_PATTERN.test(value));
+    .flatMap((input) =>
+      endpointCandidates(
+        [input.value, input.placeholder, input.getAttribute("data-endpoint") ?? "", input.getAttribute("data-base-url") ?? ""],
+        `${input.name} ${input.id} ${input.placeholder} ${input.getAttribute("aria-label") ?? ""}`
+      )
+    );
+  const textCandidates = limitedElements<HTMLElement>(
+    doc,
+    "code, pre, output, a[href], [data-endpoint], [data-base-url], [data-api-base-url]",
+    ENDPOINT_TEXT_SCAN_LIMIT
+  ).flatMap((element) =>
+    endpointCandidates(
+      [
+        element.textContent ?? "",
+        element.getAttribute("href") ?? "",
+        element.getAttribute("data-endpoint") ?? "",
+        element.getAttribute("data-base-url") ?? "",
+        element.getAttribute("data-api-base-url") ?? ""
+      ],
+      `${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""} ${element.parentElement?.textContent?.slice(0, 180) ?? ""}`
+    )
+  );
+  const candidates = [...fieldCandidates, ...textCandidates];
+  const contextual = candidates.find((candidate) => ENDPOINT_CONTEXT_PATTERN.test(candidate.context));
+  if (contextual) return contextual.url;
+  const explicit = candidates.find((candidate) => ENDPOINT_PATTERN.test(candidate.url));
+  if (explicit) return explicit.url;
+  return undefined;
+}
+
+function endpointCandidates(values: string[], context: string): Array<{ url: string; context: string }> {
+  return values.flatMap((value) =>
+    Array.from(value.matchAll(HTTP_URL_PATTERN), (match) => ({
+      url: match[0].replace(/[.,;:]+$/, ""),
+      context
+    }))
+  );
 }
 
 function recognizePage(doc: Document): PageRecognition {
-  const endpoint = findEndpoint(doc);
+  const detectedEndpoint = findEndpoint(doc);
   const signature = matchGatewaySignature(doc);
-  const endpointProvider = endpoint ? inferKnownProviderFromEndpoint(endpoint) : undefined;
+  const endpointProvider = detectedEndpoint ? inferKnownProviderFromEndpoint(detectedEndpoint) : undefined;
   const provider =
     matchProviderByDomain(location.hostname) ??
     (signature?.id ? providerDefinitions.find((item) => item.id === signature.id) : undefined) ??
     endpointProvider;
+  const endpoint = endpointForProvider(provider, detectedEndpoint, location.origin);
   const siteName = siteNameFromDocumentTitle(doc.title, signature, provider);
   const tokenPage = SELF_HOSTED_TOKEN_PATH_PATTERN.test(location.pathname) || hasSelfHostedKeyPageText(doc);
   const aiGatewayEvidence = Boolean(provider) || Boolean(signature) || hasAiGatewayEvidence(doc, endpoint);
@@ -693,12 +730,7 @@ async function sendDraftForClipboardSecret(secret: string) {
     debugLog("clipboard: skipped ignored origin", { origin: draft.origin });
     return;
   }
-  const freshDrafts = takeUnsentDrafts([draft]);
-  if (!freshDrafts.length) {
-    debugLog("clipboard: skipped duplicate draft", { title: draft.title });
-    return;
-  }
-  const unsavedDrafts = await filterUnsavedDetectedDrafts(freshDrafts);
+  const unsavedDrafts = await filterUnsavedDetectedDrafts([draft]);
   if (!unsavedDrafts.length) {
     debugLog("clipboard: skipped saved draft", { title: draft.title });
     return;
@@ -1168,6 +1200,7 @@ function showToast(key: string, options: ToastOptions) {
 
   const dismiss = () => {
     if (!host.isConnected) return;
+    shownToastKeys.delete(key);
     card.classList.add("leaving");
     window.setTimeout(() => host.remove(), 160);
   };
@@ -1460,9 +1493,21 @@ function installClipboardSecretListener() {
   debugLog("clipboard listener installed");
   window.addEventListener(CLIPBOARD_SECRET_EVENT, (event) => {
     const detail = (event as CustomEvent<{ text?: string }>).detail;
-    if (typeof detail?.text !== "string") return;
-    void sendDraftForClipboardSecret(detail.text).catch(() => undefined);
+    handleClipboardSecret(detail?.text);
   });
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const data = event.data as { source?: string; type?: string; text?: string } | undefined;
+    if (data?.source !== CLIPBOARD_SECRET_MESSAGE_SOURCE || data.type !== CLIPBOARD_SECRET_EVENT) return;
+    handleClipboardSecret(data.text);
+  });
+}
+
+function handleClipboardSecret(value: unknown) {
+  if (typeof value !== "string" || recentClipboardSecrets.has(value)) return;
+  recentClipboardSecrets.add(value);
+  window.setTimeout(() => recentClipboardSecrets.delete(value), CLIPBOARD_EVENT_DEDUP_MS);
+  void sendDraftForClipboardSecret(value).catch(() => undefined);
 }
 
 function installDraftMutationObserver() {

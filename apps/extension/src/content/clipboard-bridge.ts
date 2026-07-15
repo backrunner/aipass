@@ -1,4 +1,5 @@
 const CLIPBOARD_SECRET_EVENT = "aipass.clipboardSecret";
+const CLIPBOARD_SECRET_MESSAGE_SOURCE = "aipass.clipboardBridge";
 const DEBUG_MODE_EVENT = "aipass.debugMode";
 const FRAMEWORK_SECRET_SCAN_EVENT = "aipass.frameworkSecretScan";
 const SECRET_PATTERNS = [
@@ -75,8 +76,16 @@ function installFrameworkScanListener() {
   });
 }
 
-function emitSelectedSecret() {
+function emitSelectedSecret(event: Event) {
   try {
+    const clipboardEvent = event as ClipboardEvent;
+    window.setTimeout(() => {
+      try {
+        emitSecret(clipboardEvent.clipboardData?.getData("text/plain") ?? "");
+      } catch {
+        // Clipboard data may no longer be readable after the event returns.
+      }
+    }, 0);
     const active = document.activeElement;
     if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
       const start = active.selectionStart ?? 0;
@@ -108,11 +117,27 @@ function patchClipboardWriteText() {
     Object.defineProperty(patchedWriteText, "__AIPASS_WRAPPED_WRITE_TEXT__", {
       value: true
     });
-    clipboard.writeText = patchedWriteText;
+    const owner = propertyOwner(clipboard, "writeText") ?? clipboard;
+    const descriptor = Object.getOwnPropertyDescriptor(owner, "writeText");
+    Object.defineProperty(owner, "writeText", {
+      configurable: descriptor?.configurable ?? true,
+      enumerable: descriptor?.enumerable ?? false,
+      writable: descriptor && "writable" in descriptor ? descriptor.writable : true,
+      value: patchedWriteText
+    });
     debugLog("clipboard writeText patched");
   } catch (err) {
     debugLog("clipboard writeText patch skipped", { error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+function propertyOwner(value: object, property: PropertyKey): object | undefined {
+  let current: object | null = value;
+  while (current) {
+    if (Object.prototype.hasOwnProperty.call(current, property)) return current;
+    current = Object.getPrototypeOf(current) as object | null;
+  }
+  return undefined;
 }
 
 function deferEmitSecret(text: string) {
@@ -127,10 +152,14 @@ function emitSecret(text: string) {
       return;
     }
     debugLog("clipboard secret emitted", { valueLength: text.length, secretLength: secret.length });
-    window.dispatchEvent(
-      new CustomEvent(CLIPBOARD_SECRET_EVENT, {
-        detail: { text: secret }
-      })
+    window.dispatchEvent(new CustomEvent(CLIPBOARD_SECRET_EVENT, { detail: { text: secret } }));
+    window.postMessage(
+      {
+        source: CLIPBOARD_SECRET_MESSAGE_SOURCE,
+        type: CLIPBOARD_SECRET_EVENT,
+        text: secret
+      },
+      "*"
     );
   } catch {
     // The page's copy flow should not depend on AIPass detection.

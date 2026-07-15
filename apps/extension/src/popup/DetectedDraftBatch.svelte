@@ -20,6 +20,12 @@
   function draftKind(item: DraftItem): ProviderKind {
     return providerDefinitions.find((definition) => definition.id === item.draft.providerId)?.kind ?? "unknown";
   }
+
+  function providerLabel(providerId: string, displayName: string): string {
+    if (providerId === "custom_openai_compatible") return "OpenAI-compatible";
+    if (providerId === "custom_http") return "HTTP API";
+    return displayName;
+  }
 </script>
 
 {#if visibleDraftItems.length > 0}
@@ -50,9 +56,6 @@
               <ProviderIcon title={item.draft.title} kind={draftKind(item)} faviconUrl={item.draft.faviconUrl} size="md" />
             </label>
             <div class="draft-secret">
-              {#if item.preview?.secretLabel ?? item.safe.secretLabel ?? item.draft.secretLabel}
-                <strong>{item.preview?.secretLabel ?? item.safe.secretLabel ?? item.draft.secretLabel}</strong>
-              {/if}
               <code class="mono">{item.preview?.maskedSecret ?? item.safe.maskedSecret ?? "••••"}</code>
               <span class="mono">
                 {item.preview?.fingerprint ?? (item.previewLoading ? $t("ext.previewing") : $t("ext.pendingPreview"))}
@@ -68,17 +71,13 @@
               <span>{$t("providerForm.provider")}</span>
               <select bind:value={item.draft.providerId} on:change={() => onProviderChanged(item)}>
                 {#each providerDefinitions as definition}
-                  <option value={definition.id}>{definition.displayName}</option>
+                  <option value={definition.id}>{providerLabel(definition.id, definition.displayName)}</option>
                 {/each}
               </select>
             </label>
             <label>
               <span>{$t("providerForm.title")}</span>
               <input bind:value={item.draft.title} on:input={onSchedulePreview} />
-            </label>
-            <label>
-              <span>{$t("providerForm.secretLabel")}</span>
-              <input bind:value={item.draft.secretLabel} placeholder={$t("providerDetail.secretLabelPlaceholder")} on:input={onSchedulePreview} />
             </label>
             <label class="wide">
               <span>{$t("providerForm.endpointUrl")}</span>
@@ -206,15 +205,6 @@
       white-space: nowrap;
     }
 
-    strong {
-      min-width: 0;
-      color: var(--text);
-      font-size: 12px;
-      font-weight: 600;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
   }
 
   .draft-grid {

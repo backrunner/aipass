@@ -13,14 +13,19 @@ describe("clipboard bridge", () => {
   });
 
   it("observes navigator.clipboard.writeText without changing the write result", async () => {
-    const clipboard = {
-      writeText: vi.fn().mockResolvedValue(undefined)
-    };
+    const calls: string[] = [];
+    class PageClipboard {
+      writeText(text: string): Promise<void> {
+        calls.push(text);
+        return Promise.resolve();
+      }
+    }
+    const clipboard = new PageClipboard();
+    const originalWriteText = PageClipboard.prototype.writeText;
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: clipboard
     });
-    const originalWriteText = clipboard.writeText;
     const observed: string[] = [];
     window.addEventListener("aipass.clipboardSecret", (event) => {
       observed.push((event as CustomEvent<{ text?: string }>).detail?.text ?? "");
@@ -31,9 +36,9 @@ describe("clipboard bridge", () => {
     const result = await navigator.clipboard.writeText("sk-written1234567890");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.notEqual(navigator.clipboard.writeText, originalWriteText);
+    assert.notEqual(PageClipboard.prototype.writeText, originalWriteText);
     assert.equal(result, undefined);
-    assert.equal(originalWriteText.mock.calls[0]?.[0], "sk-written1234567890");
+    assert.deepEqual(calls, ["sk-written1234567890"]);
     assert.deepEqual(observed, ["sk-written1234567890"]);
   });
 

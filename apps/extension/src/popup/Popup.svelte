@@ -21,8 +21,10 @@
     type Draft
   } from "@aipass/ui";
   import { t } from "@aipass/ui/i18n";
-  import { Ban, Check, Copy, Eye, EyeOff, KeyRound, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-svelte";
+  import { Ban, Check, Copy, ExternalLink, Eye, EyeOff, KeyRound, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-svelte";
 
+  import { siteUrlForEntry } from "../entry-site-url";
+  import { endpointForProvider, parseHttpEndpoint, providerForEndpoint } from "../provider-endpoint";
   import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
   import type { DraftItem, DraftPreview, Entry, FaviconBackfillResult, Grant, LookupData, NativeResponse, SafeDraft } from "./types";
 
@@ -527,7 +529,7 @@
     next.domain = hostFromOrigin(pending.origin);
     next.consoleUrl = pending.url ?? "";
     next.apiKey = pending.apiKey ?? "";
-    next.endpoint = pending.endpoint ?? definition?.endpoints.find((item) => item.kind === "api")?.url ?? "";
+    next.endpoint = endpointForProvider(definition, pending.endpoint, pending.origin);
     next.faviconUrl = pending.faviconUrl ?? "";
     next.faviconUrl = resolvedDraftFaviconUrl(next) ?? "";
     next.interfaceType = pending.interfaceType ?? definition?.interfaces[0] ?? "custom_http";
@@ -550,11 +552,7 @@
       .join(", ");
     next.apiKey = "";
     next.secretLabel = entrySecrets(entry)[0]?.label ?? "";
-    next.endpoint = entry.endpoints
-      .filter((endpoint) => endpoint.kind === "api")
-      .map((endpoint) => endpoint.url)
-      .filter((url): url is string => Boolean(url))
-      .join(", ");
+    next.endpoint = entry.endpoints.find((endpoint) => endpoint.kind === "api" && endpoint.url)?.url ?? "";
     next.faviconUrl = entry.faviconUrl ?? "";
     next.faviconUrl = resolvedDraftFaviconUrl(next) ?? "";
     next.interfaceType = entry.interfaceType;
@@ -587,7 +585,7 @@
     if (definition) {
       current.interfaceType = detectInterfaceFromProvider(definition.id);
       current.authScheme = detectAuthFromProvider(definition.id);
-      current.endpoint ||= definition.endpoints.find((item) => item.kind === "api")?.url ?? "";
+      current.endpoint = endpointForProvider(definition, current.endpoint, item.safe.origin || currentOrigin);
       applyFaviconFromEndpoint(current);
       current.title ||= definition.displayName;
       draftItems = draftItems.map((draftItem) =>
@@ -599,7 +597,7 @@
 
   function onInferDraftFromEndpoint(item: DraftItem) {
     const current = item.draft;
-    const match = inferProviderFromEndpoint(current.endpoint.trim());
+    const match = providerForEndpoint(current.endpoint.trim(), current.providerId);
     if (match) {
       current.providerId = match.id;
       current.title ||= match.displayName;
@@ -676,12 +674,18 @@
             rate: draft.gatewayRate.trim() || undefined
           }
         : undefined;
+    const definition = providerDefinitions.find((provider) => provider.id === draft.providerId);
+    const endpoint = endpointForProvider(
+      definition,
+      splitCsv(draft.endpoint)[0] ?? draft.endpoint,
+      currentOrigin || currentUrl
+    );
     return {
       providerId: draft.providerId || undefined,
       title: draft.title.trim() || "Browser Provider",
       secretLabel: draft.secretLabel.trim() || undefined,
       faviconUrl: resolvedDraftFaviconUrl(draft),
-      endpoint: draft.endpoint.trim() || undefined,
+      endpoint: endpoint || undefined,
       interfaceType: draft.interfaceType,
       authScheme: draft.authScheme,
       apiKey: includeApiKey ? draft.apiKey.trim() || undefined : undefined,
@@ -853,37 +857,6 @@
     }
   }
 
-  function endpointForProvider(
-    definition: ProviderDefinition | undefined,
-    origin: string,
-    currentEndpoint: string
-  ): string {
-    const existing = currentEndpoint.trim();
-    if (existing && !isCurrentOriginEndpoint(existing, origin) && !isKnownProviderApiEndpoint(existing)) return existing;
-    const defaultEndpoint = definition?.endpoints.find((endpoint) => endpoint.kind === "api")?.url;
-    if (defaultEndpoint) return defaultEndpoint;
-    if (!origin) return existing;
-    if (!definition || definition.kind === "self_hosted" || definition.id === "custom_openai_compatible") {
-      return `${origin}/v1`;
-    }
-    if (definition.id === "custom_http") return origin;
-    return existing;
-  }
-
-  function isKnownProviderApiEndpoint(value: string): boolean {
-    const parsed = parseHttpUrl(value);
-    if (!parsed) return false;
-    return providerDefinitions.some((provider) =>
-      provider.endpoints.some((endpoint) => endpoint.kind === "api" && endpoint.url && parseHttpUrl(endpoint.url)?.href === parsed.href)
-    );
-  }
-
-  function isCurrentOriginEndpoint(value: string, origin: string): boolean {
-    if (!origin) return false;
-    const parsed = parseHttpUrl(value);
-    return Boolean(parsed && parsed.origin === origin && /^\/v\d+\/?$/i.test(parsed.pathname));
-  }
-
   function siteNameFromTabTitle(title: string, definition?: ProviderDefinition): string | undefined {
     const cleaned = cleanTitleSegment(title);
     if (!cleaned) return undefined;
@@ -1042,6 +1015,12 @@
     setTimeout(() => (copied = ""), 1400);
   }
 
+  function openEntrySite(entry: Entry) {
+    const url = siteUrlForEntry(entry);
+    if (!url) return;
+    chrome.tabs.create({ url, active: true });
+  }
+
   function toggleDraftSelection(draftId: string) {
     draftItems = draftItems.map((item) =>
       item.draftId === draftId ? { ...item, selected: !item.selected } : item
@@ -1065,10 +1044,9 @@
     const siteName = currentSiteName(definition);
     next.providerId = definition?.id ?? "custom_openai_compatible";
     next.title = draftTitleFromCurrentContext(definition, siteName, host);
-    next.secretLabel = draftSecretLabelFromCurrentContext(definition, siteName, host);
     next.domain = host;
     next.consoleUrl = /^https?:\/\//i.test(currentUrl) ? currentUrl : "";
-    next.endpoint = endpointForProvider(definition, origin, "");
+    next.endpoint = endpointForProvider(definition, "", origin);
     next.faviconUrl = origin ? `${origin}/favicon.ico` : "";
     next.interfaceType = definition?.interfaces[0] ?? "openai_compatible";
     next.authScheme = definition?.authSchemes[0] ?? "bearer";
@@ -1119,15 +1097,6 @@
   ): string {
     if (definition?.kind === "official" || definition?.kind === "third_party") return definition.displayName;
     return siteName || definition?.displayName || host || "Browser Provider";
-  }
-
-  function draftSecretLabelFromCurrentContext(
-    definition: ProviderDefinition | undefined,
-    siteName: string | undefined,
-    host: string
-  ): string {
-    if (siteName && normalizeName(siteName) !== normalizeName(definition?.displayName)) return siteName;
-    return host || siteName || "default";
   }
 
   function openEditEntry(entry: Entry) {
@@ -1205,14 +1174,13 @@
     if (!definition) return;
     addDraft.interfaceType = detectInterfaceFromProvider(definition.id);
     addDraft.authScheme = detectAuthFromProvider(definition.id);
-    addDraft.endpoint = endpointForProvider(definition, httpOriginFromUrl(currentUrl) ?? "", addDraft.endpoint);
+    addDraft.endpoint = endpointForProvider(
+      definition,
+      splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint,
+      httpOriginFromUrl(currentUrl)
+    );
     applyFaviconFromEndpoint(addDraft);
     addDraft.title ||= draftTitleFromCurrentContext(definition, currentSiteName(definition), hostFromOrigin(currentOrigin || currentUrl));
-    addDraft.secretLabel ||= draftSecretLabelFromCurrentContext(
-      definition,
-      currentSiteName(definition),
-      hostFromOrigin(currentOrigin || currentUrl)
-    );
   }
 
   function addInferFromDomain() {
@@ -1220,14 +1188,21 @@
     if (!match) return;
     addDraft.providerId = match.id;
     addDraft.title ||= match.displayName;
-    addDraft.endpoint = endpointForProvider(match, httpOriginFromUrl(currentUrl) ?? "", addDraft.endpoint);
+    addDraft.endpoint = endpointForProvider(
+      match,
+      splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint,
+      httpOriginFromUrl(currentUrl)
+    );
     applyFaviconFromEndpoint(addDraft);
     addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
     addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
   }
 
   function addInferFromEndpoint() {
-    const match = inferProviderFromEndpoint(splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint);
+    const match = providerForEndpoint(
+      splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint,
+      addDraft.providerId
+    );
     if (match) {
       addDraft.providerId = match.id;
       addDraft.title ||= match.displayName;
@@ -1244,6 +1219,14 @@
       statusError = true;
       return;
     }
+    const primaryEndpoint = splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint;
+    if (primaryEndpoint.trim() && !parseHttpEndpoint(primaryEndpoint)) {
+      statusText = $t("ext.invalidEndpoint");
+      statusError = true;
+      return;
+    }
+    const selectedDefinition = providerDefinitions.find((item) => item.id === addDraft.providerId);
+    addDraft.endpoint = endpointForProvider(selectedDefinition, primaryEndpoint, currentOrigin || currentUrl);
     addBusy = true;
     statusText = "";
     statusError = false;
@@ -1463,6 +1446,13 @@
             {addBusy ? $t("ext.adding") : $t("providerModal.saveChanges")}
           </Button>
         {:else}
+          <IconButton
+            label={$t("ext.openSite")}
+            disabled={!siteUrlForEntry(entry)}
+            on:click={() => openEntrySite(entry)}
+          >
+            <ExternalLink size={15} />
+          </IconButton>
           <IconButton label={$t("providerDetail.edit")} on:click={() => openEditEntry(entry)}>
             <Pencil size={15} />
           </IconButton>
@@ -1485,6 +1475,7 @@
           formMode="edit"
           bind:draft={addDraft}
           compactProviderSelect
+          showSecretLabel={false}
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
           onProviderChanged={addProviderChanged}
@@ -1695,6 +1686,7 @@
           formMode={editingDraftId ? "edit" : "add"}
           bind:draft={addDraft}
           compactProviderSelect
+          showSecretLabel={false}
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
           onProviderChanged={addProviderChanged}
@@ -1939,6 +1931,8 @@
   .vault-shell {
     display: grid;
     grid-template-columns: minmax(230px, 0.42fr) minmax(0, 1fr);
+    flex: 1 1 430px;
+    height: 430px;
     min-height: 360px;
     max-height: 430px;
     border: 1px solid var(--divider);
@@ -1951,6 +1945,8 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     border-right: 1px solid var(--divider);
     background: color-mix(in oklab, var(--surface-2) 50%, var(--surface));
   }
@@ -2053,6 +2049,7 @@
     min-height: 0;
     padding: 0 6px 8px;
     overflow: auto;
+    overscroll-behavior: contain;
   }
 
   .vault-entry {
