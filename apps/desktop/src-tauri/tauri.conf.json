@@ -29,6 +29,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["aipass"]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://updates.aipass.dev/{{target}}/{{arch}}/{{current_version}}"

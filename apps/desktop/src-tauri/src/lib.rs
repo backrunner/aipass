@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::thread;
 use tauri::{AppHandle, LogicalSize, Manager, Size};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -1596,9 +1597,22 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
         .manage(AppState::default())
         .setup(move |app| {
             configure_window_target(app.handle(), &launch_target);
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    if let Some(target) =
+                        url.path_segments().and_then(|mut segments| segments.next())
+                    {
+                        activate_window_target(&handle, target);
+                    } else {
+                        activate_window_target(&handle, "main");
+                    }
+                }
+            });
             if let Some(singleton) = singleton.take() {
                 singleton::spawn_server(app.handle().clone(), singleton, version.to_string());
             }

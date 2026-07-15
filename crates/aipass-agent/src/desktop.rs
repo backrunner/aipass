@@ -8,6 +8,11 @@ pub const SUPPRESS_TRAY_ENV: &str = "AIPASS_AGENT_SUPPRESS_TRAY";
 pub const TRAY_WINDOW_TARGET: &str = "tray";
 
 pub fn open_desktop_window(target: &str, vault_dir: &Path) -> Result<()> {
+    if should_open_desktop_url(target, vault_dir) && open_desktop_url(target).is_ok() {
+        return Ok(());
+    }
+
+    // This path preserves the launch target and custom vault environment.
     Command::new(desktop_binary())
         .env(WINDOW_TARGET_ENV, target)
         .env(VAULT_DIR_ENV, vault_dir)
@@ -17,6 +22,51 @@ pub fn open_desktop_window(target: &str, vault_dir: &Path) -> Result<()> {
         .spawn()
         .context("failed to open desktop companion")?;
     Ok(())
+}
+
+fn should_open_desktop_url(target: &str, vault_dir: &Path) -> bool {
+    if cfg!(debug_assertions) || target == TRAY_WINDOW_TARGET {
+        return false;
+    }
+    let Ok(default_vault_dir) = crate::paths::default_vault_dir() else {
+        return false;
+    };
+    match (
+        crate::paths::canonical_vault_dir(default_vault_dir),
+        crate::paths::canonical_vault_dir(vault_dir),
+    ) {
+        (Ok(default_vault_dir), Ok(vault_dir)) => default_vault_dir == vault_dir,
+        _ => false,
+    }
+}
+
+fn open_desktop_url(target: &str) -> Result<()> {
+    let target = match target {
+        "main" | "unlock" | "quick-access" | "tray" => target,
+        _ => "main",
+    };
+    let url = format!("aipass://launch/{target}");
+    let mut command = if cfg!(target_os = "macos") {
+        let mut command = Command::new("open");
+        command.arg(&url);
+        command
+    } else if cfg!(target_os = "windows") {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", &url]);
+        command
+    } else {
+        let mut command = Command::new("xdg-open");
+        command.arg(&url);
+        command
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+        .spawn()
+        .map(|_| ())
+        .context("failed to open AIPass URL")
 }
 
 pub fn tray_launch_suppressed() -> bool {
