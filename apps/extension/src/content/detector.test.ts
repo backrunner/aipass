@@ -662,6 +662,30 @@ describe("content detector", () => {
     assert.equal(detection?.drafts?.[0]?.endpoint, "https://one.example.test/v1");
   });
 
+  it("keeps the saved confirmation visible after the prompt exit animation", async () => {
+    setLocation("one.example.test", "/token");
+    document.title = "One API";
+    document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-oneApiSavedToastSecret1234567890" }
+      })
+    );
+    await flushTimers();
+    clickPromptAction("save");
+    await flushTimers();
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    const host = document.getElementById("aipass-extension-toast");
+    const title = host?.shadowRoot?.querySelector<HTMLElement>(".title");
+    assert.ok(host, "expected the saved confirmation to remain mounted");
+    assert.equal(title?.textContent, "Saved to AIPass");
+  });
+
   it("accepts clipboard bridge messages across extension worlds", async () => {
     setLocation("one.example.test", "/token");
     document.title = "One API";

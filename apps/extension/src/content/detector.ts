@@ -1202,7 +1202,9 @@ function showToast(key: string, options: ToastOptions) {
     if (!host.isConnected) return;
     shownToastKeys.delete(key);
     card.classList.add("leaving");
-    window.setTimeout(() => host.remove(), 160);
+    window.setTimeout(() => {
+      if (card.isConnected) host.remove();
+    }, 160);
   };
 
   // Brand header keeps the injected prompt visually anchored to the popup.
