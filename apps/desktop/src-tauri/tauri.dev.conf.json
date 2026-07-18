@@ -1,6 +1,6 @@
 {
   "productName": "AIPass Dev",
-  "identifier": "dev.aipass.desktop.dev",
+  "identifier": "com.alkinum.aipass.dev",
   "build": {
     "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension build && pnpm dev:agent && pnpm build"
   },
