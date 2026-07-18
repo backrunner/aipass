@@ -22,11 +22,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
-#[cfg(target_os = "windows")]
-const DESKTOP_SINGLETON_NAME: &str = "dev.aipass.desktop.tray";
 const REPLACEMENT_BIND_TIMEOUT: Duration = Duration::from_secs(8);
 const REPLACEMENT_BIND_INTERVAL: Duration = Duration::from_millis(100);
 const REPLACEMENT_EXIT_DELAY: Duration = Duration::from_millis(150);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DesktopInstanceKind {
+    Release,
+    PackagedDevelopment,
+    LiveDevelopment,
+}
 
 pub(crate) enum SingletonDecision {
     Run(DesktopSingleton),
@@ -210,7 +215,8 @@ fn wait_for_replacement_listener() -> Result<Listener> {
 
 #[cfg(target_os = "windows")]
 fn connect_existing_instance() -> Result<Stream> {
-    let name = DESKTOP_SINGLETON_NAME.to_ns_name::<GenericNamespaced>()?;
+    let name =
+        desktop_singleton_name(current_desktop_instance()).to_ns_name::<GenericNamespaced>()?;
     Ok(Stream::connect(name)?)
 }
 
@@ -222,7 +228,8 @@ fn connect_existing_instance() -> Result<Stream> {
 
 #[cfg(target_os = "windows")]
 fn listen_for_instances() -> Result<Listener> {
-    let name = DESKTOP_SINGLETON_NAME.to_ns_name::<GenericNamespaced>()?;
+    let name =
+        desktop_singleton_name(current_desktop_instance()).to_ns_name::<GenericNamespaced>()?;
     Ok(ListenerOptions::new().name(name).create_sync()?)
 }
 
@@ -274,7 +281,34 @@ fn is_addr_in_use(err: &anyhow::Error) -> bool {
 
 #[cfg(not(target_os = "windows"))]
 fn singleton_socket_path() -> Result<PathBuf> {
-    Ok(desktop_runtime_dir()?.join("desktop-tray.sock"))
+    Ok(desktop_runtime_dir()?.join(singleton_socket_name(current_desktop_instance())))
+}
+
+fn current_desktop_instance() -> DesktopInstanceKind {
+    if !cfg!(debug_assertions) {
+        DesktopInstanceKind::Release
+    } else if cfg!(feature = "custom-protocol") {
+        DesktopInstanceKind::PackagedDevelopment
+    } else {
+        DesktopInstanceKind::LiveDevelopment
+    }
+}
+
+fn singleton_socket_name(instance: DesktopInstanceKind) -> &'static str {
+    match instance {
+        DesktopInstanceKind::Release => "desktop-tray.sock",
+        DesktopInstanceKind::PackagedDevelopment => "desktop-dev-bundle.sock",
+        DesktopInstanceKind::LiveDevelopment => "desktop-dev-server.sock",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn desktop_singleton_name(instance: DesktopInstanceKind) -> &'static str {
+    match instance {
+        DesktopInstanceKind::Release => "dev.aipass.desktop.tray",
+        DesktopInstanceKind::PackagedDevelopment => "dev.aipass.desktop.dev-bundle",
+        DesktopInstanceKind::LiveDevelopment => "dev.aipass.desktop.dev-server",
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -305,7 +339,10 @@ fn desktop_runtime_dir() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{incoming_version_replaces_current, SingletonCommand, SingletonRequest};
+    use super::{
+        current_desktop_instance, incoming_version_replaces_current, singleton_socket_name,
+        DesktopInstanceKind, SingletonCommand, SingletonRequest,
+    };
 
     #[test]
     fn newer_semver_replaces_current() {
@@ -325,6 +362,32 @@ mod tests {
     fn invalid_versions_do_not_replace_existing() {
         assert!(!incoming_version_replaces_current("nightly", "1.0.0"));
         assert!(!incoming_version_replaces_current("1.0.1", "dev"));
+    }
+
+    #[test]
+    fn release_and_development_instances_use_distinct_sockets() {
+        assert_eq!(
+            singleton_socket_name(DesktopInstanceKind::Release),
+            "desktop-tray.sock"
+        );
+        assert_eq!(
+            singleton_socket_name(DesktopInstanceKind::PackagedDevelopment),
+            "desktop-dev-bundle.sock"
+        );
+        assert_eq!(
+            singleton_socket_name(DesktopInstanceKind::LiveDevelopment),
+            "desktop-dev-server.sock"
+        );
+    }
+
+    #[test]
+    fn debug_build_uses_the_expected_development_instance() {
+        let expected = if cfg!(feature = "custom-protocol") {
+            DesktopInstanceKind::PackagedDevelopment
+        } else {
+            DesktopInstanceKind::LiveDevelopment
+        };
+        assert_eq!(current_desktop_instance(), expected);
     }
 
     #[test]

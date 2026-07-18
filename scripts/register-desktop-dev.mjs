@@ -13,6 +13,8 @@ run("pnpm", [
   "tauri",
   "build",
   "--debug",
+  "--features",
+  "custom-protocol",
   "--bundles",
   "app",
   "--ci",
