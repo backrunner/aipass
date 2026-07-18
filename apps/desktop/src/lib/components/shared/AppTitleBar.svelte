@@ -197,7 +197,8 @@
   }
 
   .titlebar.mac {
-    padding-left: 12px;
+    /* The custom control host has 1.6px of inner padding; align circles to the sidebar list edge. */
+    padding-left: calc(var(--workspace-padding) + 9.4px);
   }
 
   .items-list-slot {
