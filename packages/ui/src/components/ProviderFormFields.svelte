@@ -2,7 +2,7 @@
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { providerDefinitions } from "@aipass/schemas";
   import { Eye, EyeOff, Plus, X } from "lucide-svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
 
   import { t } from "../i18n";
   import type { Draft, FormMode, MaybePromise } from "../types";
@@ -109,6 +109,7 @@
 
   let visibleFields: Set<FieldId> = new Set();
   let showApiKey = false;
+  let formRoot: HTMLDivElement;
 
   onMount(() => {
     const initial = new Set<FieldId>();
@@ -123,8 +124,12 @@
     visibleFields = initial;
   });
 
-  function addField(id: FieldId) {
+  async function addField(id: FieldId) {
     visibleFields = new Set([...visibleFields, id]);
+    await tick();
+    const field = formRoot.querySelector<HTMLElement>(`[data-provider-field="${id}"]`);
+    field?.scrollIntoView({ behavior: "smooth", block: "center" });
+    field?.querySelector<HTMLElement>("input, textarea, select, button")?.focus({ preventScroll: true });
   }
 
   function removeField(id: FieldId) {
@@ -198,6 +203,7 @@
     isVisible("gateway");
 </script>
 
+<div class="provider-form-fields" bind:this={formRoot}>
 <section class="form-section">
   <h3 class="section-title">{$t("providerForm.identity")}</h3>
   <div class="section-fields identity-fields">
@@ -247,7 +253,7 @@
     <h3 class="section-title">{$t("providerForm.details")}</h3>
     <div class="section-fields">
       {#if isVisible("domain")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="domain">
           <Field label={$t("providerForm.domains")}>
             <input
               bind:value={draft.domain}
@@ -263,7 +269,7 @@
         </div>
       {/if}
       {#if isVisible("endpoint")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="endpoint">
           <Field label={$t("providerForm.endpointUrl")}>
             <input
               bind:value={draft.endpoint}
@@ -277,7 +283,7 @@
         </div>
       {/if}
       {#if isVisible("defaultModel")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="defaultModel">
           <Field label={$t("providerForm.defaultModel")}>
             <input bind:value={draft.defaultModel} placeholder="gpt-4o" />
           </Field>
@@ -287,7 +293,7 @@
         </div>
       {/if}
       {#if isVisible("tag")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="tag">
           <Field label={$t("providerForm.tags")}>
             <input bind:value={draft.tag} placeholder="prod, team" />
           </Field>
@@ -297,7 +303,7 @@
         </div>
       {/if}
       {#if isVisible("notes")}
-        <div class="removable-field align-top">
+        <div class="removable-field align-top" data-provider-field="notes">
           <Field label={$t("providerForm.notes")}>
             <textarea bind:value={draft.notes} rows="3" placeholder={$t("providerForm.notes")}></textarea>
           </Field>
@@ -315,7 +321,7 @@
     <h3 class="section-title">{$t("providerForm.advanced")}</h3>
     <div class="section-fields">
       {#if isVisible("consoleUrl")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="consoleUrl">
           <Field label={$t("providerForm.consoleUrl")}>
             <input bind:value={draft.consoleUrl} placeholder="https://console.example.com" />
           </Field>
@@ -325,7 +331,7 @@
         </div>
       {/if}
       {#if isVisible("faviconUrl")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="faviconUrl">
           <Field label={$t("providerForm.faviconUrl")}>
             <input bind:value={draft.faviconUrl} placeholder="https://example.com/favicon.ico" />
           </Field>
@@ -335,7 +341,7 @@
         </div>
       {/if}
       {#if isVisible("modelAlias")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="modelAlias">
           <Field label={$t("providerForm.modelAliases")}>
             <input bind:value={draft.modelAlias} placeholder="fast=gpt-4o-mini" />
           </Field>
@@ -345,7 +351,7 @@
         </div>
       {/if}
       {#if isVisible("header")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="header">
           <Field label={$t("providerForm.customHeaders")}>
             <input bind:value={draft.header} placeholder="x-version=1" />
           </Field>
@@ -355,7 +361,7 @@
         </div>
       {/if}
       {#if isVisible("interfaceType")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="interfaceType">
           <SelectField
             label={$t("providerForm.interface")}
             bind:value={draft.interfaceType}
@@ -367,7 +373,7 @@
         </div>
       {/if}
       {#if isVisible("authScheme")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="authScheme">
           <SelectField
             label={$t("providerForm.auth")}
             bind:value={draft.authScheme}
@@ -379,7 +385,7 @@
         </div>
       {/if}
       {#if isVisible("quota")}
-        <div class="removable-field align-top quota-block">
+        <div class="removable-field align-top quota-block" data-provider-field="quota">
           <div class="quota-grid">
             <Field label={$t("providerForm.quotaLabel")}>
               <input bind:value={draft.quotaLabel} placeholder={$t("providerForm.quotaLabelPlaceholder")} />
@@ -400,7 +406,7 @@
         </div>
       {/if}
       {#if isVisible("gateway")}
-        <div class="removable-field">
+        <div class="removable-field" data-provider-field="gateway">
           <div class="gateway-grid">
             <Field label={$t("providerForm.gatewayGroup")}>
               <input bind:value={draft.gatewayGroup} placeholder={$t("providerForm.gatewayGroupPlaceholder")} />
@@ -437,8 +443,13 @@
     </div>
   </section>
 {/if}
+</div>
 
 <style lang="scss">
+  .provider-form-fields {
+    display: contents;
+  }
+
   .form-section {
     display: flex;
     flex-direction: column;

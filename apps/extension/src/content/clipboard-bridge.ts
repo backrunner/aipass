@@ -29,7 +29,18 @@ const FRAMEWORK_SCAN_SECRET_LIMIT = 12;
 let debugEnabled = false;
 let copyListenerInstalled = false;
 let frameworkScanTimer: number | undefined;
-const emittedFrameworkSecrets = new Set<string>();
+const emittedFrameworkSecretSignatures = new Map<string, string>();
+
+type FrameworkSecret = {
+  text: string;
+  label?: string;
+  gateway?: {
+    group?: string;
+    rate?: string;
+  };
+};
+
+type FrameworkMetadata = Omit<FrameworkSecret, "text">;
 
 installClipboardBridge();
 
@@ -152,18 +163,22 @@ function emitSecret(text: string) {
       return;
     }
     debugLog("clipboard secret emitted", { valueLength: text.length, secretLength: secret.length });
-    window.dispatchEvent(new CustomEvent(CLIPBOARD_SECRET_EVENT, { detail: { text: secret } }));
-    window.postMessage(
-      {
-        source: CLIPBOARD_SECRET_MESSAGE_SOURCE,
-        type: CLIPBOARD_SECRET_EVENT,
-        text: secret
-      },
-      "*"
-    );
+    emitSecretCandidate({ text: secret });
   } catch {
     // The page's copy flow should not depend on AIPass detection.
   }
+}
+
+function emitSecretCandidate(candidate: FrameworkSecret) {
+  window.dispatchEvent(new CustomEvent(CLIPBOARD_SECRET_EVENT, { detail: candidate }));
+  window.postMessage(
+    {
+      source: CLIPBOARD_SECRET_MESSAGE_SOURCE,
+      type: CLIPBOARD_SECRET_EVENT,
+      ...candidate
+    },
+    "*"
+  );
 }
 
 function extractSecret(value: string): string | undefined {
@@ -230,23 +245,24 @@ function scanFrameworkSecrets() {
       return;
     }
     const allowContextual = canUseContextualSecret();
-    const secrets = findFrameworkSecrets(roots, allowContextual);
+    const candidates = findFrameworkSecrets(roots, allowContextual);
     debugLog("framework scan result", {
       rootCount: roots.length,
-      secretCount: secrets.length
+      secretCount: candidates.length
     });
-    for (const secret of secrets) {
-      if (emittedFrameworkSecrets.has(secret)) continue;
-      emittedFrameworkSecrets.add(secret);
-      window.dispatchEvent(
-        new CustomEvent(CLIPBOARD_SECRET_EVENT, {
-          detail: { text: secret }
-        })
-      );
+    for (const candidate of candidates) {
+      const signature = frameworkSecretSignature(candidate);
+      if (emittedFrameworkSecretSignatures.get(candidate.text) === signature) continue;
+      emittedFrameworkSecretSignatures.set(candidate.text, signature);
+      emitSecretCandidate(candidate);
     }
   } catch (err) {
     debugLog("framework scan failed", { error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+function frameworkSecretSignature(candidate: FrameworkSecret): string {
+  return [candidate.label ?? "", candidate.gateway?.group ?? "", candidate.gateway?.rate ?? ""].join("|");
 }
 
 function frameworkStateRoots(): unknown[] {
@@ -262,10 +278,10 @@ function frameworkStateRoots(): unknown[] {
   return roots;
 }
 
-function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): string[] {
-  const secrets = new Set<string>();
+function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): FrameworkSecret[] {
+  const candidates = new Map<string, FrameworkSecret>();
   const seen = new WeakSet<object>();
-  const queue: Array<{ value: unknown; context: string; depth: number }> = roots.map((value) => ({
+  const queue: Array<{ value: unknown; context: string; depth: number; metadata?: FrameworkMetadata }> = roots.map((value) => ({
     value,
     context: "vue",
     depth: 0
@@ -273,7 +289,7 @@ function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): strin
   let objectCount = 0;
   let stringCount = 0;
 
-  while (queue.length && objectCount < FRAMEWORK_SCAN_OBJECT_LIMIT && secrets.size < FRAMEWORK_SCAN_SECRET_LIMIT) {
+  while (queue.length && objectCount < FRAMEWORK_SCAN_OBJECT_LIMIT && candidates.size < FRAMEWORK_SCAN_SECRET_LIMIT) {
     const item = queue.shift();
     if (!item) break;
     const value = item.value;
@@ -281,7 +297,7 @@ function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): strin
       stringCount += 1;
       if (stringCount > FRAMEWORK_SCAN_STRING_LIMIT) break;
       const secret = extractSecretFromValue(value, allowContextual || hasFrameworkKeyContext(item.context));
-      if (secret) secrets.add(secret);
+      if (secret) mergeFrameworkSecret(candidates, { text: secret, ...item.metadata });
       continue;
     }
     if (!value || typeof value !== "object" || item.depth >= FRAMEWORK_SCAN_DEPTH_LIMIT) continue;
@@ -290,6 +306,8 @@ function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): strin
     seen.add(value);
     objectCount += 1;
 
+    const metadata = mergeFrameworkMetadata(item.metadata, frameworkMetadata(value));
+
     const keys = frameworkObjectKeys(value);
     for (const key of keys) {
       if (shouldSkipFrameworkKey(key)) continue;
@@ -297,7 +315,8 @@ function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): strin
         queue.push({
           value: (value as Record<string, unknown>)[key],
           context: `${item.context}.${key}`,
-          depth: item.depth + 1
+          depth: item.depth + 1,
+          metadata
         });
       } catch {
         // Some framework properties are accessors; skip any that throw.
@@ -305,7 +324,73 @@ function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): strin
     }
   }
 
-  return Array.from(secrets);
+  return Array.from(candidates.values());
+}
+
+function mergeFrameworkSecret(candidates: Map<string, FrameworkSecret>, candidate: FrameworkSecret) {
+  const existing = candidates.get(candidate.text);
+  candidates.set(candidate.text, {
+    text: candidate.text,
+    label: candidate.label ?? existing?.label,
+    gateway: mergeGatewayMetadata(existing?.gateway, candidate.gateway)
+  });
+}
+
+function frameworkMetadata(value: object): FrameworkMetadata | undefined {
+  let label: string | undefined;
+  let group: string | undefined;
+  let rate: string | undefined;
+  for (const key of frameworkObjectKeys(value)) {
+    let field: unknown;
+    try {
+      field = (value as Record<string, unknown>)[key];
+    } catch {
+      continue;
+    }
+    const scalar = frameworkScalar(field);
+    if (!scalar) continue;
+    const normalizedKey = key.replace(/[-_\s]/g, "").toLowerCase();
+    if (!rate && /^(?:rate|ratio|multiplier|groupratio|modelratio)$/.test(normalizedKey)) {
+      rate = scalar;
+    } else if (!group && /^(?:group|groupname|tokengroup|modelgroup)$/.test(normalizedKey)) {
+      group = scalar;
+    } else if (!label && /^(?:name|label|remark|displayname|tokenname|keyname)$/.test(normalizedKey)) {
+      label = scalar;
+    }
+  }
+  if (!label && !group && !rate) return undefined;
+  return {
+    label,
+    gateway: group || rate ? { group, rate } : undefined
+  };
+}
+
+function frameworkScalar(value: unknown): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const normalized = String(value).trim();
+  if (!normalized || normalized.length > 80 || extractSecretFromValue(normalized, true)) return undefined;
+  return normalized;
+}
+
+function mergeFrameworkMetadata(
+  inherited: FrameworkMetadata | undefined,
+  direct: FrameworkMetadata | undefined
+): FrameworkMetadata | undefined {
+  if (!inherited) return direct;
+  if (!direct) return inherited;
+  return {
+    label: direct.label ?? inherited.label,
+    gateway: mergeGatewayMetadata(inherited.gateway, direct.gateway)
+  };
+}
+
+function mergeGatewayMetadata(
+  inherited: FrameworkMetadata["gateway"],
+  direct: FrameworkMetadata["gateway"]
+): FrameworkMetadata["gateway"] {
+  const group = direct?.group ?? inherited?.group;
+  const rate = direct?.rate ?? inherited?.rate;
+  return group || rate ? { group, rate } : undefined;
 }
 
 function frameworkObjectKeys(value: object): string[] {

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use uuid::Uuid;
 
-use aipass_agent_protocol::SensitiveString;
+use aipass_agent_protocol::{SensitiveString, UsageProbeMode};
 use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, QuotaInfo};
 use zeroize::Zeroize;
 
@@ -150,6 +150,23 @@ pub enum NativeRequest {
         #[serde(default)]
         tags: Vec<String>,
         notes: Option<String>,
+    },
+    #[serde(rename = "provider.usageProbe")]
+    ProviderUsageProbe {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+        #[serde(default)]
+        mode: UsageProbeMode,
+        timeout_seconds: u64,
+    },
+    #[serde(rename = "provider.usageApply")]
+    ProviderUsageApply {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+        quota: Option<QuotaInfo>,
+        gateway: Option<GatewayMetadata>,
     },
     #[serde(rename = "provider.faviconBackfill")]
     ProviderFaviconBackfill {
@@ -368,6 +385,33 @@ mod tests {
                 assert_eq!(entry_id.to_string(), "11111111-1111-1111-1111-111111111111");
                 assert_eq!(title, "Edited Gateway");
                 assert_eq!(api_key.unwrap().into_inner(), "sk-updated");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn provider_usage_probe_deserializes_auto_mode() {
+        let request: NativeRequest = serde_json::from_str(
+            r#"{
+                "type": "provider.usageProbe",
+                "id": "00000000-0000-0000-0000-000000000000",
+                "entry_id": "11111111-1111-1111-1111-111111111111",
+                "mode": "auto",
+                "timeout_seconds": 15
+            }"#,
+        )
+        .unwrap();
+        match request {
+            NativeRequest::ProviderUsageProbe {
+                entry_id,
+                mode,
+                timeout_seconds,
+                ..
+            } => {
+                assert_eq!(entry_id.to_string(), "11111111-1111-1111-1111-111111111111");
+                assert_eq!(mode, UsageProbeMode::Auto);
+                assert_eq!(timeout_seconds, 15);
             }
             other => panic!("unexpected variant: {other:?}"),
         }

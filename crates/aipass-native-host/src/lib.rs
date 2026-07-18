@@ -568,6 +568,52 @@ mod tests {
             Some("0.8x")
         );
 
+        let refreshed = handle_request_with_config(
+            NativeRequest::SaveDetected {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://gateway.example.test".to_string(),
+                url: "https://gateway.example.test/keys".to_string(),
+                title: Some("Gateway".to_string()),
+                favicon_url: None,
+                secret_label: None,
+                endpoint: Some("https://gateway.example.test/v1".to_string()),
+                provider_id: None,
+                interface_type: None,
+                auth_scheme: None,
+                api_key: "sk-gateway-secret-value".into(),
+                tags: vec![],
+                gateway: Some(aipass_provider_registry::GatewayMetadata {
+                    group: Some("premium".to_string()),
+                    rate: Some("1.2x".to_string()),
+                }),
+            },
+            &config,
+        );
+        assert!(refreshed.ok, "{refreshed:?}");
+        let refreshed_entry = aipass_vault::Vault::open(
+            agent.dir.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .unwrap()
+        .search("gateway")
+        .unwrap()
+        .remove(0);
+        assert_eq!(
+            refreshed_entry
+                .gateway
+                .as_ref()
+                .and_then(|gateway| gateway.group.as_deref()),
+            Some("premium")
+        );
+        assert_eq!(
+            refreshed_entry
+                .gateway
+                .as_ref()
+                .and_then(|gateway| gateway.rate.as_deref()),
+            Some("1.2x")
+        );
+
         let preview = handle_request_with_config(
             NativeRequest::PreviewDetected {
                 id: Uuid::new_v4(),

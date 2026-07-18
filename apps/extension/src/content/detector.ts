@@ -12,6 +12,7 @@ import {
   extractSecret,
   findSecretCandidates as scanSecretCandidates,
   hasKeyContext,
+  metadataForSecretElement,
   SELF_HOSTED_TOKEN_PATH_PATTERN,
   type SecretCandidate
 } from "./secret-scanner";
@@ -58,6 +59,7 @@ const MUTATION_SCAN_DEBOUNCE_MS = 800;
 const MUTATION_SCAN_MIN_INTERVAL_MS = 2500;
 const FRAMEWORK_SCAN_MIN_INTERVAL_MS = 2500;
 const CLIPBOARD_EVENT_DEDUP_MS = 100;
+const CLIPBOARD_INTERACTION_TTL_MS = 3_000;
 const GENERIC_TITLE_SEGMENT_PATTERN =
   /^(?:api\s*(?:keys?|密钥)(?:\s*(?:management|settings)|管理|设置)?|keys?|tokens?|secret\s*keys?|virtual\s*keys?|key\s*management|token\s*management|dashboard|console|settings?|management|user\s*settings?|密钥(?:管理|设置)?|令牌(?:管理|设置)?|系统访问令牌|下游密钥|控制台|仪表盘|后台|管理后台)$/i;
 const sentDraftKeys = new Set<string>();
@@ -70,6 +72,16 @@ let draftScanQueued = false;
 let lastDraftScanStartedAt = 0;
 let lastFrameworkScanRequestedAt = 0;
 let debugEnabledCache: boolean | undefined;
+let lastClipboardInteraction: { element: Element; at: number } | undefined;
+
+type ClipboardSecretPayload = {
+  text?: string;
+  label?: string;
+  gateway?: {
+    group?: string;
+    rate?: string;
+  };
+};
 
 type GatewaySignature = {
   id?: string;
@@ -708,7 +720,7 @@ async function sendDraftIfAllowed() {
   showDetectedDraftPrompt(unsavedDrafts);
 }
 
-async function sendDraftForClipboardSecret(secret: string) {
+async function sendDraftForClipboardSecret(secret: string, metadata: Omit<ClipboardSecretPayload, "text"> = {}) {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
   debugLog("clipboard: event received", { valueLength: secret.length });
   const recognition = recognizePage(document);
@@ -721,7 +733,17 @@ async function sendDraftForClipboardSecret(secret: string) {
     debugLog("clipboard: no secret candidate", recognitionDebugContext(recognition));
     return;
   }
-  const draft = buildDraft(document, { secret: candidate }, recognition);
+  const scanned = findSecretCandidates(document, recognition).find((item) => item.secret === candidate);
+  const interaction = clipboardInteractionMetadata(candidate);
+  const draft = buildDraft(
+    document,
+    {
+      secret: candidate,
+      label: metadata.label ?? interaction?.label ?? scanned?.label,
+      gateway: mergeGatewayMetadata(scanned?.gateway, interaction?.gateway, metadata.gateway)
+    },
+    recognition
+  );
   if (!draft?.apiKey) {
     debugLog("clipboard: no draft", recognitionDebugContext(recognition));
     return;
@@ -888,8 +910,28 @@ function draftKey(draft: DetectedSecretDraft): string {
     draft.url,
     draft.providerId ?? "",
     draft.endpoint ?? "",
-    draft.apiKey ?? ""
+    draft.apiKey ?? "",
+    draft.gateway?.group ?? "",
+    draft.gateway?.rate ?? ""
   ].join("|");
+}
+
+function clipboardInteractionMetadata(secret: string): Omit<SecretCandidate, "secret"> | undefined {
+  const interaction = lastClipboardInteraction;
+  if (!interaction || Date.now() - interaction.at > CLIPBOARD_INTERACTION_TTL_MS) return undefined;
+  return metadataForSecretElement(interaction.element, secret);
+}
+
+function mergeGatewayMetadata(
+  ...values: Array<SecretCandidate["gateway"] | undefined>
+): SecretCandidate["gateway"] {
+  let group: string | undefined;
+  let rate: string | undefined;
+  for (const value of values) {
+    group = value?.group ?? group;
+    rate = value?.rate ?? rate;
+  }
+  return group || rate ? { group, rate } : undefined;
 }
 
 function isIgnoredOrigin(origin: string): Promise<boolean> {
@@ -1493,23 +1535,33 @@ function installClipboardSecretListener() {
   if (typeof window === "undefined" || clipboardListenerAlreadyInstalled()) return;
   markClipboardListenerInstalled();
   debugLog("clipboard listener installed");
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (event.target instanceof Element) {
+        lastClipboardInteraction = { element: event.target, at: Date.now() };
+      }
+    },
+    { capture: true, passive: true }
+  );
   window.addEventListener(CLIPBOARD_SECRET_EVENT, (event) => {
-    const detail = (event as CustomEvent<{ text?: string }>).detail;
-    handleClipboardSecret(detail?.text);
+    const detail = (event as CustomEvent<ClipboardSecretPayload>).detail;
+    handleClipboardSecret(detail);
   });
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
-    const data = event.data as { source?: string; type?: string; text?: string } | undefined;
+    const data = event.data as (ClipboardSecretPayload & { source?: string; type?: string }) | undefined;
     if (data?.source !== CLIPBOARD_SECRET_MESSAGE_SOURCE || data.type !== CLIPBOARD_SECRET_EVENT) return;
-    handleClipboardSecret(data.text);
+    handleClipboardSecret(data);
   });
 }
 
-function handleClipboardSecret(value: unknown) {
+function handleClipboardSecret(payload: ClipboardSecretPayload | undefined) {
+  const value = payload?.text;
   if (typeof value !== "string" || recentClipboardSecrets.has(value)) return;
   recentClipboardSecrets.add(value);
   window.setTimeout(() => recentClipboardSecrets.delete(value), CLIPBOARD_EVENT_DEDUP_MS);
-  void sendDraftForClipboardSecret(value).catch(() => undefined);
+  void sendDraftForClipboardSecret(value, payload).catch(() => undefined);
 }
 
 function installDraftMutationObserver() {

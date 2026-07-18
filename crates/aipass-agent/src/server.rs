@@ -461,8 +461,9 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
         .map(|id| provider_kind_for_id(Some(id)))
         .unwrap_or(aipass_provider_registry::ProviderKind::Unknown);
     let preview = detected_secret_preview(vault, &fields);
-    if let Some(existing_entry_id) = preview.existing_entry_id.as_ref() {
-        return Ok(*existing_entry_id);
+    if let Some(existing_entry_id) = preview.existing_entry_id {
+        merge_detected_gateway(vault, existing_entry_id, preview.gateway)?;
+        return Ok(existing_entry_id);
     }
     let api_key = fields.api_key.into_inner();
     vault
@@ -490,6 +491,39 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
             tags: preview.tags,
             notes: None,
         })
+        .map_err(map_vault_error)
+}
+
+fn merge_detected_gateway(
+    vault: &Vault,
+    entry_id: Uuid,
+    detected: Option<aipass_provider_registry::GatewayMetadata>,
+) -> ServiceResult<()> {
+    let Some(detected) = detected else {
+        return Ok(());
+    };
+    let current = vault
+        .get_provider_summary(entry_id)
+        .map_err(map_vault_error)?;
+    let merged = aipass_provider_registry::GatewayMetadata {
+        group: detected.group.or_else(|| {
+            current
+                .gateway
+                .as_ref()
+                .and_then(|gateway| gateway.group.clone())
+        }),
+        rate: detected.rate.or_else(|| {
+            current
+                .gateway
+                .as_ref()
+                .and_then(|gateway| gateway.rate.clone())
+        }),
+    };
+    if current.gateway.as_ref() == Some(&merged) {
+        return Ok(());
+    }
+    vault
+        .update_provider_usage(entry_id, current.quota, Some(merged))
         .map_err(map_vault_error)
 }
 

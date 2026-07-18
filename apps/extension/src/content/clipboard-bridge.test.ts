@@ -102,26 +102,26 @@ describe("clipboard bridge", () => {
     const app = document.getElementById("app") as HTMLElement & {
       __vueParentComponent?: unknown;
     };
+    const keyRecord = {
+      name: "Production",
+      key: "productA_key_1234567890abcdef",
+      group: "vip",
+      rate: "0.8x"
+    };
     app.__vueParentComponent = {
       setupState: {
         apiKeys: {
-          value: [
-            {
-              name: "Production",
-              key: "productA_key_1234567890abcdef"
-            }
-          ]
+          value: [keyRecord]
         }
       }
     };
 
-    const emitted: string[] = [];
+    const emitted: Array<{ text?: string; label?: string; gateway?: { group?: string; rate?: string } }> = [];
     window.addEventListener(
       "aipass.clipboardSecret",
       (event) => {
-        emitted.push((event as CustomEvent<{ text?: string }>).detail?.text ?? "");
-      },
-      { once: true }
+        emitted.push((event as CustomEvent<(typeof emitted)[number]>).detail ?? {});
+      }
     );
 
     // clipboard-bridge is intentionally a classic content script without exports.
@@ -130,6 +130,18 @@ describe("clipboard bridge", () => {
     window.dispatchEvent(new CustomEvent("aipass.frameworkSecretScan", { detail: { enabled: true } }));
     await flushFrameworkScan();
 
-    assert.deepEqual(emitted, ["productA_key_1234567890abcdef"]);
+    assert.equal(emitted[0]?.text, "productA_key_1234567890abcdef");
+    assert.equal(emitted[0]?.label, "Production");
+    assert.equal(emitted[0]?.gateway?.group, "vip");
+    assert.equal(emitted[0]?.gateway?.rate, "0.8x");
+
+    keyRecord.group = "enterprise";
+    keyRecord.rate = "1.2x";
+    window.dispatchEvent(new CustomEvent("aipass.frameworkSecretScan", { detail: { enabled: true } }));
+    await flushFrameworkScan();
+
+    assert.equal(emitted.length, 2);
+    assert.equal(emitted[1]?.gateway?.group, "enterprise");
+    assert.equal(emitted[1]?.gateway?.rate, "1.2x");
   });
 });

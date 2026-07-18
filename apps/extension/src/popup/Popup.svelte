@@ -98,6 +98,7 @@
   let deletingEntryId = "";
   let selectedEntryId = "";
   let usingEntryId = "";
+  let usageRefreshEntryId = "";
   let entriesLoading = false;
   let filteredEntries: Entry[] = [];
   let selectedEntry: Entry | undefined;
@@ -213,6 +214,28 @@
       console.warn("favicon backfill failed", err);
     } finally {
       faviconBackfillBusy = false;
+    }
+  }
+
+  async function refreshEntryUsage(entry: Entry) {
+    if (usageRefreshEntryId) return;
+    usageRefreshEntryId = entry.id;
+    statusText = "";
+    statusError = false;
+    try {
+      const response = await sendToWorker({
+        type: "aipass.providerUsageRefresh",
+        entryId: entry.id
+      });
+      if (!response?.ok) {
+        statusText = response?.error ?? $t("error.usageProbeUnavailable");
+        statusError = true;
+        return;
+      }
+      await refresh({ scanActiveTab: false });
+      statusText = $t("notice.usageProbeApplied");
+    } finally {
+      usageRefreshEntryId = "";
     }
   }
 
@@ -1367,6 +1390,10 @@
     return { group: draft.gatewayGroup || undefined, rate: draft.gatewayRate || undefined };
   }
 
+  function supportsUsageRefresh(entry: Entry): boolean {
+    return entry.providerId === "new_api" || entry.providerId === "one_api" || entry.providerId === "sub2api" || entry.providerId === "veloera";
+  }
+
   function secretMatchesEntry(secret: string, entry: Entry): boolean {
     const masked = entry.maskedSecret.trim();
     if (!masked || masked === "****") return true;
@@ -1446,6 +1473,15 @@
             {addBusy ? $t("ext.adding") : $t("providerModal.saveChanges")}
           </Button>
         {:else}
+          {#if supportsUsageRefresh(entry)}
+            <IconButton
+              label={$t("providerDetail.refreshUsage")}
+              disabled={Boolean(usageRefreshEntryId)}
+              on:click={() => refreshEntryUsage(entry)}
+            >
+              <span class:spin={usageRefreshEntryId === entry.id}><RefreshCw size={15} /></span>
+            </IconButton>
+          {/if}
           <IconButton
             label={$t("ext.openSite")}
             disabled={!siteUrlForEntry(entry)}

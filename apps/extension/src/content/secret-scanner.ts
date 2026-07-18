@@ -218,6 +218,10 @@ function metadataFromElement(element: Element, secret: string): Omit<SecretCandi
   };
 }
 
+export function metadataForSecretElement(element: Element, secret: string): Omit<SecretCandidate, "secret"> {
+  return metadataFromElement(element, secret);
+}
+
 function metadataFromTableRow(row: Element, secret: string): Omit<SecretCandidate, "secret"> {
   const cells = limitedElements<HTMLElement>(row, "td, th, [role='cell'], [role='gridcell'], [role='columnheader']", TABLE_CELL_SCAN_LIMIT);
   if (!cells.length) return {};

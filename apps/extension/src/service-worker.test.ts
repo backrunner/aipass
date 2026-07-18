@@ -7,6 +7,8 @@ const listeners: Listener[] = [];
 const openPopup = vi.fn().mockResolvedValue(undefined);
 const nativeSaveResponses: unknown[] = [];
 const nativePreviewResponses: unknown[] = [];
+const nativeUsageProbeResponses: unknown[] = [];
+const nativeUsageApplyResponses: unknown[] = [];
 const nativeListResponses: unknown[] = [];
 const nativeMessages: Array<Record<string, unknown>> = [];
 const storageSessionData = new Map<string, unknown>();
@@ -87,6 +89,25 @@ function installChromeStub() {
             return;
           }
           callback({ id: "1", ok: true, data: { entryId: crypto.randomUUID() } });
+          return;
+        }
+        if (type === "provider.usageProbe") {
+          callback(
+            nativeUsageProbeResponses.shift() ?? {
+              id: "1",
+              ok: true,
+              data: {
+                ok: true,
+                source: "sub_api_v1_usage",
+                quota: { label: "pro", limit: "10", remaining: "7.5" },
+                gateway: { group: "pro" }
+              }
+            }
+          );
+          return;
+        }
+        if (type === "provider.usageApply") {
+          callback(nativeUsageApplyResponses.shift() ?? { id: "1", ok: true, data: { entryId: message.entry_id } });
           return;
         }
         if (type === "provider.faviconBackfill") {
@@ -197,6 +218,8 @@ describe("service worker pending drafts", () => {
     openPopup.mockClear();
     nativeSaveResponses.length = 0;
     nativePreviewResponses.length = 0;
+    nativeUsageProbeResponses.length = 0;
+    nativeUsageApplyResponses.length = 0;
     nativeListResponses.length = 0;
     nativeMessages.length = 0;
     storageSessionData.clear();
@@ -518,6 +541,76 @@ describe("service worker pending drafts", () => {
     assert.equal(filtered.data?.drafts?.length, 0);
     assert.equal(filtered.data?.savedCount, 1);
     assert.equal(filtered.data?.checkedCount, 1);
+  });
+
+  it("syncs gateway metadata for an already-saved detected draft", async () => {
+    await import("./service-worker");
+    nativePreviewResponses.push({
+      id: "1",
+      ok: true,
+      data: {
+        title: "SubAPI",
+        providerId: "sub2api",
+        endpoint: "https://relay.example.test/v1",
+        interfaceType: "openai_compatible",
+        authScheme: "bearer",
+        maskedSecret: "•••• 1234",
+        fingerprint: "fp",
+        existingEntryId: "existing-entry",
+        isSaved: true,
+        tags: [],
+        gateway: { group: "old", rate: "1x" }
+      }
+    });
+    const filtered = (await dispatchMessage({
+      type: "aipass.filterUnsavedDetectedDrafts",
+      drafts: [
+        {
+          title: "SubAPI",
+          origin: "https://relay.example.test",
+          url: "https://relay.example.test/keys",
+          providerId: "sub2api",
+          endpoint: "https://relay.example.test/v1",
+          apiKey: "productA_key_1234567890abcdef",
+          gateway: { group: "premium", rate: "0.8x" }
+        }
+      ]
+    })) as { ok?: boolean; data?: { drafts?: unknown[]; savedCount?: number } };
+    assert.equal(filtered.ok, true);
+    assert.equal(filtered.data?.drafts?.length, 0);
+    assert.equal(filtered.data?.savedCount, 1);
+    const sync = nativeMessages.find((message) => message.type === "secret.saveDetected");
+    assert.equal((sync?.gateway as { group?: string })?.group, "premium");
+    assert.equal((sync?.gateway as { rate?: string })?.rate, "0.8x");
+    assert.ok(nativeMessages.some((message) => message.type === "provider.usageProbe"));
+  });
+
+  it("probes and applies usage metadata from the extension", async () => {
+    await import("./service-worker");
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry({ providerId: "sub2api", gateway: { rate: "0.8x" } })]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+    nativeUsageProbeResponses.push({
+      id: "1",
+      ok: true,
+      data: {
+        ok: true,
+        source: "sub_api_v1_usage",
+        quota: { label: "pro", limit: "10", remaining: "7.5" },
+        gateway: { group: "premium" }
+      }
+    });
+    const response = (await dispatchMessage({
+      type: "aipass.providerUsageRefresh",
+      entryId: "entry-1"
+    })) as { ok?: boolean; data?: { gateway?: { group?: string; rate?: string }; quota?: { remaining?: string } } };
+    assert.equal(response.ok, true);
+    assert.equal(response.data?.gateway?.group, "premium");
+    assert.equal(response.data?.gateway?.rate, "0.8x");
+    assert.equal(response.data?.quota?.remaining, "7.5");
+    const apply = nativeMessages.find((message) => message.type === "provider.usageApply");
+    assert.equal((apply?.gateway as { group?: string })?.group, "premium");
+    assert.equal((apply?.gateway as { rate?: string })?.rate, "0.8x");
   });
 
   it("keeps detected drafts promptable when the vault is locked", async () => {

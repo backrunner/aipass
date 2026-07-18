@@ -7,7 +7,7 @@ use aipass_agent_protocol::{
     AgentErrorCode, AgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
     BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
     BrowserIgnoredStatus, FaviconBackfillRequest, FaviconBackfillResponse, SaveDetectedResult,
-    SessionStatus, SessionUnlockMode,
+    SessionStatus, SessionUnlockMode, UsageProbeResult,
 };
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
 use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
@@ -352,6 +352,41 @@ fn handle_request_inner(
             )?;
             Ok(json!({ "entryId": entry_id }))
         }
+        NativeRequest::ProviderUsageProbe {
+            entry_id,
+            mode,
+            timeout_seconds,
+            ..
+        } => {
+            let result: UsageProbeResult = request_agent(
+                config,
+                &AgentRequest::ProviderUsageProbe {
+                    id: entry_id,
+                    mode,
+                    timeout_seconds: timeout_seconds.max(1),
+                    base_url: None,
+                    access_token: None,
+                    user_id: None,
+                },
+            )?;
+            Ok(serde_json::to_value(result)?)
+        }
+        NativeRequest::ProviderUsageApply {
+            entry_id,
+            quota,
+            gateway,
+            ..
+        } => {
+            let _: serde_json::Value = request_agent(
+                config,
+                &AgentRequest::ProviderUsageApply {
+                    id: entry_id,
+                    quota,
+                    gateway,
+                },
+            )?;
+            Ok(json!({ "entryId": entry_id }))
+        }
         NativeRequest::ProviderFaviconBackfill {
             entry_ids, limit, ..
         } => {
@@ -389,6 +424,8 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::PreviewDetected { id, .. }
         | NativeRequest::ProviderAdd { id, .. }
         | NativeRequest::ProviderUpdate { id, .. }
+        | NativeRequest::ProviderUsageProbe { id, .. }
+        | NativeRequest::ProviderUsageApply { id, .. }
         | NativeRequest::ProviderFaviconBackfill { id, .. }
         | NativeRequest::ProviderDelete { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
@@ -410,6 +447,8 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::PreviewDetected { extension_id, .. }
         | NativeRequest::ProviderAdd { extension_id, .. }
         | NativeRequest::ProviderUpdate { extension_id, .. }
+        | NativeRequest::ProviderUsageProbe { extension_id, .. }
+        | NativeRequest::ProviderUsageApply { extension_id, .. }
         | NativeRequest::ProviderFaviconBackfill { extension_id, .. }
         | NativeRequest::ProviderDelete { extension_id, .. }
         | NativeRequest::UnlockRequest { extension_id, .. }

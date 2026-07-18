@@ -148,6 +148,31 @@ export interface DetectedSecretPreview {
   };
 }
 
+export type UsageProbeMode = "auto" | "new_api" | "sub_api" | "new_api_advanced";
+
+export interface UsageProbeResult {
+  ok: boolean;
+  providerId?: string;
+  source: "new_api_token_usage" | "new_api_user_self" | "sub_api_v1_usage" | "unknown";
+  endpoint?: string;
+  status?: number;
+  quota?: {
+    label?: string;
+    limit?: string;
+    used?: string;
+    remaining?: string;
+    resetAt?: string;
+    unit?: string;
+  };
+  gateway?: {
+    group?: string;
+    rate?: string;
+  };
+  planName?: string;
+  message?: string;
+  error?: string;
+}
+
 export function startNativeConnectionMonitor() {
   if (!supportsNativePort()) return;
   connectNativePort();
@@ -581,6 +606,34 @@ export function updateProvider(request: ProviderUpdateRequest): Promise<NativeRe
     gateway: request.gateway,
     tags: request.tags,
     notes: request.notes
+  });
+}
+
+export function probeProviderUsage(
+  entryId: string,
+  mode: UsageProbeMode = "auto",
+  timeoutSeconds = 15
+): Promise<NativeResponse<UsageProbeResult>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "provider.usageProbe",
+    entry_id: entryId,
+    mode,
+    timeout_seconds: timeoutSeconds
+  });
+}
+
+export function applyProviderUsage(
+  entryId: string,
+  quota: ProviderSummary["quota"],
+  gateway: ProviderSummary["gateway"]
+): Promise<NativeResponse<{ entryId: string }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "provider.usageApply",
+    entry_id: entryId,
+    quota,
+    gateway
   });
 }
 

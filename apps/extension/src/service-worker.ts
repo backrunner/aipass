@@ -1,5 +1,6 @@
 import {
   addProvider,
+  applyProviderUsage,
   backfillFavicons,
   deleteProvider,
   fillSecret,
@@ -11,6 +12,7 @@ import {
   openDesktopApp,
   openNativeUnlock,
   pingNativeHost,
+  probeProviderUsage,
   previewDetectedSecret,
   recoverNativeHost,
   saveDetectedSecret,
@@ -23,7 +25,8 @@ import {
   type NativeResponse,
   type ProviderAddRequest,
   type ProviderSummary,
-  type ProviderUpdateRequest
+  type ProviderUpdateRequest,
+  type UsageProbeResult
 } from "./native-client";
 
 type PendingDraftRecord = {
@@ -60,6 +63,9 @@ const PENDING_DRAFT_TTL_MS = 5 * 60 * 1000;
 const ENTRY_CACHE_SCHEMA_VERSION = 1;
 const ENTRY_CACHE_KEY_PREFIX = `aipass.entries.v${ENTRY_CACHE_SCHEMA_VERSION}.`;
 const memoryEntryCache = new Map<string, EntryCacheSnapshotV1>();
+const usageRefreshPromises = new Map<string, Promise<UsageRefreshResponse>>();
+const automaticUsageRefreshAt = new Map<string, number>();
+const AUTOMATIC_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 startNativeConnectionMonitor();
 chrome.runtime.onStartup?.addListener(startNativeConnectionMonitor);
@@ -103,6 +109,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.backfillFavicons" && Array.isArray(typed.entryIds)) {
     backfillFaviconsAndPatchCache(typed.entryIds, typed.limit).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.providerUsageRefresh" && typed.entryId) {
+    refreshProviderUsage(typed.entryId, true).then(sendResponse);
     return true;
   }
 
@@ -400,8 +411,118 @@ async function addProviderAndRefreshCache(request: ProviderAddRequest) {
   if (response.ok) {
     entryCacheMutationVersion += 1;
     scheduleEntryCacheRefresh("provider.add");
+    if (response.data?.entryId && isUsageProvider(request.providerId)) {
+      void refreshProviderUsage(response.data.entryId, false);
+    }
   }
   return response;
+}
+
+type UsageRefreshResponse = {
+  ok: boolean;
+  error?: string;
+  data: {
+    result?: UsageProbeResult;
+    quota?: ProviderSummary["quota"];
+    gateway?: ProviderSummary["gateway"];
+  };
+};
+
+function refreshProviderUsage(entryId: string, force: boolean): Promise<UsageRefreshResponse> {
+  const existing = usageRefreshPromises.get(entryId);
+  if (existing) return existing;
+  const lastRefresh = automaticUsageRefreshAt.get(entryId) ?? 0;
+  if (!force && Date.now() - lastRefresh < AUTOMATIC_USAGE_REFRESH_INTERVAL_MS) {
+    return Promise.resolve({ ok: true, data: {} });
+  }
+  automaticUsageRefreshAt.set(entryId, Date.now());
+  const refresh = refreshProviderUsageInner(entryId)
+    .catch((err): UsageRefreshResponse => ({
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      data: {}
+    }))
+    .finally(() => {
+      usageRefreshPromises.delete(entryId);
+    });
+  usageRefreshPromises.set(entryId, refresh);
+  return refresh;
+}
+
+async function refreshProviderUsageInner(entryId: string): Promise<UsageRefreshResponse> {
+  const probe = await probeProviderUsage(entryId);
+  if (!probe.ok) {
+    return { ok: false, error: probe.error ?? "Unable to refresh usage", data: {} };
+  }
+  const result = probe.data;
+  if (!result?.ok) {
+    return { ok: false, error: result?.error ?? "Unable to refresh usage", data: { result } };
+  }
+
+  const entry = await providerEntryById(entryId);
+  const quota = mergeUsageQuota(entry?.quota, result.quota);
+  const gateway = mergeUsageGateway(entry?.gateway, result.gateway);
+  const apply = await applyProviderUsage(entryId, quota, gateway);
+  if (!apply.ok) {
+    return { ok: false, error: apply.error ?? "Unable to apply usage", data: { result } };
+  }
+
+  entryCacheMutationVersion += 1;
+  await mutateEntryCache((entries) =>
+    entries.map((item) =>
+      item.id === entryId ? { ...item, quota, gateway, updatedAt: new Date().toISOString() } : item
+    )
+  );
+  scheduleEntryCacheRefresh("provider.usageRefresh");
+  return { ok: true, data: { result, quota, gateway } };
+}
+
+async function providerEntryById(entryId: string): Promise<ProviderSummary | undefined> {
+  const response = await listEntries();
+  if (response.ok) {
+    const entry = response.data?.entries.find((item) => item.id === entryId);
+    if (entry) return entry;
+  }
+  if (activeVaultNamespace) {
+    const cached = await readEntryCache(activeVaultNamespace);
+    const entry = cached?.entries.find((item) => item.id === entryId);
+    if (entry) return entry;
+  }
+  return undefined;
+}
+
+function mergeUsageQuota(
+  current: ProviderSummary["quota"],
+  probed: UsageProbeResult["quota"]
+): ProviderSummary["quota"] {
+  const next = {
+    label: probed?.label ?? current?.label,
+    limit: probed?.limit ?? current?.limit,
+    remaining: probed?.remaining ?? current?.remaining,
+    resetAt: probed?.resetAt ?? current?.resetAt
+  };
+  return next.label || next.limit || next.remaining || next.resetAt ? next : undefined;
+}
+
+function mergeUsageGateway(
+  current: ProviderSummary["gateway"],
+  probed: UsageProbeResult["gateway"]
+): ProviderSummary["gateway"] {
+  const next = {
+    group: probed?.group ?? current?.group,
+    rate: probed?.rate ?? current?.rate
+  };
+  return next.group || next.rate ? next : undefined;
+}
+
+function isUsageProvider(providerId: string | undefined): boolean {
+  return providerId === "new_api" || providerId === "one_api" || providerId === "sub2api" || providerId === "veloera";
+}
+
+function refreshUsageForDetectedDraft(draft: DetectedSecretDraft, entryId: string | undefined) {
+  if (entryId && isUsageProvider(draft.providerId)) {
+    void refreshProviderUsage(entryId, false);
+  }
 }
 
 async function updateProviderAndRefreshCache(request: ProviderUpdateRequest) {
@@ -688,6 +809,7 @@ async function savePendingDraft(draft: DetectedSecretDraft, draftId?: string) {
   const response = await saveDetectedSecret(draft);
   if (response.ok) {
     entryCacheMutationVersion += 1;
+    refreshUsageForDetectedDraft(draft, response.data?.entryId);
     clearPendingDraft(draftId);
     scheduleEntryCacheRefresh("secret.savePendingDraft");
     return response;
@@ -716,16 +838,31 @@ async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]) {
   const unsaved: DetectedSecretDraft[] = [];
   const errors: Array<{ error: string }> = [];
   let savedCount = 0;
+  let metadataUpdatedCount = 0;
   for (const draft of drafts) {
     const response = await previewDetectedSecret(draft);
     if (response.ok && response.data?.isSaved) {
       savedCount += 1;
+      if (response.data.existingEntryId && (draft.gateway?.group || draft.gateway?.rate)) {
+        const synced = await saveDetectedSecret(draft);
+        if (!synced.ok) {
+          errors.push({ error: synced.error ?? "Unable to sync gateway metadata" });
+          unsaved.push(draft);
+          continue;
+        }
+        metadataUpdatedCount += 1;
+      }
+      refreshUsageForDetectedDraft(draft, response.data.existingEntryId);
       continue;
     }
     if (!response.ok) {
       errors.push({ error: response.error ?? "Unable to preview detected key" });
     }
     unsaved.push(draft);
+  }
+  if (metadataUpdatedCount) {
+    entryCacheMutationVersion += 1;
+    scheduleEntryCacheRefresh("secret.syncDetectedMetadata");
   }
   return {
     ok: true,
@@ -753,6 +890,7 @@ async function savePendingDraftBatch(
     const response = await saveDetectedSecret(draft);
     if (response.ok) {
       entryCacheMutationVersion += 1;
+      refreshUsageForDetectedDraft(draft, response.data?.entryId);
       saved.push({ draftId: item.draftId, entryId: response.data?.entryId });
       clearPendingDraft(item.draftId);
     } else if (await shouldUnlockForFailedSave(response)) {
@@ -795,6 +933,7 @@ async function saveDetectedDraftBatch(drafts: DetectedSecretDraft[]) {
     const response = await saveDetectedSecret(draft);
     if (response.ok) {
       entryCacheMutationVersion += 1;
+      refreshUsageForDetectedDraft(draft, response.data?.entryId);
       saved.push({ entryId: response.data?.entryId });
     } else if (await shouldUnlockForFailedSave(response)) {
       enqueuePendingDraft(draft, "review", true);
@@ -828,6 +967,7 @@ async function resumePendingSaves() {
     const response = await saveDetectedSecret(record.draft);
     if (response.ok) {
       entryCacheMutationVersion += 1;
+      refreshUsageForDetectedDraft(record.draft, response.data?.entryId);
       saved.push({ draftId: record.id, entryId: response.data?.entryId });
       clearPendingDraft(record.id);
       continue;
