@@ -449,7 +449,10 @@ pub fn load_policy(vault_dir: &Path) -> Result<SessionPolicy> {
     if path.exists() {
         let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
         let had_persist_unlock = value.get("persistUnlock").is_some();
-        let decoded: SessionPolicy = serde_json::from_value(value)?;
+        let mut decoded: SessionPolicy = serde_json::from_value(value)?;
+        if had_persist_unlock && matches!(decoded.idle_lock_minutes, 15 | 30) {
+            decoded.idle_lock_minutes = SessionPolicy::default().idle_lock_minutes;
+        }
         let policy = clamp_policy(decoded.clone());
         if had_persist_unlock || policy != decoded {
             save_policy(vault_dir, &policy)?;
@@ -896,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_policy_is_clamped_and_drops_persist_unlock() {
+    fn legacy_policy_uses_relaxed_default_and_drops_persist_unlock() {
         let temp = tempdir().expect("tempdir");
         let vault_dir = temp.path().join("vault");
         let path = policy_path(&vault_dir);
@@ -906,7 +909,7 @@ mod tests {
         atomic_write_bytes(
             &path,
             br#"{
-                "idleLockMinutes": 65535,
+                "idleLockMinutes": 30,
                 "lockOnSleep": true,
                 "lockOnScreenLock": false,
                 "persistUnlock": true
@@ -915,7 +918,7 @@ mod tests {
         .expect("write legacy policy");
 
         let policy = load_policy(&vault_dir).expect("load policy");
-        assert_eq!(policy.idle_lock_minutes, 1_440);
+        assert_eq!(policy.idle_lock_minutes, 60);
         assert!(!policy.lock_on_screen_lock);
         let rewritten = fs::read_to_string(path).expect("read migrated policy");
         assert!(!rewritten.contains("persistUnlock"));
