@@ -210,7 +210,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 12px;
+    padding: 0 var(--pane-content-inset);
     transition: opacity 120ms ease;
   }
 

@@ -1705,6 +1705,8 @@
     --workspace-gap: 8px;
     --sidebar-width: 232px;
     --items-list-width: 368px;
+    --pane-content-inset: 13px;
+    --workspace-content-top: 42px;
 
     height: 100vh;
     display: flex;
@@ -1766,11 +1768,11 @@
   }
 
   .workspace > :global(.sidebar) {
-    padding-top: 50px;
+    padding-top: var(--workspace-content-top);
   }
 
   .workspace > :global(.list-pane .toolbar) {
-    padding-top: 48px;
+    padding-top: var(--workspace-content-top);
   }
 
   .workspace > :global(.detail-header) {
