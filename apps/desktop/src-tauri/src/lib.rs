@@ -365,7 +365,17 @@ fn load_preferences(app: &AppHandle) -> Result<AppPreferences, String> {
         return Ok(AppPreferences::default());
     }
     let bytes = fs::read(&path).map_err(|err| err.to_string())?;
-    serde_json::from_slice(&bytes).or_else(|_| Ok(AppPreferences::default()))
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => return Ok(AppPreferences::default()),
+    };
+    let had_persist_unlock = value.get("persistUnlock").is_some();
+    let preferences: AppPreferences =
+        serde_json::from_value(value).unwrap_or_else(|_| AppPreferences::default());
+    if had_persist_unlock {
+        write_json_atomic(&path, &preferences)?;
+    }
+    Ok(preferences)
 }
 
 fn save_preferences(app: &AppHandle, preferences: &AppPreferences) -> Result<(), String> {

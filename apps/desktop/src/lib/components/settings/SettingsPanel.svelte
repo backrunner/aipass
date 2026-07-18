@@ -21,11 +21,10 @@
   import SegmentedControl from "../shared/SegmentedControl.svelte";
 
   export let entriesCount = 0;
-  export let autoLockMinutes = 30;
+  export let autoLockMinutes = 60;
   export let clipboardClearSeconds = 45;
   export let lockOnSleep = true;
   export let lockOnScreenLock = true;
-  export let persistUnlock = true;
   export let newPassword = "";
   export let exportPath = "";
   export let exportPassword = "";
@@ -112,6 +111,23 @@
     { value: "en" as LocalePreference, label: $t("locale.en") },
     { value: "zh-CN" as LocalePreference, label: $t("locale.zhCN") }
   ];
+
+  $: autoLockOptions = [
+    { value: 15, label: $t("settings.autoLock15m") },
+    { value: 30, label: $t("settings.autoLock30m") },
+    { value: 60, label: $t("settings.autoLock1h") },
+    { value: 120, label: $t("settings.autoLock2h") },
+    { value: 240, label: $t("settings.autoLock4h") },
+    { value: 480, label: $t("settings.autoLock8h") },
+    { value: 1440, label: $t("settings.autoLock24h") },
+    { value: 0, label: $t("settings.autoLockNever") }
+  ];
+  $: if (!autoLockOptions.some((option) => option.value === autoLockMinutes)) {
+    autoLockOptions = [
+      { value: autoLockMinutes, label: $t("settings.autoLockCustom", { minutes: autoLockMinutes }) },
+      ...autoLockOptions
+    ];
+  }
 
   function onThemeChange(next: ThemePreference) {
     setTheme(next);
@@ -252,14 +268,16 @@
                     <span class="row-label">{$t("settings.autoLock")}</span>
                     <span class="row-desc">{$t("settings.autoLockDesc")}</span>
                   </div>
-                  <input
-                    class="num-input"
-                    type="number"
-                    min="0"
-                    max="240"
+                  <select
+                    class="select-input"
                     bind:value={autoLockMinutes}
                     on:change={() => onSavePreferences()}
-                  />
+                    aria-label={$t("settings.autoLock")}
+                  >
+                    {#each autoLockOptions as option}
+                      <option value={option.value}>{option.label}</option>
+                    {/each}
+                  </select>
                 </div>
                 <div class="row">
                   <div class="row-text">
@@ -285,12 +303,6 @@
                   label={$t("settings.lockOnScreenLock")}
                   description={$t("settings.lockOnScreenLockDesc")}
                   bind:checked={lockOnScreenLock}
-                  onCheckedChange={() => onSavePreferences()}
-                />
-                <SwitchField
-                  label={$t("settings.persistUnlock")}
-                  description={$t("settings.persistUnlockDesc")}
-                  bind:checked={persistUnlock}
                   onCheckedChange={() => onSavePreferences()}
                 />
               </div>
@@ -860,6 +872,23 @@
     font-size: 13px;
     text-align: right;
     transition: border-color 120ms ease, box-shadow 120ms ease;
+
+    &:focus {
+      outline: 0;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-ring);
+    }
+  }
+
+  .select-input {
+    width: 132px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
 
     &:focus {
       outline: 0;

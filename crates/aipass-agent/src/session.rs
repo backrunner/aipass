@@ -1,4 +1,3 @@
-use crate::device_secrets;
 use aipass_agent_protocol::{
     AgentErrorCode, LockReason, SensitiveString, SessionPolicy, SessionStatus, SyncMode,
     SyncSettings, SyncSettingsUpdate,
@@ -6,7 +5,7 @@ use aipass_agent_protocol::{
 use aipass_crypto::{decrypt_bytes, encrypt_bytes, Ciphertext, SecretString};
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::{RecoveryKit, Vault, VaultError};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::ErrorKind;
@@ -39,15 +38,12 @@ pub struct PersistedSyncSettings {
     pub webdav_username: Option<String>,
     #[serde(default)]
     pub webdav_password: Option<Ciphertext>,
-    #[serde(default)]
-    pub webdav_password_device: bool,
 }
 
 #[derive(Clone, Debug)]
 pub enum StoredSyncSecret {
     Plaintext(SensitiveString),
     Encrypted(Ciphertext),
-    Device,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -79,7 +75,6 @@ pub struct AgentState {
     pub session: Mutex<SessionState>,
     pub session_changed: Condvar,
     pub last_lock_reason: Mutex<Option<LockReason>>,
-    pub initializing: AtomicBool,
     pub shutdown: AtomicBool,
 }
 
@@ -163,63 +158,9 @@ pub fn unlock_with_password(
             return Err(err);
         }
     };
-    if current_policy(state)
-        .map(|p| p.persist_unlock)
-        .unwrap_or(false)
-    {
-        let _ = device_secrets::set_session_unlock(&state.vault_dir, &password);
-    }
     password.zeroize();
     set_session_vault(state, vault);
     session_status(state)
-}
-
-/// On agent start, re-open the vault from a device-sealed password (if the policy
-/// allows and one was stored), so an agent crash or helper restart inside the
-/// same desktop session does not force a manual unlock.
-pub fn try_restore_session(state: &Arc<AgentState>) {
-    try_restore_session_inner(state);
-    state.initializing.store(false, Ordering::Release);
-    state.session_changed.notify_all();
-}
-
-fn try_restore_session_inner(state: &Arc<AgentState>) {
-    if !current_policy(state)
-        .map(|p| p.persist_unlock)
-        .unwrap_or(false)
-    {
-        return;
-    }
-    let Ok(Some(mut password)) = device_secrets::get_session_unlock(&state.vault_dir) else {
-        return;
-    };
-    let opened = Vault::open(&state.vault_dir, &SecretString::new(&password));
-    password.zeroize();
-    let Ok(vault) = opened else {
-        let _ = device_secrets::delete_session_unlock(&state.vault_dir);
-        return;
-    };
-    set_session_vault(state, vault);
-    if let Ok(mut last_reason) = state.last_lock_reason.lock() {
-        *last_reason = None;
-    }
-}
-
-pub fn wait_for_session_initialization(state: &Arc<AgentState>) -> ServiceResult<()> {
-    if !state.initializing.load(Ordering::Acquire) {
-        return Ok(());
-    }
-    let mut session = state
-        .session
-        .lock()
-        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))?;
-    while state.initializing.load(Ordering::Acquire) {
-        session = state
-            .session_changed
-            .wait(session)
-            .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))?;
-    }
-    Ok(())
 }
 
 pub fn create_vault(
@@ -235,12 +176,6 @@ pub fn create_vault(
             return Err(err);
         }
     };
-    if current_policy(state)
-        .map(|p| p.persist_unlock)
-        .unwrap_or(false)
-    {
-        let _ = device_secrets::set_session_unlock(&state.vault_dir, &password);
-    }
     password.zeroize();
     let recovery_kit = creation.recovery_kit.clone();
     set_session_vault(state, creation.vault);
@@ -266,12 +201,6 @@ pub fn recover_vault(
             return Err(err);
         }
     };
-    if current_policy(state)
-        .map(|p| p.persist_unlock)
-        .unwrap_or(false)
-    {
-        let _ = device_secrets::set_session_unlock(&state.vault_dir, &new_password);
-    }
     new_password.zeroize();
     let recovery_kit = creation.recovery_kit.clone();
     set_session_vault(state, creation.vault);
@@ -305,8 +234,6 @@ pub fn reset_vault(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
         remove_dir_if_exists(&root.join(dir)).map_err(remove_err)?;
     }
     remove_file_if_exists(&sync_settings_path(root)).map_err(remove_err)?;
-    device_secrets::delete_webdav_password(root).ok();
-    device_secrets::delete_session_unlock(root).ok();
 
     session_status(state)
 }
@@ -335,21 +262,10 @@ pub fn touch_session(state: &Arc<AgentState>) {
 }
 
 pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
-    let was_unlocked = if let Ok(mut session) = state.session.lock() {
-        let was_unlocked = matches!(*session, SessionState::Unlocked(_));
+    if let Ok(mut session) = state.session.lock() {
         *session = SessionState::Locked;
-        was_unlocked
-    } else {
-        false
-    };
-    state.session_changed.notify_all();
-    // Drop the device-sealed password so a fresh agent start honors explicit
-    // locks and normal app quits. The sole exception is AgentRestart, which is
-    // reserved for unexpected process death or a helper restart inside the same
-    // desktop session.
-    if was_unlocked && reason != LockReason::AgentRestart {
-        let _ = device_secrets::delete_session_unlock(&state.vault_dir);
     }
+    state.session_changed.notify_all();
     if let Ok(mut last_reason) = state.last_lock_reason.lock() {
         *last_reason = Some(reason);
     }
@@ -402,14 +318,7 @@ pub fn lock_if_idle(state: &Arc<AgentState>) -> ServiceResult<bool> {
             SessionState::Locked => false,
             SessionState::Unlocked(info) => {
                 let request_idle = OffsetDateTime::now_utc() - info.last_activity_at;
-                // Mirror 1Password: only lock when the user is also idle system-wide
-                // (no keyboard/mouse anywhere). Where the OS idle is unavailable, fall
-                // back to request activity alone.
-                let system_idle_ok = match system_idle_seconds() {
-                    Some(seconds) => time::Duration::seconds_f64(seconds) >= idle_threshold,
-                    None => true,
-                };
-                request_idle >= idle_threshold && system_idle_ok
+                should_lock_for_idle(request_idle, system_idle_seconds(), idle_threshold)
             }
         }
     };
@@ -417,6 +326,21 @@ pub fn lock_if_idle(state: &Arc<AgentState>) -> ServiceResult<bool> {
         lock_session(state, LockReason::IdleTimeout);
     }
     Ok(should_lock)
+}
+
+fn should_lock_for_idle(
+    request_idle: time::Duration,
+    system_idle_seconds: Option<f64>,
+    threshold: time::Duration,
+) -> bool {
+    if request_idle < threshold {
+        return false;
+    }
+    // Match 1Password's system-idle behavior: activity elsewhere on the
+    // computer keeps the vault open even when AIPass itself is not in use.
+    system_idle_seconds
+        .map(|seconds| time::Duration::seconds_f64(seconds) >= threshold)
+        .unwrap_or(true)
 }
 
 /// Seconds since the last system-wide input event (keyboard/mouse), or `None` when
@@ -514,17 +438,23 @@ pub fn spawn_power_watcher(_state: Arc<AgentState>) {}
 
 pub fn clamp_policy(policy: SessionPolicy) -> SessionPolicy {
     SessionPolicy {
-        idle_lock_minutes: policy.idle_lock_minutes.min(240),
+        idle_lock_minutes: policy.idle_lock_minutes.min(1_440),
         lock_on_sleep: policy.lock_on_sleep,
         lock_on_screen_lock: policy.lock_on_screen_lock,
-        persist_unlock: policy.persist_unlock,
     }
 }
 
 pub fn load_policy(vault_dir: &Path) -> Result<SessionPolicy> {
     let path = policy_path(vault_dir);
     if path.exists() {
-        return Ok(clamp_policy(serde_json::from_slice(&fs::read(path)?)?));
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+        let had_persist_unlock = value.get("persistUnlock").is_some();
+        let decoded: SessionPolicy = serde_json::from_value(value)?;
+        let policy = clamp_policy(decoded.clone());
+        if had_persist_unlock || policy != decoded {
+            save_policy(vault_dir, &policy)?;
+        }
+        return Ok(policy);
     }
     Ok(SessionPolicy::default())
 }
@@ -538,15 +468,6 @@ pub fn save_policy(vault_dir: &Path, policy: &SessionPolicy) -> Result<()> {
     Ok(())
 }
 
-pub fn persist_session_unlock_if_allowed(state: &Arc<AgentState>, password: &str) {
-    if current_policy(state)
-        .map(|p| p.persist_unlock)
-        .unwrap_or(false)
-    {
-        let _ = device_secrets::set_session_unlock(&state.vault_dir, password);
-    }
-}
-
 pub fn policy_path(vault_dir: &Path) -> PathBuf {
     vault_dir
         .parent()
@@ -558,17 +479,18 @@ pub fn policy_path(vault_dir: &Path) -> PathBuf {
 pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
     let path = sync_settings_path(vault_dir);
     if path.exists() {
-        let persisted: PersistedSyncSettings = serde_json::from_slice(&fs::read(path)?)?;
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        let had_device_marker = value.get("webdavPasswordDevice").is_some();
+        let persisted: PersistedSyncSettings = serde_json::from_value(value)?;
+        if had_device_marker {
+            atomic_write_bytes(&path, &serde_json::to_vec_pretty(&persisted)?)?;
+        }
         return Ok(StoredSyncSettings {
             mode: persisted.mode,
             sync_folder: persisted.sync_folder,
             webdav_url: persisted.webdav_url,
             webdav_username: persisted.webdav_username,
-            webdav_password: if persisted.webdav_password_device {
-                Some(StoredSyncSecret::Device)
-            } else {
-                persisted.webdav_password.map(StoredSyncSecret::Encrypted)
-            },
+            webdav_password: persisted.webdav_password.map(StoredSyncSecret::Encrypted),
         });
     }
     Ok(StoredSyncSettings::default())
@@ -586,21 +508,14 @@ pub fn sync_settings_view(settings: &StoredSyncSettings) -> SyncSettings {
 
 pub fn save_sync_settings(
     vault_dir: &Path,
-    vault: Option<&Vault>,
+    vault: &Vault,
     settings: &StoredSyncSettings,
 ) -> Result<StoredSyncSettings> {
-    let had_device_secret = load_sync_settings(vault_dir)
-        .ok()
-        .and_then(|current| current.webdav_password)
-        .is_some_and(|secret| matches!(secret, StoredSyncSecret::Device));
     let normalized_secret = settings
         .webdav_password
         .clone()
-        .map(|secret| persist_sync_secret(vault_dir, vault, secret))
+        .map(|secret| persist_sync_secret(vault, secret))
         .transpose()?;
-    if should_delete_device_secret(had_device_secret, &normalized_secret) {
-        device_secrets::delete_webdav_password(vault_dir).ok();
-    }
     let persisted = PersistedSyncSettings {
         mode: settings.mode,
         sync_folder: settings.sync_folder.clone(),
@@ -610,7 +525,6 @@ pub fn save_sync_settings(
             Some(StoredSyncSecret::Encrypted(ciphertext)) => Some(ciphertext.clone()),
             _ => None,
         },
-        webdav_password_device: matches!(normalized_secret, Some(StoredSyncSecret::Device)),
     };
     let path = sync_settings_path(vault_dir);
     if let Some(parent) = path.parent() {
@@ -624,13 +538,6 @@ pub fn save_sync_settings(
         webdav_username: settings.webdav_username.clone(),
         webdav_password: normalized_secret,
     })
-}
-
-fn should_delete_device_secret(
-    had_device_secret: bool,
-    normalized_secret: &Option<StoredSyncSecret>,
-) -> bool {
-    had_device_secret && !matches!(normalized_secret, Some(StoredSyncSecret::Device))
 }
 
 pub fn apply_sync_settings_update(
@@ -653,37 +560,14 @@ pub fn apply_sync_settings_update(
 }
 
 pub fn sync_settings_password(
-    vault_dir: &Path,
     settings: &StoredSyncSettings,
     vault: &Vault,
 ) -> Result<Option<SensitiveString>> {
     settings
         .webdav_password
         .as_ref()
-        .map(|secret| decrypt_sync_secret(vault_dir, vault, secret))
+        .map(|secret| decrypt_sync_secret(vault, secret))
         .transpose()
-}
-
-pub fn sync_settings_password_without_vault(
-    vault_dir: &Path,
-    settings: &StoredSyncSettings,
-) -> Result<Option<SensitiveString>> {
-    match settings.webdav_password.as_ref() {
-        Some(StoredSyncSecret::Plaintext(secret)) => Ok(Some(secret.clone())),
-        Some(StoredSyncSecret::Device) => Ok(Some(
-            device_secrets::get_webdav_password(vault_dir)?
-                .map(SensitiveString::new)
-                .context("webdav password is missing from device secret storage")?,
-        )),
-        _ => Ok(None),
-    }
-}
-
-pub fn sync_settings_password_requires_vault(settings: &StoredSyncSettings) -> bool {
-    matches!(
-        settings.webdav_password,
-        Some(StoredSyncSecret::Encrypted(_))
-    )
 }
 
 pub fn sync_settings_path(vault_dir: &Path) -> PathBuf {
@@ -706,43 +590,15 @@ pub fn manifest_path(vault_dir: &Path) -> PathBuf {
     vault_dir.join("manifest.aipmanifest")
 }
 
-fn persist_sync_secret(
-    vault_dir: &Path,
-    vault: Option<&Vault>,
-    secret: StoredSyncSecret,
-) -> Result<StoredSyncSecret> {
+fn persist_sync_secret(vault: &Vault, secret: StoredSyncSecret) -> Result<StoredSyncSecret> {
     match secret {
         StoredSyncSecret::Plaintext(secret) => {
             let mut plaintext = secret.into_inner();
-            let stored_in_device =
-                device_secrets::set_webdav_password(vault_dir, &plaintext).unwrap_or(false);
-            if stored_in_device {
-                plaintext.zeroize();
-                return Ok(StoredSyncSecret::Device);
-            }
-            let Some(vault) = vault else {
-                plaintext.zeroize();
-                bail!("vault is locked and device secret storage is unavailable");
-            };
-            let ciphertext = encrypt_sync_plaintext(vault, &plaintext)?;
+            let encrypted = encrypt_sync_plaintext(vault, &plaintext);
             plaintext.zeroize();
-            Ok(StoredSyncSecret::Encrypted(ciphertext))
+            encrypted.map(StoredSyncSecret::Encrypted)
         }
-        StoredSyncSecret::Encrypted(ciphertext) => {
-            let Some(vault) = vault else {
-                return Ok(StoredSyncSecret::Encrypted(ciphertext));
-            };
-            let mut plaintext = decrypt_sync_ciphertext(vault, &ciphertext)?;
-            let stored_in_device =
-                device_secrets::set_webdav_password(vault_dir, &plaintext).unwrap_or(false);
-            plaintext.zeroize();
-            if stored_in_device {
-                Ok(StoredSyncSecret::Device)
-            } else {
-                Ok(StoredSyncSecret::Encrypted(ciphertext))
-            }
-        }
-        StoredSyncSecret::Device => Ok(StoredSyncSecret::Device),
+        StoredSyncSecret::Encrypted(ciphertext) => Ok(StoredSyncSecret::Encrypted(ciphertext)),
     }
 }
 
@@ -754,16 +610,9 @@ fn encrypt_sync_plaintext(vault: &Vault, plaintext: &str) -> Result<Ciphertext> 
     )?)
 }
 
-fn decrypt_sync_secret(
-    vault_dir: &Path,
-    vault: &Vault,
-    secret: &StoredSyncSecret,
-) -> Result<SensitiveString> {
+fn decrypt_sync_secret(vault: &Vault, secret: &StoredSyncSecret) -> Result<SensitiveString> {
     match secret {
         StoredSyncSecret::Plaintext(secret) => Ok(secret.clone()),
-        StoredSyncSecret::Device => device_secrets::get_webdav_password(vault_dir)?
-            .map(SensitiveString::new)
-            .context("webdav password is missing from device secret storage"),
         StoredSyncSecret::Encrypted(ciphertext) => Ok(SensitiveString::new(
             decrypt_sync_ciphertext(vault, ciphertext)?,
         )),
@@ -882,23 +731,18 @@ pub fn shutdown_requested(state: &Arc<AgentState>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
     use std::thread;
     use tempfile::tempdir;
 
     fn test_state(vault_dir: PathBuf) -> Arc<AgentState> {
         Arc::new(AgentState {
-            policy: Mutex::new(SessionPolicy {
-                persist_unlock: false,
-                ..SessionPolicy::default()
-            }),
+            policy: Mutex::new(SessionPolicy::default()),
             vault_dir,
             namespace: "test".to_string(),
             auth_token: SensitiveString::from("token"),
             session: Mutex::new(SessionState::Locked),
             session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
-            initializing: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -922,26 +766,6 @@ mod tests {
     }
 
     #[test]
-    fn requests_wait_until_session_initialization_finishes() {
-        let temp = tempdir().expect("tempdir");
-        let state = test_state(temp.path().join("vault"));
-        state.initializing.store(true, Ordering::Release);
-        let wait_state = state.clone();
-        let (tx, rx) = mpsc::channel();
-        let handle = thread::spawn(move || {
-            wait_for_session_initialization(&wait_state).expect("wait for initialization");
-            tx.send(()).expect("notify completion");
-        });
-
-        assert!(rx.recv_timeout(StdDuration::from_millis(50)).is_err());
-        state.initializing.store(false, Ordering::Release);
-        state.session_changed.notify_all();
-        rx.recv_timeout(StdDuration::from_secs(1))
-            .expect("initialization completion");
-        handle.join().expect("wait thread");
-    }
-
-    #[test]
     fn wait_for_unlock_returns_locked_on_timeout() {
         let temp = tempdir().expect("tempdir");
         let vault_dir = temp.path().join("vault");
@@ -954,61 +778,57 @@ mod tests {
     }
 
     #[test]
-    fn save_sync_settings_persists_device_marker() {
+    fn save_sync_settings_encrypts_webdav_password_with_vault_key() {
         let temp = tempdir().expect("tempdir");
         let vault_dir = temp.path().join("vault");
+        let creation = Vault::create(
+            &vault_dir,
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
         let settings = StoredSyncSettings {
             mode: SyncMode::WebDav,
             sync_folder: None,
             webdav_url: Some("https://dav.example".to_string()),
             webdav_username: Some("alice".to_string()),
-            webdav_password: Some(StoredSyncSecret::Device),
+            webdav_password: Some(StoredSyncSecret::Plaintext(SensitiveString::new(
+                "webdav secret",
+            ))),
         };
 
-        let saved = save_sync_settings(&vault_dir, None, &settings).expect("save settings");
+        let saved =
+            save_sync_settings(&vault_dir, &creation.vault, &settings).expect("save settings");
         assert!(matches!(
             saved.webdav_password,
-            Some(StoredSyncSecret::Device)
+            Some(StoredSyncSecret::Encrypted(_))
         ));
 
-        let persisted: PersistedSyncSettings = serde_json::from_slice(
-            &fs::read(sync_settings_path(&vault_dir)).expect("read settings"),
-        )
-        .expect("decode settings");
-        assert!(persisted.webdav_password.is_none());
-        assert!(persisted.webdav_password_device);
+        let bytes = fs::read(sync_settings_path(&vault_dir)).expect("read settings");
+        assert!(!String::from_utf8_lossy(&bytes).contains("webdav secret"));
+        assert!(!String::from_utf8_lossy(&bytes).contains("webdavPasswordDevice"));
+        let persisted: PersistedSyncSettings =
+            serde_json::from_slice(&bytes).expect("decode settings");
+        assert!(persisted.webdav_password.is_some());
+        let password = sync_settings_password(&saved, &creation.vault)
+            .expect("decrypt settings")
+            .expect("stored password");
+        assert_eq!(password.expose(), "webdav secret");
     }
 
     #[test]
-    fn device_secret_is_deleted_only_when_replacing_existing_device_storage() {
-        assert!(!should_delete_device_secret(false, &None));
-        assert!(!should_delete_device_secret(
-            true,
-            &Some(StoredSyncSecret::Device)
-        ));
-        assert!(should_delete_device_secret(true, &None));
-    }
-
-    #[test]
-    fn load_sync_settings_prefers_device_marker_over_ciphertext() {
+    fn legacy_device_password_marker_requires_password_reentry() {
         let temp = tempdir().expect("tempdir");
         let vault_dir = temp.path().join("vault");
         let path = sync_settings_path(&vault_dir);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent");
         }
-        let persisted = PersistedSyncSettings {
-            mode: SyncMode::WebDav,
-            sync_folder: Some(PathBuf::from("/tmp/aipass-sync")),
-            webdav_url: Some("https://dav.example".to_string()),
-            webdav_username: Some("alice".to_string()),
-            webdav_password: Some(Ciphertext {
-                aead: "xchacha20poly1305".to_string(),
-                nonce_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
-                ciphertext_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
-            }),
-            webdav_password_device: true,
-        };
+        let persisted = serde_json::json!({
+            "mode": "web_dav",
+            "webdavUrl": "https://dav.example",
+            "webdavUsername": "alice",
+            "webdavPasswordDevice": true
+        });
         atomic_write_bytes(
             &path,
             &serde_json::to_vec(&persisted).expect("encode settings"),
@@ -1016,10 +836,9 @@ mod tests {
         .expect("write settings");
 
         let loaded = load_sync_settings(&vault_dir).expect("load settings");
-        assert!(matches!(
-            loaded.webdav_password,
-            Some(StoredSyncSecret::Device)
-        ));
+        assert!(loaded.webdav_password.is_none());
+        let rewritten = fs::read_to_string(path).expect("read migrated settings");
+        assert!(!rewritten.contains("webdavPasswordDevice"));
     }
 
     #[test]
@@ -1034,7 +853,6 @@ mod tests {
             session: Mutex::new(SessionState::Locked),
             session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
-            initializing: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
         });
 
@@ -1045,7 +863,6 @@ mod tests {
             webdav_url: Some("https://dav.example".to_string()),
             webdav_username: Some("alice".to_string()),
             webdav_password: None,
-            webdav_password_device: false,
         };
         atomic_write_bytes(
             sync_settings_path(&vault_dir),
@@ -1064,36 +881,69 @@ mod tests {
     }
 
     #[test]
-    fn lock_reason_controls_session_unlock_persistence() {
+    fn policy_defaults_to_relaxed_one_hour_idle_lock() {
+        let policy = SessionPolicy::default();
+        assert_eq!(policy.idle_lock_minutes, 60);
+        assert!(policy.lock_on_sleep);
+        assert!(policy.lock_on_screen_lock);
+
+        let clamped = clamp_policy(SessionPolicy {
+            idle_lock_minutes: u16::MAX,
+            lock_on_sleep: false,
+            lock_on_screen_lock: false,
+        });
+        assert_eq!(clamped.idle_lock_minutes, 1_440);
+    }
+
+    #[test]
+    fn legacy_policy_is_clamped_and_drops_persist_unlock() {
         let temp = tempdir().expect("tempdir");
         let vault_dir = temp.path().join("vault");
-        let state = Arc::new(AgentState {
-            policy: Mutex::new(SessionPolicy::default()),
-            vault_dir: vault_dir.clone(),
-            namespace: "test".to_string(),
-            auth_token: SensitiveString::from("token"),
-            session: Mutex::new(SessionState::Locked),
-            session_changed: Condvar::new(),
-            last_lock_reason: Mutex::new(None),
-            initializing: AtomicBool::new(false),
-            shutdown: AtomicBool::new(false),
-        });
-
-        create_vault(&state, "correct horse battery staple".to_string()).expect("create vault");
-        lock_session(&state, LockReason::AgentRestart);
-        let restart_secret =
-            device_secrets::get_session_unlock(&vault_dir).expect("read restart secret");
-        if cfg!(target_os = "macos") {
-            assert_eq!(
-                restart_secret.as_deref(),
-                Some("correct horse battery staple")
-            );
+        let path = policy_path(&vault_dir);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create policy parent");
         }
+        atomic_write_bytes(
+            &path,
+            br#"{
+                "idleLockMinutes": 65535,
+                "lockOnSleep": true,
+                "lockOnScreenLock": false,
+                "persistUnlock": true
+            }"#,
+        )
+        .expect("write legacy policy");
 
-        unlock_with_password(&state, "correct horse battery staple".to_string())
-            .expect("unlock vault");
-        lock_session(&state, LockReason::AppQuit);
-        let quit_secret = device_secrets::get_session_unlock(&vault_dir).expect("read quit secret");
-        assert!(quit_secret.is_none());
+        let policy = load_policy(&vault_dir).expect("load policy");
+        assert_eq!(policy.idle_lock_minutes, 1_440);
+        assert!(!policy.lock_on_screen_lock);
+        let rewritten = fs::read_to_string(path).expect("read migrated policy");
+        assert!(!rewritten.contains("persistUnlock"));
+    }
+
+    #[test]
+    fn idle_lock_requires_both_app_and_system_inactivity() {
+        let threshold = time::Duration::minutes(60);
+
+        assert!(!should_lock_for_idle(
+            time::Duration::minutes(30),
+            Some(7_200.0),
+            threshold
+        ));
+        assert!(!should_lock_for_idle(
+            time::Duration::minutes(120),
+            Some(30.0),
+            threshold
+        ));
+        assert!(should_lock_for_idle(
+            time::Duration::minutes(120),
+            Some(7_200.0),
+            threshold
+        ));
+        assert!(should_lock_for_idle(
+            time::Duration::minutes(120),
+            None,
+            threshold
+        ));
     }
 }

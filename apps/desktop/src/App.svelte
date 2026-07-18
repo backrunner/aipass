@@ -187,11 +187,10 @@
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
   let clipboardClearTimer: ReturnType<typeof setTimeout> | undefined;
   let lastSessionTouchAt = 0;
-  let autoLockMinutes = 30;
+  let autoLockMinutes = 60;
   let clipboardClearSeconds = 45;
   let lockOnSleep = true;
   let lockOnScreenLock = true;
-  let persistUnlock = true;
   let newPassword = "";
   let syncState: SyncReport["status"] = "idle";
   let syncMode: SyncMode = "local";
@@ -1476,11 +1475,10 @@
   async function loadPreferences() {
     try {
       const prefs = await invokeTauri<AppPreferences>("preferences_load");
-      autoLockMinutes = clampPreference(prefs.autoLockMinutes, 0, 240, autoLockMinutes);
+      autoLockMinutes = clampPreference(prefs.autoLockMinutes, 0, 1440, autoLockMinutes);
       clipboardClearSeconds = clampPreference(prefs.clipboardClearSeconds, 0, 600, clipboardClearSeconds);
       lockOnSleep = prefs.lockOnSleep ?? lockOnSleep;
       lockOnScreenLock = prefs.lockOnScreenLock ?? lockOnScreenLock;
-      persistUnlock = prefs.persistUnlock ?? persistUnlock;
       if (isThemePreference(prefs.theme)) {
         setTheme(prefs.theme);
       }
@@ -1494,7 +1492,7 @@
 
   async function savePreferences() {
     const operation = preferencesSaveChain.then(async () => {
-      autoLockMinutes = clampPreference(autoLockMinutes, 0, 240, 30);
+      autoLockMinutes = clampPreference(autoLockMinutes, 0, 1440, 60);
       clipboardClearSeconds = clampPreference(clipboardClearSeconds, 0, 600, 45);
       await invokeTauri<AppPreferences>("preferences_save", {
         request: {
@@ -1502,7 +1500,6 @@
           clipboardClearSeconds,
           lockOnSleep,
           lockOnScreenLock,
-          persistUnlock,
           theme: $themeStore,
           locale: $localeStore
         }
@@ -1675,7 +1672,6 @@
     bind:clipboardClearSeconds
     bind:lockOnSleep
     bind:lockOnScreenLock
-    bind:persistUnlock
     bind:newPassword
     bind:exportPath
     bind:exportPassword

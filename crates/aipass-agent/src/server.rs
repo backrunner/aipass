@@ -6,7 +6,6 @@ use crate::session::{
     apply_sync_settings_update, clamp_policy, current_policy, load_policy, load_sync_settings,
     lock_if_idle, lock_session, map_vault_error, native_host_settings_path, reset_vault,
     save_policy, save_sync_settings, session_status, shutdown_requested, sync_settings_password,
-    sync_settings_password_requires_vault, sync_settings_password_without_vault,
     sync_settings_view, touch_session, unlock_with_password, wait_for_unlock, with_vault,
     with_vault_mut, AgentState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
 };
@@ -109,8 +108,8 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
             namespace
         ),
     );
-    // Claim the per-vault singleton before reading device secrets. Competing
-    // launchers should exit without ever asking the user for Keychain access.
+    // Claim the per-vault singleton before initializing the agent so competing
+    // launchers exit without touching any vault state.
     let listener = ipc::listen(&vault_dir)
         .with_context(|| format!("failed to bind agent listener for {}", vault_dir.display()))?;
     write_component_log(
@@ -134,7 +133,6 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         session: Mutex::new(SessionState::Locked),
         session_changed: Condvar::new(),
         last_lock_reason: Mutex::new(Some(LockReason::AgentRestart)),
-        initializing: AtomicBool::new(true),
         shutdown: AtomicBool::new(false),
     });
     run_server_with_state(state, listener, launch_desktop_tray)
@@ -150,8 +148,6 @@ fn run_server_with_state(
     listener: Listener,
     launch_desktop_tray: bool,
 ) -> Result<()> {
-    let restore_state = state.clone();
-    thread::spawn(move || crate::session::try_restore_session(&restore_state));
     spawn_idle_lock_watcher(state.clone());
     crate::session::spawn_power_watcher(state.clone());
     if launch_desktop_tray {
@@ -1453,6 +1449,19 @@ mod tests {
 
         std::env::set_var(crate::desktop::SUPPRESS_TRAY_ENV, "0");
         assert!(ServerOptions::for_current_process(vault_dir).launch_desktop_tray);
+    }
+
+    #[test]
+    fn agent_starts_locked_even_when_the_vault_already_exists() {
+        let agent = RunningAgent::start();
+        let status = agent
+            .client
+            .request::<SessionStatus>(&AgentRequest::SessionStatus)
+            .expect("status response");
+
+        assert!(status.exists);
+        assert!(status.locked);
+        assert_eq!(status.last_lock_reason, Some(LockReason::AgentRestart));
     }
 
     #[test]

@@ -1,7 +1,6 @@
 pub mod autostart;
 pub mod client;
 pub mod desktop;
-pub mod device_secrets;
 pub mod ipc;
 pub mod launcher;
 pub mod logging;

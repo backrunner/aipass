@@ -49,7 +49,6 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation",
  "reqwest",
- "security-framework",
  "serde",
  "serde_json",
  "sha2",

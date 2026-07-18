@@ -38,7 +38,6 @@ export type AppPreferences = {
   clipboardClearSeconds: number;
   lockOnSleep: boolean;
   lockOnScreenLock: boolean;
-  persistUnlock: boolean;
   theme: ThemePreference;
   locale: LocalePreference;
 };
