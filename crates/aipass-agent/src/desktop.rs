@@ -6,6 +6,8 @@ pub const WINDOW_TARGET_ENV: &str = "AIPASS_WINDOW_TARGET";
 pub const VAULT_DIR_ENV: &str = "AIPASS_VAULT_DIR";
 pub const SUPPRESS_TRAY_ENV: &str = "AIPASS_AGENT_SUPPRESS_TRAY";
 pub const TRAY_WINDOW_TARGET: &str = "tray";
+pub const RELEASE_DEEP_LINK_SCHEME: &str = "aipass";
+pub const DEVELOPMENT_DEEP_LINK_SCHEME: &str = "aipass-dev";
 
 pub fn open_desktop_window(target: &str, vault_dir: &Path) -> Result<()> {
     if should_open_desktop_url(target, vault_dir) && open_desktop_url(target).is_ok() {
@@ -25,7 +27,7 @@ pub fn open_desktop_window(target: &str, vault_dir: &Path) -> Result<()> {
 }
 
 fn should_open_desktop_url(target: &str, vault_dir: &Path) -> bool {
-    if cfg!(debug_assertions) || target == TRAY_WINDOW_TARGET {
+    if target == TRAY_WINDOW_TARGET {
         return false;
     }
     let Ok(default_vault_dir) = crate::paths::default_vault_dir() else {
@@ -45,7 +47,7 @@ fn open_desktop_url(target: &str) -> Result<()> {
         "main" | "unlock" | "quick-access" | "tray" => target,
         _ => "main",
     };
-    let url = format!("aipass://launch/{target}");
+    let url = format!("{}://launch/{target}", desktop_deep_link_scheme());
     let mut command = if cfg!(target_os = "macos") {
         let mut command = Command::new("open");
         command.arg(&url);
@@ -67,6 +69,14 @@ fn open_desktop_url(target: &str) -> Result<()> {
         .spawn()
         .map(|_| ())
         .context("failed to open AIPass URL")
+}
+
+fn desktop_deep_link_scheme() -> &'static str {
+    if cfg!(debug_assertions) {
+        DEVELOPMENT_DEEP_LINK_SCHEME
+    } else {
+        RELEASE_DEEP_LINK_SCHEME
+    }
 }
 
 pub fn tray_launch_suppressed() -> bool {
@@ -119,5 +129,15 @@ fn desktop_binary_names() -> &'static [&'static str] {
 fn push_unique(candidates: &mut Vec<PathBuf>, path: PathBuf) {
     if !candidates.iter().any(|candidate| candidate == &path) {
         candidates.push(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{desktop_deep_link_scheme, DEVELOPMENT_DEEP_LINK_SCHEME};
+
+    #[test]
+    fn debug_builds_use_the_development_deep_link_scheme() {
+        assert_eq!(desktop_deep_link_scheme(), DEVELOPMENT_DEEP_LINK_SCHEME);
     }
 }

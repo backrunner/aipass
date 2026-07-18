@@ -1613,6 +1613,10 @@ pub fn run() {
                     }
                 }
             });
+            #[cfg(all(debug_assertions, not(target_os = "macos")))]
+            if let Err(err) = app.deep_link().register_all() {
+                eprintln!("failed to register development deep-link scheme: {err}");
+            }
             if let Some(singleton) = singleton.take() {
                 singleton::spawn_server(app.handle().clone(), singleton, version.to_string());
             }

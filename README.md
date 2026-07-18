@@ -50,6 +50,14 @@ Desktop development:
 pnpm --filter @aipass/desktop dev
 ```
 
+Register and build the development desktop app before using extension-triggered launches:
+
+```bash
+pnpm --filter @aipass/desktop dev:register
+```
+
+The development app uses the isolated `aipass-dev://` URL scheme; release builds keep `aipass://`.
+
 Extension build:
 
 ```bash

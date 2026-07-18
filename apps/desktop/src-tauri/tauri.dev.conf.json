@@ -1,0 +1,22 @@
+{
+  "productName": "AIPass Dev",
+  "identifier": "dev.aipass.desktop.dev",
+  "build": {
+    "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension build && pnpm dev:agent && pnpm build"
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["aipass-dev"]
+      }
+    }
+  },
+  "bundle": {
+    "resources": {
+      "../../../target/release/aipass-agent*": null,
+      "../../../target/release/aipass-native-host*": null,
+      "../../../target/debug/aipass-agent*": "",
+      "../../../target/debug/aipass-native-host*": ""
+    }
+  }
+}
