@@ -179,6 +179,7 @@
   let detailEditMode = false;
   let showArchived = false;
   let showTrash = false;
+  let showFavorites = false;
   let showSettings = false;
   let settingsInitialTab = "general";
   let providerFilter: ProviderFilter = "all";
@@ -560,10 +561,16 @@
     clearTimeout(revealTimer);
   }
 
-  async function loadEntries(archived = showArchived, trash = showTrash) {
+  async function loadEntries(
+    archived = showArchived,
+    trash = showTrash,
+    favorite = showFavorites
+  ) {
     let summaries: EntrySummary[];
     if (trash) {
       summaries = await invokeTauri<EntrySummary[]>("entries_trash_list");
+    } else if (favorite) {
+      summaries = await invokeTauri<EntrySummary[]>("entries_favorites_list");
     } else {
       summaries = await invokeTauri<EntrySummary[]>("entries_list", { archived });
     }
@@ -630,7 +637,7 @@
 
   async function performSearch(requestId: number) {
     if (status.locked) return;
-    if (showArchived || showTrash || !query.trim()) {
+    if (showArchived || showTrash || showFavorites || !query.trim()) {
       await loadEntries();
       return;
     }
@@ -644,10 +651,11 @@
     clearTimeout(searchTimer);
     searchRequestId++;
     providerFilter = value;
-    if (showArchived || showTrash) {
+    if (showArchived || showTrash || showFavorites) {
       showArchived = false;
       showTrash = false;
-      await loadEntries(false, false);
+      showFavorites = false;
+      await loadEntries(false, false, false);
     }
     if (!filtered.some((entry) => entry.id === selectedId)) {
       selectedId = filtered[0]?.id ?? "";
@@ -909,6 +917,17 @@
     await loadEntries();
   }
 
+  async function toggleFavoriteSelected(favorite: boolean) {
+    if (!selected) return;
+    error = "";
+    try {
+      await invokeTauri("provider_favorite", { id: selected.id, favorite });
+      await loadEntries();
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
   async function trashSelected() {
     if (!selected) return;
     await invokeTauri("provider_trash", { id: selected.id });
@@ -938,9 +957,10 @@
     searchRequestId++;
     showArchived = value;
     showTrash = false;
+    showFavorites = false;
     providerFilter = "all";
     query = "";
-    await loadEntries(value, false);
+    await loadEntries(value, false, false);
   }
 
   async function setTrashView(value: boolean) {
@@ -948,6 +968,7 @@
     searchRequestId++;
     showTrash = value;
     showArchived = false;
+    showFavorites = false;
     providerFilter = "all";
     query = "";
     if (value) {
@@ -957,7 +978,18 @@
         console.warn("trash purge expired failed", err);
       }
     }
-    await loadEntries(false, value);
+    await loadEntries(false, value, false);
+  }
+
+  async function setFavoriteView(value: boolean) {
+    clearTimeout(searchTimer);
+    searchRequestId++;
+    showFavorites = value;
+    showArchived = false;
+    showTrash = false;
+    providerFilter = "all";
+    query = "";
+    await loadEntries(false, false, value);
   }
 
   async function rotateVault() {
@@ -1565,10 +1597,12 @@
       <Sidebar
         {showArchived}
         {showTrash}
+        {showFavorites}
         {providerFilter}
         providerCounts={counts}
         trashCount={trashCount}
         onFilterChange={setProviderFilter}
+        onFavoriteView={setFavoriteView}
         onArchiveView={setArchiveView}
         onTrashView={setTrashView}
       />
@@ -1579,6 +1613,7 @@
         selectedId={selected?.id ?? ""}
         {showArchived}
         {showTrash}
+        {showFavorites}
         {providerFilter}
         bind:query
         onSearch={runSearch}
@@ -1612,6 +1647,7 @@
         onEditStart={openEdit}
         onEditCancel={cancelDetailEdit}
         onEditSave={saveDetailEdit}
+        onFavorite={toggleFavoriteSelected}
         onRestore={restoreSelected}
         onDelete={deleteSelected}
         onArchive={archiveSelected}

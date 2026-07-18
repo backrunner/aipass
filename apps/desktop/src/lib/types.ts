@@ -83,6 +83,7 @@ export type SyncReport = {
 export type EntrySummary = {
   id: string;
   title: string;
+  favorite?: boolean;
   providerId?: string;
   providerKind: ProviderKind;
   domains: string[];
@@ -143,7 +144,7 @@ export type ProviderFilter =
   | ProviderKind
   | `tag:${string}`;
 
-export type ProviderCounts = Record<"all" | "recent" | ProviderKind, number>;
+export type ProviderCounts = Record<"all" | "recent" | "favorites" | ProviderKind, number>;
 
 export type DeviceRecord = {
   id: string;

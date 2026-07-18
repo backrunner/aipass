@@ -8,6 +8,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
   return {
     id: summary.id,
     title: summary.title,
+    favorite: summary.favorite ?? false,
     providerId: summary.providerId,
     providerKind: summary.providerKind,
     domains: summary.domains,
@@ -44,6 +45,7 @@ export function providerCounts(entries: ProviderEntry[]): ProviderCounts {
   return {
     all: entries.length,
     recent: entries.filter((entry) => Boolean(entry.lastUsedAt)).length,
+    favorites: entries.filter((entry) => entry.favorite).length,
     official: entries.filter((entry) => entry.providerKind === "official").length,
     third_party: entries.filter((entry) => entry.providerKind === "third_party").length,
     self_hosted: entries.filter((entry) => entry.providerKind === "self_hosted").length,

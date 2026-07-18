@@ -110,6 +110,8 @@ pub struct GatewayMetadata {
 pub struct ProviderEntry {
     pub id: Uuid,
     pub title: String,
+    #[serde(default)]
+    pub favorite: bool,
     pub provider_kind: ProviderKind,
     pub provider_id: Option<String>,
     pub domains: Vec<String>,

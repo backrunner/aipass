@@ -405,6 +405,17 @@ pub(crate) async fn provider_trash(app: AppHandle, id: Uuid) -> Result<(), Strin
 }
 
 #[tauri::command]
+pub(crate) async fn provider_favorite(
+    app: AppHandle,
+    id: Uuid,
+    favorite: bool,
+) -> Result<(), String> {
+    let _: serde_json::Value =
+        agent_request_async(app, AgentRequest::ProviderFavorite { id, favorite }).await?;
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) async fn provider_delete(app: AppHandle, id: Uuid) -> Result<(), String> {
     let _: serde_json::Value =
         agent_request_async(app, AgentRequest::ProviderDelete { id }).await?;
@@ -414,6 +425,11 @@ pub(crate) async fn provider_delete(app: AppHandle, id: Uuid) -> Result<(), Stri
 #[tauri::command]
 pub(crate) async fn entries_trash_list(app: AppHandle) -> Result<Vec<EntrySummary>, String> {
     agent_request_async(app, AgentRequest::EntriesTrash).await
+}
+
+#[tauri::command]
+pub(crate) async fn entries_favorites_list(app: AppHandle) -> Result<Vec<EntrySummary>, String> {
+    agent_request_async(app, AgentRequest::EntriesFavorites).await
 }
 
 #[tauri::command]

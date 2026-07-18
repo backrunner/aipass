@@ -2,7 +2,7 @@
   import type { ProviderEntry } from "@aipass/schemas";
   import { Button, ProviderIcon } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
-  import { KeyRound, Plus, Search, SlidersHorizontal, Trash2 } from "lucide-svelte";
+  import { KeyRound, Plus, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderFilter } from "../../types";
@@ -12,6 +12,7 @@
   export let selectedId = "";
   export let showArchived = false;
   export let showTrash = false;
+  export let showFavorites = false;
   export let providerFilter: ProviderFilter = "all";
   export let query = "";
   export let onSearch: () => MaybePromise = () => {};
@@ -74,7 +75,7 @@
               class:active-filter={providerFilter !== "all"}
               aria-label={$t("providerList.filter")}
               title={$t("providerList.filter")}
-              disabled={showArchived || showTrash}
+              disabled={showArchived || showTrash || showFavorites}
             >
               <SlidersHorizontal size={14} />
             </button>
@@ -117,11 +118,19 @@
     {#if entries.length === 0}
       <div class="empty">
         <span class="empty-icon">
-          {#if showTrash}<Trash2 size={22} />{:else}<KeyRound size={22} />{/if}
+          {#if showTrash}
+            <Trash2 size={22} />
+          {:else if showFavorites}
+            <Star size={22} />
+          {:else}
+            <KeyRound size={22} />
+          {/if}
         </span>
         <strong class="empty-title">
           {#if showTrash}
             {$t("providerList.trashEmpty")}
+          {:else if showFavorites}
+            {$t("providerList.favoritesEmpty")}
           {:else if showArchived}
             {$t("providerList.archiveEmpty")}
           {:else}
@@ -131,13 +140,15 @@
         <span class="empty-meta">
           {#if showTrash}
             {$t("providerList.trashEmptyDesc")}
+          {:else if showFavorites}
+            {$t("providerList.favoritesEmptyDesc")}
           {:else if showArchived}
             {$t("providerList.archiveEmptyDesc")}
           {:else}
             {$t("providerList.noProvidersDesc")}
           {/if}
         </span>
-        {#if !showArchived && !showTrash}
+        {#if !showArchived && !showTrash && !showFavorites}
           <Button variant="primary" size="sm" on:click={() => onAdd()}>
             <Plus size={14} /> {$t("providerList.addProvider")}
           </Button>

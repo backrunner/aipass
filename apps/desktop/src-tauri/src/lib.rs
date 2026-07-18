@@ -1646,8 +1646,10 @@ pub fn run() {
             provider_archive,
             provider_restore,
             provider_trash,
+            provider_favorite,
             provider_delete,
             entries_trash_list,
+            entries_favorites_list,
             trash_purge_expired,
             trash_empty,
             secret_reveal_field,
@@ -1741,6 +1743,7 @@ mod tests {
         EntrySummary {
             id: Uuid::new_v4(),
             title: "Gemini".to_string(),
+            favorite: false,
             provider_id: Some("gemini".to_string()),
             provider_kind: ProviderKind::Official,
             domains: vec!["ai.google.dev".to_string()],

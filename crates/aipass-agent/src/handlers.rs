@@ -156,6 +156,12 @@ fn dispatch_request(
                 .map_err(map_vault_error)
         })
         .map(AgentResponse::success),
+        AgentRequest::EntriesFavorites => with_vault(state, true, |vault| {
+            vault
+                .list_favorite_provider_summaries()
+                .map_err(map_vault_error)
+        })
+        .map(AgentResponse::success),
         AgentRequest::EntriesSearch { query } => with_vault(state, true, |vault| {
             vault.search(&query).map_err(map_vault_error)
         })
@@ -182,6 +188,12 @@ fn dispatch_request(
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderTrash { id } => with_vault(state, false, |vault| {
             vault.trash_provider(id).map_err(map_vault_error)
+        })
+        .map(|_| AgentResponse::empty()),
+        AgentRequest::ProviderFavorite { id, favorite } => with_vault(state, false, |vault| {
+            vault
+                .set_provider_favorite(id, favorite)
+                .map_err(map_vault_error)
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderDelete { id } => with_vault(state, false, |vault| {

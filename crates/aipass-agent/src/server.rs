@@ -1475,6 +1475,7 @@ mod tests {
         EntrySummary {
             id: Uuid::new_v4(),
             title: "Example".to_string(),
+            favorite: false,
             provider_id: None,
             provider_kind: aipass_provider_registry::ProviderKind::Unknown,
             domains: vec!["example.com".to_string()],

@@ -186,6 +186,8 @@ pub struct ProviderEntryUpdateInput {
 pub struct EntrySummary {
     pub id: Uuid,
     pub title: String,
+    #[serde(default)]
+    pub favorite: bool,
     pub provider_id: Option<String>,
     pub provider_kind: ProviderKind,
     pub domains: Vec<String>,
@@ -613,6 +615,7 @@ impl Vault {
         let entry = ProviderEntry {
             id,
             title: input.title,
+            favorite: false,
             provider_kind: input.provider_kind,
             provider_id: input.provider_id,
             domains: input.domains,
@@ -742,6 +745,7 @@ impl Vault {
         let entry = ProviderEntry {
             id,
             title: input.title,
+            favorite: old.entry.favorite,
             provider_kind: input.provider_kind,
             provider_id: input.provider_id,
             domains: input.domains,
@@ -783,6 +787,27 @@ impl Vault {
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         self.write_provider_record(id, &plaintext)?;
         self.audit("provider.usage.update", Some(id), None)?;
+        Ok(())
+    }
+
+    pub fn set_provider_favorite(&self, id: Uuid, favorite: bool) -> Result<(), VaultError> {
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        if plaintext.entry.favorite == favorite {
+            return Ok(());
+        }
+        plaintext.entry.favorite = favorite;
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit(
+            if favorite {
+                "provider.favorite"
+            } else {
+                "provider.unfavorite"
+            },
+            Some(id),
+            None,
+        )?;
         Ok(())
     }
 
@@ -853,6 +878,22 @@ impl Vault {
             if plaintext.entry.archived_at.is_some() {
                 summaries.push(summary_from_plaintext(&plaintext));
             }
+        }
+        summaries.sort_by_key(|entry| entry.title.to_lowercase());
+        Ok(summaries)
+    }
+
+    pub fn list_favorite_provider_summaries(&self) -> Result<Vec<EntrySummary>, VaultError> {
+        let mut summaries = Vec::new();
+        for envelope_path in self.record_paths()? {
+            let plaintext = self.decrypt_provider_path(&envelope_path)?;
+            if plaintext.entry.deleted_at.is_some()
+                || plaintext.entry.archived_at.is_some()
+                || !plaintext.entry.favorite
+            {
+                continue;
+            }
+            summaries.push(summary_from_plaintext(&plaintext));
         }
         summaries.sort_by_key(|entry| entry.title.to_lowercase());
         Ok(summaries)
@@ -1425,6 +1466,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
     EntrySummary {
         id: entry.id,
         title: entry.title.clone(),
+        favorite: entry.favorite,
         provider_id: entry.provider_id.clone(),
         provider_kind: entry.provider_kind.clone(),
         domains: entry.domains.clone(),
@@ -1843,6 +1885,30 @@ mod tests {
         let summaries = reopened.search("anthropic").unwrap();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].auth_scheme, AuthScheme::XApiKey);
+    }
+
+    #[test]
+    fn favorite_round_trip_and_update_preserve_state() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-favorite-secret")).unwrap();
+
+        assert!(vault.list_favorite_provider_summaries().unwrap().is_empty());
+        vault.set_provider_favorite(id, true).unwrap();
+        assert_eq!(vault.list_favorite_provider_summaries().unwrap().len(), 1);
+
+        vault.update_provider(id, update_input(None)).unwrap();
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        let favorites = reopened.list_favorite_provider_summaries().unwrap();
+        assert_eq!(favorites.len(), 1);
+        assert!(favorites[0].favorite);
+
+        reopened.set_provider_favorite(id, false).unwrap();
+        assert!(reopened
+            .list_favorite_provider_summaries()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

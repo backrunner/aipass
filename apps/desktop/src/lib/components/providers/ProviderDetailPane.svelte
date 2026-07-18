@@ -21,6 +21,7 @@
     MoreHorizontal,
     Pencil,
     Plus,
+    Star,
     Terminal,
     Trash2,
     Undo2,
@@ -75,6 +76,7 @@
   export let onEditStart: (entry: ProviderEntry) => MaybePromise = () => {};
   export let onEditCancel: () => MaybePromise = () => {};
   export let onEditSave: () => MaybePromise = () => {};
+  export let onFavorite: (favorite: boolean) => MaybePromise = () => {};
   export let onRestore: () => MaybePromise = () => {};
   export let onDelete: () => MaybePromise = () => {};
   export let onArchive: () => MaybePromise = () => {};
@@ -281,6 +283,16 @@
       </div>
 
       <div class="actions">
+        {#if !editMode && !showTrash}
+          <IconButton
+            label={selected.favorite ? $t("providerDetail.removeFavorite") : $t("providerDetail.addFavorite")}
+            pressed={selected.favorite}
+            tone={selected.favorite ? "primary" : "neutral"}
+            on:click={() => onFavorite(!selected.favorite)}
+          >
+            <Star size={16} fill={selected.favorite ? "currentColor" : "none"} />
+          </IconButton>
+        {/if}
         {#if editMode}
           <Button variant="ghost" on:click={cancelEdit}>{$t("common.cancel")}</Button>
           <Button variant="primary" on:click={() => onEditSave()}>{$t("providerModal.saveChanges")}</Button>

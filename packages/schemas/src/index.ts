@@ -49,6 +49,7 @@ export interface GatewayMetadata {
 export interface ProviderEntry {
   id: string;
   title: string;
+  favorite: boolean;
   providerKind: ProviderKind;
   providerId?: string;
   domains: string[];

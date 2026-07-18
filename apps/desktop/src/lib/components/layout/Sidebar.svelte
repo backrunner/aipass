@@ -1,19 +1,27 @@
 <script lang="ts">
-  import { Archive, Inbox, ShieldCheck, Sparkles, Terminal, Trash2, Wifi } from "lucide-svelte";
+  import { Archive, Inbox, ShieldCheck, Sparkles, Star, Terminal, Trash2, Wifi } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderCounts, ProviderFilter } from "../../types";
 
   export let showArchived = false;
   export let showTrash = false;
+  export let showFavorites = false;
   export let providerFilter: ProviderFilter = "all";
   export let providerCounts: ProviderCounts;
   export let trashCount = 0;
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
+  export let onFavoriteView: (value: boolean) => MaybePromise = () => {};
   export let onArchiveView: (value: boolean) => MaybePromise = () => {};
   export let onTrashView: (value: boolean) => MaybePromise = () => {};
 
-  $: activeFilter = showTrash ? "__trash" : showArchived ? "__archive" : providerFilter;
+  $: activeFilter = showTrash
+    ? "__trash"
+    : showArchived
+      ? "__archive"
+      : showFavorites
+        ? "__favorites"
+        : providerFilter;
 </script>
 
 <aside class="sidebar">
@@ -26,6 +34,15 @@
       <Inbox size={16} />
       <span class="label">{$t("sidebar.allItems")}</span>
       <span class="count">{providerCounts.all}</span>
+    </button>
+    <button
+      type="button"
+      class:active={activeFilter === "__favorites"}
+      on:click={() => onFavoriteView(true)}
+    >
+      <Star size={16} fill={activeFilter === "__favorites" ? "currentColor" : "none"} />
+      <span class="label">{$t("sidebar.favorites")}</span>
+      <span class="count">{providerCounts.favorites}</span>
     </button>
     <button
       type="button"
