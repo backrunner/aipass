@@ -396,7 +396,18 @@ if [ ! -x "$AGENT" ]; then
   exit 0
 fi
 
+agent_running() {{
+  pgrep -f "$AGENT --vault $VAULT" >/dev/null 2>&1
+}}
+
+wait_for_existing_agent() {{
+  while agent_running; do
+    sleep 2
+  done
+}}
+
 while [ -x "$AGENT" ]; do
+  wait_for_existing_agent
   AIPASS_AGENT_SUPPRESS_TRAY=1 "$AGENT" --vault "$VAULT" >>"$OUT_LOG" 2>>"$ERR_LOG" &
   child=$!
   while kill -0 "$child" >/dev/null 2>&1; do
@@ -622,7 +633,7 @@ cleanup
         use super::*;
 
         #[test]
-        fn macos_agent_supervisor_suppresses_tray_launch() {
+        fn macos_agent_supervisor_waits_for_existing_agent_and_suppresses_tray_launch() {
             let script = macos_supervisor_script(
                 "dev.aipass.agent.test",
                 Path::new("/tmp/dev.aipass.agent.test.plist"),
@@ -632,6 +643,8 @@ cleanup
                 Path::new("/tmp/agent.err.log"),
             );
 
+            assert!(script.contains("pgrep -f \"$AGENT --vault $VAULT\""));
+            assert!(script.contains("wait_for_existing_agent"));
             assert!(script.contains("AIPASS_AGENT_SUPPRESS_TRAY=1 \"$AGENT\" --vault \"$VAULT\""));
         }
 
