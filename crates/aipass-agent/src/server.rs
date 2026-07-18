@@ -39,7 +39,7 @@ use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, TtlGrantSummary, Vault,
 };
 use anyhow::{bail, Context, Result};
-use interprocess::local_socket::{prelude::*, ListenerNonblockingMode, Stream};
+use interprocess::local_socket::{prelude::*, Listener, ListenerNonblockingMode, Stream};
 use reqwest::blocking::{Client as HttpClient, RequestBuilder};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, RANGE};
 use reqwest::Url;
@@ -109,6 +109,22 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
             namespace
         ),
     );
+    // Claim the per-vault singleton before reading device secrets. Competing
+    // launchers should exit without ever asking the user for Keychain access.
+    let listener = ipc::listen(&vault_dir)
+        .with_context(|| format!("failed to bind agent listener for {}", vault_dir.display()))?;
+    write_component_log(
+        AGENT_LOG,
+        "INFO",
+        &format!(
+            "listener bound vault={} namespace={}",
+            vault_dir.display(),
+            namespace
+        ),
+    );
+    listener
+        .set_nonblocking(ListenerNonblockingMode::Accept)
+        .context("failed to set agent listener to nonblocking accept mode")?;
     let auth_token = ipc::load_or_create_auth_token(&vault_dir)?;
     let state = Arc::new(AgentState {
         policy: Mutex::new(load_policy(&vault_dir)?),
@@ -118,10 +134,10 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         session: Mutex::new(SessionState::Locked),
         session_changed: Condvar::new(),
         last_lock_reason: Mutex::new(Some(LockReason::AgentRestart)),
+        initializing: AtomicBool::new(true),
         shutdown: AtomicBool::new(false),
     });
-    crate::session::try_restore_session(&state);
-    run_server_with_state(state, launch_desktop_tray)
+    run_server_with_state(state, listener, launch_desktop_tray)
 }
 
 #[path = "handlers.rs"]
@@ -129,26 +145,13 @@ mod handlers;
 
 use handlers::handle_request;
 
-fn run_server_with_state(state: Arc<AgentState>, launch_desktop_tray: bool) -> Result<()> {
-    let listener = ipc::listen(&state.vault_dir).with_context(|| {
-        format!(
-            "failed to bind agent listener for {}",
-            state.vault_dir.display()
-        )
-    })?;
-    write_component_log(
-        AGENT_LOG,
-        "INFO",
-        &format!(
-            "listener bound vault={} namespace={}",
-            state.vault_dir.display(),
-            state.namespace
-        ),
-    );
-    listener
-        .set_nonblocking(ListenerNonblockingMode::Accept)
-        .context("failed to set agent listener to nonblocking accept mode")?;
-
+fn run_server_with_state(
+    state: Arc<AgentState>,
+    listener: Listener,
+    launch_desktop_tray: bool,
+) -> Result<()> {
+    let restore_state = state.clone();
+    thread::spawn(move || crate::session::try_restore_session(&restore_state));
     spawn_idle_lock_watcher(state.clone());
     crate::session::spawn_power_watcher(state.clone());
     if launch_desktop_tray {

@@ -79,6 +79,7 @@ pub struct AgentState {
     pub session: Mutex<SessionState>,
     pub session_changed: Condvar,
     pub last_lock_reason: Mutex<Option<LockReason>>,
+    pub initializing: AtomicBool,
     pub shutdown: AtomicBool,
 }
 
@@ -177,11 +178,16 @@ pub fn unlock_with_password(
 /// allows and one was stored), so an agent crash or helper restart inside the
 /// same desktop session does not force a manual unlock.
 pub fn try_restore_session(state: &Arc<AgentState>) {
+    try_restore_session_inner(state);
+    state.initializing.store(false, Ordering::Release);
+    state.session_changed.notify_all();
+}
+
+fn try_restore_session_inner(state: &Arc<AgentState>) {
     if !current_policy(state)
         .map(|p| p.persist_unlock)
         .unwrap_or(false)
     {
-        let _ = device_secrets::delete_session_unlock(&state.vault_dir);
         return;
     }
     let Ok(Some(mut password)) = device_secrets::get_session_unlock(&state.vault_dir) else {
@@ -197,6 +203,23 @@ pub fn try_restore_session(state: &Arc<AgentState>) {
     if let Ok(mut last_reason) = state.last_lock_reason.lock() {
         *last_reason = None;
     }
+}
+
+pub fn wait_for_session_initialization(state: &Arc<AgentState>) -> ServiceResult<()> {
+    if !state.initializing.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let mut session = state
+        .session
+        .lock()
+        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))?;
+    while state.initializing.load(Ordering::Acquire) {
+        session = state
+            .session_changed
+            .wait(session)
+            .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "session lock poisoned"))?;
+    }
+    Ok(())
 }
 
 pub fn create_vault(
@@ -312,15 +335,19 @@ pub fn touch_session(state: &Arc<AgentState>) {
 }
 
 pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
-    if let Ok(mut session) = state.session.lock() {
+    let was_unlocked = if let Ok(mut session) = state.session.lock() {
+        let was_unlocked = matches!(*session, SessionState::Unlocked(_));
         *session = SessionState::Locked;
-    }
+        was_unlocked
+    } else {
+        false
+    };
     state.session_changed.notify_all();
     // Drop the device-sealed password so a fresh agent start honors explicit
     // locks and normal app quits. The sole exception is AgentRestart, which is
     // reserved for unexpected process death or a helper restart inside the same
     // desktop session.
-    if reason != LockReason::AgentRestart {
+    if was_unlocked && reason != LockReason::AgentRestart {
         let _ = device_secrets::delete_session_unlock(&state.vault_dir);
     }
     if let Ok(mut last_reason) = state.last_lock_reason.lock() {
@@ -559,12 +586,16 @@ pub fn save_sync_settings(
     vault: Option<&Vault>,
     settings: &StoredSyncSettings,
 ) -> Result<StoredSyncSettings> {
+    let had_device_secret = load_sync_settings(vault_dir)
+        .ok()
+        .and_then(|current| current.webdav_password)
+        .is_some_and(|secret| matches!(secret, StoredSyncSecret::Device));
     let normalized_secret = settings
         .webdav_password
         .clone()
         .map(|secret| persist_sync_secret(vault_dir, vault, secret))
         .transpose()?;
-    if !matches!(normalized_secret, Some(StoredSyncSecret::Device)) {
+    if should_delete_device_secret(had_device_secret, &normalized_secret) {
         device_secrets::delete_webdav_password(vault_dir).ok();
     }
     let persisted = PersistedSyncSettings {
@@ -590,6 +621,13 @@ pub fn save_sync_settings(
         webdav_username: settings.webdav_username.clone(),
         webdav_password: normalized_secret,
     })
+}
+
+fn should_delete_device_secret(
+    had_device_secret: bool,
+    normalized_secret: &Option<StoredSyncSecret>,
+) -> bool {
+    had_device_secret && !matches!(normalized_secret, Some(StoredSyncSecret::Device))
 }
 
 pub fn apply_sync_settings_update(
@@ -841,6 +879,7 @@ pub fn shutdown_requested(state: &Arc<AgentState>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
     use std::thread;
     use tempfile::tempdir;
 
@@ -856,6 +895,7 @@ mod tests {
             session: Mutex::new(SessionState::Locked),
             session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
+            initializing: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -867,7 +907,7 @@ mod tests {
         let state = test_state(vault_dir);
         let wait_state = state.clone();
         let handle = thread::spawn(move || {
-            wait_for_unlock(&wait_state, StdDuration::from_secs(5)).expect("wait for unlock")
+            wait_for_unlock(&wait_state, StdDuration::from_secs(15)).expect("wait for unlock")
         });
 
         thread::sleep(StdDuration::from_millis(50));
@@ -876,6 +916,26 @@ mod tests {
         let status = handle.join().expect("wait thread");
         assert!(status.exists);
         assert!(!status.locked);
+    }
+
+    #[test]
+    fn requests_wait_until_session_initialization_finishes() {
+        let temp = tempdir().expect("tempdir");
+        let state = test_state(temp.path().join("vault"));
+        state.initializing.store(true, Ordering::Release);
+        let wait_state = state.clone();
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            wait_for_session_initialization(&wait_state).expect("wait for initialization");
+            tx.send(()).expect("notify completion");
+        });
+
+        assert!(rx.recv_timeout(StdDuration::from_millis(50)).is_err());
+        state.initializing.store(false, Ordering::Release);
+        state.session_changed.notify_all();
+        rx.recv_timeout(StdDuration::from_secs(1))
+            .expect("initialization completion");
+        handle.join().expect("wait thread");
     }
 
     #[test]
@@ -914,6 +974,16 @@ mod tests {
         .expect("decode settings");
         assert!(persisted.webdav_password.is_none());
         assert!(persisted.webdav_password_device);
+    }
+
+    #[test]
+    fn device_secret_is_deleted_only_when_replacing_existing_device_storage() {
+        assert!(!should_delete_device_secret(false, &None));
+        assert!(!should_delete_device_secret(
+            true,
+            &Some(StoredSyncSecret::Device)
+        ));
+        assert!(should_delete_device_secret(true, &None));
     }
 
     #[test]
@@ -961,6 +1031,7 @@ mod tests {
             session: Mutex::new(SessionState::Locked),
             session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
+            initializing: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
         });
 
@@ -1001,10 +1072,11 @@ mod tests {
             session: Mutex::new(SessionState::Locked),
             session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
+            initializing: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
         });
 
-        persist_session_unlock_if_allowed(&state, "correct horse battery staple");
+        create_vault(&state, "correct horse battery staple".to_string()).expect("create vault");
         lock_session(&state, LockReason::AgentRestart);
         let restart_secret =
             device_secrets::get_session_unlock(&vault_dir).expect("read restart secret");
@@ -1015,7 +1087,8 @@ mod tests {
             );
         }
 
-        persist_session_unlock_if_allowed(&state, "correct horse battery staple");
+        unlock_with_password(&state, "correct horse battery staple".to_string())
+            .expect("unlock vault");
         lock_session(&state, LockReason::AppQuit);
         let quit_secret = device_secrets::get_session_unlock(&vault_dir).expect("read quit secret");
         assert!(quit_secret.is_none());

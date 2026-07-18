@@ -5,6 +5,9 @@ use aipass_agent_protocol::CloudSyncProvider;
 const BROWSER_FILL_GRANT_LIMIT: usize = 5;
 
 pub(crate) fn handle_request(state: &Arc<AgentState>, request: AgentRequest) -> AgentResponse {
+    if let Err(err) = crate::session::wait_for_session_initialization(state) {
+        return err.response();
+    }
     if let Err(err) = lock_if_idle(state) {
         return err.response();
     }
@@ -48,8 +51,9 @@ fn dispatch_request(
         AgentRequest::SessionPolicyGet => Ok(AgentResponse::success(current_policy(state)?)),
         AgentRequest::SessionPolicySet { policy } => {
             let policy = clamp_policy(policy);
+            let previous_policy = current_policy(state)?;
             save_policy(&state.vault_dir, &policy)?;
-            if !policy.persist_unlock {
+            if previous_policy.persist_unlock && !policy.persist_unlock {
                 crate::device_secrets::delete_session_unlock(&state.vault_dir).ok();
             }
             *state.policy.lock().map_err(|_| {
