@@ -397,7 +397,7 @@ if [ ! -x "$AGENT" ]; then
 fi
 
 agent_running() {{
-  pgrep -f "$AGENT --vault $VAULT" >/dev/null 2>&1
+  pgrep -f "aipass-agent --vault $VAULT" >/dev/null 2>&1
 }}
 
 wait_for_existing_agent() {{
@@ -643,7 +643,7 @@ cleanup
                 Path::new("/tmp/agent.err.log"),
             );
 
-            assert!(script.contains("pgrep -f \"$AGENT --vault $VAULT\""));
+            assert!(script.contains("pgrep -f \"aipass-agent --vault $VAULT\""));
             assert!(script.contains("wait_for_existing_agent"));
             assert!(script.contains("AIPASS_AGENT_SUPPRESS_TRAY=1 \"$AGENT\" --vault \"$VAULT\""));
         }
