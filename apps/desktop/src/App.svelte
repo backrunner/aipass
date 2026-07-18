@@ -1701,6 +1701,11 @@
 
 <style lang="scss">
   .app-shell {
+    --workspace-padding: 8px;
+    --workspace-gap: 8px;
+    --sidebar-width: 232px;
+    --items-list-width: 368px;
+
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -1742,9 +1747,9 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 232px 368px minmax(0, 1fr);
-    gap: 8px;
-    padding: 0 8px 8px;
+    grid-template-columns: var(--sidebar-width) var(--items-list-width) minmax(0, 1fr);
+    gap: var(--workspace-gap);
+    padding: 0 var(--workspace-padding) var(--workspace-padding);
     overflow: hidden;
     position: relative;
     background: transparent;
@@ -1773,18 +1778,26 @@
   }
 
   @media (max-width: 1100px) {
-    .workspace {
-      grid-template-columns: 208px 332px minmax(0, 1fr);
+    .app-shell {
+      --sidebar-width: 208px;
+      --items-list-width: 332px;
     }
   }
 
   @media (max-width: 920px) {
-    .workspace {
-      grid-template-columns: 64px 300px minmax(0, 1fr);
+    .app-shell {
+      --sidebar-width: 64px;
+      --items-list-width: 300px;
     }
   }
 
   @media (max-width: 720px) {
+    .app-shell {
+      --sidebar-width: 0px;
+      --items-list-width: calc(100vw - 16px);
+      --workspace-gap: 0px;
+    }
+
     .workspace {
       grid-template-columns: 1fr;
     }

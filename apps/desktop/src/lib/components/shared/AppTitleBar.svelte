@@ -118,43 +118,47 @@
     </div>
   {/if}
 
-  <div class="brand" data-tauri-drag-region>
-    <Logo size={16} />
-    <span class="title" data-tauri-drag-region>{title}</span>
-  </div>
-
-  <div class="spacer" data-tauri-drag-region></div>
-
   {#if showAppMenu}
-    <div class="menu-slot">
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger>
-          {#snippet child({ props })}
-            <button
-              {...props}
-              type="button"
-              class="menu-trigger"
-              aria-label={$t("titlebar.menu")}
-            >
-              <Menu size={16} />
-            </button>
-          {/snippet}
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content sideOffset={6} align="end" class="titlebar-menu">
-            <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onOpenSettings()}>
-              <Settings size={14} />
-              <span>{$t("titlebar.settings")}</span>
-            </DropdownMenu.Item>
-            <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onLock()}>
-              <Lock size={14} />
-              <span>{$t("titlebar.lock")}</span>
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+    <div class="items-list-slot" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <Logo size={16} />
+        <span class="title" data-tauri-drag-region>{title}</span>
+      </div>
+
+      <div class="items-list-spacer" data-tauri-drag-region></div>
+
+      <div class="menu-slot">
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <button
+                {...props}
+                type="button"
+                class="menu-trigger"
+                aria-label={$t("titlebar.menu")}
+              >
+                <Menu size={16} />
+              </button>
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content sideOffset={6} align="end" class="titlebar-menu">
+              <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onOpenSettings()}>
+                <Settings size={14} />
+                <span>{$t("titlebar.settings")}</span>
+              </DropdownMenu.Item>
+              <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onLock()}>
+                <Lock size={14} />
+                <span>{$t("titlebar.lock")}</span>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
     </div>
   {/if}
+
+  <div class="spacer" data-tauri-drag-region></div>
 
   {#if !isMac}
     <div class="win-controls" aria-label={$t("titlebar.windowControls")}>
@@ -188,8 +192,7 @@
     z-index: 70;
   }
 
-  .titlebar.blurred .brand,
-  .titlebar.blurred .title {
+  .titlebar.blurred .items-list-slot {
     opacity: 0.65;
   }
 
@@ -197,15 +200,25 @@
     padding-left: 12px;
   }
 
+  .items-list-slot {
+    position: absolute;
+    inset: 0 auto auto calc(
+      var(--workspace-padding) + var(--sidebar-width) + var(--workspace-gap)
+    );
+    width: var(--items-list-width);
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    transition: opacity 120ms ease;
+  }
+
   .brand {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     color: var(--text-secondary);
-  }
-
-  .titlebar.mac .brand {
-    margin-left: 4px;
   }
 
   .title {
@@ -220,10 +233,14 @@
     align-self: stretch;
   }
 
+  .items-list-spacer {
+    flex: 1;
+    align-self: stretch;
+  }
+
   .menu-slot {
     display: inline-flex;
     align-items: center;
-    padding-right: 8px;
     -webkit-app-region: no-drag;
   }
 
