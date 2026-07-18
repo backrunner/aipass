@@ -177,7 +177,7 @@
 
 <style lang="scss">
   .titlebar {
-    height: 34px;
+    height: calc(34px + var(--workspace-top));
     width: 100%;
     flex-shrink: 0;
     display: flex;
@@ -202,7 +202,7 @@
 
   .items-list-slot {
     position: absolute;
-    inset: 0 auto auto calc(
+    inset: var(--workspace-top) auto auto calc(
       var(--workspace-padding) + var(--sidebar-width) + var(--workspace-gap)
     );
     width: var(--items-list-width);
@@ -241,6 +241,7 @@
   .menu-slot {
     display: inline-flex;
     align-items: center;
+    margin-right: -6px;
     -webkit-app-region: no-drag;
   }
 
@@ -301,6 +302,7 @@
   .mac-controls {
     display: inline-flex;
     align-items: center;
+    margin-top: var(--workspace-top);
     padding-right: 4px;
     -webkit-app-region: no-drag;
   }
@@ -318,6 +320,7 @@
   .win-controls {
     display: inline-flex;
     align-items: stretch;
+    align-self: flex-start;
     height: 34px;
   }
 

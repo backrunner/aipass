@@ -1703,6 +1703,7 @@
   .app-shell {
     --workspace-padding: 8px;
     --workspace-gap: 8px;
+    --workspace-top: 4px;
     --sidebar-width: 232px;
     --items-list-width: 368px;
     --pane-content-inset: 13px;
@@ -1751,7 +1752,7 @@
     display: grid;
     grid-template-columns: var(--sidebar-width) var(--items-list-width) minmax(0, 1fr);
     gap: var(--workspace-gap);
-    padding: 0 var(--workspace-padding) var(--workspace-padding);
+    padding: var(--workspace-top) var(--workspace-padding) var(--workspace-padding);
     overflow: hidden;
     position: relative;
     background: transparent;
