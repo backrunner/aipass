@@ -501,6 +501,9 @@ pub fn spawn_power_watcher(state: Arc<AgentState>) {
                 1.0,
                 false,
             );
+            // A run loop without a registered source returns immediately. Keep
+            // that state from turning this watcher into a busy loop.
+            std::thread::sleep(StdDuration::from_millis(50));
         }
         let _ = (_sleep_obs, _lock_obs);
     });
