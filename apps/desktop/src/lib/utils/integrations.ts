@@ -5,7 +5,6 @@ import type { ToolConfigMode, ToolConfigTarget } from "../types";
 export type IntegrationToolDefinition = {
   id: ToolConfigTarget;
   name: string;
-  descKey: string;
   defaultMode: ToolConfigMode;
 };
 
@@ -20,25 +19,21 @@ export const integrationToolDefinitions: IntegrationToolDefinition[] = [
   {
     id: "codex",
     name: "Codex",
-    descKey: "integration.codexDesc",
-    defaultMode: "helper"
+    defaultMode: "plaintext"
   },
   {
     id: "claude-code",
     name: "Claude Code",
-    descKey: "integration.claudeCodeDesc",
     defaultMode: "helper"
   },
   {
     id: "gemini-cli",
     name: "Gemini CLI",
-    descKey: "integration.geminiCliDesc",
     defaultMode: "helper"
   },
   {
     id: "opencode",
     name: "OpenCode",
-    descKey: "integration.opencodeDesc",
     defaultMode: "helper"
   }
 ];
@@ -48,7 +43,10 @@ export function supportsIntegration(tool: ToolConfigTarget, entry: IntegrationEn
     case "codex":
       return entry.interfaceType === "openai_compatible" && entry.authScheme === "bearer";
     case "claude-code":
-      return entry.interfaceType === "anthropic_messages" && entry.authScheme === "x_api_key";
+      return (
+        entry.interfaceType === "anthropic_messages" &&
+        (entry.authScheme === "x_api_key" || entry.authScheme === "bearer")
+      );
     case "gemini-cli":
       return entry.interfaceType === "gemini" && entry.authScheme === "google_api_key";
     case "opencode":

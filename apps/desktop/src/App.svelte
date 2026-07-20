@@ -34,6 +34,7 @@
     ProbeResult,
     ProviderCounts,
     ProviderFilter,
+    CodexApiKeyMode,
     SyncConflict,
     SyncSettings,
     SyncMode,
@@ -1168,6 +1169,7 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    codexApiKeyMode?: CodexApiKeyMode;
   }) {
     error = "";
     return invokeTauri<ToolConfigPreview>("tool_config_preview", { request });
@@ -1177,6 +1179,7 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    codexApiKeyMode?: CodexApiKeyMode;
   }) {
     error = "";
     try {
@@ -1666,7 +1669,6 @@
 
 {#if showSettings && !status.locked}
   <SettingsPanel
-    entriesCount={entries.length}
     initialTab={settingsInitialTab}
     bind:autoLockMinutes
     bind:clipboardClearSeconds

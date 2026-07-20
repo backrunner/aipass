@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Dialog, Tabs } from "bits-ui";
-  import { Check, Chrome, Download, RefreshCw, RotateCw, Trash2, Upload, Wifi, X } from "lucide-svelte";
+  import { Check, Download, Puzzle, RefreshCw, RotateCw, Trash2, Upload, Wifi, X } from "lucide-svelte";
 
   import { themeStore, setTheme } from "../../stores/appearance";
   import { isLocalizedMessage, localeStore, resolveMessage, setLocale, t } from "../../stores/i18n";
@@ -20,7 +20,6 @@
   import Card from "../shared/Card.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
 
-  export let entriesCount = 0;
   export let autoLockMinutes = 60;
   export let clipboardClearSeconds = 45;
   export let lockOnSleep = true;
@@ -87,12 +86,7 @@
       ? $t("settings.extensionInstalling")
       : browserExtensionStatus?.extensionInstalled
         ? $t("settings.extensionRepair")
-        : browserExtensionStatus?.installMode === "externalCrx"
-          ? $t("settings.extensionInstall")
-          : $t("settings.extensionOpenInstaller");
-  $: detectedBrowserLabel = browserExtensionStatus?.detectedBrowsers?.length
-    ? browserExtensionStatus.detectedBrowsers.join(", ")
-    : $t("settings.notDetected");
+        : $t("settings.extensionInstall");
 
   const themeOptions: ThemePreference[] = ["system", "light", "dark"];
 
@@ -179,15 +173,6 @@
       updateInstalling = false;
     }
   }
-
-  $: platformLabel = (() => {
-    if (typeof navigator === "undefined") return "Desktop";
-    const ua = navigator.userAgent || "";
-    if (/Mac/i.test(ua)) return "macOS";
-    if (/Win/i.test(ua)) return "Windows";
-    if (/Linux/i.test(ua)) return "Linux";
-    return "Desktop";
-  })();
 
   let dialogOpen = true;
   let closing = false;
@@ -496,24 +481,6 @@
           </Tabs.Content>
 
           <Tabs.Content value="about" class="tab-panel">
-            <Card title={$t("settings.aboutAipass")}>
-              <div class="rows">
-                <div class="row">
-                  <span class="row-label">{$t("settings.version")}</span>
-                  <span class="text-secondary tabular">{updateCheck?.currentVersion ?? "—"}</span>
-                </div>
-                <div class="row">
-                  <span class="row-label">{$t("settings.platform")}</span>
-                  <span class="text-secondary">{platformLabel}</span>
-                </div>
-                <div class="row">
-                  <span class="row-label">{$t("settings.vault")}</span>
-                  <span class="text-secondary">{$t("settings.providerCount", { count: entriesCount, label: entriesCount === 1 ? $t("settings.providerSingular") : $t("settings.providerPlural") })}</span>
-                </div>
-                <p class="hint">{$t("settings.cryptoDesc")}</p>
-              </div>
-            </Card>
-
             <Card title={$t("settings.browserExtension")}>
               <span slot="actions">
                 <button
@@ -529,7 +496,7 @@
                 {#if browserExtensionStatus}
                   <div class="extension-summary">
                     <div class="extension-icon" aria-hidden="true">
-                      <Chrome size={18} />
+                      <Puzzle size={18} />
                     </div>
                     <div class="extension-copy">
                       <strong>
@@ -543,45 +510,17 @@
                           {$t("settings.extensionAvailable")}
                         {/if}
                       </strong>
-                      <span>
-                        {#if browserExtensionStatus.installMode === "externalCrx"}
-                          {$t("settings.extensionLinuxDesc")}
-                        {:else}
-                          {$t("settings.extensionManualDesc")}
-                        {/if}
-                      </span>
                     </div>
-                    <Button
-                      variant="secondary"
-                      on:click={() => onInstallBrowserExtension()}
-                      disabled={browserExtensionInstallDisabled}
-                    >
-                      <Chrome size={14} /> {browserExtensionActionLabel}
-                    </Button>
+                    {#if !browserExtensionStatus.extensionInstalled || !browserExtensionStatus.nativeHostConfigured}
+                      <Button
+                        variant="secondary"
+                        on:click={() => onInstallBrowserExtension()}
+                        disabled={browserExtensionInstallDisabled}
+                      >
+                        <Puzzle size={14} /> {browserExtensionActionLabel}
+                      </Button>
+                    {/if}
                   </div>
-
-                  <div class="extension-grid">
-                    <div>
-                      <span class="kv-label">{$t("settings.extensionBrowser")}</span>
-                      <span class="text-secondary">
-                        {detectedBrowserLabel}
-                      </span>
-                    </div>
-                    <div>
-                      <span class="kv-label">{$t("settings.extensionPackage")}</span>
-                      <span class="text-secondary">
-                        {browserExtensionStatus.crxExists ? $t("settings.bundled") : $t("settings.notBundled")}
-                      </span>
-                    </div>
-                    <div>
-                      <span class="kv-label">{$t("settings.extensionNativeHost")}</span>
-                      <span class="text-secondary">
-                        {browserExtensionStatus.nativeHostConfigured ? $t("settings.configured") : $t("settings.notConfigured")}
-                      </span>
-                    </div>
-                  </div>
-
-                  <code class="path-chip">{browserExtensionStatus.extensionId}</code>
                 {:else}
                   <p class="hint">{$t("common.loading")}</p>
                 {/if}
@@ -616,13 +555,6 @@
                           {$t("settings.upToDate")}
                         {:else}
                           {$t("settings.checkUpdates")}
-                        {/if}
-                      </span>
-                      <span class="row-desc">
-                        {#if updateCheck && !updateErrorText}
-                          {$t("settings.upToDateDesc")}
-                        {:else}
-                          {$t("settings.checkUpdatesDesc")}
                         {/if}
                       </span>
                     </div>
@@ -1023,10 +955,7 @@
     grid-template-columns: 32px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    padding: 12px;
-    border: 1px solid var(--divider);
-    border-radius: var(--radius);
-    background: var(--surface);
+    min-height: 40px;
   }
 
   .extension-icon {
@@ -1051,48 +980,6 @@
       font-weight: 600;
       color: var(--text);
     }
-
-    span {
-      font-size: 12px;
-      line-height: 1.35;
-      color: var(--text-tertiary);
-    }
-  }
-
-  .extension-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-
-    div {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      min-width: 0;
-      padding: 9px 10px;
-      border: 1px solid var(--divider);
-      border-radius: var(--radius-sm);
-      background: var(--surface);
-    }
-
-    span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  .path-chip {
-    display: block;
-    min-width: 0;
-    padding: 8px 10px;
-    border-radius: var(--radius-sm);
-    background: var(--surface-2);
-    color: var(--text-secondary);
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .update-summary {
@@ -1140,8 +1027,5 @@
       }
     }
 
-    .extension-grid {
-      grid-template-columns: 1fr;
-    }
   }
 </style>

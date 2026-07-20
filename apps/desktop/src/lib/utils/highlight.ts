@@ -6,7 +6,7 @@ const ESCAPE_MAP: Record<string, string> = {
   "<": "&lt;",
   ">": "&gt;",
   '"': "&quot;",
-  "'": "&#39;"
+  "'": "&#39;",
 };
 
 export function escapeHtml(input: string): string {
@@ -15,23 +15,28 @@ export function escapeHtml(input: string): string {
 
 export function detectLang(targetPath: string): CodeLang {
   const path = targetPath.toLowerCase();
-  if (path.endsWith(".json")) return "json";
+  if (path.endsWith(".json") || path.endsWith(".jsonc")) return "json";
   if (path.endsWith(".toml")) return "toml";
   if (path.endsWith(".env") || /\.env(\.|$)/.test(path)) return "env";
   if (path.endsWith(".ini") || path.endsWith(".conf")) return "ini";
   return "text";
 }
 
-function stripDiffPrefix(input: string): string {
-  return input
-    .split("\n")
-    .map((line) => {
-      if (line.startsWith("+ ")) return line.slice(2);
-      if (line.startsWith("+") && line.length > 1) return line.slice(1);
-      if (line === "+") return "";
-      return line;
-    })
-    .join("\n");
+function diffLine(input: string): {
+  prefix: "add" | "remove" | "context" | "none";
+  body: string;
+} {
+  if (input.startsWith("+ ")) return { prefix: "add", body: input.slice(2) };
+  if (input.startsWith("- ")) return { prefix: "remove", body: input.slice(2) };
+  if (input.startsWith("  "))
+    return { prefix: "context", body: input.slice(2) };
+  if (input === "+" || input === "-" || input === "  ") {
+    return {
+      prefix: input === "+" ? "add" : input === "-" ? "remove" : "context",
+      body: "",
+    };
+  }
+  return { prefix: "none", body: input };
 }
 
 function highlightJsonLine(line: string): string {
@@ -58,7 +63,9 @@ function highlightJsonLine(line: string): string {
       let k = j;
       while (k < line.length && /\s/.test(line[k])) k++;
       const isKey = line[k] === ":";
-      out.push(`<span class="tok-${isKey ? "key" : "str"}">${escapeHtml(token)}</span>`);
+      out.push(
+        `<span class="tok-${isKey ? "key" : "str"}">${escapeHtml(token)}</span>`,
+      );
       i = j;
       continue;
     }
@@ -195,22 +202,41 @@ function findCommentStart(line: string, char: string): number {
 }
 
 export function highlightPreview(input: string, targetPath: string): string {
-  const lang = detectLang(targetPath);
-  const cleaned = stripDiffPrefix(input);
-  const lines = cleaned.split("\n");
-  const highlighted = lines.map((line) => {
-    if (line.length === 0) return "";
-    switch (lang) {
-      case "json":
-        return highlightJsonLine(line);
-      case "toml":
-        return highlightTomlLine(line);
-      case "env":
-      case "ini":
-        return highlightEnvLine(line);
-      default:
-        return escapeHtml(line);
+  let lang = detectLang(targetPath);
+  const highlighted = input.split("\n").map((rawLine) => {
+    // Multi-file plans prefix each section with its absolute path. Keep the
+    // marker visible and switch syntax highlighting for auth.json/env files.
+    if (
+      rawLine.startsWith("# ") &&
+      /\.(json|jsonc|toml|env|ini|conf)$/.test(rawLine.slice(2))
+    ) {
+      lang = detectLang(rawLine.slice(2));
+      return `<span class="diff-file">${escapeHtml(rawLine)}</span>`;
     }
+
+    const { prefix, body } = diffLine(rawLine);
+    const highlightedBody =
+      body.length === 0
+        ? ""
+        : (() => {
+            switch (lang) {
+              case "json":
+                return highlightJsonLine(body);
+              case "toml":
+                return highlightTomlLine(body);
+              case "env":
+              case "ini":
+                return highlightEnvLine(body);
+              default:
+                return escapeHtml(body);
+            }
+          })();
+
+    if (prefix === "none") {
+      return highlightedBody;
+    }
+    const marker = prefix === "add" ? "+" : prefix === "remove" ? "-" : " ";
+    return `<span class="diff-${prefix}">${marker}</span>${highlightedBody}`;
   });
   return highlighted.join("\n");
 }

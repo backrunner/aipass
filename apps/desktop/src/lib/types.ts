@@ -26,6 +26,7 @@ export type ToolConfigTarget =
   | "gemini-cli"
   | "opencode";
 export type ToolConfigMode = "helper" | "env" | "plaintext";
+export type CodexApiKeyMode = "experimental_bearer_token" | "auth_json";
 
 export type VaultStatus = { exists: boolean; locked: boolean };
 

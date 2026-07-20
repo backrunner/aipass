@@ -14,6 +14,7 @@
     Archive,
     Check,
     Copy,
+    ChevronDown,
     Eye,
     EyeOff,
     Gauge,
@@ -29,6 +30,7 @@
   } from "lucide-svelte";
 
   import type {
+    CodexApiKeyMode,
     Draft,
     FormMode,
     MaybePromise,
@@ -49,6 +51,7 @@
   import { detectLang, highlightPreview } from "../../utils/highlight";
   import { usageSourceLabelKey } from "../../utils/usageProbe";
   import Card from "../shared/Card.svelte";
+  import SegmentedControl from "../shared/SegmentedControl.svelte";
   import ProviderUsageProbeDialog from "./ProviderUsageProbeDialog.svelte";
 
   export let selected: ProviderEntry | undefined;
@@ -92,6 +95,7 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    codexApiKeyMode?: CodexApiKeyMode;
   }) => Promise<ToolConfigPreview> = async () => {
     throw localizedMessage("error.toolPreviewUnavailable");
   };
@@ -99,12 +103,17 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    codexApiKeyMode?: CodexApiKeyMode;
   }) => Promise<ToolConfigApplyResult> = async () => {
     throw localizedMessage("error.toolApplyUnavailable");
   };
 
   let showAddSecret = false;
   let usageDialogOpen = false;
+  type CodexIntegrationMode = CodexApiKeyMode;
+  let codexIntegrationMode: CodexIntegrationMode = "experimental_bearer_token";
+  let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
+  let expandedIntegrations: Partial<Record<ToolConfigTarget, boolean>> = {};
 
   $: primaryLabel = selected?.secretRefs[0]?.label ?? "primary";
   $: hasQuota = Boolean(
@@ -120,6 +129,13 @@
         authScheme: selected.authScheme
       })
     : [];
+  $: codexIntegrationModeOptions = [
+    {
+      value: "experimental_bearer_token",
+      label: $t("providerDetail.codexModeExperimental")
+    },
+    { value: "auth_json", label: "auth.json" }
+  ];
 
   type IntegrationState = {
     busy: boolean;
@@ -139,6 +155,8 @@
 
   $: if (selected?.id) {
     integrationState = initialIntegrationState();
+    codexIntegrationMode = "experimental_bearer_token";
+    expandedIntegrations = {};
   }
 
   $: if (selected?.id) {
@@ -153,7 +171,7 @@
       [tool.id]: { ...state, busy: true, error: "" }
     };
     try {
-      const preview = await onPreviewToolConfig({ tool: tool.id, mode: tool.defaultMode, id: selected.id });
+      const preview = await onPreviewToolConfig(integrationRequest(tool, selected.id));
       integrationState = {
         ...integrationState,
         [tool.id]: { ...integrationState[tool.id], busy: false, preview }
@@ -173,16 +191,12 @@
   async function applyIntegration(tool: IntegrationToolDefinition) {
     if (!selected) return;
     const state = integrationState[tool.id];
-    if (!state.preview) {
-      await previewIntegration(tool);
-      return;
-    }
     integrationState = {
       ...integrationState,
       [tool.id]: { ...state, busy: true, error: "" }
     };
     try {
-      const applied = await onApplyToolConfig({ tool: tool.id, mode: tool.defaultMode, id: selected.id });
+      const applied = await onApplyToolConfig(integrationRequest(tool, selected.id));
       integrationState = {
         ...integrationState,
         [tool.id]: { ...integrationState[tool.id], busy: false, applied }
@@ -197,6 +211,42 @@
         }
       };
     }
+  }
+
+  function integrationRequest(tool: IntegrationToolDefinition, id: string) {
+    if (tool.id !== "codex") {
+      return { tool: tool.id, mode: tool.defaultMode, id };
+    }
+    return {
+      tool: tool.id,
+      mode: "plaintext" as ToolConfigMode,
+      id,
+      codexApiKeyMode: codexIntegrationMode
+    };
+  }
+
+  function setCodexIntegrationMode(mode: CodexIntegrationMode) {
+    codexIntegrationMode = mode;
+    integrationState = {
+      ...integrationState,
+      codex: { busy: false, error: "" }
+    };
+  }
+
+  function codexModeDescriptionKey(mode: CodexIntegrationMode): string {
+    switch (mode) {
+      case "experimental_bearer_token":
+        return "providerDetail.codexModeExperimentalDesc";
+      case "auth_json":
+        return "providerDetail.codexModeAuthJsonDesc";
+    }
+  }
+
+  function toggleIntegration(tool: ToolConfigTarget) {
+    expandedIntegrations = {
+      ...expandedIntegrations,
+      [tool]: !expandedIntegrations[tool]
+    };
   }
 
   function fullyMasked(): string {
@@ -268,7 +318,6 @@
 </script>
 
 {#if selected}
-  {#key selected.id}
   <section class="detail">
     <header class="detail-header">
       <div class="identity">
@@ -424,7 +473,7 @@
           </button>
         {/if}
       {:else}
-        <Card title={$t("providerDetail.credentials")}>
+        <Card title={$t("providerDetail.credentials")} collapsible>
           {#if endpointDisplay(selected)}
             <button
               type="button"
@@ -563,7 +612,7 @@
         </Card>
 
         {#if hasQuota}
-          <Card title={$t("providerDetail.quota")}>
+          <Card title={$t("providerDetail.quota")} collapsible>
             <div class="kv-row">
               <span class="kv-label">{selected.quota?.label ?? $t("providerDetail.quota")}</span>
               <span class="kv-value">
@@ -583,48 +632,75 @@
         {/if}
 
         {#if selected.notes}
-          <Card title={$t("providerDetail.notes")}>
+          <Card title={$t("providerDetail.notes")} collapsible>
             <div class="notes-body">{selected.notes}</div>
           </Card>
         {/if}
 
         {#if integrationTools.length > 0}
-          <Card title={$t("providerDetail.integrations")}>
+          <Card title={$t("providerDetail.integrations")} collapsible>
             <div class="integration-list">
               {#each integrationTools as tool}
                 {@const state = integrationState[tool.id]}
-                <div class="integration-row">
-                  <div class="integration-header">
+                <div class="integration-row" class:expanded={expandedIntegrations[tool.id]}>
+                  <button
+                    type="button"
+                    class="integration-toggle"
+                    aria-expanded={Boolean(expandedIntegrations[tool.id])}
+                    aria-controls={`integration-${tool.id}-content`}
+                    on:click={() => toggleIntegration(tool.id)}
+                  >
                     <div class="integration-meta">
                       <div class="integration-icon"><Terminal size={14} /></div>
                       <div class="integration-text">
                         <strong>{tool.name}</strong>
-                        <span class="text-tertiary">{$t(tool.descKey)}</span>
                       </div>
                     </div>
-                    <div class="integration-actions">
-                      <Button variant="secondary" size="sm" on:click={() => previewIntegration(tool)} disabled={state.busy}>
-                        <Eye size={13} /> {$t("providerDetail.preview")}
-                      </Button>
-                      <Button variant="primary" size="sm" on:click={() => applyIntegration(tool)} disabled={state.busy || !state.preview}>
-                        <Check size={13} /> {$t("providerDetail.apply")}
-                      </Button>
-                    </div>
-                  </div>
-                  {#if state.error}
-                    <Banner tone="danger">{resolveMessage($t, state.error)}</Banner>
-                  {/if}
-                  {#if state.applied}
-                    <Banner tone="success">
-                      {$t("providerDetail.configured", { title: state.applied.entryTitle })} <code>{state.applied.targetPath}</code>
-                    </Banner>
-                  {/if}
-                  {#if state.preview}
-                    <div class="integration-preview">
-                      <div class="integration-preview-meta">
-                        <code>{state.preview.targetPath}</code>
+                    <span class="integration-chevron">
+                      <ChevronDown size={15} aria-hidden="true" />
+                    </span>
+                  </button>
+                  {#if expandedIntegrations[tool.id]}
+                    <div class="integration-content" id={`integration-${tool.id}-content`}>
+                      {#if tool.id === "codex"}
+                        <div class="integration-mode">
+                          <div class="integration-mode-line">
+                            <span class="integration-mode-label">{$t("providerDetail.codexAuthMode")}</span>
+                            <SegmentedControl
+                              options={codexIntegrationModeOptions}
+                              value={codexIntegrationMode}
+                              ariaLabel={$t("providerDetail.codexAuthMode")}
+                              onChange={setCodexIntegrationMode}
+                            />
+                          </div>
+                          <span class="integration-mode-desc">{$t(codexModeDescriptionKey(codexIntegrationMode))}</span>
+                        </div>
+                      {/if}
+                      <div class="integration-actions">
+                        <Button variant="secondary" size="sm" on:click={() => previewIntegration(tool)} disabled={state.busy}>
+                          <Eye size={13} /> {$t("providerDetail.preview")}
+                        </Button>
+                        <Button variant="primary" size="sm" on:click={() => applyIntegration(tool)} disabled={state.busy}>
+                          <Check size={13} /> {$t("providerDetail.apply")}
+                        </Button>
                       </div>
-                      <pre class="code-block" data-lang={detectLang(state.preview.targetPath)}>{@html highlightPreview(state.preview.preview, state.preview.targetPath)}</pre>
+                      {#if state.error}
+                        <Banner tone="danger">{resolveMessage($t, state.error)}</Banner>
+                      {/if}
+                      {#if state.applied}
+                        <Banner tone="success">
+                          {$t("providerDetail.configured", { title: state.applied.entryTitle })} <code>{state.applied.targetPath}</code>
+                        </Banner>
+                      {/if}
+                      {#if state.preview}
+                        <div class="integration-preview">
+                          <div class="integration-preview-meta">
+                            <strong>{state.preview.summary}</strong>
+                            <code>{state.preview.targetPath}</code>
+                          </div>
+                          <pre class="code-block" data-lang={detectLang(state.preview.targetPath)}>{@html highlightPreview(state.preview.preview, state.preview.targetPath)}</pre>
+                        </div>
+                      {/if}
                     </div>
                   {/if}
                 </div>
@@ -647,7 +723,6 @@
     {onUsageProbe}
     {onApplyUsageProbe}
   />
-  {/key}
 {:else}
   <section class="detail empty">
     <div class="empty-card">
@@ -804,11 +879,17 @@
   .detail-body {
     flex: 1;
     overflow: auto;
+    overscroll-behavior: contain;
     padding: 22px 28px 36px;
     display: flex;
     flex-direction: column;
     gap: 18px;
     background: transparent;
+  }
+
+  :global(.detail-body > .card) {
+    flex: 0 0 auto;
+    min-height: 0;
   }
 
   .kv-row {
@@ -1116,24 +1197,56 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    max-height: clamp(220px, 48vh, 520px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 14px 16px;
+    scrollbar-gutter: stable;
   }
 
   .integration-row {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 12px;
+    flex: 0 0 auto;
     border: 1px solid var(--divider);
     border-radius: var(--radius);
     background: var(--surface-2);
+
+    &.expanded {
+      border-color: var(--border);
+    }
   }
 
-  .integration-header {
+  .integration-toggle {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    width: 100%;
+    min-width: 0;
+    gap: 12px;
+    padding: 12px;
+    text-align: left;
+
+    &:hover {
+      background: color-mix(in oklab, var(--accent) 6%, transparent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: -2px;
+      border-radius: var(--radius);
+    }
+  }
+
+  .integration-chevron {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+    transition: transform 140ms ease;
+  }
+
+  .integration-row.expanded .integration-chevron {
+    transform: rotate(180deg);
   }
 
   .integration-meta {
@@ -1158,27 +1271,61 @@
   .integration-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
     min-width: 0;
 
     strong {
       font-size: 13px;
     }
+  }
 
-    span {
-      font-size: 12px;
-    }
+  .integration-content {
+    display: grid;
+    gap: 10px;
+    padding: 0 12px 12px;
   }
 
   .integration-actions {
     display: flex;
+    justify-content: flex-end;
     gap: 6px;
     flex-shrink: 0;
   }
 
   .integration-mode {
+    display: grid;
+    gap: 4px;
+    padding-top: 2px;
+  }
+
+  .integration-mode-line {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .integration-mode-label {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .integration-mode-desc {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  :global(.integration-mode .segmented) {
+    flex-shrink: 0;
+  }
+
+  :global(.integration-mode .segmented button) {
+    min-width: 0;
+    padding-inline: 8px;
+    white-space: nowrap;
   }
 
   .integration-preview {
@@ -1233,6 +1380,34 @@
     color: var(--accent);
   }
 
+  :global(.code-block .diff-file) {
+    display: inline-block;
+    width: 100%;
+    color: var(--text-secondary);
+    font-weight: 600;
+    border-bottom: 1px solid var(--divider);
+  }
+
+  :global(.code-block .diff-add),
+  :global(.code-block .diff-remove),
+  :global(.code-block .diff-context) {
+    display: inline-block;
+    width: 1.2em;
+    user-select: none;
+  }
+
+  :global(.code-block .diff-add) {
+    color: var(--success);
+  }
+
+  :global(.code-block .diff-remove) {
+    color: var(--danger);
+  }
+
+  :global(.code-block .diff-context) {
+    color: var(--text-tertiary);
+  }
+
   .integration-preview-meta {
     display: grid;
     gap: 4px;
@@ -1241,6 +1416,12 @@
       overflow-wrap: anywhere;
       font-size: 11px;
       color: var(--text-tertiary);
+    }
+
+    strong {
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 600;
     }
   }
 
