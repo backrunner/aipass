@@ -207,11 +207,20 @@ pub enum ToolConfigMode {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexApiKeyMode {
+    ExperimentalBearerToken,
+    AuthJson,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolConfigRequest {
     pub tool: ToolConfigTool,
     pub id: Uuid,
     pub mode: ToolConfigMode,
+    #[serde(default)]
+    pub codex_api_key_mode: Option<CodexApiKeyMode>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -42,6 +42,7 @@ pub(crate) fn new_plan(
         summary,
         preview,
         extra_writes: Vec::new(),
+        codex_provider_migration: None,
     }
 }
 
@@ -92,10 +93,10 @@ pub(crate) fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'
 }
 
 pub(crate) fn read_json_object(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
-    Ok(read_json_value(path)?
+    read_json_value(path)?
         .as_object()
         .cloned()
-        .unwrap_or_default())
+        .with_context(|| format!("{} must contain a JSON object", path.display()))
 }
 
 pub(crate) fn read_json_value(path: &Path) -> Result<Value> {
@@ -114,7 +115,7 @@ pub(crate) fn ensure_json_object<'a>(
         .entry(key.to_string())
         .or_insert_with(|| Value::Object(Map::new()));
     if !value.is_object() {
-        *value = Value::Object(Map::new());
+        anyhow::bail!("{key} must be a JSON object");
     }
     value
         .as_object_mut()
@@ -139,21 +140,114 @@ pub(crate) fn slug(value: &str) -> String {
 }
 
 pub(crate) fn diff_preview(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| format!("+ {line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    diff_preview_from("", content)
 }
 
-pub(crate) fn redacted_diff_preview(content: &str, redactions: &[&str]) -> String {
-    let mut preview = diff_preview(content);
+pub fn diff_preview_for_path(path: &Path, content: &str) -> String {
+    let before = fs::read_to_string(path).unwrap_or_default();
+    diff_preview_from(&before, content)
+}
+
+/// Produce a small, line-oriented diff without exposing an entire file as a
+/// replacement. This is intentionally dependency-free because plans are also
+/// used by the native agent before any config is written.
+pub(crate) fn diff_preview_from(before: &str, after: &str) -> String {
+    if before == after {
+        return "(no changes)".to_string();
+    }
+
+    let before_lines = before.lines().collect::<Vec<_>>();
+    let after_lines = after.lines().collect::<Vec<_>>();
+    let mut prefix = 0;
+    while prefix < before_lines.len()
+        && prefix < after_lines.len()
+        && before_lines[prefix] == after_lines[prefix]
+    {
+        prefix += 1;
+    }
+
+    let mut before_end = before_lines.len();
+    let mut after_end = after_lines.len();
+    while before_end > prefix
+        && after_end > prefix
+        && before_lines[before_end - 1] == after_lines[after_end - 1]
+    {
+        before_end -= 1;
+        after_end -= 1;
+    }
+
+    let mut lines = Vec::new();
+    if prefix > 0 {
+        lines.push(format!("  {}", before_lines[prefix - 1]));
+    }
+    lines.extend(
+        before_lines[prefix..before_end]
+            .iter()
+            .map(|line| format!("- {line}")),
+    );
+    lines.extend(
+        after_lines[prefix..after_end]
+            .iter()
+            .map(|line| format!("+ {line}")),
+    );
+    if before_end < before_lines.len() && after_end < after_lines.len() {
+        lines.push(format!("  {}", after_lines[after_end]));
+    }
+    lines.join("\n")
+}
+
+pub fn redacted_diff_preview(content: &str, redactions: &[&str]) -> String {
+    let mut preview = if content
+        .lines()
+        .any(|line| line.starts_with("+ ") || line.starts_with("- "))
+    {
+        content.to_string()
+    } else {
+        diff_preview(content)
+    };
     for value in redactions {
         if !value.is_empty() {
             preview = preview.replace(value, "[redacted]");
         }
     }
+    preview = preview
+        .lines()
+        .map(|line| {
+            if (line.starts_with("- ") || line.starts_with("+ ") || line.starts_with("  "))
+                && looks_like_secret_line(line)
+            {
+                format!("{}[redacted]", &line[..2])
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     preview
+}
+
+fn looks_like_secret_line(line: &str) -> bool {
+    let body = line
+        .get(2..)
+        .unwrap_or(line)
+        .trim()
+        .strip_prefix("export ")
+        .unwrap_or_else(|| line.get(2..).unwrap_or(line).trim());
+    let key = body
+        .split(['=', ':'])
+        .next()
+        .unwrap_or_default()
+        .trim_matches(|character: char| {
+            character.is_whitespace() || matches!(character, '"' | '\'' | '{' | ',')
+        })
+        .to_ascii_lowercase();
+    key.contains("api_key")
+        || key.contains("apikey")
+        || key.contains("api-token")
+        || key.contains("access_token")
+        || key.contains("auth_token")
+        || key.contains("bearer_token")
+        || key.contains("secret")
 }
 
 pub(crate) fn dotenv_quote(value: &str) -> String {

@@ -587,6 +587,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             tool,
             id,
             mode,
+            codex_api_key_mode,
             yes,
         } => {
             let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
@@ -594,6 +595,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 tool: tool.into(),
                 id,
                 mode: mode.into(),
+                codex_api_key_mode: codex_api_key_mode.map(Into::into),
             };
             if !yes {
                 let plan: ToolConfigPreviewResponse =

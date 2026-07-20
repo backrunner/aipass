@@ -14,6 +14,12 @@ pub enum ToolId {
     OpenCode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodexApiKeyMode {
+    ExperimentalBearerToken,
+    AuthJson,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolEntry {
     pub id: Uuid,
@@ -35,6 +41,12 @@ pub struct PlannedWrite {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CodexProviderMigration {
+    pub from_provider: String,
+    pub to_provider: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigPlan {
     pub operation_id: Uuid,
     pub tool: ToolId,
@@ -44,6 +56,8 @@ pub struct ConfigPlan {
     pub preview: String,
     #[serde(skip, default)]
     pub extra_writes: Vec<PlannedWrite>,
+    #[serde(skip, default)]
+    pub codex_provider_migration: Option<CodexProviderMigration>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

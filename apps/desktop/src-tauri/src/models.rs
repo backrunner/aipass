@@ -1,6 +1,6 @@
 use aipass_agent_protocol::{
-    CloudSyncProvider as AgentCloudSyncProvider, SensitiveString,
-    SyncConflictActionRequest as AgentSyncConflictActionRequest,
+    CloudSyncProvider as AgentCloudSyncProvider, CodexApiKeyMode as AgentCodexApiKeyMode,
+    SensitiveString, SyncConflictActionRequest as AgentSyncConflictActionRequest,
     SyncConflictResponse as AgentSyncConflictResponse, SyncMode as AgentSyncMode,
     SyncSettings as AgentSyncSettings, SyncSettingsUpdate as AgentSyncSettingsUpdate,
     ToolConfigApplyResponse as AgentToolConfigApplyResponse, ToolConfigMode as AgentToolConfigMode,
@@ -304,12 +304,21 @@ pub(crate) enum ToolConfigMode {
     Plaintext,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CodexApiKeyMode {
+    ExperimentalBearerToken,
+    AuthJson,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolConfigRequest {
     pub(crate) tool: ToolConfigTool,
     pub(crate) id: Uuid,
     pub(crate) mode: ToolConfigMode,
+    #[serde(default)]
+    pub(crate) codex_api_key_mode: Option<CodexApiKeyMode>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -411,6 +420,12 @@ pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> Agen
             ToolConfigMode::Env => AgentToolConfigMode::Env,
             ToolConfigMode::Plaintext => AgentToolConfigMode::Plaintext,
         },
+        codex_api_key_mode: request.codex_api_key_mode.map(|mode| match mode {
+            CodexApiKeyMode::ExperimentalBearerToken => {
+                AgentCodexApiKeyMode::ExperimentalBearerToken
+            }
+            CodexApiKeyMode::AuthJson => AgentCodexApiKeyMode::AuthJson,
+        }),
     }
 }
 

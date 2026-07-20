@@ -1,7 +1,8 @@
 use aipass_agent::{default_vault_dir, AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{
-    AgentRequest, CloudSyncProvider, LockReason, ProbeResult, SecretValue, SessionStatus,
-    ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest, VaultCreateResponse,
+    AgentRequest, CloudSyncProvider, CodexApiKeyMode, LockReason, ProbeResult, SecretValue,
+    SessionStatus, ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest,
+    VaultCreateResponse,
 };
 use aipass_config_writers::endpoint_url;
 use aipass_native_host::native_manifest;
@@ -209,6 +210,8 @@ enum Command {
         id: Uuid,
         #[arg(long, value_enum, default_value = "helper")]
         mode: ConfigureMode,
+        #[arg(long, value_enum)]
+        codex_api_key_mode: Option<CodexApiKeyModeArg>,
         #[arg(long)]
         yes: bool,
     },
@@ -358,6 +361,12 @@ enum ConfigureMode {
     Helper,
     Env,
     Plaintext,
+}
+
+#[derive(Clone, ValueEnum)]
+enum CodexApiKeyModeArg {
+    ExperimentalBearerToken,
+    AuthJson,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -1251,6 +1260,15 @@ impl From<ConfigureMode> for aipass_agent_protocol::ToolConfigMode {
             ConfigureMode::Helper => Self::Helper,
             ConfigureMode::Env => Self::Env,
             ConfigureMode::Plaintext => Self::Plaintext,
+        }
+    }
+}
+
+impl From<CodexApiKeyModeArg> for CodexApiKeyMode {
+    fn from(value: CodexApiKeyModeArg) -> Self {
+        match value {
+            CodexApiKeyModeArg::ExperimentalBearerToken => Self::ExperimentalBearerToken,
+            CodexApiKeyModeArg::AuthJson => Self::AuthJson,
         }
     }
 }

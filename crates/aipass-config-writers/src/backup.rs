@@ -3,8 +3,10 @@ use crate::utils::{backup_aad, read_json, resolve_codex_dir, write_json};
 use aipass_crypto::{decrypt_bytes, encrypt_bytes, KEY_LEN};
 use aipass_storage::atomic_write_bytes;
 use anyhow::{Context, Result};
+use rusqlite::{params, Connection};
 use std::collections::HashSet;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -29,14 +31,30 @@ pub fn apply_plan_encrypted(
 ) -> Result<ApplyResult> {
     let prepared = prepare_writes(plan, content)?;
     write_encrypted_backups(plan.operation_id, &prepared, backup_key)?;
-    apply_prepared_writes(plan.operation_id, &prepared)?;
+    let sqlite_backups = prepare_codex_sqlite_backups(plan, Some(backup_key))?;
+    if let Err(err) = apply_codex_sqlite_migration(plan) {
+        let _ = restore_codex_sqlite_backups(&sqlite_backups, Some(backup_key));
+        return Err(err);
+    }
+    if let Err(err) = apply_prepared_writes(plan.operation_id, &prepared) {
+        let _ = restore_codex_sqlite_backups(&sqlite_backups, Some(backup_key));
+        return Err(err);
+    }
     Ok(apply_result(plan))
 }
 
 pub fn apply_plan_with_plain_backup(plan: &ConfigPlan, content: &str) -> Result<ApplyResult> {
     let prepared = prepare_writes(plan, content)?;
     write_plain_backups(&prepared)?;
-    apply_prepared_writes(plan.operation_id, &prepared)?;
+    let sqlite_backups = prepare_codex_sqlite_backups(plan, None)?;
+    if let Err(err) = apply_codex_sqlite_migration(plan) {
+        let _ = restore_codex_sqlite_backups(&sqlite_backups, None);
+        return Err(err);
+    }
+    if let Err(err) = apply_prepared_writes(plan.operation_id, &prepared) {
+        let _ = restore_codex_sqlite_backups(&sqlite_backups, None);
+        return Err(err);
+    }
     Ok(apply_result(plan))
 }
 
@@ -89,6 +107,7 @@ pub fn rollback_plain(plan: &ConfigPlan) -> Result<()> {
     for write in &plan.extra_writes {
         restore_plain_backup_file(&write.target_path, &write.backup_path)?;
     }
+    restore_codex_sqlite_backups(&codex_sqlite_backup_paths(plan), None)?;
     Ok(())
 }
 
@@ -231,6 +250,191 @@ fn restore_plain_backup_file(target_path: &Path, backup_path: &Path) -> Result<(
         atomic_write_bytes(target_path, &original)?;
     }
     Ok(())
+}
+
+type SqliteBackup = (PathBuf, PathBuf);
+
+fn codex_sqlite_database_paths(plan: &ConfigPlan) -> Vec<PathBuf> {
+    let Some(codex_dir) = plan.target_path.parent() else {
+        return Vec::new();
+    };
+    [
+        codex_dir.join("state_5.sqlite"),
+        codex_dir.join("sqlite").join("state_5.sqlite"),
+        codex_dir.join("codex-dev.db"),
+        codex_dir.join("sqlite").join("codex-dev.db"),
+    ]
+    .into_iter()
+    .filter(|path| path.exists())
+    .collect()
+}
+
+fn codex_sqlite_backup_paths(plan: &ConfigPlan) -> Vec<SqliteBackup> {
+    let Some(codex_dir) = plan.target_path.parent() else {
+        return Vec::new();
+    };
+    codex_sqlite_database_paths(plan)
+        .into_iter()
+        .map(|target| {
+            (
+                target.clone(),
+                codex_dir.join(".aipass-backups").join(format!(
+                    "sqlite-{}-{}.aipbackup",
+                    path_hash(&target),
+                    plan.operation_id
+                )),
+            )
+        })
+        .collect()
+}
+
+fn prepare_codex_sqlite_backups(
+    plan: &ConfigPlan,
+    backup_key: Option<&[u8; KEY_LEN]>,
+) -> Result<Vec<SqliteBackup>> {
+    if plan.codex_provider_migration.is_none() {
+        return Ok(Vec::new());
+    }
+    let all_paths = codex_sqlite_backup_paths(plan);
+    if all_paths.is_empty() {
+        return Ok(all_paths);
+    }
+    let mut paths = Vec::new();
+    for (target, backup) in all_paths {
+        if !sqlite_provider_tables(&target)?.is_empty() {
+            paths.push((target, backup));
+        }
+    }
+    if paths.is_empty() {
+        return Ok(paths);
+    }
+
+    for (target, backup) in &paths {
+        checkpoint_sqlite(target)?;
+        let original = fs::read(target)?;
+        if let Some(key) = backup_key {
+            let encrypted = EncryptedBackup {
+                format: "aipass-config-backup".to_string(),
+                version: 1,
+                operation_id: plan.operation_id,
+                target_path: target.clone(),
+                target_existed: true,
+                created_at: OffsetDateTime::now_utc(),
+                ciphertext: encrypt_bytes(
+                    key,
+                    backup_aad(plan.operation_id, target).as_bytes(),
+                    &original,
+                )?,
+            };
+            write_json(backup, &encrypted)?;
+        } else {
+            if let Some(parent) = backup.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            atomic_write_bytes(backup, &original)?;
+        }
+    }
+    Ok(paths)
+}
+
+fn apply_codex_sqlite_migration(plan: &ConfigPlan) -> Result<()> {
+    let Some(migration) = plan.codex_provider_migration.as_ref() else {
+        return Ok(());
+    };
+    for database in codex_sqlite_database_paths(plan) {
+        let tables = sqlite_provider_tables(&database)?;
+        if tables.is_empty() {
+            continue;
+        }
+        let mut connection = Connection::open(&database)?;
+        let transaction = connection.transaction()?;
+        for table in tables {
+            transaction.execute(
+                &format!(
+                    "UPDATE {} SET model_provider = ?1 WHERE model_provider = ?2",
+                    sqlite_identifier(&table)
+                ),
+                params![migration.to_provider, migration.from_provider],
+            )?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        checkpoint_sqlite(&database)?;
+    }
+    Ok(())
+}
+
+fn restore_codex_sqlite_backups(
+    backups: &[SqliteBackup],
+    backup_key: Option<&[u8; KEY_LEN]>,
+) -> Result<()> {
+    for (target, backup) in backups.iter().rev() {
+        if !backup.exists() {
+            continue;
+        }
+        if let Some(key) = backup_key {
+            restore_encrypted_backup_file(backup, key)
+        } else {
+            restore_plain_backup_file(target, backup)
+        }?;
+        remove_sqlite_sidecars(target);
+    }
+    Ok(())
+}
+
+fn sqlite_provider_tables(database: &Path) -> Result<Vec<String>> {
+    let connection = Connection::open(database)?;
+    let mut table_query = connection.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('threads', 'local_thread_catalog')",
+    )?;
+    let tables = table_query
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(table_query);
+    let mut provider_tables = Vec::new();
+    for table in tables {
+        let mut column_query =
+            connection.prepare(&format!("PRAGMA table_info({})", sqlite_identifier(&table)))?;
+        let has_provider = column_query
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|column| column == "model_provider");
+        if has_provider {
+            provider_tables.push(table.to_string());
+        }
+    }
+    Ok(provider_tables)
+}
+
+fn checkpoint_sqlite(database: &Path) -> Result<()> {
+    let connection = Connection::open(database)?;
+    connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    Ok(())
+}
+
+fn remove_sqlite_sidecars(database: &Path) {
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = database.with_extension(format!(
+            "{}{}",
+            database
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("db"),
+            suffix
+        ));
+        let _ = fs::remove_file(sidecar);
+    }
+}
+
+fn sqlite_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn path_hash(path: &Path) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    hasher.finish()
 }
 
 fn backup_group_paths(backup_path: &Path, operation_id: Uuid) -> Result<Vec<PathBuf>> {
