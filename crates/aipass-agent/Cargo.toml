@@ -17,6 +17,7 @@ path = "src/main.rs"
 aipass-agent-protocol = { path = "../aipass-agent-protocol" }
 aipass-config-writers = { path = "../aipass-config-writers" }
 aipass-crypto = { path = "../aipass-crypto" }
+aipass-proxy = { path = "../aipass-proxy" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
 aipass-storage = { path = "../aipass-storage" }
 aipass-sync = { path = "../aipass-sync" }

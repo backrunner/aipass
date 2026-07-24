@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Archive, Inbox, ShieldCheck, Sparkles, Star, Terminal, Trash2, Wifi } from "lucide-svelte";
+  import { Archive, Inbox, Server, ShieldCheck, Sparkles, Star, Terminal, Trash2, Wifi } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderCounts, ProviderFilter } from "../../types";
@@ -7,6 +7,7 @@
   export let showArchived = false;
   export let showTrash = false;
   export let showFavorites = false;
+  export let showServer = false;
   export let providerFilter: ProviderFilter = "all";
   export let providerCounts: ProviderCounts;
   export let trashCount = 0;
@@ -14,8 +15,11 @@
   export let onFavoriteView: (value: boolean) => MaybePromise = () => {};
   export let onArchiveView: (value: boolean) => MaybePromise = () => {};
   export let onTrashView: (value: boolean) => MaybePromise = () => {};
+  export let onServerView: () => MaybePromise = () => {};
 
-  $: activeFilter = showTrash
+  $: activeFilter = showServer
+    ? "__server"
+    : showTrash
     ? "__trash"
     : showArchived
       ? "__archive"
@@ -99,6 +103,10 @@
 
   <div class="group bottom-group">
     <nav class="nav" aria-label={$t("sidebar.storage")}>
+      <button type="button" class:active={activeFilter === "__server"} on:click={() => onServerView()}>
+        <Server size={16} />
+        <span class="label">{$t("sidebar.server")}</span>
+      </button>
       <button
         type="button"
         class:active={activeFilter === "__archive"}
@@ -178,8 +186,8 @@
     position: relative;
     transition: background-color 80ms ease, color 120ms ease;
 
-    &:hover:not(:disabled) {
-      background: rgba(0, 0, 0, 0.04);
+    &:hover:not(:disabled):not(.active) {
+      background: var(--surface-2);
       color: var(--text);
     }
 
@@ -195,17 +203,6 @@
     &:disabled {
       opacity: 0.5;
       cursor: not-allowed;
-    }
-  }
-
-  :global(html[data-theme="dark"]) .nav button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :global(html:not([data-theme])) .nav button:hover:not(:disabled),
-    :global(html[data-theme="system"]) .nav button:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 0.05);
     }
   }
 

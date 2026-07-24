@@ -30,6 +30,138 @@ export type CodexApiKeyMode = "experimental_bearer_token" | "auth_json";
 
 export type VaultStatus = { exists: boolean; locked: boolean };
 
+export type ProxyProtocol = "open_ai_responses" | "open_ai_chat_completions" | "anthropic_messages";
+
+export type RetryPolicy = {
+  maxAttempts: number;
+  failureThreshold: number;
+  circuitOpenSeconds: number;
+  connectTimeoutMs: number;
+  firstByteTimeoutMs: number;
+  streamIdleTimeoutMs: number;
+};
+
+export type ProxyTargetConfig = {
+  id: string;
+  providerEntryId: string;
+  secretId: string;
+  label: string;
+  baseUrl: string;
+  authScheme: string;
+  headers?: Array<[string, string]>;
+  group?: string;
+  priority: number;
+  weight: number;
+  enabled: boolean;
+};
+
+export type ProxyRouteStrategy = "fallback" | "round_robin";
+
+export type ProxyRouteConfig = {
+  id: string;
+  name: string;
+  token: string;
+  tokenFingerprint: string;
+  strategy: ProxyRouteStrategy;
+  inboundProtocol: ProxyProtocol;
+  upstreamProtocol: ProxyProtocol;
+  conversionEnabled: boolean;
+  targets: ProxyTargetConfig[];
+  retry: RetryPolicy;
+  enabled: boolean;
+};
+
+export type ModelPricing = {
+  model: string;
+  inputMicrosPerMillion: number;
+  outputMicrosPerMillion: number;
+  cacheReadMicrosPerMillion: number;
+  cacheCreationMicrosPerMillion: number;
+};
+
+export type ProxyConfig = {
+  enabled: boolean;
+  bindAddr: string;
+  routes: ProxyRouteConfig[];
+  pricing: ModelPricing[];
+};
+
+export type ProxyStatus = {
+  running: boolean;
+  enabled: boolean;
+  bindAddr: string;
+  activeRoutes: number;
+  requests: number;
+  failures: number;
+  lastError?: string;
+  recentRequests: number;
+  recentTokens: number;
+};
+
+export type ServerTokenResponse = { routeId: string; token: string; fingerprint: string };
+export type UsageTimeseriesPoint = {
+  date: string;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  estimatedCostMicros: number;
+};
+export type ToolConfigProxyRequest = { tool: ToolConfigTarget; routeId: string };
+
+export type PricingOffPeakWindow = {
+  startMinuteUtc: number;
+  endMinuteUtc: number;
+  inputMicrosPerMillion: number;
+  outputMicrosPerMillion: number;
+  cacheReadMicrosPerMillion: number;
+  cacheCreationMicrosPerMillion: number;
+};
+
+export type ModelPriceRule = {
+  model: string;
+  inputMicrosPerMillion: number;
+  outputMicrosPerMillion: number;
+  cacheReadMicrosPerMillion: number;
+  cacheCreationMicrosPerMillion: number;
+  offPeak?: PricingOffPeakWindow;
+};
+
+export type GroupPriceVersion = { effectiveFrom: number; rules: ModelPriceRule[] };
+export type PricingGroup = { id: string; name: string; versions: GroupPriceVersion[] };
+export type CredentialAssignment = {
+  entryId: string;
+  secretId: string;
+  groupId?: string;
+  multiplier: number;
+};
+export type PricingConfig = {
+  groups: PricingGroup[];
+  assignments: CredentialAssignment[];
+  listPriceUpdatedAt?: number;
+};
+export type PricingApplyScope = "all_history" | "from_now";
+export type ToolDetection = { tool: ToolConfigTarget; binaryFound: boolean; configPath?: string };
+export type ServerUsageSummary = {
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  estimatedCostMicros: number;
+  providers: Array<{
+    providerEntryId: string;
+    secretId: string;
+    requestCount: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    estimatedCostMicros: number;
+  }>;
+};
+
 export type RecoveryKit = { recoveryKey: string };
 
 export type ThemePreference = "system" | "light" | "dark";
@@ -211,6 +343,7 @@ export type ToolConfigPreview = {
   targetPath: string;
   summary: string;
   preview: string;
+  files?: Array<{ path: string; content: string; diff?: string }>;
 };
 
 export type ToolConfigApplyResult = {

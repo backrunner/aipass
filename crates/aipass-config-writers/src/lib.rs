@@ -1,4 +1,5 @@
 mod backup;
+mod detect;
 mod models;
 mod plan;
 mod utils;
@@ -7,6 +8,7 @@ pub use backup::{
     apply_plan, apply_plan_encrypted, apply_plan_with_plain_backup, find_backup_by_operation,
     rollback, rollback_encrypted, rollback_plain,
 };
+pub use detect::{detect_tools, ToolDetection};
 pub use models::{
     ApplyResult, CodexApiKeyMode, CodexProviderMigration, ConfigPlan, ConfigWriter,
     EncryptedBackup, ToolEntry, ToolId,

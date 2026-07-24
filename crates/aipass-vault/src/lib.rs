@@ -317,6 +317,32 @@ impl Drop for Vault {
 }
 
 impl Vault {
+    pub fn encrypt_local_state(
+        &self,
+        purpose: &str,
+        plaintext: &[u8],
+    ) -> Result<Ciphertext, VaultError> {
+        encrypt_bytes(
+            &self.index_key,
+            format!("aipass-local-state:{}:{purpose}", self.header.vault_id).as_bytes(),
+            plaintext,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn decrypt_local_state(
+        &self,
+        purpose: &str,
+        ciphertext: &Ciphertext,
+    ) -> Result<Vec<u8>, VaultError> {
+        decrypt_bytes(
+            &self.index_key,
+            format!("aipass-local-state:{}:{purpose}", self.header.vault_id).as_bytes(),
+            ciphertext,
+        )
+        .map_err(Into::into)
+    }
+
     pub fn create(
         root: impl AsRef<Path>,
         password: &SecretString,
@@ -836,6 +862,28 @@ impl Vault {
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         self.write_provider_record(id, &plaintext)?;
         self.audit("provider.favicon_backfill", Some(id), None)?;
+        Ok(Some(summary_from_plaintext(&plaintext)))
+    }
+
+    pub fn replace_provider_favicon_url(
+        &self,
+        id: Uuid,
+        favicon_url: impl Into<String>,
+    ) -> Result<Option<EntrySummary>, VaultError> {
+        let favicon_url = favicon_url.into();
+        let favicon_url = favicon_url.trim();
+        if favicon_url.is_empty() {
+            return Ok(None);
+        }
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        if plaintext.entry.favicon_url.as_deref() == Some(favicon_url) {
+            return Ok(None);
+        }
+        plaintext.entry.favicon_url = Some(favicon_url.to_string());
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("provider.favicon_refresh", Some(id), None)?;
         Ok(Some(summary_from_plaintext(&plaintext)))
     }
 
@@ -1646,7 +1694,11 @@ fn create_dirs(root: &Path) -> Result<(), VaultError> {
 
 fn exportable_files(root: &Path) -> Result<Vec<PathBuf>, VaultError> {
     let mut files = Vec::new();
-    for relative in ["manifest.aipmanifest", "sync-checkpoint.aipcheckpoint"] {
+    for relative in [
+        "manifest.aipmanifest",
+        "sync-checkpoint.aipcheckpoint",
+        "server-config.aipstate",
+    ] {
         let path = root.join(relative);
         if path.exists() {
             files.push(PathBuf::from(relative));

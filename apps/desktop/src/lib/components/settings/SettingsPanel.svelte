@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { getVersion } from "@tauri-apps/api/app";
   import { Dialog, Tabs } from "bits-ui";
-  import { Check, Download, Puzzle, RefreshCw, RotateCw, Trash2, Upload, Wifi, X } from "lucide-svelte";
+  import { Check, Download, Plus, Puzzle, RefreshCw, RotateCw, Server, Trash2, Upload, Wifi, X } from "lucide-svelte";
+  import { onMount } from "svelte";
 
   import { themeStore, setTheme } from "../../stores/appearance";
   import { isLocalizedMessage, localeStore, resolveMessage, setLocale, t } from "../../stores/i18n";
@@ -10,6 +12,8 @@
     LocalePreference,
     MaybePromise,
     MessageValue,
+    ModelPricing,
+    ProxyConfig,
     SyncConflict,
     SyncMode,
     SyncReport,
@@ -46,6 +50,8 @@
   export let devices: DeviceRecord[] = [];
   export let devicesLoading = false;
   export let initialTab: string = "general";
+  export let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+  export let serverBusy = "";
   export let onClose: () => MaybePromise = () => {};
   export let onSavePreferences: () => MaybePromise = () => {};
   export let onChangeMasterPassword: () => MaybePromise = () => {};
@@ -60,6 +66,7 @@
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
   export let onLoadBrowserExtensionStatus: () => MaybePromise = () => {};
   export let onInstallBrowserExtension: () => MaybePromise = () => {};
+  export let onSaveServerConfig: (config: ProxyConfig) => MaybePromise = () => {};
 
   let activeTab = initialTab || "general";
   let previousInitialTab = initialTab;
@@ -142,12 +149,51 @@
     return `${summary.maskedSecret} · ${summary.fingerprint.slice(0, 12)}`;
   }
 
+  function updateRouteRetry(routeId: string, key: keyof ProxyConfig["routes"][number]["retry"], value: number) {
+    serverConfig = {
+      ...serverConfig,
+      routes: serverConfig.routes.map((route) => route.id === routeId
+        ? { ...route, retry: { ...route.retry, [key]: value } }
+        : route)
+    };
+  }
+
+  function addPricing() {
+    const pricing: ModelPricing = {
+      model: "",
+      inputMicrosPerMillion: 0,
+      outputMicrosPerMillion: 0,
+      cacheReadMicrosPerMillion: 0,
+      cacheCreationMicrosPerMillion: 0
+    };
+    serverConfig = { ...serverConfig, pricing: [...serverConfig.pricing, pricing] };
+  }
+
+  function updatePricing(index: number, patch: Partial<ModelPricing>) {
+    serverConfig = { ...serverConfig, pricing: serverConfig.pricing.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) };
+  }
+
+  function removePricing(index: number) {
+    serverConfig = { ...serverConfig, pricing: serverConfig.pricing.filter((_, itemIndex) => itemIndex !== index) };
+  }
+
   let updateCheck: UpdateCheckResult | undefined;
   let updateChecking = false;
   let updateInstalling = false;
   let updateError: MessageValue = "";
   let updateErrorText = "";
   $: updateErrorText = resolveMessage($t, updateError);
+
+  let appVersion = "";
+  onMount(() => {
+    void (async () => {
+      try {
+        appVersion = await getVersion();
+      } catch {
+        appVersion = "";
+      }
+    })();
+  });
 
   async function runUpdateCheck() {
     updateChecking = true;
@@ -209,6 +255,7 @@
           <Tabs.Trigger value="general" class="tab-trigger">{$t("settings.general")}</Tabs.Trigger>
           <Tabs.Trigger value="security" class="tab-trigger">{$t("settings.security")}</Tabs.Trigger>
           <Tabs.Trigger value="sync" class="tab-trigger">{$t("settings.sync")}</Tabs.Trigger>
+          <Tabs.Trigger value="server" class="tab-trigger">{$t("settings.server")}</Tabs.Trigger>
           <Tabs.Trigger value="backup" class="tab-trigger">{$t("settings.backup")}</Tabs.Trigger>
           <Tabs.Trigger value="about" class="tab-trigger">{$t("settings.about")}</Tabs.Trigger>
         </Tabs.List>
@@ -445,6 +492,48 @@
             </Card>
           </Tabs.Content>
 
+          <Tabs.Content value="server" class="tab-panel">
+            <Card title={$t("settings.serverFailover")}>
+              <div class="settings-stack">
+                {#each serverConfig.routes as route (route.id)}
+                  <section class="server-route-settings">
+                    <div class="server-route-title"><Server size={14} /><strong>{route.name}</strong></div>
+                    <div class="server-settings-grid">
+                      <Field label={$t("server.maxAttempts")}><input type="number" min="1" max="10" value={route.retry.maxAttempts} on:change={(event) => updateRouteRetry(route.id, "maxAttempts", Number(event.currentTarget.value))} /></Field>
+                      <Field label={$t("server.failureThreshold")}><input type="number" min="1" max="20" value={route.retry.failureThreshold} on:change={(event) => updateRouteRetry(route.id, "failureThreshold", Number(event.currentTarget.value))} /></Field>
+                      <Field label={$t("settings.circuitOpenSeconds")}><input type="number" min="1" value={route.retry.circuitOpenSeconds} on:change={(event) => updateRouteRetry(route.id, "circuitOpenSeconds", Number(event.currentTarget.value))} /></Field>
+                      <Field label={$t("settings.connectTimeoutMs")}><input type="number" min="100" step="100" value={route.retry.connectTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "connectTimeoutMs", Number(event.currentTarget.value))} /></Field>
+                      <Field label={$t("server.firstByteTimeout")}><input type="number" min="1000" step="1000" value={route.retry.firstByteTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "firstByteTimeoutMs", Number(event.currentTarget.value))} /></Field>
+                      <Field label={$t("settings.streamIdleTimeoutMs")}><input type="number" min="1000" step="1000" value={route.retry.streamIdleTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "streamIdleTimeoutMs", Number(event.currentTarget.value))} /></Field>
+                    </div>
+                  </section>
+                {:else}
+                  <p class="hint">{$t("settings.noServerRoutes")}</p>
+                {/each}
+              </div>
+            </Card>
+
+            <Card title={$t("settings.modelPricing")}>
+              <div class="settings-stack">
+                <p class="hint">{$t("settings.modelPricingDesc")}</p>
+                {#each serverConfig.pricing as pricing, index}
+                  <div class="pricing-row">
+                    <Field label={$t("settings.modelPrefix")}><input value={pricing.model} on:change={(event) => updatePricing(index, { model: event.currentTarget.value })} /></Field>
+                    <Field label={$t("settings.inputPrice")}><input type="number" min="0" value={pricing.inputMicrosPerMillion} on:change={(event) => updatePricing(index, { inputMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
+                    <Field label={$t("settings.outputPrice")}><input type="number" min="0" value={pricing.outputMicrosPerMillion} on:change={(event) => updatePricing(index, { outputMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
+                    <Field label={$t("settings.cacheReadPrice")}><input type="number" min="0" value={pricing.cacheReadMicrosPerMillion} on:change={(event) => updatePricing(index, { cacheReadMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
+                    <Field label={$t("settings.cacheCreationPrice")}><input type="number" min="0" value={pricing.cacheCreationMicrosPerMillion} on:change={(event) => updatePricing(index, { cacheCreationMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
+                    <button type="button" class="pricing-remove" title={$t("settings.removePricing")} on:click={() => removePricing(index)}><Trash2 size={14} /></button>
+                  </div>
+                {/each}
+                <div class="button-row">
+                  <Button variant="ghost" size="sm" on:click={addPricing}><Plus size={13} /> {$t("settings.addPricing")}</Button>
+                  <Button variant="primary" on:click={() => onSaveServerConfig(serverConfig)} disabled={Boolean(serverBusy)}><Check size={14} /> {$t("server.save")}</Button>
+                </div>
+              </div>
+            </Card>
+          </Tabs.Content>
+
           <Tabs.Content value="backup" class="tab-panel">
             <Card title={$t("settings.export")}>
               <div class="rows">
@@ -529,6 +618,14 @@
 
             <Card title={$t("settings.updates")}>
               <div class="rows">
+                {#if appVersion}
+                  <div class="row">
+                    <div class="row-text">
+                      <span class="row-label">{$t("settings.currentVersion")}</span>
+                    </div>
+                    <span class="row-desc">AIPass v{appVersion}</span>
+                  </div>
+                {/if}
                 {#if updateCheck?.available}
                   <div class="update-summary">
                     <div class="update-summary-text">
@@ -1017,7 +1114,62 @@
     white-space: pre-wrap;
   }
 
+  .settings-stack {
+    display: grid;
+    gap: 12px;
+  }
+
+  .server-route-settings {
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--divider);
+  }
+
+  .server-route-settings:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .server-route-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 10px;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+
+  .server-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .pricing-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) repeat(4, minmax(90px, 0.8fr)) 28px;
+    align-items: end;
+    gap: 8px;
+  }
+
+  .pricing-remove {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 34px;
+    color: var(--text-tertiary);
+    border-radius: var(--radius-sm);
+  }
+
+  .pricing-remove:hover {
+    color: var(--danger);
+    background: color-mix(in oklab, var(--danger) 8%, transparent);
+  }
+
   @media (max-width: 560px) {
+    .server-settings-grid,
+    .pricing-row {
+      grid-template-columns: 1fr;
+    }
     .extension-summary {
       grid-template-columns: 32px minmax(0, 1fr);
 

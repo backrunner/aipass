@@ -6,6 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+aipass-config-writers = { path = "../aipass-config-writers" }
+aipass-proxy = { path = "../aipass-proxy" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
 aipass-sync = { path = "../aipass-sync" }
 aipass-vault = { path = "../aipass-vault" }

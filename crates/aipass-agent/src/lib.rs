@@ -5,6 +5,8 @@ pub mod ipc;
 pub mod launcher;
 pub mod logging;
 pub mod paths;
+pub mod pricing;
+pub mod proxy_service;
 pub mod server;
 pub mod session;
 pub(crate) mod usage_probe;

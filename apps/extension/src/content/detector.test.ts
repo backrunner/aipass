@@ -57,6 +57,20 @@ function clickPromptAction(action: string) {
   button.click();
 }
 
+// Saving a detected draft now includes asynchronous favicon localization, so
+// the runtime message may land a few macrotasks after the click.
+async function waitForMessage<T>(type: string): Promise<T | undefined> {
+  let found: unknown;
+  await vi.waitFor(
+    () => {
+      found = sentMessages.find((message) => (message as { type?: string }).type === type);
+      assert.ok(found, `expected runtime message ${type}`);
+    },
+    { timeout: 2000, interval: 10 }
+  );
+  return found as T | undefined;
+}
+
 describe("content detector", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -297,7 +311,7 @@ describe("content detector", () => {
     assert.equal(drafts.length, 1);
     assert.equal(drafts[0]?.providerId, "new_api");
     assert.equal(drafts[0]?.title, "Acme Gateway · Production");
-    assert.equal(drafts[0]?.secretLabel, "Production");
+    assert.equal(drafts[0]?.secretLabel, "vip");
     assert.equal(drafts[0]?.apiKey, "sk-anyrouterListSecret1234567890");
     assert.equal(drafts[0]?.gateway?.group, "vip");
     assert.equal(drafts[0]?.gateway?.rate, "0.8x");
@@ -320,10 +334,10 @@ describe("content detector", () => {
     const drafts = detectAllFromDocument(doc);
     assert.equal(drafts.length, 2);
     assert.equal(drafts[0]?.providerId, "sub2api");
-    assert.equal(drafts[0]?.secretLabel, "Product A");
+    assert.equal(drafts[0]?.secretLabel, "vip");
     assert.equal(drafts[0]?.gateway?.group, "vip");
     assert.equal(drafts[0]?.gateway?.rate, "0.8x");
-    assert.equal(drafts[1]?.secretLabel, "Product B");
+    assert.equal(drafts[1]?.secretLabel, "default");
     assert.equal(drafts[1]?.gateway?.group, "default");
     assert.equal(drafts[1]?.gateway?.rate, "1x");
   });
@@ -345,6 +359,131 @@ describe("content detector", () => {
     assert.equal(drafts[0]?.providerId, "new_api");
     assert.equal(drafts[0]?.gateway?.group, "premium");
     assert.equal(drafts[0]?.gateway?.rate, "0.5x");
+  });
+
+  it("matches a copied key to its table row via the elided display form", async () => {
+    setLocation("relay.example.test", "/console/token");
+    document.title = "API Keys - Acme Gateway";
+    document.body.innerHTML =
+      `<h1>AnyRouter</h1>
+       <table>
+        <thead><tr><th>名称</th><th>密钥</th><th>分组</th><th>倍率</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Production</td>
+            <td>sk-any...7890</td>
+            <td>vip</td>
+            <td>0.8x</td>
+            <td><button aria-label="复制密钥">复制</button></td>
+          </tr>
+        </tbody>
+       </table>`;
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-anyrouterListSecret1234567890" }
+      })
+    );
+    await flushTimers();
+    clickPromptAction("save");
+
+    const detection = await waitForMessage<
+      { drafts?: Array<{ apiKey?: string; secretLabel?: string; gateway?: { group?: string; rate?: string } }> }
+    >("aipass.saveDetectedDraftsNow");
+    assert.equal(detection?.drafts?.[0]?.apiKey, "sk-anyrouterListSecret1234567890");
+    assert.equal(detection?.drafts?.[0]?.gateway?.group, "vip");
+    assert.equal(detection?.drafts?.[0]?.gateway?.rate, "0.8x");
+    assert.equal(detection?.drafts?.[0]?.secretLabel, "vip");
+  });
+
+  it("never uses an elided key as the key name or title suffix", async () => {
+    setLocation("newapi.example.test", "/token");
+    document.title = "New API";
+    document.body.innerHTML =
+      `<h1>New API</h1>
+       <table>
+        <thead><tr><th>名称</th><th>密钥</th><th>分组</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>sk-def…4567</td>
+            <td>sk-def…4567</td>
+            <td>default</td>
+            <td><button aria-label="复制密钥">复制</button></td>
+          </tr>
+        </tbody>
+       </table>`;
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-defaultSecretValue0004567" }
+      })
+    );
+    await flushTimers();
+    clickPromptAction("save");
+
+    const detection = await waitForMessage<
+      { drafts?: Array<{ title?: string; secretLabel?: string; gateway?: { group?: string } }> }
+    >("aipass.saveDetectedDraftsNow");
+    const draft = detection?.drafts?.[0];
+    assert.equal(draft?.gateway?.group, "default");
+    assert.equal(draft?.secretLabel, "default");
+    assert.ok(draft?.title, "expected a title");
+    assert.ok(!draft?.title?.includes("sk-"), `title must not contain key material: ${draft?.title}`);
+    assert.ok(!draft?.title?.includes("…"), `title must not contain elisions: ${draft?.title}`);
+  });
+
+  it("falls back to primary when neither group nor label is readable", async () => {
+    setLocation("one.example.test", "/token");
+    document.title = "One API";
+    document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-oneApiPrimaryFallbackSecret1234567890" }
+      })
+    );
+    await flushTimers();
+    clickPromptAction("save");
+
+    const detection = await waitForMessage<{ drafts?: Array<{ secretLabel?: string }> }>(
+      "aipass.saveDetectedDraftsNow"
+    );
+    assert.equal(detection?.drafts?.[0]?.secretLabel, "primary");
+  });
+
+  it("rejects over-long or secret-shaped group values", async () => {
+    setLocation("sub2api.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const longGroup = "g".repeat(80);
+    const doc = new DOMParser().parseFromString(
+      `<title>sub2api</title>
+       <table>
+        <thead><tr><th>名称</th><th>API Key</th><th>分组</th><th>倍率</th></tr></thead>
+        <tbody>
+          <tr><td>Product A</td><td>productA_key_1234567890abcdef</td><td>${longGroup}</td><td>0.8x</td></tr>
+          <tr><td>Product B</td><td>productB_key_abcdef1234567890</td><td>vip</td><td>sk-def…4567</td></tr>
+        </tbody>
+       </table>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 2);
+    // Over-long group is dropped; the name column still provides the label,
+    // and the key name falls back to primary only when nothing is readable.
+    assert.equal(drafts[0]?.gateway?.group, undefined);
+    assert.equal(drafts[0]?.gateway?.rate, "0.8x");
+    // Masked-key-shaped rate value is rejected.
+    assert.equal(drafts[1]?.gateway?.group, "vip");
+    assert.equal(drafts[1]?.gateway?.rate, undefined);
   });
 
   it("detects OpenRouter and Replicate official console keys", async () => {
@@ -578,12 +717,7 @@ describe("content detector", () => {
 
     assert.ok(document.getElementById("aipass-extension-toast"));
     clickPromptAction("save");
-    await flushTimers();
-
-    assert.equal(
-      sentMessages.some((message) => (message as { type?: string }).type === "aipass.saveDetectedDraftsNow"),
-      true
-    );
+    await waitForMessage("aipass.saveDetectedDraftsNow");
   });
 
   it("logs local build scan decisions without raw secrets", async () => {
@@ -624,16 +758,14 @@ describe("content detector", () => {
     await import("./detector");
     await flushTimers();
     clickPromptAction("save");
-    await flushTimers();
 
-    const detection = sentMessages.find((message) => {
-      const typed = message as { type?: string };
-      return typed.type === "aipass.saveDetectedDraftsNow";
-    }) as { drafts?: Array<{ providerId?: string; apiKey?: string; title?: string; secretLabel?: string }> } | undefined;
+    const detection = await waitForMessage<
+      { drafts?: Array<{ providerId?: string; apiKey?: string; title?: string; secretLabel?: string }> }
+    >("aipass.saveDetectedDraftsNow");
     assert.equal(detection?.drafts?.[0]?.providerId, "new_api");
     assert.equal(detection?.drafts?.[0]?.apiKey, "sk-anyrouterListSecret1234567890");
     assert.equal(detection?.drafts?.[0]?.title, "Acme Gateway · Production");
-    assert.equal(detection?.drafts?.[0]?.secretLabel, "Production");
+    assert.equal(detection?.drafts?.[0]?.secretLabel, "vip");
   });
 
   it("prompts before saving copied one-api keys", async () => {
@@ -651,12 +783,10 @@ describe("content detector", () => {
     );
     await flushTimers();
     clickPromptAction("save");
-    await flushTimers();
 
-    const detection = sentMessages.find((message) => {
-      const typed = message as { type?: string };
-      return typed.type === "aipass.saveDetectedDraftsNow";
-    }) as { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string }> } | undefined;
+    const detection = await waitForMessage<
+      { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string }> }
+    >("aipass.saveDetectedDraftsNow");
     assert.equal(detection?.drafts?.[0]?.providerId, "one_api");
     assert.equal(detection?.drafts?.[0]?.apiKey, "sk-oneApiCopiedSecret1234567890");
     assert.equal(detection?.drafts?.[0]?.endpoint, "https://one.example.test/v1");
@@ -697,6 +827,7 @@ describe("content detector", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         source: window,
+        origin: window.location.origin,
         data: {
           source: "aipass.clipboardBridge",
           type: "aipass.clipboardSecret",
@@ -706,13 +837,35 @@ describe("content detector", () => {
     );
     await flushTimers();
     clickPromptAction("save");
+
+    const detection = await waitForMessage<{ drafts?: Array<{ apiKey?: string }> }>(
+      "aipass.saveDetectedDraftsNow"
+    );
+    assert.equal(detection?.drafts?.[0]?.apiKey, "sk-crossWorldSecret1234567890");
+  });
+
+  it("ignores clipboard bridge messages from another origin", async () => {
+    setLocation("one.example.test", "/token");
+    document.title = "One API";
+    document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: window,
+        origin: "https://attacker.example",
+        data: {
+          source: "aipass.clipboardBridge",
+          type: "aipass.clipboardSecret",
+          text: "sk-crossOriginSecret1234567890"
+        }
+      })
+    );
     await flushTimers();
 
-    const detection = sentMessages.find((message) => {
-      const typed = message as { type?: string };
-      return typed.type === "aipass.saveDetectedDraftsNow";
-    }) as { drafts?: Array<{ apiKey?: string }> } | undefined;
-    assert.equal(detection?.drafts?.[0]?.apiKey, "sk-crossWorldSecret1234567890");
+    assert.equal(document.getElementById("aipass-extension-toast"), null);
   });
 
   it("prompts again when the user copies a dismissed key", async () => {
@@ -740,7 +893,9 @@ describe("content detector", () => {
     copy();
     await flushTimers();
     clickPromptAction("save");
-    await flushTimers();
+    // Consume the save message here so its favicon-localization delay cannot
+    // leak it into the next test's message list.
+    await waitForMessage("aipass.saveDetectedDraftsNow");
 
     const filters = sentMessages.filter((message) => {
       const typed = message as { type?: string };
@@ -764,12 +919,10 @@ describe("content detector", () => {
     );
     await flushTimers();
     clickPromptAction("save");
-    await flushTimers();
 
-    const detection = sentMessages.find((message) => {
-      const typed = message as { type?: string };
-      return typed.type === "aipass.saveDetectedDraftsNow";
-    }) as { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string; title?: string }> } | undefined;
+    const detection = await waitForMessage<
+      { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string; title?: string }> }
+    >("aipass.saveDetectedDraftsNow");
     assert.equal(detection?.drafts?.[0]?.providerId, "new_api");
     assert.equal(detection?.drafts?.[0]?.apiKey, "sk-newApiCopiedSecret1234567890");
     assert.equal(detection?.drafts?.[0]?.endpoint, "https://relay.example.test/v1");
@@ -791,12 +944,10 @@ describe("content detector", () => {
     );
     await flushTimers();
     clickPromptAction("save");
-    await flushTimers();
 
-    const detection = sentMessages.find((message) => {
-      const typed = message as { type?: string };
-      return typed.type === "aipass.saveDetectedDraftsNow";
-    }) as { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string }> } | undefined;
+    const detection = await waitForMessage<
+      { drafts?: Array<{ providerId?: string; apiKey?: string; endpoint?: string }> }
+    >("aipass.saveDetectedDraftsNow");
     assert.equal(detection?.drafts?.[0]?.providerId, "sub2api");
     assert.equal(detection?.drafts?.[0]?.apiKey, "productA_key_1234567890abcdef");
     assert.equal(detection?.drafts?.[0]?.endpoint, "https://relay.example.test/v1");

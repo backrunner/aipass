@@ -1,5 +1,11 @@
+pub use aipass_config_writers::ToolId;
 use aipass_provider_registry::{
     AuthScheme, GatewayMetadata, InterfaceType, ProviderEndpoint, QuotaInfo,
+};
+pub use aipass_proxy::{
+    ModelPricing, Protocol as ProxyProtocol, ProviderUsageAggregate, ProxyConfig, ProxyRouteConfig,
+    ProxyStatus, ProxyTargetConfig, RetryPolicy, RouteStrategy, UsageAggregate,
+    UsageTimeseriesPoint,
 };
 use aipass_sync::SyncObject;
 use aipass_vault::{
@@ -223,6 +229,23 @@ pub struct ToolConfigRequest {
     pub codex_api_key_mode: Option<CodexApiKeyMode>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolConfigProxyRequest {
+    pub tool: ToolId,
+    pub route_id: Uuid,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolConfigPreviewFile {
+    pub path: String,
+    pub content: String,
+    /// Redacted line diff between the current file and the planned content.
+    #[serde(default)]
+    pub diff: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolConfigPreviewResponse {
@@ -233,6 +256,8 @@ pub struct ToolConfigPreviewResponse {
     pub target_path: String,
     pub summary: String,
     pub preview: String,
+    #[serde(default)]
+    pub files: Vec<ToolConfigPreviewFile>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -424,6 +449,40 @@ pub enum AgentRequest {
     SessionPolicyGet,
     #[serde(rename = "session.policy.set")]
     SessionPolicySet { policy: SessionPolicy },
+    #[serde(rename = "server.status")]
+    ServerStatus,
+    #[serde(rename = "server.start")]
+    ServerStart,
+    #[serde(rename = "server.stop")]
+    ServerStop,
+    #[serde(rename = "server.config.get")]
+    ServerConfigGet,
+    #[serde(rename = "server.config.set")]
+    ServerConfigSet { config: ProxyConfig },
+    #[serde(rename = "server.token.rotate")]
+    ServerTokenRotate { route_id: Uuid },
+    #[serde(rename = "server.usage.summary")]
+    ServerUsageSummary,
+    #[serde(rename = "server.usage_timeseries")]
+    ServerUsageTimeseries { days: u32 },
+    #[serde(rename = "server.pricing_config.get")]
+    ServerPricingConfigGet,
+    #[serde(rename = "server.pricing_assignment.set")]
+    ServerPricingAssignmentSet {
+        entry_id: Uuid,
+        secret_id: String,
+        group_id: Option<Uuid>,
+        multiplier: f64,
+    },
+    #[serde(rename = "server.pricing_group.upsert")]
+    ServerPricingGroupUpsert {
+        group: PricingGroup,
+        apply_scope: PricingApplyScope,
+    },
+    #[serde(rename = "server.pricing_group.delete")]
+    ServerPricingGroupDelete { group_id: Uuid },
+    #[serde(rename = "server.pricing_group_version.delete")]
+    ServerPricingGroupVersionDelete { group_id: Uuid, effective_from: i64 },
     #[serde(rename = "vault.status")]
     VaultStatus,
     #[serde(rename = "vault.create")]
@@ -521,6 +580,10 @@ pub enum AgentRequest {
     ToolConfigPreview { request: ToolConfigRequest },
     #[serde(rename = "tool_config.apply")]
     ToolConfigApply { request: ToolConfigRequest },
+    #[serde(rename = "tool_config.proxy_preview")]
+    ToolConfigProxyPreview { request: ToolConfigProxyRequest },
+    #[serde(rename = "tool_config.proxy_apply")]
+    ToolConfigProxyApply { request: ToolConfigProxyRequest },
     #[serde(rename = "tool_config.rollback")]
     ToolConfigRollback { operation_id: Uuid },
     #[serde(rename = "sync.local")]
@@ -699,6 +762,87 @@ pub struct BrowserIgnoredStatus {
 #[serde(rename_all = "camelCase")]
 pub struct SecretValue {
     pub secret: SensitiveString,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerTokenResponse {
+    pub route_id: Uuid,
+    pub token: SensitiveString,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerUsageSummary {
+    pub request_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub estimated_cost_micros: u64,
+    pub providers: Vec<ProviderUsageAggregate>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OffPeakWindow {
+    pub start_minute_utc: u16,
+    pub end_minute_utc: u16,
+    pub input_micros_per_million: u64,
+    pub output_micros_per_million: u64,
+    pub cache_read_micros_per_million: u64,
+    pub cache_creation_micros_per_million: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelPriceRule {
+    pub model: String,
+    pub input_micros_per_million: u64,
+    pub output_micros_per_million: u64,
+    pub cache_read_micros_per_million: u64,
+    pub cache_creation_micros_per_million: u64,
+    pub off_peak: Option<OffPeakWindow>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GroupPriceVersion {
+    pub effective_from: i64,
+    pub rules: Vec<ModelPriceRule>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PricingGroup {
+    pub id: Uuid,
+    pub name: String,
+    pub versions: Vec<GroupPriceVersion>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CredentialAssignment {
+    pub entry_id: Uuid,
+    pub secret_id: String,
+    pub group_id: Option<Uuid>,
+    pub multiplier: f64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PricingConfig {
+    pub groups: Vec<PricingGroup>,
+    pub assignments: Vec<CredentialAssignment>,
+    pub list_price_updated_at: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingApplyScope {
+    AllHistory,
+    FromNow,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

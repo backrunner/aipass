@@ -1,0 +1,10 @@
+# Cloudflare account for AIPass release assets.
+#
+# The R2 bucket `aipass-assets` backs https://assets.aipass.alkinum.io:
+#   - latest.json            Tauri updater manifest (desktop auto-update endpoint)
+#   - releases/<tag>/...     full release artifacts (dmg, updater archives, CLI, extension)
+#
+# Uploads run in CI via the Wrangler CLI (see .github/workflows/release.yml,
+# job `cdn-upload`). With CLOUDFLARE_API_TOKEN set, inspect the bucket locally with:
+#   npx wrangler r2 bucket info aipass-assets
+account_id = "b6754402d59fc29ee8b62119014fec89"

@@ -11,7 +11,11 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   resolve-release:
@@ -62,7 +66,7 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "build_number=${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
-          echo "update_endpoint=https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" >> "${GITHUB_OUTPUT}"
+          echo "update_endpoint=https://assets.aipass.alkinum.io/latest.json" >> "${GITHUB_OUTPUT}"
 
   macos-desktop:
     name: macOS desktop
@@ -139,6 +143,11 @@ jobs:
           keychain_path="${RUNNER_TEMP}/aipass-signing.keychain-db"
           keychain_password="$(openssl rand -base64 32)"
           certificate_path="${RUNNER_TEMP}/apple-certificate.p12"
+          previous_keychain="$(security default-keychain -d user | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')"
+
+          echo "keychain_path=${keychain_path}" >> "${GITHUB_OUTPUT}"
+          echo "certificate_path=${certificate_path}" >> "${GITHUB_OUTPUT}"
+          echo "previous_keychain=${previous_keychain}" >> "${GITHUB_OUTPUT}"
 
           printf '%s' "${APPLE_CERTIFICATE}" | base64 -D > "${certificate_path}"
           if [[ ! -s "${certificate_path}" ]]; then
@@ -173,8 +182,6 @@ jobs:
         env:
           CI: true
           AIPASS_MACOS_UNIVERSAL: true
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ steps.apple-certificate.outputs.identity }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_PATH: ${{ steps.apple-notarization.outputs.api_key_path }}
@@ -188,19 +195,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          app_candidates="$(find target apps/desktop/src-tauri/target -path "*/release/bundle/*" -type d -name "AIPass.app" 2>/dev/null || true)"
-          dmg_candidates="$(find target apps/desktop/src-tauri/target -path "*/release/bundle/*" -type f -name "*.dmg" 2>/dev/null || true)"
-          app_path="$(printf '%s\n' "${app_candidates}" | awk '/\/universal-apple-darwin\// { print; found=1; exit } END { if (!found) exit 0 }')"
-          dmg_path="$(printf '%s\n' "${dmg_candidates}" | awk '/\/universal-apple-darwin\// { print; found=1; exit } END { if (!found) exit 0 }')"
-          if [[ -z "${app_path}" ]]; then
-            app_path="$(printf '%s\n' "${app_candidates}" | sort | head -n 1)"
-          fi
-          if [[ -z "${dmg_path}" ]]; then
-            dmg_path="$(printf '%s\n' "${dmg_candidates}" | sort | head -n 1)"
-          fi
+          app_path="$(find target apps/desktop/src-tauri/target -path "*/universal-apple-darwin/release/bundle/*" -type d -name "AIPass.app" -print -quit 2>/dev/null || true)"
+          dmg_path="$(find target apps/desktop/src-tauri/target -path "*/universal-apple-darwin/release/bundle/*" -type f -name "*.dmg" -print -quit 2>/dev/null || true)"
 
           if [[ -z "${app_path}" || -z "${dmg_path}" ]]; then
-            echo "::error::Missing built AIPass.app or DMG bundle."
+            echo "::error::Missing universal AIPass.app or DMG bundle."
             find target apps/desktop/src-tauri/target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
             exit 1
           fi
@@ -217,8 +216,33 @@ jobs:
         env:
           AIPASS_RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
           AIPASS_RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
+          AIPASS_REQUIRE_UNIVERSAL: true
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: node scripts/prepare-macos-release-artifacts.mjs release-artifacts
+
+      - name: Verify updater archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive_path="$(find release-artifacts -maxdepth 1 -type f -name "*.app.tar.gz" -print -quit)"
+          if [[ -z "${archive_path}" ]]; then
+            echo "::error::Missing macOS updater archive."
+            exit 1
+          fi
+
+          extract_dir="$(mktemp -d "${RUNNER_TEMP}/aipass-updater.XXXXXX")"
+          trap 'rm -rf "${extract_dir}"' EXIT
+          tar -xzf "${archive_path}" -C "${extract_dir}"
+          updater_app="$(find "${extract_dir}" -type d -name "AIPass.app" -print -quit)"
+          if [[ -z "${updater_app}" ]]; then
+            echo "::error::Updater archive does not contain AIPass.app."
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "${updater_app}"
+          spctl --assess --type execute --verbose=4 "${updater_app}"
+          xcrun stapler validate "${updater_app}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -226,6 +250,30 @@ jobs:
           path: release-artifacts/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Clean up signing material
+        if: always()
+        shell: bash
+        env:
+          PREVIOUS_KEYCHAIN: ${{ steps.apple-certificate.outputs.previous_keychain }}
+          SIGNING_KEYCHAIN: ${{ steps.apple-certificate.outputs.keychain_path }}
+          CERTIFICATE_PATH: ${{ steps.apple-certificate.outputs.certificate_path }}
+          API_KEY_PATH: ${{ steps.apple-notarization.outputs.api_key_path }}
+        run: |
+          signing_keychain="${SIGNING_KEYCHAIN:-${RUNNER_TEMP}/aipass-signing.keychain-db}"
+          certificate_path="${CERTIFICATE_PATH:-${RUNNER_TEMP}/apple-certificate.p12}"
+          if [[ -n "${PREVIOUS_KEYCHAIN}" && -e "${PREVIOUS_KEYCHAIN}" ]]; then
+            security default-keychain -d user -s "${PREVIOUS_KEYCHAIN}" || true
+          fi
+          if [[ -e "${signing_keychain}" ]]; then
+            security delete-keychain "${signing_keychain}" || true
+          fi
+          rm -f "${certificate_path}"
+          if [[ -n "${API_KEY_PATH}" ]]; then
+            rm -f "${API_KEY_PATH}"
+          else
+            find "${RUNNER_TEMP}" -maxdepth 1 -type f -name 'AuthKey_*.p8' -delete
+          fi
 
   cli:
     name: CLI ${{ matrix.name }}
@@ -320,6 +368,8 @@ jobs:
       - cli
       - extension
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -351,5 +401,66 @@ jobs:
               --draft \
               --verify-tag \
               --title "AIPass ${RELEASE_TAG}" \
-              --notes "Signed and notarized macOS desktop artifacts, updater manifest, CLI archives, and extension package. Publish this draft to make latest.json available to the in-app updater."
+              --notes "Signed and notarized macOS desktop artifacts, updater manifest, CLI archives, and extension package. The cdn-upload job publishes the same artifacts and latest.json to https://assets.aipass.alkinum.io for the in-app updater; publish this draft when the GitHub release should go public."
           fi
+
+  cdn-upload:
+    name: Upload assets to R2
+    needs:
+      - resolve-release
+      - github-release
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate checksums and SBOM
+        run: node scripts/release-metadata.mjs release-artifacts
+
+      - name: Validate Cloudflare secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing ${name}. Configure the matching GitHub secret (API token needs R2 read/write on the aipass-assets bucket)."
+              exit 1
+            fi
+          done
+
+      - name: Upload release assets to assets.aipass.alkinum.io
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find release-artifacts -maxdepth 1 -type f | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No release artifacts found to upload."
+            exit 1
+          fi
+          # Upload versioned artifacts first; publish the updater manifest last so
+          # clients never see a latest.json pointing at not-yet-uploaded binaries.
+          for file in "${files[@]}"; do
+            name="$(basename "${file}")"
+            npx --yes wrangler@4 r2 object put "aipass-assets/releases/${RELEASE_TAG}/${name}" \
+              --file "${file}" \
+              --remote \
+              --cache-control "public, max-age=31536000, immutable"
+          done
+          npx --yes wrangler@4 r2 object put "aipass-assets/latest.json" \
+            --file release-artifacts/latest.json \
+            --remote \
+            --content-type application/json \
+            --cache-control "no-cache"

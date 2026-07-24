@@ -10,6 +10,7 @@
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
+  import { Banner, Button } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
@@ -19,6 +20,8 @@
   import ProviderDetailPane from "./lib/components/providers/ProviderDetailPane.svelte";
   import ProviderListPane from "./lib/components/providers/ProviderListPane.svelte";
   import ProviderModal from "./lib/components/providers/ProviderModal.svelte";
+  import RouteListPane from "./lib/components/server/RouteListPane.svelte";
+  import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
   import type {
@@ -31,9 +34,17 @@
     EntrySummary,
     FaviconBackfillResult,
     FormMode,
+    PricingApplyScope,
+    PricingConfig,
+    PricingGroup,
     ProbeResult,
     ProviderCounts,
     ProviderFilter,
+    ProxyConfig,
+    ProxyRouteConfig,
+    ProxyStatus,
+    ServerTokenResponse,
+    ServerUsageSummary,
     CodexApiKeyMode,
     SyncConflict,
     SyncSettings,
@@ -43,17 +54,21 @@
     ToolConfigMode,
     ToolConfigPreview,
     ToolConfigTarget,
+    ToolDetection,
     UsageProbeRequest,
     UsageProbeResult,
+    UsageTimeseriesPoint,
     VaultAuthTaskStartResponse,
     VaultAuthTaskStatus,
     VaultStatus
   } from "./lib/types";
   import { passwordStrength } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry } from "./lib/utils/server";
   import { integrationToolName } from "./lib/utils/integrations";
+  import { checkForUpdates, installUpdate } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
-  import { isLocalePreference, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
+  import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
   import type { MessageValue } from "./lib/types";
 
   const hasTauriRuntime = () =>
@@ -83,6 +98,8 @@
   }
 
   let unlistenVaultAuth: (() => void) | undefined;
+  let unlistenOpenServer: (() => void) | undefined;
+  let unlistenProxyStatus: (() => void) | undefined;
   const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
   const finishedVaultAuthTasks = new Map<string, VaultAuthTaskStatus>();
 
@@ -123,6 +140,9 @@
         unlockTransitioning = true;
         unlockCovered = false;
       }
+      if (wasUnlocked && !nowUnlocked) {
+        clearSensitiveUnlockedState();
+      }
       lastLockedState = !nowUnlocked;
     }
   }
@@ -149,7 +169,7 @@
     !(lockTransitioning && !lockCovered);
   $: showWorkspace =
     statusReady && status.exists && !status.locked && !(lockTransitioning && lockCovered);
-  let windowTarget: "main" | "unlock" | "quick-access" | "tray" = "main";
+  let windowTarget: "main" | "unlock" | "quick-access" | "server" | "tray" = "main";
   let password = "";
   let createPassword = "";
   let createPasswordConfirm = "";
@@ -174,6 +194,11 @@
   let notice: MessageValue = "";
   let errorText = "";
   let noticeText = "";
+  let updateAvailableVersion = "";
+  let updateInstalling = false;
+  let updateInstallError: MessageValue = "";
+  let updateInstallErrorText = "";
+  let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
   let selectedId = "";
   let showForm = false;
   let formMode: FormMode = "add";
@@ -181,11 +206,14 @@
   let showArchived = false;
   let showTrash = false;
   let showFavorites = false;
+  let showServer = false;
+  let pendingServerView = false;
   let showSettings = false;
   let settingsInitialTab = "general";
   let providerFilter: ProviderFilter = "all";
   let revealedSecrets: Record<string, string> = {};
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
+  let serverTokenTimer: ReturnType<typeof setTimeout> | undefined;
   let clipboardClearTimer: ReturnType<typeof setTimeout> | undefined;
   let lastSessionTouchAt = 0;
   let autoLockMinutes = 60;
@@ -228,6 +256,27 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchRequestId = 0;
   let faviconBackfillBusy = false;
+  let serverBusy = "";
+  let serverToken = "";
+  let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [] };
+  let serverUsageSeries: UsageTimeseriesPoint[] = [];
+  let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+  let serverStatus: ProxyStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
+  let selectedRouteId = "";
+  let pricingConfig: PricingConfig = { groups: [], assignments: [] };
+  let toolDetections: ToolDetection[] = [];
+  let toolDetectionsLoaded = false;
+  let serverPollTimer: ReturnType<typeof setInterval> | undefined;
+  $: {
+    clearInterval(serverPollTimer);
+    serverPollTimer = undefined;
+    if (showServer && status.exists && !status.locked) {
+      serverPollTimer = setInterval(() => void pollServerStatus(), 2000);
+    }
+  }
+  $: if (showServer && !serverConfig.routes.some((route) => route.id === selectedRouteId)) {
+    selectedRouteId = serverConfig.routes[0]?.id ?? "";
+  }
   const faviconBackfillAttemptedIds = new Set<string>();
 
   async function refreshTrashCount() {
@@ -291,6 +340,60 @@
   $: recoveryPasswordStrength = passwordStrength(recoveryPassword, $t);
   $: errorText = resolveMessage($t, error);
   $: noticeText = resolveMessage($t, notice);
+  $: updateInstallErrorText = resolveMessage($t, updateInstallError);
+
+  const UPDATE_CHECK_DELAY_MS = 3000;
+  const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  const UPDATE_LAST_CHECK_KEY = "aipass.updates.lastCheck";
+  const UPDATE_DISMISSED_KEY = "aipass.updates.dismissed";
+
+  function scheduleAutoUpdateCheck() {
+    let lastCheck = 0;
+    try {
+      lastCheck = Number(localStorage.getItem(UPDATE_LAST_CHECK_KEY) ?? "0");
+    } catch {
+      lastCheck = 0;
+    }
+    if (Number.isFinite(lastCheck) && lastCheck > 0 && Date.now() - lastCheck < UPDATE_CHECK_INTERVAL_MS) {
+      return;
+    }
+    updateCheckTimer = setTimeout(() => {
+      void runAutoUpdateCheck();
+    }, UPDATE_CHECK_DELAY_MS);
+  }
+
+  async function runAutoUpdateCheck() {
+    try {
+      localStorage.setItem(UPDATE_LAST_CHECK_KEY, String(Date.now()));
+      const result = await checkForUpdates();
+      if (result.error || !result.available || !result.latestVersion) return;
+      if (localStorage.getItem(UPDATE_DISMISSED_KEY) === result.latestVersion) return;
+      updateAvailableVersion = result.latestVersion;
+    } catch {
+      // Background checks stay silent; manual checks in settings surface errors.
+    }
+  }
+
+  function dismissUpdatePrompt() {
+    try {
+      localStorage.setItem(UPDATE_DISMISSED_KEY, updateAvailableVersion);
+    } catch {
+      // Ignore storage failures; the prompt simply reappears on next launch.
+    }
+    updateAvailableVersion = "";
+  }
+
+  async function installAvailableUpdate() {
+    updateInstalling = true;
+    updateInstallError = "";
+    try {
+      await installUpdate();
+    } catch (err) {
+      updateInstallError = isLocalizedMessage(err) ? err : String(err);
+    } finally {
+      updateInstalling = false;
+    }
+  }
 
   onMount(() => {
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
@@ -300,32 +403,55 @@
         unlistenVaultAuth = await listen<VaultAuthTaskStatus>("vault-auth-finished", ({ payload }) => {
           settleVaultAuthTask(payload);
         });
+        unlistenOpenServer = await listen("open-server-workspace", () => {
+          pendingServerView = true;
+          void openPendingServerView();
+        });
+        unlistenProxyStatus = await listen("proxy-status-changed", () => {
+          if (showServer && status.exists && !status.locked) {
+            void loadServer();
+          }
+        });
       }
       await loadPreferences();
       await loadSyncSettings();
       await refreshStatus();
       if (hasTauriRuntime()) {
         windowTarget =
-          (await invokeTauri<"main" | "unlock" | "quick-access" | "tray" | null>(
+          (await invokeTauri<"main" | "unlock" | "quick-access" | "server" | "tray" | null>(
             "window_target"
           )) ?? "main";
         if (windowTarget === "unlock") {
           setAuthMode("unlock");
         }
+        pendingServerView ||= windowTarget === "server";
+        if (windowTarget === "main") {
+          scheduleAutoUpdateCheck();
+        }
       }
-      if (!status.locked && status.exists) await loadEntries();
+      if (!status.locked && status.exists) {
+        await loadEntries();
+        await loadServer();
+        void loadPricing();
+        await openPendingServerView();
+      }
     })();
   });
 
   onDestroy(() => {
     unlistenVaultAuth?.();
+    unlistenOpenServer?.();
+    unlistenProxyStatus?.();
     pendingVaultAuthTasks.clear();
     finishedVaultAuthTasks.clear();
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
     activityEvents.forEach((event) => window.removeEventListener(event, markActivity));
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
+    clearTimeout(serverTokenTimer);
     clearTimeout(searchTimer);
+    clearTimeout(updateCheckTimer);
+    clearInterval(serverPollTimer);
   });
 
   async function refreshStatus() {
@@ -371,6 +497,10 @@
       entries = [];
       selectedId = "";
       setAuthMode("unlock");
+      await loadEntries();
+      await loadServer();
+      void loadPricing();
+      await openPendingServerView();
     } catch (err) {
       error = String(err);
     } finally {
@@ -400,6 +530,9 @@
       showUnlockPassword = false;
       setAuthMode("unlock");
       await loadEntries();
+      await loadServer();
+      void loadPricing();
+      await openPendingServerView();
     } catch (err) {
       error = err instanceof Error ? err.message : localizedMessage("error.unlockFailed");
     } finally {
@@ -440,6 +573,9 @@
       password = "";
       setAuthMode("unlock");
       await loadEntries();
+      await loadServer();
+      void loadPricing();
+      await openPendingServerView();
     } catch (err) {
       error = String(err);
     } finally {
@@ -535,12 +671,7 @@
     await lockPromise;
 
     status = { exists: true, locked: true };
-    entries = [];
-    selectedId = "";
-    revealedSecrets = {};
-    probeResult = undefined;
-    usageProbeResult = undefined;
-    showSettings = false;
+    clearSensitiveUnlockedState();
     password = "";
     createPassword = "";
     createPasswordConfirm = "";
@@ -559,6 +690,25 @@
     setAuthMode("unlock");
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
+    clearTimeout(serverTokenTimer);
+  }
+
+  function clearSensitiveUnlockedState() {
+    entries = [];
+    selectedId = "";
+    pricingConfig = { groups: [], assignments: [] };
+    revealedSecrets = {};
+    probeResult = undefined;
+    usageProbeResult = undefined;
+    showSettings = false;
+    showServer = false;
+    clearTimeout(serverTokenTimer);
+    serverToken = "";
+    serverConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+    serverStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
+    serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [] };
+    serverUsageSeries = [];
+    selectedRouteId = "";
   }
 
   async function loadEntries(
@@ -651,6 +801,7 @@
     clearTimeout(searchTimer);
     searchRequestId++;
     providerFilter = value;
+    showServer = false;
     if (showArchived || showTrash || showFavorites) {
       showArchived = false;
       showTrash = false;
@@ -894,6 +1045,7 @@
       delete nextRevealed[label];
       revealedSecrets = nextRevealed;
       await loadEntries();
+      void loadServer();
       notice = localizedMessage("notice.secretRemoved");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
@@ -932,6 +1084,7 @@
     if (!selected) return;
     await invokeTauri("provider_trash", { id: selected.id });
     await loadEntries();
+    void loadServer();
   }
 
   async function restoreSelected() {
@@ -944,6 +1097,7 @@
     if (!selected || !confirm($t("confirm.deleteProvider", { title: selected.title }))) return;
     await invokeTauri("provider_delete", { id: selected.id });
     await loadEntries();
+    void loadServer();
   }
 
   async function emptyTrash() {
@@ -958,6 +1112,7 @@
     showArchived = value;
     showTrash = false;
     showFavorites = false;
+    showServer = false;
     providerFilter = "all";
     query = "";
     await loadEntries(value, false, false);
@@ -969,6 +1124,7 @@
     showTrash = value;
     showArchived = false;
     showFavorites = false;
+    showServer = false;
     providerFilter = "all";
     query = "";
     if (value) {
@@ -987,9 +1143,304 @@
     showFavorites = value;
     showArchived = false;
     showTrash = false;
+    showServer = false;
     providerFilter = "all";
     query = "";
     await loadEntries(false, false, value);
+  }
+
+  async function loadServer() {
+    try {
+      const [nextStatus, nextConfig, usage] = await Promise.all([
+        invokeTauri<ProxyStatus>("server_status"),
+        invokeTauri<ProxyConfig>("server_config_get"),
+        invokeTauri<ServerUsageSummary>("server_usage_summary")
+      ]);
+      serverStatus = nextStatus;
+      serverConfig = nextConfig;
+      serverUsage = usage;
+    } catch (err) {
+      console.warn("server state load failed", err);
+    }
+    try {
+      serverUsageSeries = await invokeTauri<UsageTimeseriesPoint[]>("server_usage_timeseries", { days: 30 });
+    } catch (err) {
+      console.warn("server usage timeseries load failed", err);
+    }
+  }
+
+  async function pollServerStatus() {
+    try {
+      serverStatus = await invokeTauri<ProxyStatus>("server_status");
+    } catch {
+      // Best-effort status polling while the server view is open.
+    }
+  }
+
+  async function loadPricing() {
+    try {
+      pricingConfig = await invokeTauri<PricingConfig>("pricing_config_get");
+    } catch {
+      // Pricing commands require an unlocked vault; stay on empty defaults.
+    }
+    if (!toolDetectionsLoaded) {
+      toolDetectionsLoaded = true;
+      void loadToolDetections();
+    }
+  }
+
+  async function setPricingAssignment(
+    entryId: string,
+    secretId: string,
+    groupId: string | null,
+    multiplier: number
+  ) {
+    try {
+      pricingConfig = await invokeTauri<PricingConfig>("pricing_assignment_set", {
+        entryId,
+        secretId,
+        groupId,
+        multiplier
+      });
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  async function upsertPricingGroup(
+    group: PricingGroup,
+    applyScope: PricingApplyScope,
+    assign?: { entryId: string; secretId: string }
+  ) {
+    try {
+      pricingConfig = await invokeTauri<PricingConfig>("pricing_group_upsert", { group, applyScope });
+      if (assign) {
+        const current = pricingConfig.assignments.find(
+          (assignment) => assignment.entryId === assign.entryId && assignment.secretId === assign.secretId
+        );
+        pricingConfig = await invokeTauri<PricingConfig>("pricing_assignment_set", {
+          entryId: assign.entryId,
+          secretId: assign.secretId,
+          groupId: group.id,
+          multiplier: current?.multiplier ?? 1
+        });
+      }
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  async function deletePricingGroup(groupId: string) {
+    if (!confirm($t("pricing.deleteGroupConfirm"))) return;
+    try {
+      pricingConfig = await invokeTauri<PricingConfig>("pricing_group_delete", { groupId });
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  async function deletePricingVersion(groupId: string, effectiveFrom: number) {
+    try {
+      pricingConfig = await invokeTauri<PricingConfig>("pricing_group_version_delete", {
+        groupId,
+        effectiveFrom
+      });
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  async function loadToolDetections() {
+    try {
+      toolDetections = await invokeTauri<ToolDetection[]>("tool_config_detect");
+    } catch (err) {
+      console.warn("tool detection failed", err);
+    }
+  }
+
+  async function setServerView() {
+    showServer = true;
+    showArchived = false;
+    showTrash = false;
+    showFavorites = false;
+    showSettings = false;
+    clearTimeout(serverTokenTimer);
+    serverToken = "";
+    await loadServer();
+  }
+
+  async function openPendingServerView() {
+    if (!pendingServerView || !statusReady || !status.exists || status.locked) return;
+    pendingServerView = false;
+    await setServerView();
+  }
+
+  async function saveServerConfig(config: ProxyConfig) {
+    if (serverBusy) return;
+    serverBusy = "save";
+    error = "";
+    try {
+      serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config });
+      serverStatus = await invokeTauri<ProxyStatus>("server_status");
+    } catch (err) {
+      error = String(err);
+    } finally {
+      serverBusy = "";
+    }
+  }
+
+  async function startServer() {
+    if (serverBusy) return;
+    serverBusy = "start";
+    error = "";
+    try {
+      serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
+      serverStatus = await invokeTauri<ProxyStatus>("server_start");
+      serverConfig = { ...serverConfig, enabled: serverStatus.enabled };
+    } catch (err) {
+      error = String(err);
+    } finally {
+      serverBusy = "";
+    }
+  }
+
+  async function stopServer() {
+    if (serverBusy) return;
+    serverBusy = "stop";
+    error = "";
+    try {
+      serverStatus = await invokeTauri<ProxyStatus>("server_stop");
+      serverConfig = { ...serverConfig, enabled: false };
+    } catch (err) {
+      error = String(err);
+    } finally {
+      serverBusy = "";
+    }
+  }
+
+  async function rotateServerToken(routeId: string) {
+    if (serverBusy) return;
+    serverBusy = `token:${routeId}`;
+    error = "";
+    try {
+      serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
+      const result = await invokeTauri<ServerTokenResponse>("server_token_rotate", { routeId });
+      clearTimeout(serverTokenTimer);
+      serverToken = result.token;
+      serverTokenTimer = setTimeout(() => {
+        if (serverToken === result.token) serverToken = "";
+      }, 60_000);
+      serverConfig = {
+        ...serverConfig,
+        routes: serverConfig.routes.map((route) =>
+          route.id === routeId
+            ? { ...route, token: "", tokenFingerprint: result.fingerprint }
+            : route
+        )
+      };
+    } catch (err) {
+      error = String(err);
+    } finally {
+      serverBusy = "";
+    }
+  }
+
+  async function copyServerToken(token: string = serverToken) {
+    if (!token) return;
+    await navigator.clipboard?.writeText(token);
+    scheduleClipboardClear(token);
+  }
+
+  async function saveRouteGroup(route: ProxyRouteConfig) {
+    const exists = serverConfig.routes.some((item) => item.id === route.id);
+    const routes = exists
+      ? serverConfig.routes.map((item) => (item.id === route.id ? route : item))
+      : [...serverConfig.routes, route];
+    if (!exists) selectedRouteId = route.id;
+    await saveServerConfig({ ...serverConfig, routes });
+  }
+
+  async function deleteRouteGroup(routeId: string) {
+    if (!confirm($t("server.deleteGroupConfirm"))) return;
+    const routes = serverConfig.routes.filter((route) => route.id !== routeId);
+    if (selectedRouteId === routeId) selectedRouteId = routes[0]?.id ?? "";
+    await saveServerConfig({ ...serverConfig, routes });
+  }
+
+  async function toggleRouteGroup(routeId: string, enabled: boolean) {
+    await saveServerConfig({
+      ...serverConfig,
+      routes: serverConfig.routes.map((route) => (route.id === routeId ? { ...route, enabled } : route))
+    });
+  }
+
+  async function moveRouteGroup(routeId: string, direction: -1 | 1) {
+    const routes = [...serverConfig.routes];
+    const index = routes.findIndex((route) => route.id === routeId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= routes.length) return;
+    [routes[index], routes[target]] = [routes[target], routes[index]];
+    await saveServerConfig({ ...serverConfig, routes });
+  }
+
+  async function addEntryAsRoute(entry: ProviderEntry, groupId?: string) {
+    error = "";
+    if (!proxySupportedEntry(entry)) {
+      error = localizedMessage("providers.routeUnsupportedInterface");
+      return;
+    }
+    const secret = entry.secretRefs[0];
+    if (!secret) {
+      error = localizedMessage("providers.routeNoSecret");
+      return;
+    }
+    if (!entry.endpoints.some((endpoint) => endpoint.kind === "api" && endpoint.url)) {
+      error = localizedMessage("providers.routeNoEndpoint");
+      return;
+    }
+    // Reliability check: probe the credential endpoint before routing traffic to it.
+    notice = localizedMessage("providers.routeChecking");
+    let probe: ProbeResult;
+    try {
+      probe = await invokeTauri<ProbeResult>("provider_probe", { id: entry.id, timeoutSeconds: 10 });
+    } catch (err) {
+      probe = { ok: false, providerId: entry.providerId, interfaceType: entry.interfaceType, error: String(err) };
+    }
+    notice = "";
+    if (!probe.ok) {
+      const message = resolveMessage($t, localizedMessage("providers.routeProbeFailed", { error: probe.error ?? "unknown" }));
+      if (!confirm(message)) return;
+    }
+    if (groupId) {
+      const group = serverConfig.routes.find((route) => route.id === groupId);
+      if (!group) return;
+      const target = buildRouteTarget(entry, secret, group.targets.length);
+      if (!target) return;
+      await saveServerConfig({
+        ...serverConfig,
+        routes: serverConfig.routes.map((route) =>
+          route.id === groupId ? { ...route, targets: [...route.targets, target] } : route
+        )
+      });
+    } else {
+      const route = buildSingleEntryRoute(entry, secret);
+      if (!route) return;
+      selectedRouteId = route.id;
+      await saveServerConfig({ ...serverConfig, routes: [...serverConfig.routes, route] });
+    }
+    notice = localizedMessage("providers.routeAdded");
+    setTimeout(() => (notice = ""), 1800);
+  }
+
+  async function previewProxyIntegration(tool: ToolConfigTarget, routeId: string): Promise<ToolConfigPreview> {
+    return invokeTauri<ToolConfigPreview>("tool_config_proxy_preview", { tool, routeId });
+  }
+
+  async function applyProxyIntegration(tool: ToolConfigTarget, routeId: string): Promise<ToolConfigApplyResult> {
+    const applied = await invokeTauri<ToolConfigApplyResult>("tool_config_proxy_apply", { tool, routeId });
+    notice = localizedMessage("server.configWritten");
+    setTimeout(() => (notice = ""), 2200);
+    return applied;
   }
 
   async function rotateVault() {
@@ -1390,12 +1841,7 @@
       const nextStatus = await invokeTauri<VaultStatus>("session_touch");
       if (nextStatus.locked && !status.locked) {
         status = nextStatus;
-        entries = [];
-        selectedId = "";
-        revealedSecrets = {};
-        probeResult = undefined;
-        usageProbeResult = undefined;
-        showSettings = false;
+        clearSensitiveUnlockedState();
         setAuthMode("unlock");
       } else {
         status = nextStatus;
@@ -1598,6 +2044,7 @@
         {showArchived}
         {showTrash}
         {showFavorites}
+        {showServer}
         {providerFilter}
         providerCounts={counts}
         trashCount={trashCount}
@@ -1605,8 +2052,38 @@
         onFavoriteView={setFavoriteView}
         onArchiveView={setArchiveView}
         onTrashView={setTrashView}
+        onServerView={setServerView}
       />
 
+      {#if showServer}
+        <RouteListPane
+          routes={serverConfig.routes}
+          {entries}
+          bind:selectedRouteId
+          busy={serverBusy}
+          onSave={saveRouteGroup}
+          onDelete={deleteRouteGroup}
+          onToggle={toggleRouteGroup}
+          onMove={moveRouteGroup}
+        />
+
+        <ServerDetailPane
+          config={serverConfig}
+          status={serverStatus}
+          series={serverUsageSeries}
+          {selectedRouteId}
+          busy={serverBusy}
+          revealedToken={serverToken}
+          {toolDetections}
+          onStart={startServer}
+          onStop={stopServer}
+          onSaveConfig={saveServerConfig}
+          onRotateToken={rotateServerToken}
+          onCopyToken={copyServerToken}
+          onPreviewIntegration={previewProxyIntegration}
+          onApplyIntegration={applyProxyIntegration}
+        />
+      {:else}
       <ProviderListPane
         entries={filtered}
         filterEntries={entries}
@@ -1616,11 +2093,14 @@
         {showFavorites}
         {providerFilter}
         bind:query
+        routeGroups={serverConfig.routes.map((route) => ({ id: route.id, name: route.name }))}
         onSearch={runSearch}
         onAdd={openAdd}
         onFilterChange={setProviderFilter}
         onEmptyTrash={emptyTrash}
         onSelect={selectProvider}
+        onAddAsRoute={(entry) => addEntryAsRoute(entry)}
+        onAddToGroup={(entry, groupId) => addEntryAsRoute(entry, groupId)}
       />
 
       <ProviderDetailPane
@@ -1661,9 +2141,34 @@
         onProviderChanged={providerChanged}
         onPreviewToolConfig={previewToolConfig}
         onApplyToolConfig={applyToolConfig}
+        pricingGroups={pricingConfig.groups}
+        pricingAssignments={pricingConfig.assignments}
+        {toolDetections}
+        onSetPricingAssignment={setPricingAssignment}
+        onUpsertPricingGroup={upsertPricingGroup}
+        onDeletePricingGroup={deletePricingGroup}
+        onDeletePricingVersion={deletePricingVersion}
       />
+      {/if}
     </main>
     {/if}
+  {/if}
+
+  {#if updateAvailableVersion}
+    <div class="update-banner">
+      <Banner tone="info">
+        <span class="update-banner-text">{$t("updates.bannerTitle", { version: updateAvailableVersion })}</span>
+        <Button variant="primary" size="sm" on:click={() => installAvailableUpdate()} disabled={updateInstalling}>
+          {updateInstalling ? $t("settings.installing") : $t("updates.installRestart")}
+        </Button>
+        <Button variant="ghost" size="sm" on:click={dismissUpdatePrompt} disabled={updateInstalling}>
+          {$t("updates.later")}
+        </Button>
+      </Banner>
+      {#if updateInstallErrorText}
+        <Banner tone="danger">{updateInstallErrorText}</Banner>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -1695,6 +2200,8 @@
     {syncState}
     {devices}
     {devicesLoading}
+    bind:serverConfig
+    {serverBusy}
     onClose={closeSettings}
     onSavePreferences={savePreferences}
     onChangeMasterPassword={changeMasterPassword}
@@ -1709,6 +2216,7 @@
     onRevokeDevice={revokeDevice}
     onLoadBrowserExtensionStatus={loadBrowserExtensionStatus}
     onInstallBrowserExtension={installBrowserExtension}
+    onSaveServerConfig={saveServerConfig}
   />
 {/if}
 
@@ -1737,7 +2245,7 @@
   .app-shell {
     --workspace-padding: 8px;
     --workspace-gap: 8px;
-    --workspace-top: 4px;
+    --workspace-top: 8px;
     --sidebar-width: 232px;
     --items-list-width: 368px;
     --pane-content-inset: 13px;
@@ -1812,6 +2320,22 @@
 
   .workspace > :global(.detail-header) {
     padding-top: 56px;
+  }
+
+  .app-shell > .update-banner {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(420px, calc(100vw - 32px));
+  }
+
+  .update-banner-text {
+    flex: 1;
+    min-width: 0;
   }
 
   @media (max-width: 1100px) {

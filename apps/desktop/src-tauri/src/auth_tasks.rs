@@ -139,6 +139,7 @@ pub(crate) fn auth_task_status_response(
 
 pub(crate) fn emit_auth_task_event(app: &AppHandle, response: &VaultAuthTaskStatusResponse) {
     let _ = app.emit("vault-auth-finished", response.clone());
+    let _ = app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
 }
 
 pub(crate) fn finish_vault_create_task(

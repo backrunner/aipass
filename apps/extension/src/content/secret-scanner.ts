@@ -7,6 +7,24 @@ export type SecretCandidate = {
   };
 };
 
+const TOKEN_ROW_SELECTOR =
+  "tr, [role='row'], article, li, section, [data-row-key], .ant-table-row, .arco-table-tr, .arco-table-row, .el-table__row, .semi-table-row, .v-data-table__tr, .ant-list-item, .semi-list-item";
+
+/** Mask runs pages use to elide secrets: "…", "...", "***", "•••". */
+const MASK_RUN_SOURCE = "(?:…|\\.{3,}|\\*{2,}|•{2,})";
+const MASKED_TOKEN_GLOBAL = new RegExp(
+  `[A-Za-z0-9][A-Za-z0-9_-]*${MASK_RUN_SOURCE}[A-Za-z0-9_-]*[A-Za-z0-9]`,
+  "g"
+);
+const MASKED_TOKEN_EXACT = new RegExp(
+  `^[A-Za-z0-9][A-Za-z0-9_-]*${MASK_RUN_SOURCE}[A-Za-z0-9_-]*[A-Za-z0-9]$`
+);
+const MASK_RUN_SPLIT = /…|\.{3,}|\*{2,}|•{2,}/;
+const MIN_MASKED_TOKEN_LENGTH = 8;
+const MAX_GROUP_LENGTH = 48;
+const MAX_RATE_LENGTH = 24;
+const MAX_LABEL_LENGTH = 64;
+
 type SecretScanOptions = {
   providerId?: string;
   tokenManagementPage?: boolean;
@@ -176,7 +194,7 @@ function normalizeSecretMatch(value: string | undefined): string {
 function findTokenManagementCandidates(doc: Document, providerId?: string): SecretCandidate[] {
   const rows = limitedElements<HTMLElement>(
     doc,
-    "tr, [role='row'], article, li, section, [data-row-key], .ant-table-row, .arco-table-tr, .arco-table-row, .el-table__row, .semi-table-row, .v-data-table__tr, .ant-list-item, .semi-list-item",
+    TOKEN_ROW_SELECTOR,
     TOKEN_ROW_SCAN_LIMIT
   );
   const candidates: SecretCandidate[] = [];
@@ -205,7 +223,7 @@ function secretSourcesForRow(row: Element, rowText: string): string[] {
 }
 
 function metadataFromElement(element: Element, secret: string): Omit<SecretCandidate, "secret"> {
-  const row = element.closest("tr, [role='row'], article, li, section, [data-row-key], .ant-table-row, .arco-table-tr, .arco-table-row, .el-table__row, .semi-table-row, .v-data-table__tr, .ant-list-item, .semi-list-item");
+  const row = element.closest(TOKEN_ROW_SELECTOR);
   const contextElement = row ?? element.closest("label, section, article, form, div, body") ?? element;
   const context = normalizedText(contextElement).replace(secret, " ");
   const tableMetadata = row ? metadataFromTableRow(row, secret) : {};
@@ -222,6 +240,81 @@ export function metadataForSecretElement(element: Element, secret: string): Omit
   return metadataFromElement(element, secret);
 }
 
+/**
+ * Locates the token-table row that displays an elided form of `secret`
+ * (e.g. `sk-abc…xyz`) and extracts label/group/rate from that row. Used when
+ * the full secret is only known from the clipboard or framework state, so the
+ * DOM scanner cannot match it directly.
+ */
+export function metadataForMaskedSecret(
+  doc: Document,
+  secret: string
+): Omit<SecretCandidate, "secret"> | undefined {
+  const rows = limitedElements<HTMLElement>(doc, TOKEN_ROW_SELECTOR, TOKEN_ROW_SCAN_LIMIT);
+  for (const row of rows) {
+    if (!rowDisplaysMaskedSecret(row, secret)) continue;
+    const context = normalizedText(row).replace(secret, " ");
+    const tableMetadata = metadataFromTableRow(row, secret);
+    const group = tableMetadata.gateway?.group ?? extractGatewayGroup(context);
+    const rate = tableMetadata.gateway?.rate ?? extractGatewayRate(context);
+    const label = tableMetadata.label ?? extractCandidateLabel(context, secret);
+    return {
+      label,
+      gateway: group || rate ? { group, rate } : undefined
+    };
+  }
+  return undefined;
+}
+
+function rowDisplaysMaskedSecret(row: Element, secret: string): boolean {
+  const cells = limitedElements<HTMLElement>(row, "td, th, [role='cell'], [role='gridcell']", TABLE_CELL_SCAN_LIMIT);
+  const texts = cells.length ? cells.map((cell) => normalizedText(cell)) : [normalizedText(row)];
+  return texts.some((text) => textDisplaysMaskedSecret(text, secret));
+}
+
+function textDisplaysMaskedSecret(text: string, secret: string): boolean {
+  if (text.includes(secret)) return true;
+  for (const match of text.matchAll(MASKED_TOKEN_GLOBAL)) {
+    if (maskedTokenMatchesSecret(match[0], secret)) return true;
+  }
+  return false;
+}
+
+/**
+ * Checks whether an elided page token (e.g. `sk-abc…xyz`, `sk-abc***xyz`)
+ * is consistent with the full secret: literal segments around the mask run
+ * must anchor the secret (first segment = prefix, last = suffix).
+ */
+export function maskedTokenMatchesSecret(token: string, secret: string): boolean {
+  if (token.length < MIN_MASKED_TOKEN_LENGTH || !MASKED_TOKEN_EXACT.test(token)) return false;
+  const segments = token.split(MASK_RUN_SPLIT).filter(Boolean);
+  if (segments.length < 2) return false;
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  if (first.length < 3 || last.length < 3) return false;
+  if (!secret.startsWith(first) || !secret.endsWith(last)) return false;
+  let position = first.length;
+  for (const segment of segments.slice(1, -1)) {
+    const index = secret.indexOf(segment, position);
+    if (index < 0) return false;
+    position = index + segment.length;
+  }
+  return true;
+}
+
+/** True when the whole value is an elided secret (e.g. `sk-abc…xyz`). */
+export function looksLikeMaskedSecret(value: string): boolean {
+  return value.length >= MIN_MASKED_TOKEN_LENGTH && MASKED_TOKEN_EXACT.test(value);
+}
+
+/** True when the value contains an unmasked secret shape. */
+export function containsSecretLike(value: string): boolean {
+  for (const pattern of [...GLOBAL_SECRET_PATTERNS, CUSTOM_KEY_SECRET_PATTERN]) {
+    if (pattern.test(value)) return true;
+  }
+  return false;
+}
+
 function metadataFromTableRow(row: Element, secret: string): Omit<SecretCandidate, "secret"> {
   const cells = limitedElements<HTMLElement>(row, "td, th, [role='cell'], [role='gridcell'], [role='columnheader']", TABLE_CELL_SCAN_LIMIT);
   if (!cells.length) return {};
@@ -231,16 +324,27 @@ function metadataFromTableRow(row: Element, secret: string): Omit<SecretCandidat
   let rate: string | undefined;
   cells.forEach((cell, index) => {
     const header = (headers[index] ?? "").toLowerCase();
-    const value = cleanedCellText(cell, secret);
+    const value = sanitizeCellValue(cleanedCellText(cell, secret));
     if (!value) return;
-    if (!label && /(name|label|名称|备注|说明)/i.test(header)) label = value;
-    if (!group && /(group|分组|模型组|渠道组)/i.test(header)) group = value;
-    if (!rate && /(rate|ratio|倍率|倍数)/i.test(header)) rate = value;
+    if (!label && /(name|label|名称|备注|说明)/i.test(header)) label = truncateMetadata(value, MAX_LABEL_LENGTH);
+    if (!group && /(group|分组|模型组|渠道组)/i.test(header)) group = truncateMetadata(value, MAX_GROUP_LENGTH);
+    if (!rate && /(rate|ratio|倍率|倍数)/i.test(header)) rate = truncateMetadata(value, MAX_RATE_LENGTH);
   });
   return {
     label,
     gateway: group || rate ? { group, rate } : undefined
   };
+}
+
+/** Rejects cell values that are really the elided key itself (or a raw secret). */
+function sanitizeCellValue(value: string): string | undefined {
+  if (!value) return undefined;
+  if (looksLikeMaskedSecret(value) || containsSecretLike(value)) return undefined;
+  return value;
+}
+
+function truncateMetadata(value: string, maxLength: number): string | undefined {
+  return value.length > maxLength ? undefined : value;
 }
 
 function limitedElements<T extends Element>(
@@ -296,17 +400,34 @@ function extractLabeledValue(text: string, pattern: RegExp): string | undefined 
 
 function sanitizeMetadataValue(value: string | undefined): string | undefined {
   const cleaned = value?.trim().replace(/[，,;；。]+$/, "");
-  if (!cleaned || hasKeyContext(cleaned) || cleaned.length > 80) return undefined;
+  if (
+    !cleaned ||
+    hasKeyContext(cleaned) ||
+    cleaned.length > MAX_GROUP_LENGTH ||
+    looksLikeMaskedSecret(cleaned) ||
+    containsSecretLike(cleaned)
+  ) {
+    return undefined;
+  }
   return cleaned;
 }
 
 function extractCandidateLabel(text: string, secret: string): string | undefined {
   const cleaned = text
     .replace(secret, " ")
+    .replace(MASKED_TOKEN_GLOBAL, " ")
     .replace(/api\s*key|token|secret|密钥|令牌|复制|copy/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (!cleaned || cleaned.length > 64 || /^[-_:|,\s]+$/.test(cleaned)) return undefined;
+  if (
+    !cleaned ||
+    cleaned.length > MAX_LABEL_LENGTH ||
+    /^[-_:|,\s]+$/.test(cleaned) ||
+    looksLikeMaskedSecret(cleaned) ||
+    containsSecretLike(cleaned)
+  ) {
+    return undefined;
+  }
   return cleaned;
 }
 

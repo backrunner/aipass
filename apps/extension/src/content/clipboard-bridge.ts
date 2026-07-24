@@ -171,13 +171,14 @@ function emitSecret(text: string) {
 
 function emitSecretCandidate(candidate: FrameworkSecret) {
   window.dispatchEvent(new CustomEvent(CLIPBOARD_SECRET_EVENT, { detail: candidate }));
+  const targetOrigin = window.location.origin === "null" ? "*" : window.location.origin;
   window.postMessage(
     {
       source: CLIPBOARD_SECRET_MESSAGE_SOURCE,
       type: CLIPBOARD_SECRET_EVENT,
       ...candidate
     },
-    "*"
+    targetOrigin
   );
 }
 

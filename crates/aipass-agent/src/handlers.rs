@@ -54,6 +54,124 @@ fn dispatch_request(
             })? = policy.clone();
             Ok(AgentResponse::success(policy))
         }
+        AgentRequest::ServerStatus => {
+            let proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            Ok(AgentResponse::success(proxy.status()))
+        }
+        AgentRequest::ServerStart => with_vault(state, false, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.start(vault)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerStop => with_vault(state, false, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.stop_and_save(vault)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerConfigGet => with_vault(state, true, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.client_config(vault)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerConfigSet { config } => with_vault(state, false, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.set_config(vault, config)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerTokenRotate { route_id } => with_vault(state, false, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.rotate_token(vault, route_id)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerUsageSummary => with_vault(state, true, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.load_config(vault)?;
+            let pricing = proxy.pricing_config(vault)?;
+            let list_prices = crate::pricing::load_list_prices(&state.vault_dir);
+            proxy.usage_summary(&pricing, &list_prices)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerUsageTimeseries { days } => with_vault(state, true, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.load_config(vault)?;
+            let pricing = proxy.pricing_config(vault)?;
+            let list_prices = crate::pricing::load_list_prices(&state.vault_dir);
+            proxy.usage_timeseries(days, &pricing, &list_prices)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerPricingConfigGet => with_vault(state, true, |vault| {
+            let proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.pricing_config(vault)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerPricingAssignmentSet {
+            entry_id,
+            secret_id,
+            group_id,
+            multiplier,
+        } => with_vault(state, false, |vault| {
+            let proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.set_pricing_assignment(vault, entry_id, secret_id, group_id, multiplier)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerPricingGroupUpsert { group, apply_scope } => {
+            with_vault(state, false, |vault| {
+                let proxy = state.proxy.lock().map_err(|_| {
+                    ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned")
+                })?;
+                proxy.upsert_pricing_group(vault, group, apply_scope)
+            })
+            .map(AgentResponse::success)
+        }
+        AgentRequest::ServerPricingGroupDelete { group_id } => with_vault(state, false, |vault| {
+            let proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.delete_pricing_group(vault, group_id)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerPricingGroupVersionDelete {
+            group_id,
+            effective_from,
+        } => with_vault(state, false, |vault| {
+            let proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.delete_pricing_group_version(vault, group_id, effective_from)
+        })
+        .map(AgentResponse::success),
         AgentRequest::VaultCreate { password } => {
             let response = create_vault(state, password.into_inner())?;
             Ok(AgentResponse::success(response))
@@ -181,7 +299,9 @@ fn dispatch_request(
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderTrash { id } => with_vault(state, false, |vault| {
-            vault.trash_provider(id).map_err(map_vault_error)
+            vault.trash_provider(id).map_err(map_vault_error)?;
+            cleanup_proxy_provider_references(state, vault, id, None);
+            Ok(())
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderFavorite { id, favorite } => with_vault(state, false, |vault| {
@@ -193,7 +313,9 @@ fn dispatch_request(
         AgentRequest::ProviderDelete { id } => with_vault(state, false, |vault| {
             vault
                 .delete_provider_permanently(id)
-                .map_err(map_vault_error)
+                .map_err(map_vault_error)?;
+            cleanup_proxy_provider_references(state, vault, id, None);
+            Ok(())
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::TrashPurgeExpired => with_vault(state, false, |vault| {
@@ -231,7 +353,9 @@ fn dispatch_request(
         })
         .map(AgentResponse::success),
         AgentRequest::SecretRemove { id, label } => with_vault(state, false, |vault| {
-            vault.remove_secret(id, &label).map_err(map_vault_error)
+            vault.remove_secret(id, &label).map_err(map_vault_error)?;
+            cleanup_proxy_provider_references(state, vault, id, Some(&label));
+            Ok(())
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::DevicesList => with_vault(state, true, |vault| {
@@ -298,7 +422,8 @@ fn dispatch_request(
             backfill_provider_favicons(state, request).map(AgentResponse::success)
         }
         AgentRequest::ToolConfigPreview { request } => with_vault(state, true, |vault| {
-            let (entry, plan, _) = build_tool_config_plan(vault, &request)?;
+            let (entry, plan, content) = build_tool_config_plan(vault, &request)?;
+            let files = tool_config_preview_files(&plan, &content);
             Ok(ToolConfigPreviewResponse {
                 tool: request.tool,
                 mode: request.mode,
@@ -306,7 +431,8 @@ fn dispatch_request(
                 entry_title: entry.title,
                 target_path: plan.target_path.display().to_string(),
                 summary: plan.summary,
-                preview: plan.preview,
+                preview: redact_tool_config_diff(&plan.preview),
+                files,
             })
         })
         .map(AgentResponse::success),
@@ -322,6 +448,37 @@ fn dispatch_request(
             let backup = aipass_config_writers::find_backup_by_operation(&home, operation_id)
                 .map_err(ServiceError::internal)?;
             rollback_encrypted(&backup, &vault.config_backup_key()).map_err(ServiceError::internal)
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ToolConfigProxyPreview { request } => with_vault(state, true, |vault| {
+            let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request)?;
+            let files = tool_config_preview_files(&plan, &content);
+            Ok(ToolConfigPreviewResponse {
+                tool: tool_config_tool_for(&request.tool),
+                mode: ToolConfigMode::Plaintext,
+                entry_id: entry.id,
+                entry_title: entry.title,
+                target_path: plan.target_path.display().to_string(),
+                summary: plan.summary,
+                preview: redact_tool_config_diff(&plan.preview),
+                files,
+            })
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ToolConfigProxyApply { request } => with_vault(state, false, |vault| {
+            let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request)?;
+            let result = apply_plan_encrypted(&plan, &content, &vault.config_backup_key())
+                .map_err(ServiceError::internal)?;
+            Ok(ToolConfigApplyResponse {
+                tool: tool_config_tool_for(&request.tool),
+                mode: ToolConfigMode::Plaintext,
+                entry_id: entry.id,
+                entry_title: entry.title,
+                operation_id: result.operation_id,
+                target_path: result.target_path.display().to_string(),
+                backup_path: result.backup_path.display().to_string(),
+                summary: plan.summary,
+            })
         })
         .map(AgentResponse::success),
         AgentRequest::SyncLocal { dir } => sync_local_folder(&state.vault_dir, &dir)
@@ -498,6 +655,35 @@ fn dispatch_request(
             state.shutdown.store(true, Ordering::SeqCst);
             Ok(AgentResponse::empty())
         }
+    }
+}
+
+fn cleanup_proxy_provider_references(
+    state: &Arc<AgentState>,
+    vault: &Vault,
+    entry_id: Uuid,
+    secret_id: Option<&str>,
+) {
+    let result = state
+        .proxy
+        .lock()
+        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))
+        .and_then(|mut proxy| proxy.remove_provider_references(vault, entry_id, secret_id));
+    match result {
+        Ok(true) => write_component_log(
+            AGENT_LOG,
+            "INFO",
+            &format!("removed proxy route references for provider {entry_id}"),
+        ),
+        Ok(false) => {}
+        Err(err) => write_component_log(
+            AGENT_LOG,
+            "WARN",
+            &format!(
+                "failed to remove proxy route references for provider {entry_id}: {}",
+                err.message
+            ),
+        ),
     }
 }
 

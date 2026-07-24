@@ -36,7 +36,7 @@
     },
     "updater": {
       "endpoints": [
-        "https://updates.aipass.dev/{{target}}/{{arch}}/{{current_version}}"
+        "https://assets.aipass.alkinum.io/latest.json"
       ],
       "pubkey": ""
     }
@@ -61,6 +61,9 @@
       "nsis": {
         "installerHooks": "windows/nsis-hooks.nsh"
       }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0"
     }
   }
 }

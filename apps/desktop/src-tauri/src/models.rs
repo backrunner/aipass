@@ -323,6 +323,14 @@ pub(crate) struct ToolConfigRequest {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ToolConfigPreviewFile {
+    pub(crate) path: String,
+    pub(crate) content: String,
+    pub(crate) diff: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ToolConfigPreviewResponse {
     pub(crate) tool: ToolConfigTool,
     pub(crate) mode: ToolConfigMode,
@@ -331,6 +339,7 @@ pub(crate) struct ToolConfigPreviewResponse {
     pub(crate) target_path: String,
     pub(crate) summary: String,
     pub(crate) preview: String,
+    pub(crate) files: Vec<ToolConfigPreviewFile>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -406,6 +415,32 @@ pub(crate) struct BrowserExtensionInstallResult {
     pub(crate) opened_package: bool,
 }
 
+pub(crate) fn into_tool_id(tool: ToolConfigTool) -> aipass_agent_protocol::ToolId {
+    match tool {
+        ToolConfigTool::Codex => aipass_agent_protocol::ToolId::Codex,
+        ToolConfigTool::ClaudeCode => aipass_agent_protocol::ToolId::ClaudeCode,
+        ToolConfigTool::GeminiCli => aipass_agent_protocol::ToolId::GeminiCli,
+        ToolConfigTool::OpenCode => aipass_agent_protocol::ToolId::OpenCode,
+    }
+}
+
+pub(crate) fn from_tool_id(tool: aipass_agent_protocol::ToolId) -> ToolConfigTool {
+    match tool {
+        aipass_agent_protocol::ToolId::Codex => ToolConfigTool::Codex,
+        aipass_agent_protocol::ToolId::ClaudeCode => ToolConfigTool::ClaudeCode,
+        aipass_agent_protocol::ToolId::GeminiCli => ToolConfigTool::GeminiCli,
+        aipass_agent_protocol::ToolId::OpenCode => ToolConfigTool::OpenCode,
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ToolDetection {
+    pub(crate) tool: ToolConfigTool,
+    pub(crate) binary_found: bool,
+    pub(crate) config_path: Option<String>,
+}
+
 pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> AgentToolConfigRequest {
     AgentToolConfigRequest {
         tool: match request.tool {
@@ -440,6 +475,15 @@ pub(crate) fn from_agent_tool_config_preview(
         target_path: response.target_path,
         summary: response.summary,
         preview: response.preview,
+        files: response
+            .files
+            .into_iter()
+            .map(|file| ToolConfigPreviewFile {
+                path: file.path,
+                content: file.content,
+                diff: file.diff,
+            })
+            .collect(),
     }
 }
 

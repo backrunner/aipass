@@ -26,6 +26,7 @@ aipass-config-writers = { path = "../../../crates/aipass-config-writers" }
 aipass-crypto = { path = "../../../crates/aipass-crypto" }
 aipass-native-host = { path = "../../../crates/aipass-native-host" }
 aipass-provider-registry = { path = "../../../crates/aipass-provider-registry" }
+aipass-proxy = { path = "../../../crates/aipass-proxy" }
 aipass-storage = { path = "../../../crates/aipass-storage" }
 aipass-sync = { path = "../../../crates/aipass-sync" }
 aipass-vault = { path = "../../../crates/aipass-vault" }

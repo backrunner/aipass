@@ -9,9 +9,12 @@ import {
 } from "@aipass/schemas";
 
 import {
+  containsSecretLike,
   extractSecret,
   findSecretCandidates as scanSecretCandidates,
   hasKeyContext,
+  looksLikeMaskedSecret,
+  metadataForMaskedSecret,
   metadataForSecretElement,
   SELF_HOSTED_TOKEN_PATH_PATTERN,
   type SecretCandidate
@@ -336,8 +339,15 @@ function titleFromCandidate(baseTitle: string, candidate?: SecretCandidate): str
   return suffix ? `${baseTitle} · ${suffix}` : baseTitle;
 }
 
-function secretLabelFromCandidate(baseTitle: string, candidate?: SecretCandidate): string | undefined {
-  return sanitizeTitleSuffix(candidate?.label, baseTitle) ?? sanitizeTitleSuffix(candidate?.gateway?.group, baseTitle);
+function secretLabelFromCandidate(baseTitle: string, candidate?: SecretCandidate): string {
+  // The key name comes from the gateway group first (per product decision),
+  // then a sanitized page label, and finally a stable default — never an
+  // elided key fragment.
+  return (
+    sanitizeTitleSuffix(candidate?.gateway?.group, baseTitle) ??
+    sanitizeTitleSuffix(candidate?.label, baseTitle) ??
+    "primary"
+  );
 }
 
 function sanitizeTitleSuffix(value: string | undefined, baseTitle?: string): string | undefined {
@@ -348,6 +358,8 @@ function sanitizeTitleSuffix(value: string | undefined, baseTitle?: string): str
     normalizeTitleForCompare(cleaned) === normalizeTitleForCompare(baseTitle) ||
     isAccountNavigationText(cleaned) ||
     hasKeyContext(cleaned) ||
+    looksLikeMaskedSecret(cleaned) ||
+    containsSecretLike(cleaned) ||
     AI_GATEWAY_TEXT_PATTERN.test(cleaned)
   ) {
     return undefined;
@@ -691,6 +703,8 @@ async function sendDraftIfAllowed() {
     candidateCount: detection.candidateCount,
     draftCount: detection.drafts.length
   });
+  // Prompt immediately; favicon localization (network fetch) happens at
+  // save/edit time so the toast is never delayed by icon downloads.
   const drafts = detection.drafts.filter((draft) => draft.apiKey);
   if (!drafts.length) {
     requestFrameworkSecretScan(detection.recognition);
@@ -735,12 +749,19 @@ async function sendDraftForClipboardSecret(secret: string, metadata: Omit<Clipbo
   }
   const scanned = findSecretCandidates(document, recognition).find((item) => item.secret === candidate);
   const interaction = clipboardInteractionMetadata(candidate);
+  // When the page only displays the elided key (sk-abc…xyz), the scanner
+  // cannot match the full secret; fall back to locating the row by its
+  // masked form and read the 分组/倍率 cells from there.
+  const masked =
+    scanned?.gateway?.group || scanned?.label
+      ? undefined
+      : metadataForMaskedSecret(document, candidate);
   const draft = buildDraft(
     document,
     {
       secret: candidate,
-      label: metadata.label ?? interaction?.label ?? scanned?.label,
-      gateway: mergeGatewayMetadata(scanned?.gateway, interaction?.gateway, metadata.gateway)
+      label: metadata.label ?? interaction?.label ?? scanned?.label ?? masked?.label,
+      gateway: mergeGatewayMetadata(scanned?.gateway, interaction?.gateway, metadata.gateway, masked?.gateway)
     },
     recognition
   );
@@ -1549,7 +1570,7 @@ function installClipboardSecretListener() {
     handleClipboardSecret(detail);
   });
   window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
+    if (event.source !== window || event.origin !== window.location.origin) return;
     const data = event.data as (ClipboardSecretPayload & { source?: string; type?: string }) | undefined;
     if (data?.source !== CLIPBOARD_SECRET_MESSAGE_SOURCE || data.type !== CLIPBOARD_SECRET_EVENT) return;
     handleClipboardSecret(data);

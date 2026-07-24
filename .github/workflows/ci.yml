@@ -35,3 +35,31 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  macos-desktop:
+    name: macOS desktop bundle
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - name: Build unsigned macOS app bundle
+        run: pnpm --dir apps/desktop tauri build --ci --bundles app
+      - name: Verify app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find target -path "*/release/bundle/macos/AIPass.app" -type d -print -quit)"
+          if [[ -z "${app_path}" ]]; then
+            echo "::error::macOS app bundle was not produced."
+            exit 1
+          fi
+          test -x "${app_path}/Contents/MacOS/aipass-desktop"
+          test -x "${app_path}/Contents/Resources/aipass-agent"
+          test -x "${app_path}/Contents/Resources/aipass-native-host"

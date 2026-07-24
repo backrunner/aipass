@@ -14,18 +14,18 @@ use aipass_agent_protocol::{
     AuthenticatedAgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
     BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
     BrowserIgnoredStatus, CodexApiKeyMode, ConflictScope, FaviconBackfillError,
-    FaviconBackfillRequest, FaviconBackfillResponse, LockReason, ProbeResult, SaveDetectedResult,
-    SecretValue, SensitiveString, SessionUnlockMode, SyncConflictActionRequest,
-    SyncConflictResponse, SyncMode, ToolConfigApplyResponse, ToolConfigMode,
-    ToolConfigPreviewResponse, ToolConfigRequest, ToolConfigTool, VaultCreateResponse,
-    AGENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
+    FaviconBackfillRequest, FaviconBackfillResponse, LockReason, ProbeResult, ProxyProtocol,
+    SaveDetectedResult, SecretValue, SensitiveString, SessionUnlockMode, SyncConflictActionRequest,
+    SyncConflictResponse, SyncMode, ToolConfigApplyResponse, ToolConfigMode, ToolConfigPreviewFile,
+    ToolConfigPreviewResponse, ToolConfigProxyRequest, ToolConfigRequest, ToolConfigTool,
+    VaultCreateResponse, AGENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 use aipass_config_writers::{
     apply_plan_encrypted, config_backup_path, diff_preview_for_path, plan_claude_code,
-    plan_claude_code_plaintext, plan_codex, plan_codex_plaintext_with_mode, plan_gemini_cli,
-    plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext, redacted_diff_preview,
-    rollback_encrypted, ApplyResult, CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan,
-    ToolEntry,
+    plan_claude_code_plaintext, plan_codex, plan_codex_plaintext, plan_codex_plaintext_with_mode,
+    plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
+    redacted_diff_preview, rollback_encrypted, ApplyResult,
+    CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan, ToolEntry, ToolId,
 };
 use aipass_crypto::{mask_secret, SecretString};
 use aipass_provider_registry::{
@@ -130,12 +130,13 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
     let auth_token = ipc::load_or_create_auth_token(&vault_dir)?;
     let state = Arc::new(AgentState {
         policy: Mutex::new(load_policy(&vault_dir)?),
-        vault_dir,
+        vault_dir: vault_dir.clone(),
         namespace,
         auth_token,
         session: Mutex::new(SessionState::Locked),
         session_changed: Condvar::new(),
         last_lock_reason: Mutex::new(Some(LockReason::AgentRestart)),
+        proxy: Mutex::new(crate::proxy_service::ProxyService::new(&vault_dir.clone())?),
         shutdown: AtomicBool::new(false),
     });
     run_server_with_state(state, listener, launch_desktop_tray)
@@ -153,6 +154,7 @@ fn run_server_with_state(
 ) -> Result<()> {
     spawn_idle_lock_watcher(state.clone());
     crate::session::spawn_power_watcher(state.clone());
+    crate::pricing::spawn_list_price_refresh(state.clone());
     if launch_desktop_tray {
         ensure_desktop_tray_companion_async(state.vault_dir.clone());
     }
@@ -465,6 +467,15 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
     let preview = detected_secret_preview(vault, &fields);
     if let Some(existing_entry_id) = preview.existing_entry_id {
         merge_detected_gateway(vault, existing_entry_id, preview.gateway)?;
+        if preview
+            .favicon_url
+            .as_deref()
+            .is_some_and(|favicon| favicon.starts_with("data:image/"))
+        {
+            vault
+                .replace_provider_favicon_url(existing_entry_id, preview.favicon_url.unwrap())
+                .map_err(map_vault_error)?;
+        }
         return Ok(existing_entry_id);
     }
     let api_key = fields.api_key.into_inner();
@@ -620,6 +631,7 @@ fn clean_secret_label(value: Option<&str>) -> Option<String> {
         || value.eq_ignore_ascii_case("secret")
         || value == "密钥"
         || value == "令牌"
+        || looks_like_secret_or_masked(value)
     {
         None
     } else {
@@ -627,13 +639,43 @@ fn clean_secret_label(value: Option<&str>) -> Option<String> {
     }
 }
 
+/// Defense against page-scraped metadata that is actually the API key itself,
+/// either raw or elided (e.g. `sk-abc…xyz`, `sk-abc...xyz`, `sk-abc***xyz`).
+fn looks_like_secret_or_masked(value: &str) -> bool {
+    let has_mask_run = value.contains('…')
+        || value.contains("...")
+        || value.contains("***")
+        || value.contains("•••");
+    if has_mask_run
+        && value.len() >= 8
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '…' | '.' | '*' | '•'))
+    {
+        return true;
+    }
+    const SECRET_PREFIXES: &[&str] = &[
+        "sk-", "r8_", "gsk_", "fw_", "xai-", "pplx-", "csk", "nvapi-", "hf_", "AIza",
+    ];
+    value.len() >= 16
+        && SECRET_PREFIXES
+            .iter()
+            .any(|prefix| value.starts_with(prefix))
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
 fn clean_favicon_url(value: Option<&str>) -> Option<String> {
     let value = value?.trim();
-    if value.is_empty() || value.len() > 2048 || value.chars().any(char::is_control) {
+    if value.is_empty() || value.len() > 512 * 1024 || value.chars().any(char::is_control) {
         return None;
     }
     let lower = value.to_lowercase();
-    if lower.starts_with("https://") || lower.starts_with("http://") {
+    if lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || (lower.starts_with("data:image/") && lower.contains(";base64,"))
+    {
         Some(value.to_string())
     } else {
         None
@@ -643,13 +685,15 @@ fn clean_favicon_url(value: Option<&str>) -> Option<String> {
 fn clean_gateway(
     gateway: Option<aipass_provider_registry::GatewayMetadata>,
 ) -> Option<aipass_provider_registry::GatewayMetadata> {
+    const MAX_GROUP_LEN: usize = 48;
+    const MAX_RATE_LEN: usize = 24;
     let mut gateway = gateway?;
     gateway.group = gateway
         .group
-        .and_then(|value| non_empty_string(value.trim().to_string()));
+        .and_then(|value| clean_gateway_field(&value, MAX_GROUP_LEN));
     gateway.rate = gateway
         .rate
-        .and_then(|value| non_empty_string(value.trim().to_string()));
+        .and_then(|value| clean_gateway_field(&value, MAX_RATE_LEN));
     if gateway.group.is_none() && gateway.rate.is_none() {
         None
     } else {
@@ -657,11 +701,16 @@ fn clean_gateway(
     }
 }
 
-fn non_empty_string(value: String) -> Option<String> {
-    if value.is_empty() {
+fn clean_gateway_field(value: &str, max_len: usize) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > max_len
+        || value.chars().any(char::is_control)
+        || looks_like_secret_or_masked(value)
+    {
         None
     } else {
-        Some(value)
+        Some(value.to_string())
     }
 }
 
@@ -819,6 +868,201 @@ fn build_tool_config_plan(
         }
     };
     Ok((entry, plan, content))
+}
+
+fn build_tool_config_proxy_plan(
+    vault: &Vault,
+    state: &Arc<AgentState>,
+    request: &ToolConfigProxyRequest,
+) -> ServiceResult<(ToolEntry, ConfigPlan, String)> {
+    let (bind_addr, route) = {
+        let mut proxy = state
+            .proxy
+            .lock()
+            .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+        let config = proxy.config(vault)?;
+        let route = config
+            .routes
+            .iter()
+            .find(|route| route.id == request.route_id)
+            .cloned()
+            .ok_or_else(|| ServiceError::new(AgentErrorCode::NotFound, "proxy route not found"))?;
+        (config.bind_addr.clone(), route)
+    };
+    if route.token.is_empty() {
+        return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "proxy route has no local token; rotate the route token first",
+        ));
+    }
+    if !route.enabled {
+        return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "cannot configure a disabled proxy route",
+        ));
+    }
+    if aipass_proxy::fingerprint_token(&route.token) != route.token_fingerprint {
+        return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "proxy route token fingerprint is invalid",
+        ));
+    }
+    let supported = match request.tool {
+        ToolId::Codex => route.inbound_protocol == ProxyProtocol::OpenAiResponses,
+        ToolId::ClaudeCode => route.inbound_protocol == ProxyProtocol::AnthropicMessages,
+        ToolId::OpenCode => matches!(
+            route.inbound_protocol,
+            ProxyProtocol::OpenAiChatCompletions | ProxyProtocol::AnthropicMessages
+        ),
+        ToolId::GeminiCli => false,
+    };
+    if !supported {
+        return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "tool protocol is incompatible with the selected proxy route",
+        ));
+    }
+    let anthropic = route.inbound_protocol == ProxyProtocol::AnthropicMessages;
+    let tool_bind_addr = advertised_bind_addr(&bind_addr);
+    let endpoint = if anthropic {
+        format!("http://{tool_bind_addr}")
+    } else {
+        format!("http://{tool_bind_addr}/v1")
+    };
+    let tool_entry = ToolEntry {
+        id: route.id,
+        title: route.name.clone(),
+        provider_id: None,
+        endpoint: Some(endpoint),
+        interface_type: if anthropic {
+            InterfaceType::AnthropicMessages
+        } else {
+            InterfaceType::OpenAiCompatible
+        },
+        auth_scheme: if anthropic {
+            AuthScheme::XApiKey
+        } else {
+            AuthScheme::Bearer
+        },
+        env_key: "AIPASS_PROXY_TOKEN".to_string(),
+        default_model: None,
+        api_key: Some(route.token.clone()),
+    };
+    let home = home_dir()?;
+    let (plan, content) = match request.tool {
+        ToolId::Codex => {
+            plan_codex_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        ToolId::ClaudeCode => {
+            plan_claude_code_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        ToolId::GeminiCli => return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "Gemini CLI is not supported by the local proxy; use a Gemini-native provider integration",
+        )),
+        ToolId::OpenCode => {
+            plan_opencode_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+    };
+    Ok((tool_entry, plan, content))
+}
+
+fn tool_config_preview_files(plan: &ConfigPlan, content: &str) -> Vec<ToolConfigPreviewFile> {
+    let mut files = Vec::with_capacity(plan.extra_writes.len() + 1);
+    files.push(ToolConfigPreviewFile {
+        path: plan.target_path.display().to_string(),
+        content: redact_tool_config_content(content),
+        diff: redact_tool_config_diff(&aipass_config_writers::diff_preview_for_path(
+            &plan.target_path,
+            content,
+        )),
+    });
+    for write in &plan.extra_writes {
+        files.push(ToolConfigPreviewFile {
+            path: write.target_path.display().to_string(),
+            content: redact_tool_config_content(&write.content),
+            diff: redact_tool_config_diff(&aipass_config_writers::diff_preview_for_path(
+                &write.target_path,
+                &write.content,
+            )),
+        });
+    }
+    files
+}
+
+fn advertised_bind_addr(bind_addr: &str) -> String {
+    bind_addr
+        .parse::<std::net::SocketAddr>()
+        .ok()
+        .and_then(|addr| {
+            addr.ip().is_unspecified().then(|| match addr.ip() {
+                IpAddr::V4(_) => format!("127.0.0.1:{}", addr.port()),
+                IpAddr::V6(_) => format!("[::1]:{}", addr.port()),
+            })
+        })
+        .unwrap_or_else(|| bind_addr.to_string())
+}
+
+fn redact_tool_config_content(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            if contains_sensitive_config_key(line) {
+                match line.split_once('=') {
+                    Some((key, _)) => format!("{key}=\"[redacted]\""),
+                    None => "[redacted]".to_string(),
+                }
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn redact_tool_config_diff(diff: &str) -> String {
+    redacted_diff_preview(diff, &[])
+        .lines()
+        .map(|line| {
+            if contains_sensitive_config_key(line) {
+                let prefix = line
+                    .get(..2)
+                    .filter(|prefix| matches!(*prefix, "+ " | "- " | "  "))
+                    .unwrap_or_default();
+                format!("{prefix}[redacted]")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn contains_sensitive_config_key(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    [
+        "api_key",
+        "apikey",
+        "api-key",
+        "api-token",
+        "access_token",
+        "auth_token",
+        "bearer_token",
+        "authorization",
+        "aipass_proxy_token",
+        "secret",
+    ]
+    .iter()
+    .any(|key| normalized.contains(key))
+}
+
+fn tool_config_tool_for(tool: &ToolId) -> ToolConfigTool {
+    match tool {
+        ToolId::Codex => ToolConfigTool::Codex,
+        ToolId::ClaudeCode => ToolConfigTool::ClaudeCode,
+        ToolId::GeminiCli => ToolConfigTool::GeminiCli,
+        ToolId::OpenCode => ToolConfigTool::OpenCode,
+    }
 }
 
 fn tool_apply_response(
@@ -1506,6 +1750,35 @@ mod tests {
 
         std::env::set_var(crate::desktop::SUPPRESS_TRAY_ENV, "0");
         assert!(ServerOptions::for_current_process(vault_dir).launch_desktop_tray);
+    }
+
+    #[test]
+    fn tool_config_file_preview_redacts_plaintext_credentials() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("config.json");
+        fs::write(
+            &target,
+            r#"{"OPENAI_API_KEY":"sk-old-secret","other":true}"#,
+        )
+        .expect("write old config");
+        let content = "{\n  \"OPENAI_API_KEY\": \"sk-new-secret\",\n  \"other\": true\n}";
+        let plan = ConfigPlan {
+            operation_id: Uuid::new_v4(),
+            tool: ToolId::Codex,
+            target_path: target.clone(),
+            backup_path: target.with_extension("backup"),
+            summary: "preview".to_string(),
+            preview: aipass_config_writers::diff_preview_for_path(&target, content),
+            extra_writes: Vec::new(),
+            codex_provider_migration: None,
+        };
+
+        let files = tool_config_preview_files(&plan, content);
+        assert_eq!(files.len(), 1);
+        assert!(!files[0].content.contains("sk-new-secret"));
+        assert!(!files[0].diff.contains("sk-old-secret"));
+        assert!(!files[0].diff.contains("sk-new-secret"));
+        assert!(!redact_tool_config_diff(&plan.preview).contains("sk-old-secret"));
     }
 
     #[test]

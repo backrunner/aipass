@@ -75,6 +75,7 @@ pub struct AgentState {
     pub session: Mutex<SessionState>,
     pub session_changed: Condvar,
     pub last_lock_reason: Mutex<Option<LockReason>>,
+    pub proxy: Mutex<crate::proxy_service::ProxyService>,
     pub shutdown: AtomicBool,
 }
 
@@ -209,6 +210,11 @@ pub fn recover_vault(
 
 pub fn reset_vault(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
     let root = &state.vault_dir;
+    state
+        .proxy
+        .lock()
+        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?
+        .reset()?;
     let remove_err = |err: std::io::Error| {
         ServiceError::new(
             AgentErrorCode::Internal,
@@ -227,7 +233,12 @@ pub fn reset_vault(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
         .lock()
         .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "lock reason poisoned"))? = None;
 
-    for file in ["manifest.aipmanifest", "sync-checkpoint.aipcheckpoint"] {
+    for file in [
+        "manifest.aipmanifest",
+        "sync-checkpoint.aipcheckpoint",
+        "server-config.aipstate",
+        "pricing.aipstate",
+    ] {
         remove_file_if_exists(&root.join(file)).map_err(remove_err)?;
     }
     for dir in ["objects", "audit", "devices", "grants", "index"] {
@@ -266,6 +277,13 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
         *session = SessionState::Locked;
     }
     state.session_changed.notify_all();
+    // Transition the session first. Any vault operation already in flight must
+    // finish before this lock is acquired, and no new one can start after it.
+    // Stopping the proxy afterwards prevents an in-flight server command from
+    // restarting it between the proxy stop and the session transition.
+    if let Ok(mut proxy) = state.proxy.lock() {
+        proxy.lock_for_session();
+    }
     if let Ok(mut last_reason) = state.last_lock_reason.lock() {
         *last_reason = Some(reason);
     }
@@ -740,12 +758,15 @@ mod tests {
     fn test_state(vault_dir: PathBuf) -> Arc<AgentState> {
         Arc::new(AgentState {
             policy: Mutex::new(SessionPolicy::default()),
-            vault_dir,
+            vault_dir: vault_dir.clone(),
             namespace: "test".to_string(),
             auth_token: SensitiveString::from("token"),
             session: Mutex::new(SessionState::Locked),
             session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
+            proxy: Mutex::new(
+                crate::proxy_service::ProxyService::new(&vault_dir).expect("proxy service"),
+            ),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -766,6 +787,40 @@ mod tests {
         let status = handle.join().expect("wait thread");
         assert!(status.exists);
         assert!(!status.locked);
+    }
+
+    #[test]
+    fn lock_marks_session_locked_before_waiting_for_proxy() {
+        let temp = tempdir().expect("tempdir");
+        let state = test_state(temp.path().join("vault"));
+        create_vault(&state, "correct horse battery staple".to_string()).expect("create vault");
+
+        let proxy = state.proxy.lock().expect("proxy lock");
+        let lock_state = state.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            started_tx.send(()).expect("signal lock start");
+            lock_session(&lock_state, LockReason::Manual);
+        });
+        started_rx.recv().expect("lock thread started");
+
+        let deadline = std::time::Instant::now() + StdDuration::from_secs(2);
+        loop {
+            if matches!(
+                *state.session.lock().expect("session lock"),
+                SessionState::Locked
+            ) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "session remained unlocked"
+            );
+            thread::yield_now();
+        }
+
+        drop(proxy);
+        handle.join().expect("lock thread");
     }
 
     #[test]
@@ -856,6 +911,9 @@ mod tests {
             session: Mutex::new(SessionState::Locked),
             session_changed: Condvar::new(),
             last_lock_reason: Mutex::new(None),
+            proxy: Mutex::new(
+                crate::proxy_service::ProxyService::new(&vault_dir).expect("proxy service"),
+            ),
             shutdown: AtomicBool::new(false),
         });
 
@@ -881,6 +939,17 @@ mod tests {
         assert!(!manifest_path(&vault_dir).exists());
         assert!(!vault_dir.join("objects").exists());
         assert!(!sync_settings_path(&vault_dir).exists());
+        let proxy = state.proxy.lock().expect("proxy lock");
+        assert!(!proxy.status().running);
+        assert!(!proxy.status().enabled);
+        assert!(vault_dir.join("proxy-usage.sqlite").exists());
+        assert_eq!(
+            proxy
+                .usage_summary(&Default::default(), &[])
+                .expect("usage summary")
+                .request_count,
+            0
+        );
     }
 
     #[test]

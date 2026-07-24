@@ -1,0 +1,160 @@
+[
+  {
+    "model": "gpt-5-mini",
+    "inputMicrosPerMillion": 250000,
+    "outputMicrosPerMillion": 2000000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "gpt-5",
+    "inputMicrosPerMillion": 1250000,
+    "outputMicrosPerMillion": 10000000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "gpt-4o-mini",
+    "inputMicrosPerMillion": 150000,
+    "outputMicrosPerMillion": 600000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "gpt-4o",
+    "inputMicrosPerMillion": 2500000,
+    "outputMicrosPerMillion": 10000000,
+    "cacheReadMicrosPerMillion": 1250000,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "o4-mini",
+    "inputMicrosPerMillion": 1100000,
+    "outputMicrosPerMillion": 4400000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "o3",
+    "inputMicrosPerMillion": 2000000,
+    "outputMicrosPerMillion": 8000000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "claude-sonnet-4",
+    "inputMicrosPerMillion": 3000000,
+    "outputMicrosPerMillion": 15000000,
+    "cacheReadMicrosPerMillion": 300000,
+    "cacheCreationMicrosPerMillion": 3750000,
+    "offPeak": null
+  },
+  {
+    "model": "claude-opus-4",
+    "inputMicrosPerMillion": 15000000,
+    "outputMicrosPerMillion": 75000000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "deepseek-chat",
+    "inputMicrosPerMillion": 270000,
+    "outputMicrosPerMillion": 1100000,
+    "cacheReadMicrosPerMillion": 70000,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": {
+      "startMinuteUtc": 990,
+      "endMinuteUtc": 30,
+      "inputMicrosPerMillion": 135000,
+      "outputMicrosPerMillion": 550000,
+      "cacheReadMicrosPerMillion": 35000,
+      "cacheCreationMicrosPerMillion": 0
+    }
+  },
+  {
+    "model": "deepseek-reasoner",
+    "inputMicrosPerMillion": 550000,
+    "outputMicrosPerMillion": 2190000,
+    "cacheReadMicrosPerMillion": 140000,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": {
+      "startMinuteUtc": 990,
+      "endMinuteUtc": 30,
+      "inputMicrosPerMillion": 135000,
+      "outputMicrosPerMillion": 550000,
+      "cacheReadMicrosPerMillion": 35000,
+      "cacheCreationMicrosPerMillion": 0
+    }
+  },
+  {
+    "model": "moonshot-v1-8k",
+    "inputMicrosPerMillion": 1200000,
+    "outputMicrosPerMillion": 1200000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "moonshot-v1-32k",
+    "inputMicrosPerMillion": 2400000,
+    "outputMicrosPerMillion": 2400000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "moonshot-v1-128k",
+    "inputMicrosPerMillion": 6000000,
+    "outputMicrosPerMillion": 6000000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "kimi-k2",
+    "inputMicrosPerMillion": 600000,
+    "outputMicrosPerMillion": 2500000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "qwen-max",
+    "inputMicrosPerMillion": 2400000,
+    "outputMicrosPerMillion": 9600000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "qwen-plus",
+    "inputMicrosPerMillion": 800000,
+    "outputMicrosPerMillion": 2000000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "gemini-2.5-pro",
+    "inputMicrosPerMillion": 1250000,
+    "outputMicrosPerMillion": 10000000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  },
+  {
+    "model": "gemini-2.5-flash",
+    "inputMicrosPerMillion": 300000,
+    "outputMicrosPerMillion": 2500000,
+    "cacheReadMicrosPerMillion": 0,
+    "cacheCreationMicrosPerMillion": 0,
+    "offPeak": null
+  }
+]

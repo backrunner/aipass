@@ -225,6 +225,7 @@ describe("service worker pending drafts", () => {
     storageSessionData.clear();
     nativePingLocked = false;
     installChromeStub();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
   });
 
   it("serves cached entries after an unlocked ping and reloads them from session storage", async () => {
@@ -462,6 +463,12 @@ describe("service worker pending drafts", () => {
   });
 
   it("saves detected drafts immediately without queueing review state", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { "content-type": "image/png" }
+      })
+    );
     await import("./service-worker");
 
     const saved = (await dispatchMessage({
@@ -473,12 +480,15 @@ describe("service worker pending drafts", () => {
           url: "https://openrouter.ai/settings/keys",
           providerId: "openrouter",
           endpoint: "https://openrouter.ai/api/v1",
+          faviconUrl: "https://openrouter.ai/favicon.ico",
           apiKey: "sk-or-v1-direct-secret1234"
         }
       ]
     })) as { ok?: boolean; data?: { saved?: unknown[] } };
     assert.equal(saved.ok, true);
     assert.equal(saved.data?.saved?.length, 1);
+    const saveMessage = nativeMessages.find((message) => message.type === "secret.saveDetected");
+    assert.equal(saveMessage?.favicon_url, "data:image/png;base64,iVBORw==");
 
     const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
       ok?: boolean;

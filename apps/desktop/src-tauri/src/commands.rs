@@ -5,29 +5,32 @@ use crate::auth_tasks::{
 };
 use crate::models::{
     from_agent_sync_conflict_response, from_agent_sync_settings, from_agent_tool_config_apply,
-    from_agent_tool_config_preview, into_agent_cloud_sync_provider,
+    from_agent_tool_config_preview, from_tool_id, into_agent_cloud_sync_provider,
     into_agent_sync_conflict_request, into_agent_sync_settings_update,
-    into_agent_tool_config_request, AppPreferences, BrowserExtensionInstallResult,
+    into_agent_tool_config_request, into_tool_id, AppPreferences, BrowserExtensionInstallResult,
     BrowserExtensionStatus, ChangePasswordRequest, CreateVaultRequest, NativeHostRepairRequest,
     NativeHostStatus, ProbeResult, ProviderAddRequest, ProviderUpdateRequest, RecoveryVaultRequest,
     SavePreferencesRequest, SaveSyncSettingsRequest, SyncCloudRequest, SyncConflictActionRequest,
     SyncConflictResponse, SyncConflictsRequest, SyncLocalRequest, SyncSettings, SyncWebDavRequest,
-    ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest, UnlockVaultRequest,
-    VaultExportRequest, VaultImportRequest, VaultStatus,
+    ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest, ToolConfigTool,
+    ToolDetection, UnlockVaultRequest, VaultExportRequest, VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
-    AgentRequest, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
-    ProbeResult as AgentProbeResult, SecretValue, SensitiveString, SessionPolicy, SessionStatus,
-    SessionUnlockMode, SyncConflictResponse as AgentSyncConflictResponse,
-    SyncSettings as AgentSyncSettings, ToolConfigApplyResponse as AgentToolConfigApplyResponse,
-    ToolConfigPreviewResponse as AgentToolConfigPreviewResponse, UsageProbeMode,
-    UsageProbeResult as AgentUsageProbeResult,
+    AgentRequest, FaviconBackfillRequest, FaviconBackfillResponse, LockReason, PricingApplyScope,
+    PricingConfig, PricingGroup, ProbeResult as AgentProbeResult, SecretValue, SensitiveString,
+    ServerTokenResponse, ServerUsageSummary, SessionPolicy, SessionStatus, SessionUnlockMode,
+    SyncConflictResponse as AgentSyncConflictResponse, SyncSettings as AgentSyncSettings,
+    ToolConfigApplyResponse as AgentToolConfigApplyResponse,
+    ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
+    ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageProbeMode,
+    UsageProbeResult as AgentUsageProbeResult, UsageTimeseriesPoint,
 };
 use aipass_provider_registry::{GatewayMetadata, QuotaInfo};
+use aipass_proxy::{ProxyConfig, ProxyStatus};
 use aipass_sync::SyncReport;
 use aipass_vault::{DeviceRecord, EntrySummary};
 use serde::de::DeserializeOwned;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::{
@@ -55,7 +58,12 @@ pub(crate) fn window_target() -> Option<String> {
     std::env::var("AIPASS_WINDOW_TARGET")
         .ok()
         .map(|value| value.trim().to_string())
-        .filter(|value| matches!(value.as_str(), "main" | "unlock" | "quick-access" | "tray"))
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "main" | "unlock" | "quick-access" | "server" | "tray"
+            )
+        })
 }
 
 #[tauri::command]
@@ -129,6 +137,147 @@ pub(crate) async fn preferences_save(
             },
         )?;
         Ok(preferences)
+    })
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn server_status(app: AppHandle) -> Result<ProxyStatus, String> {
+    agent_request_no_unlock_async(app, AgentRequest::ServerStatus).await
+}
+
+#[tauri::command]
+pub(crate) async fn server_start(app: AppHandle) -> Result<ProxyStatus, String> {
+    let refresh_app = app.clone();
+    let result = agent_request_async(app, AgentRequest::ServerStart).await;
+    if result.is_ok() {
+        let _ = refresh_app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
+    }
+    result
+}
+
+#[tauri::command]
+pub(crate) async fn server_stop(app: AppHandle) -> Result<ProxyStatus, String> {
+    let refresh_app = app.clone();
+    let result = agent_request_no_unlock_async(app, AgentRequest::ServerStop).await;
+    if result.is_ok() {
+        let _ = refresh_app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
+    }
+    result
+}
+
+#[tauri::command]
+pub(crate) async fn server_config_get(app: AppHandle) -> Result<ProxyConfig, String> {
+    agent_request_async(app, AgentRequest::ServerConfigGet).await
+}
+
+#[tauri::command]
+pub(crate) async fn server_config_set(
+    app: AppHandle,
+    config: ProxyConfig,
+) -> Result<ProxyConfig, String> {
+    let refresh_app = app.clone();
+    let result = agent_request_async(app, AgentRequest::ServerConfigSet { config }).await;
+    if result.is_ok() {
+        let _ = refresh_app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
+    }
+    result
+}
+
+#[tauri::command]
+pub(crate) async fn server_token_rotate(
+    app: AppHandle,
+    route_id: Uuid,
+) -> Result<ServerTokenResponse, String> {
+    agent_request_async(app, AgentRequest::ServerTokenRotate { route_id }).await
+}
+
+#[tauri::command]
+pub(crate) async fn server_usage_summary(app: AppHandle) -> Result<ServerUsageSummary, String> {
+    agent_request_async(app, AgentRequest::ServerUsageSummary).await
+}
+
+#[tauri::command]
+pub(crate) async fn server_usage_timeseries(
+    app: AppHandle,
+    days: u32,
+) -> Result<Vec<UsageTimeseriesPoint>, String> {
+    agent_request_async(app, AgentRequest::ServerUsageTimeseries { days }).await
+}
+
+#[tauri::command]
+pub(crate) async fn pricing_config_get(app: AppHandle) -> Result<PricingConfig, String> {
+    agent_request_async(app, AgentRequest::ServerPricingConfigGet).await
+}
+
+#[tauri::command]
+pub(crate) async fn pricing_assignment_set(
+    app: AppHandle,
+    entry_id: Uuid,
+    secret_id: String,
+    group_id: Option<Uuid>,
+    multiplier: f64,
+) -> Result<PricingConfig, String> {
+    agent_request_async(
+        app,
+        AgentRequest::ServerPricingAssignmentSet {
+            entry_id,
+            secret_id,
+            group_id,
+            multiplier,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn pricing_group_upsert(
+    app: AppHandle,
+    group: PricingGroup,
+    apply_scope: PricingApplyScope,
+) -> Result<PricingConfig, String> {
+    agent_request_async(
+        app,
+        AgentRequest::ServerPricingGroupUpsert { group, apply_scope },
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn pricing_group_delete(
+    app: AppHandle,
+    group_id: Uuid,
+) -> Result<PricingConfig, String> {
+    agent_request_async(app, AgentRequest::ServerPricingGroupDelete { group_id }).await
+}
+
+#[tauri::command]
+pub(crate) async fn pricing_group_version_delete(
+    app: AppHandle,
+    group_id: Uuid,
+    effective_from: i64,
+) -> Result<PricingConfig, String> {
+    agent_request_async(
+        app,
+        AgentRequest::ServerPricingGroupVersionDelete {
+            group_id,
+            effective_from,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn tool_config_detect() -> Result<Vec<ToolDetection>, String> {
+    run_blocking(|| {
+        Ok(aipass_config_writers::detect_tools()
+            .into_iter()
+            .map(|detection| ToolDetection {
+                tool: from_tool_id(detection.tool),
+                binary_found: detection.binary_found,
+                config_path: detection.config_path.map(|path| path.display().to_string()),
+            })
+            .collect())
     })
     .await
 }
@@ -278,6 +427,7 @@ pub(crate) fn vault_auth_status(
 
 #[tauri::command]
 pub(crate) async fn vault_lock(app: AppHandle) -> Result<VaultStatus, String> {
+    let refresh_app = app.clone();
     let status: SessionStatus = agent_request_no_unlock_async(
         app,
         AgentRequest::SessionLock {
@@ -285,6 +435,7 @@ pub(crate) async fn vault_lock(app: AppHandle) -> Result<VaultStatus, String> {
         },
     )
     .await?;
+    let _ = refresh_app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
@@ -569,6 +720,44 @@ pub(crate) async fn tool_config_apply(
         app,
         AgentRequest::ToolConfigApply {
             request: into_agent_tool_config_request(request),
+        },
+    )
+    .await?;
+    Ok(from_agent_tool_config_apply(response))
+}
+
+#[tauri::command]
+pub(crate) async fn tool_config_proxy_preview(
+    app: AppHandle,
+    tool: ToolConfigTool,
+    route_id: Uuid,
+) -> Result<ToolConfigPreviewResponse, String> {
+    let response: AgentToolConfigPreviewResponse = agent_request_async(
+        app,
+        AgentRequest::ToolConfigProxyPreview {
+            request: AgentToolConfigProxyRequest {
+                tool: into_tool_id(tool),
+                route_id,
+            },
+        },
+    )
+    .await?;
+    Ok(from_agent_tool_config_preview(response))
+}
+
+#[tauri::command]
+pub(crate) async fn tool_config_proxy_apply(
+    app: AppHandle,
+    tool: ToolConfigTool,
+    route_id: Uuid,
+) -> Result<ToolConfigApplyResponse, String> {
+    let response: AgentToolConfigApplyResponse = agent_request_async(
+        app,
+        AgentRequest::ToolConfigProxyApply {
+            request: AgentToolConfigProxyRequest {
+                tool: into_tool_id(tool),
+                route_id,
+            },
         },
     )
     .await?;

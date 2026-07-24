@@ -24,12 +24,8 @@
     | "notes"
     | "endpoint"
     | "consoleUrl"
-    | "faviconUrl"
     | "modelAlias"
     | "header"
-    | "interfaceType"
-    | "authScheme"
-    | "quota"
     | "gateway";
 
   type OptionalField = {
@@ -78,23 +74,8 @@
     { id: "tag", label: "providerForm.tags", section: "details", hasValue: () => Boolean(draft.tag), clear: () => (draft.tag = "") },
     { id: "notes", label: "providerForm.notes", section: "details", hasValue: () => Boolean(draft.notes), clear: () => (draft.notes = "") },
     { id: "consoleUrl", label: "providerForm.consoleUrl", section: "advanced", hasValue: () => Boolean(draft.consoleUrl), clear: () => (draft.consoleUrl = "") },
-    { id: "faviconUrl", label: "providerForm.faviconUrl", section: "advanced", hasValue: () => Boolean(draft.faviconUrl), clear: () => (draft.faviconUrl = "") },
     { id: "modelAlias", label: "providerForm.modelAliases", section: "advanced", hasValue: () => Boolean(draft.modelAlias), clear: () => (draft.modelAlias = "") },
     { id: "header", label: "providerForm.customHeaders", section: "advanced", hasValue: () => Boolean(draft.header), clear: () => (draft.header = "") },
-    { id: "interfaceType", label: "providerForm.interface", section: "advanced", hasValue: () => false, clear: () => {} },
-    { id: "authScheme", label: "providerForm.auth", section: "advanced", hasValue: () => false, clear: () => {} },
-    {
-      id: "quota",
-      label: "providerForm.quota",
-      section: "advanced",
-      hasValue: () => Boolean(draft.quotaLabel || draft.quotaLimit || draft.quotaRemaining || draft.quotaResetAt),
-      clear: () => {
-        draft.quotaLabel = "";
-        draft.quotaLimit = "";
-        draft.quotaRemaining = "";
-        draft.quotaResetAt = "";
-      }
-    },
     {
       id: "gateway",
       label: "providerForm.gateway",
@@ -140,10 +121,6 @@
     visibleFields = next;
   }
 
-  function isVisible(id: FieldId): boolean {
-    return visibleFields.has(id);
-  }
-
   function interfaceLabelKey(value: InterfaceType): string {
     switch (value) {
       case "openai_compatible":
@@ -186,21 +163,11 @@
   );
 
   $: detailsVisible =
-    isVisible("domain") ||
-    isVisible("endpoint") ||
-    isVisible("defaultModel") ||
-    isVisible("tag") ||
-    isVisible("notes");
-
-  $: advancedVisible =
-    isVisible("consoleUrl") ||
-    isVisible("faviconUrl") ||
-    isVisible("modelAlias") ||
-    isVisible("header") ||
-    isVisible("interfaceType") ||
-    isVisible("authScheme") ||
-    isVisible("quota") ||
-    isVisible("gateway");
+    visibleFields.has("domain") ||
+    visibleFields.has("endpoint") ||
+    visibleFields.has("defaultModel") ||
+    visibleFields.has("tag") ||
+    visibleFields.has("notes");
 </script>
 
 <div class="provider-form-fields" bind:this={formRoot}>
@@ -252,7 +219,7 @@
   <section class="form-section">
     <h3 class="section-title">{$t("providerForm.details")}</h3>
     <div class="section-fields">
-      {#if isVisible("domain")}
+      {#if visibleFields.has("domain")}
         <div class="removable-field" data-provider-field="domain">
           <Field label={$t("providerForm.domains")}>
             <input
@@ -268,7 +235,7 @@
           </button>
         </div>
       {/if}
-      {#if isVisible("endpoint")}
+      {#if visibleFields.has("endpoint")}
         <div class="removable-field" data-provider-field="endpoint">
           <Field label={$t("providerForm.endpointUrl")}>
             <input
@@ -282,7 +249,7 @@
           </button>
         </div>
       {/if}
-      {#if isVisible("defaultModel")}
+      {#if visibleFields.has("defaultModel")}
         <div class="removable-field" data-provider-field="defaultModel">
           <Field label={$t("providerForm.defaultModel")}>
             <input bind:value={draft.defaultModel} placeholder="gpt-4o" />
@@ -292,7 +259,7 @@
           </button>
         </div>
       {/if}
-      {#if isVisible("tag")}
+      {#if visibleFields.has("tag")}
         <div class="removable-field" data-provider-field="tag">
           <Field label={$t("providerForm.tags")}>
             <input bind:value={draft.tag} placeholder="prod, team" />
@@ -302,7 +269,7 @@
           </button>
         </div>
       {/if}
-      {#if isVisible("notes")}
+      {#if visibleFields.has("notes")}
         <div class="removable-field align-top" data-provider-field="notes">
           <Field label={$t("providerForm.notes")}>
             <textarea bind:value={draft.notes} rows="3" placeholder={$t("providerForm.notes")}></textarea>
@@ -316,113 +283,70 @@
   </section>
 {/if}
 
-{#if advancedVisible}
-  <section class="form-section">
-    <h3 class="section-title">{$t("providerForm.advanced")}</h3>
-    <div class="section-fields">
-      {#if isVisible("consoleUrl")}
-        <div class="removable-field" data-provider-field="consoleUrl">
-          <Field label={$t("providerForm.consoleUrl")}>
-            <input bind:value={draft.consoleUrl} placeholder="https://console.example.com" />
-          </Field>
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.consoleUrl") })} on:click={() => removeField("consoleUrl")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("faviconUrl")}
-        <div class="removable-field" data-provider-field="faviconUrl">
-          <Field label={$t("providerForm.faviconUrl")}>
-            <input bind:value={draft.faviconUrl} placeholder="https://example.com/favicon.ico" />
-          </Field>
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.faviconUrl") })} on:click={() => removeField("faviconUrl")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("modelAlias")}
-        <div class="removable-field" data-provider-field="modelAlias">
-          <Field label={$t("providerForm.modelAliases")}>
-            <input bind:value={draft.modelAlias} placeholder="fast=gpt-4o-mini" />
-          </Field>
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.modelAliases") })} on:click={() => removeField("modelAlias")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("header")}
-        <div class="removable-field" data-provider-field="header">
-          <Field label={$t("providerForm.customHeaders")}>
-            <input bind:value={draft.header} placeholder="x-version=1" />
-          </Field>
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.customHeaders") })} on:click={() => removeField("header")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("interfaceType")}
-        <div class="removable-field" data-provider-field="interfaceType">
-          <SelectField
-            label={$t("providerForm.interface")}
-            bind:value={draft.interfaceType}
-            options={interfaceOptions}
-          />
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeInterface")} on:click={() => removeField("interfaceType")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("authScheme")}
-        <div class="removable-field" data-provider-field="authScheme">
-          <SelectField
-            label={$t("providerForm.auth")}
-            bind:value={draft.authScheme}
-            options={authOptions}
-          />
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeAuth")} on:click={() => removeField("authScheme")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("quota")}
-        <div class="removable-field align-top quota-block" data-provider-field="quota">
-          <div class="quota-grid">
-            <Field label={$t("providerForm.quotaLabel")}>
-              <input bind:value={draft.quotaLabel} placeholder={$t("providerForm.quotaLabelPlaceholder")} />
-            </Field>
-            <Field label={$t("providerForm.resetsAt")}>
-              <input bind:value={draft.quotaResetAt} placeholder="2026-06-01" />
-            </Field>
-            <Field label={$t("providerForm.remaining")}>
-              <input bind:value={draft.quotaRemaining} placeholder="0" />
-            </Field>
-            <Field label={$t("providerForm.limit")}>
-              <input bind:value={draft.quotaLimit} placeholder="0" />
-            </Field>
-          </div>
-          <button type="button" class="remove-btn align-top" aria-label={$t("providerForm.removeField", { label: $t("providerForm.quota") })} on:click={() => removeField("quota")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
-      {#if isVisible("gateway")}
-        <div class="removable-field" data-provider-field="gateway">
-          <div class="gateway-grid">
-            <Field label={$t("providerForm.gatewayGroup")}>
-              <input bind:value={draft.gatewayGroup} placeholder={$t("providerForm.gatewayGroupPlaceholder")} />
-            </Field>
-            <Field label={$t("providerForm.gatewayRate")}>
-              <input bind:value={draft.gatewayRate} placeholder="1x" />
-            </Field>
-          </div>
-          <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.gateway") })} on:click={() => removeField("gateway")}>
-            <X size={13} />
-          </button>
-        </div>
-      {/if}
+<section class="form-section">
+  <h3 class="section-title">{$t("providerForm.advanced")}</h3>
+  <div class="section-fields">
+    <div class="protocol-field">
+      <SelectField
+        label={$t("providerForm.interface")}
+        bind:value={draft.interfaceType}
+        options={interfaceOptions}
+      />
     </div>
-  </section>
-{/if}
+    <div class="protocol-field">
+      <SelectField
+        label={$t("providerForm.auth")}
+        bind:value={draft.authScheme}
+        options={authOptions}
+      />
+    </div>
+    {#if visibleFields.has("consoleUrl")}
+      <div class="removable-field" data-provider-field="consoleUrl">
+        <Field label={$t("providerForm.consoleUrl")}>
+          <input bind:value={draft.consoleUrl} placeholder="https://console.example.com" />
+        </Field>
+        <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.consoleUrl") })} on:click={() => removeField("consoleUrl")}>
+          <X size={13} />
+        </button>
+      </div>
+    {/if}
+    {#if visibleFields.has("modelAlias")}
+      <div class="removable-field" data-provider-field="modelAlias">
+        <Field label={$t("providerForm.modelAliases")}>
+          <input bind:value={draft.modelAlias} placeholder="fast=gpt-4o-mini" />
+        </Field>
+        <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.modelAliases") })} on:click={() => removeField("modelAlias")}>
+          <X size={13} />
+        </button>
+      </div>
+    {/if}
+    {#if visibleFields.has("header")}
+      <div class="removable-field" data-provider-field="header">
+        <Field label={$t("providerForm.customHeaders")}>
+          <input bind:value={draft.header} placeholder="x-version=1" />
+        </Field>
+        <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.customHeaders") })} on:click={() => removeField("header")}>
+          <X size={13} />
+        </button>
+      </div>
+    {/if}
+    {#if visibleFields.has("gateway")}
+      <div class="removable-field" data-provider-field="gateway">
+        <div class="gateway-grid">
+          <Field label={$t("providerForm.gatewayGroup")}>
+            <input bind:value={draft.gatewayGroup} placeholder={$t("providerForm.gatewayGroupPlaceholder")} />
+          </Field>
+          <Field label={$t("providerForm.gatewayRate")}>
+            <input bind:value={draft.gatewayRate} placeholder="1x" />
+          </Field>
+        </div>
+        <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.gateway") })} on:click={() => removeField("gateway")}>
+          <X size={13} />
+        </button>
+      </div>
+    {/if}
+  </div>
+</section>
 
 {#if detailsAvailable.length > 0 || advancedAvailable.length > 0}
   <section class="form-section">
@@ -525,30 +449,21 @@
     align-items: center;
     justify-content: center;
     width: 28px;
-    height: 34px;
+    height: 28px;
+    margin-bottom: 3px;
     border-radius: var(--radius);
     color: var(--text-tertiary);
     transition: background-color 80ms ease, color 120ms ease;
 
     &.align-top {
       margin-top: 24px;
+      margin-bottom: 0;
     }
 
     &:hover {
       background: var(--danger-soft, var(--surface-2));
       color: var(--danger);
     }
-  }
-
-  .quota-block {
-    align-items: start;
-  }
-
-  .quota-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 10px;
-    min-width: 0;
   }
 
   .gateway-grid {
@@ -597,10 +512,6 @@
   }
 
   @media (max-width: 540px) {
-    .quota-grid {
-      grid-template-columns: 1fr;
-    }
-
     .gateway-grid {
       grid-template-columns: 1fr;
     }

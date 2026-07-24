@@ -3,6 +3,8 @@ mod commands;
 mod models;
 mod singleton;
 mod tray;
+#[cfg(target_os = "macos")]
+mod tray_swift;
 mod updates;
 
 use commands::*;
@@ -29,7 +31,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::thread;
-use tauri::{AppHandle, LogicalSize, Manager, Size};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 #[cfg(unix)]
@@ -1494,7 +1496,12 @@ fn launch_window_target() -> String {
     std::env::var("AIPASS_WINDOW_TARGET")
         .ok()
         .map(|value| value.trim().to_string())
-        .filter(|value| matches!(value.as_str(), "main" | "unlock" | "quick-access" | "tray"))
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "main" | "unlock" | "quick-access" | "server" | "tray"
+            )
+        })
         .unwrap_or_else(|| "main".to_string())
 }
 
@@ -1530,6 +1537,9 @@ pub(crate) fn activate_window_target(app: &AppHandle, target: &str) {
         return;
     }
     configure_window_target(app, target);
+    if target == "server" {
+        let _ = app.emit("open-server-workspace", ());
+    }
 }
 
 fn ensure_agent_resident_async(app: AppHandle) {
@@ -1640,6 +1650,20 @@ pub fn run() {
             session_touch,
             preferences_load,
             preferences_save,
+            server_status,
+            server_start,
+            server_stop,
+            server_config_get,
+            server_config_set,
+            server_token_rotate,
+            server_usage_summary,
+            server_usage_timeseries,
+            pricing_config_get,
+            pricing_assignment_set,
+            pricing_group_upsert,
+            pricing_group_delete,
+            pricing_group_version_delete,
+            tool_config_detect,
             vault_create,
             vault_unlock,
             vault_recover,
@@ -1672,6 +1696,8 @@ pub fn run() {
             provider_usage_apply,
             tool_config_preview,
             tool_config_apply,
+            tool_config_proxy_preview,
+            tool_config_proxy_apply,
             native_host_status,
             native_host_repair,
             browser_extension_status,

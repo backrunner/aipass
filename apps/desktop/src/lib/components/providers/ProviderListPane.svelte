@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
   import { Button, ProviderIcon } from "@aipass/ui";
-  import { DropdownMenu } from "bits-ui";
-  import { KeyRound, Plus, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
+  import { ContextMenu, DropdownMenu } from "bits-ui";
+  import { ChevronRight, KeyRound, Plus, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderFilter } from "../../types";
@@ -15,11 +15,14 @@
   export let showFavorites = false;
   export let providerFilter: ProviderFilter = "all";
   export let query = "";
+  export let routeGroups: Array<{ id: string; name: string }> = [];
   export let onSearch: () => MaybePromise = () => {};
   export let onAdd: () => MaybePromise = () => {};
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
   export let onEmptyTrash: () => MaybePromise = () => {};
   export let onSelect: (id: string) => MaybePromise = () => {};
+  export let onAddAsRoute: (entry: ProviderEntry) => MaybePromise = () => {};
+  export let onAddToGroup: (entry: ProviderEntry, groupId: string) => MaybePromise = () => {};
 
   $: baseFilterOptions = [
     { value: "all" as ProviderFilter, label: $t("providerList.allItems") },
@@ -156,20 +159,47 @@
       </div>
     {/if}
     {#each entries as entry (entry.id)}
-      <button
-        type="button"
-        role="option"
-        aria-selected={selectedId === entry.id}
-        class="entry"
-        class:selected={selectedId === entry.id}
-        on:click={() => onSelect(entry.id)}
-      >
-        <ProviderIcon title={entry.title} kind={entry.providerKind} faviconUrl={entry.faviconUrl} size="md" />
-        <div class="entry-main">
-          <span class="title">{entry.title}</span>
-          <span class="subtitle">{entrySubtitle(entry)}</span>
-        </div>
-      </button>
+      <ContextMenu.Root>
+        <ContextMenu.Trigger>
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              role="option"
+              aria-selected={selectedId === entry.id}
+              class="entry"
+              class:selected={selectedId === entry.id}
+              on:click={() => onSelect(entry.id)}
+            >
+              <ProviderIcon title={entry.title} kind={entry.providerKind} faviconUrl={entry.faviconUrl} size="md" />
+              <div class="entry-main">
+                <span class="title">{entry.title}</span>
+                <span class="subtitle">{entrySubtitle(entry)}</span>
+              </div>
+            </button>
+          {/snippet}
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content class="filter-menu">
+            <ContextMenu.Item class="filter-item" onSelect={() => onAddAsRoute(entry)}>
+              <span>{$t("providers.addAsRoute")}</span>
+            </ContextMenu.Item>
+            <ContextMenu.Sub>
+              <ContextMenu.SubTrigger class="filter-item" disabled={routeGroups.length === 0}>
+                <span>{$t("providers.addToGroup")}</span>
+                <ChevronRight size={13} />
+              </ContextMenu.SubTrigger>
+              <ContextMenu.SubContent class="filter-menu" sideOffset={4}>
+                {#each routeGroups as group (group.id)}
+                  <ContextMenu.Item class="filter-item" onSelect={() => onAddToGroup(entry, group.id)}>
+                    <span>{group.name}</span>
+                  </ContextMenu.Item>
+                {/each}
+              </ContextMenu.SubContent>
+            </ContextMenu.Sub>
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
     {/each}
   </div>
 </section>
@@ -283,6 +313,11 @@
 
   :global(.filter-item[data-highlighted]) {
     background: var(--accent-soft);
+  }
+
+  :global(.filter-item[data-disabled]) {
+    color: var(--text-tertiary);
+    cursor: not-allowed;
   }
 
   .filter-check {

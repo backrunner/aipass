@@ -10,7 +10,9 @@ members = [
   "crates/aipass-config-writers",
   "crates/aipass-cli",
   "crates/aipass-sync",
-  "crates/aipass-native-host"
+  "crates/aipass-native-host",
+  "crates/aipass-proxy-conversion",
+  "crates/aipass-proxy"
 ]
 resolver = "2"
 
@@ -22,6 +24,7 @@ authors = ["AIPass contributors"]
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+bytes = "1.11.1"
 argon2 = "0.5.3"
 base64 = "0.22.1"
 chacha20poly1305 = "0.10.1"
@@ -30,10 +33,15 @@ clap_complete = "4.5.61"
 directories = "6.0.0"
 hkdf = "0.12.4"
 hmac = "0.12.1"
+http = "1.4.0"
+http-body-util = "0.1.3"
+hyper = { version = "1.9.0", features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1.20", features = ["server-auto", "service", "tokio"] }
+futures-util = "0.3.31"
 json5 = "0.4.1"
 quick-xml = "0.39.4"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-reqwest = { version = "0.13.3", features = ["blocking"] }
+reqwest = { version = "0.13.3", features = ["blocking", "json", "stream"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -42,6 +50,7 @@ sha2 = "0.10.9"
 tempfile = "3.23.0"
 thiserror = "2.0.17"
 time = { version = "0.3.44", features = ["formatting", "parsing", "serde", "macros"] }
+tokio = { version = "1.52.3", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 toml_edit = "0.23.7"
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
 zeroize = { version = "1.8.2", features = ["derive"] }

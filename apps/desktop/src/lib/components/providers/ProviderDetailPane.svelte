@@ -4,9 +4,11 @@
     Badge,
     Banner,
     Button,
+    Field,
     IconButton,
     ProviderFormFields,
     ProviderIcon,
+    SelectField,
     providerKindTone
   } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
@@ -14,7 +16,6 @@
     Archive,
     Check,
     Copy,
-    ChevronDown,
     Eye,
     EyeOff,
     Gauge,
@@ -22,8 +23,8 @@
     MoreHorizontal,
     Pencil,
     Plus,
+    SlidersHorizontal,
     Star,
-    Terminal,
     Trash2,
     Undo2,
     Wifi
@@ -31,27 +32,30 @@
 
   import type {
     CodexApiKeyMode,
+    CredentialAssignment,
     Draft,
     FormMode,
     MaybePromise,
-    MessageValue,
+    PricingApplyScope,
+    PricingGroup,
     ProbeResult,
     ToolConfigApplyResult,
     ToolConfigMode,
     ToolConfigPreview,
     ToolConfigTarget,
+    ToolDetection,
     UsageProbeRequest,
     UsageProbeResult
   } from "../../types";
-  import { isLocalizedMessage, localizedMessage, resolveMessage, t } from "../../stores/i18n";
+  import { localizedMessage, t } from "../../stores/i18n";
   import {
     compatibleToolsFor,
     type IntegrationToolDefinition
   } from "../../utils/integrations";
-  import { detectLang, highlightPreview } from "../../utils/highlight";
   import { usageSourceLabelKey } from "../../utils/usageProbe";
   import Card from "../shared/Card.svelte";
-  import SegmentedControl from "../shared/SegmentedControl.svelte";
+  import IntegrationCard from "../integration/IntegrationCard.svelte";
+  import PricingGroupDialog from "../pricing/PricingGroupDialog.svelte";
   import ProviderUsageProbeDialog from "./ProviderUsageProbeDialog.svelte";
 
   export let selected: ProviderEntry | undefined;
@@ -107,13 +111,71 @@
   }) => Promise<ToolConfigApplyResult> = async () => {
     throw localizedMessage("error.toolApplyUnavailable");
   };
+  export let pricingGroups: PricingGroup[] = [];
+  export let pricingAssignments: CredentialAssignment[] = [];
+  export let toolDetections: ToolDetection[] = [];
+  export let onSetPricingAssignment: (
+    entryId: string,
+    secretId: string,
+    groupId: string | null,
+    multiplier: number
+  ) => MaybePromise = () => {};
+  export let onUpsertPricingGroup: (
+    group: PricingGroup,
+    applyScope: PricingApplyScope,
+    assign?: { entryId: string; secretId: string }
+  ) => MaybePromise = () => {};
+  export let onDeletePricingGroup: (groupId: string) => MaybePromise = () => {};
+  export let onDeletePricingVersion: (groupId: string, effectiveFrom: number) => MaybePromise = () => {};
 
   let showAddSecret = false;
   let usageDialogOpen = false;
   type CodexIntegrationMode = CodexApiKeyMode;
   let codexIntegrationMode: CodexIntegrationMode = "experimental_bearer_token";
   let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
-  let expandedIntegrations: Partial<Record<ToolConfigTarget, boolean>> = {};
+  let pricingDialogOpen = false;
+  let pricingDialogGroupId: string | undefined;
+  let pricingDialogAssign: { entryId: string; secretId: string } | undefined;
+
+  function assignmentFor(secretId: string): CredentialAssignment | undefined {
+    return pricingAssignments.find(
+      (assignment) => assignment.entryId === selected?.id && assignment.secretId === secretId
+    );
+  }
+
+  function pricingGroupName(groupId: string | undefined): string {
+    if (!groupId) return "";
+    return pricingGroups.find((item) => item.id === groupId)?.name ?? "";
+  }
+
+  $: pricingGroupOptions = [
+    { value: "", label: $t("pricing.none") },
+    ...pricingGroups.map((item) => ({ value: item.id, label: item.name }))
+  ];
+
+  function openPricingDialog(secretId: string) {
+    if (!selected) return;
+    const assignment = assignmentFor(secretId);
+    pricingDialogGroupId = assignment?.groupId;
+    pricingDialogAssign = assignment?.groupId
+      ? undefined
+      : { entryId: selected.id, secretId };
+    pricingDialogOpen = true;
+  }
+
+  async function savePricingGroup(group: PricingGroup, applyScope: PricingApplyScope) {
+    await onUpsertPricingGroup(group, applyScope, pricingDialogAssign);
+    pricingDialogOpen = false;
+  }
+
+  async function deletePricingGroup(groupId: string) {
+    await onDeletePricingGroup(groupId);
+    pricingDialogOpen = false;
+  }
+
+  $: pricingDialogGroup = pricingDialogGroupId
+    ? pricingGroups.find((item) => item.id === pricingDialogGroupId)
+    : undefined;
 
   $: primaryLabel = selected?.secretRefs[0]?.label ?? "primary";
   $: hasQuota = Boolean(
@@ -137,80 +199,13 @@
     { value: "auth_json", label: "auth.json" }
   ];
 
-  type IntegrationState = {
-    busy: boolean;
-    error: MessageValue;
-    preview?: ToolConfigPreview;
-    applied?: ToolConfigApplyResult;
-  };
-
-  const initialIntegrationState = (): Record<ToolConfigTarget, IntegrationState> => ({
-    codex: { busy: false, error: "" },
-    "claude-code": { busy: false, error: "" },
-    "gemini-cli": { busy: false, error: "" },
-    opencode: { busy: false, error: "" }
-  });
-
-  let integrationState: Record<ToolConfigTarget, IntegrationState> = initialIntegrationState();
-
   $: if (selected?.id) {
-    integrationState = initialIntegrationState();
     codexIntegrationMode = "experimental_bearer_token";
-    expandedIntegrations = {};
   }
 
   $: if (selected?.id) {
     usageDialogOpen = false;
-  }
-
-  async function previewIntegration(tool: IntegrationToolDefinition) {
-    if (!selected) return;
-    const state = integrationState[tool.id];
-    integrationState = {
-      ...integrationState,
-      [tool.id]: { ...state, busy: true, error: "" }
-    };
-    try {
-      const preview = await onPreviewToolConfig(integrationRequest(tool, selected.id));
-      integrationState = {
-        ...integrationState,
-        [tool.id]: { ...integrationState[tool.id], busy: false, preview }
-      };
-    } catch (err) {
-      integrationState = {
-        ...integrationState,
-        [tool.id]: {
-          ...integrationState[tool.id],
-          busy: false,
-          error: isLocalizedMessage(err) ? err : String(err)
-        }
-      };
-    }
-  }
-
-  async function applyIntegration(tool: IntegrationToolDefinition) {
-    if (!selected) return;
-    const state = integrationState[tool.id];
-    integrationState = {
-      ...integrationState,
-      [tool.id]: { ...state, busy: true, error: "" }
-    };
-    try {
-      const applied = await onApplyToolConfig(integrationRequest(tool, selected.id));
-      integrationState = {
-        ...integrationState,
-        [tool.id]: { ...integrationState[tool.id], busy: false, applied }
-      };
-    } catch (err) {
-      integrationState = {
-        ...integrationState,
-        [tool.id]: {
-          ...integrationState[tool.id],
-          busy: false,
-          error: isLocalizedMessage(err) ? err : String(err)
-        }
-      };
-    }
+    pricingDialogOpen = false;
   }
 
   function integrationRequest(tool: IntegrationToolDefinition, id: string) {
@@ -225,28 +220,8 @@
     };
   }
 
-  function setCodexIntegrationMode(mode: CodexIntegrationMode) {
-    codexIntegrationMode = mode;
-    integrationState = {
-      ...integrationState,
-      codex: { busy: false, error: "" }
-    };
-  }
-
-  function codexModeDescriptionKey(mode: CodexIntegrationMode): string {
-    switch (mode) {
-      case "experimental_bearer_token":
-        return "providerDetail.codexModeExperimentalDesc";
-      case "auth_json":
-        return "providerDetail.codexModeAuthJsonDesc";
-    }
-  }
-
-  function toggleIntegration(tool: ToolConfigTarget) {
-    expandedIntegrations = {
-      ...expandedIntegrations,
-      [tool]: !expandedIntegrations[tool]
-    };
+  function setCodexIntegrationMode(mode: string) {
+    codexIntegrationMode = mode as CodexIntegrationMode;
   }
 
   function fullyMasked(): string {
@@ -418,11 +393,62 @@
           {onProviderChanged}
         />
 
+        {#if selected.secretRefs.length > 0}
+          {@const primary = selected.secretRefs[0]}
+          {@const primaryAssignment = assignmentFor(primary.id)}
+          <section class="form-section">
+            <h3 class="section-title">{$t("providerDetail.apiKey")} · {$t("pricing.group")}</h3>
+            <div class="section-fields">
+              <div class="key-pricing">
+                <SelectField
+                  label={$t("pricing.group")}
+                  value={primaryAssignment?.groupId ?? ""}
+                  options={pricingGroupOptions}
+                  onValueChange={(groupId) =>
+                    onSetPricingAssignment(
+                      selected.id,
+                      primary.id,
+                      groupId || null,
+                      primaryAssignment?.multiplier ?? 1
+                    )}
+                />
+                <Field label={$t("pricing.multiplier")}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={primaryAssignment?.multiplier ?? 1}
+                    on:change={(event) => {
+                      const multiplier = Number(event.currentTarget.value);
+                      onSetPricingAssignment(
+                        selected.id,
+                        primary.id,
+                        primaryAssignment?.groupId ?? null,
+                        Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1
+                      );
+                    }}
+                  />
+                </Field>
+                <button
+                  type="button"
+                  class="key-pricing-advanced"
+                  title={$t("pricing.advanced")}
+                  aria-label={$t("pricing.advanced")}
+                  on:click={() => openPricingDialog(primary.id)}
+                >
+                  <SlidersHorizontal size={13} />
+                </button>
+              </div>
+            </div>
+          </section>
+        {/if}
+
         {#if selected.secretRefs.length > 1 || showAddSecret}
           <section class="form-section">
             <h3 class="section-title">{$t("providerDetail.additionalKeys")}</h3>
             <div class="section-fields">
               {#each selected.secretRefs.slice(1) as secret}
+                {@const assignment = assignmentFor(secret.id)}
                 <div class="key-row">
                   <span class="key-row-label">{secret.label}</span>
                   <code class="key-row-value mono">{revealedSecrets[secret.label] || fullyMasked()}</code>
@@ -434,6 +460,46 @@
                     disabled={secretBusy === secret.label}
                   >
                     <Trash2 size={13} />
+                  </button>
+                </div>
+                <div class="key-pricing">
+                  <SelectField
+                    label={$t("pricing.group")}
+                    value={assignment?.groupId ?? ""}
+                    options={pricingGroupOptions}
+                    onValueChange={(groupId) =>
+                      onSetPricingAssignment(
+                        selected.id,
+                        secret.id,
+                        groupId || null,
+                        assignment?.multiplier ?? 1
+                      )}
+                  />
+                  <Field label={$t("pricing.multiplier")}>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={assignment?.multiplier ?? 1}
+                      on:change={(event) => {
+                        const multiplier = Number(event.currentTarget.value);
+                        onSetPricingAssignment(
+                          selected.id,
+                          secret.id,
+                          assignment?.groupId ?? null,
+                          Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1
+                        );
+                      }}
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    class="key-pricing-advanced"
+                    title={$t("pricing.advanced")}
+                    aria-label={$t("pricing.advanced")}
+                    on:click={() => openPricingDialog(secret.id)}
+                  >
+                    <SlidersHorizontal size={13} />
                   </button>
                 </div>
               {/each}
@@ -473,7 +539,7 @@
           </button>
         {/if}
       {:else}
-        <Card title={$t("providerDetail.credentials")} collapsible>
+        <Card title={$t("providerDetail.credentials")} collapsible padded={false}>
           {#if endpointDisplay(selected)}
             <button
               type="button"
@@ -483,38 +549,54 @@
               <span class="kv-label">{$t("providerDetail.endpoint")}</span>
               <code class="kv-value mono">{endpointDisplay(selected)}</code>
               <span class="kv-hint">
-                {#if copied === "endpoint"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
+                {#if copied === "endpoint"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<span class="copy-hint"><Copy size={13} /></span>{/if}
               </span>
             </button>
           {/if}
           {#each selected.secretRefs as secret, index}
-            <div class="kv-row clickable secret">
-              <button
-                type="button"
-                class="kv-row-copy"
-                aria-label={$t("providerDetail.copySecret", { label: index === 0 ? $t("providerDetail.apiKey") : secret.label })}
-                on:click={() => onCopySecretByLabel(secret.label)}
-              >
-                <span class="kv-label">
-                  <KeyRound size={13} />
-                  {index === 0 ? $t("providerDetail.apiKey") : secret.label}
-                </span>
-                <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.label])}>
-                  {revealedSecrets[secret.label] || fullyMasked()}
-                </code>
-                <span class="kv-hint">
-                  {#if copied === `secret:${secret.label}`}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
-                </span>
-              </button>
-              <button
-                type="button"
-                class="reveal-btn"
-                aria-label={revealedSecrets[secret.label] ? $t("providerDetail.hideSecret", { label: secret.label }) : $t("providerDetail.revealSecret", { label: secret.label })}
-                aria-pressed={Boolean(revealedSecrets[secret.label])}
-                on:click={() => onRevealSecret(secret.label)}
-              >
-                {#if revealedSecrets[secret.label]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-              </button>
+            {@const pricingAssignment = assignmentFor(secret.id)}
+            <div
+              class="kv-row secret clickable"
+              role="button"
+              tabindex="0"
+              aria-label={$t("providerDetail.copySecret", { label: index === 0 ? $t("providerDetail.apiKey") : secret.label })}
+              on:click={() => onCopySecretByLabel(secret.label)}
+              on:keydown|self={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onCopySecretByLabel(secret.label);
+                }
+              }}
+            >
+              <span class="kv-label">
+                <KeyRound size={13} />
+                {index === 0 ? $t("providerDetail.apiKey") : secret.label}
+              </span>
+              <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.label])}>
+                {revealedSecrets[secret.label] || fullyMasked()}
+              </code>
+              <span class="kv-actions">
+                {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
+                  <span class="pricing-badge">
+                    {#if pricingAssignment.groupId}{pricingGroupName(pricingAssignment.groupId)}{/if}
+                    {#if pricingAssignment.multiplier !== 1}×{pricingAssignment.multiplier}{/if}
+                  </span>
+                {/if}
+                {#if copied === `secret:${secret.label}`}
+                  <span class="kv-hint copied"><Check size={13} /> {$t("providerDetail.copied")}</span>
+                {:else}
+                  <span class="copy-hint"><Copy size={13} /></span>
+                {/if}
+                <button
+                  type="button"
+                  class="icon-btn"
+                  aria-label={revealedSecrets[secret.label] ? $t("providerDetail.hideSecret", { label: secret.label }) : $t("providerDetail.revealSecret", { label: secret.label })}
+                  aria-pressed={Boolean(revealedSecrets[secret.label])}
+                  on:click|stopPropagation={() => onRevealSecret(secret.label)}
+                >
+                  {#if revealedSecrets[secret.label]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+                </button>
+              </span>
             </div>
           {/each}
           {#if selected.defaultModel}
@@ -526,7 +608,7 @@
               <span class="kv-label">{$t("providerDetail.defaultModel")}</span>
               <code class="kv-value mono">{selected.defaultModel}</code>
               <span class="kv-hint">
-                {#if copied === "model"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
+                {#if copied === "model"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<span class="copy-hint"><Copy size={13} /></span>{/if}
               </span>
             </button>
           {/if}
@@ -556,7 +638,7 @@
               <span class="kv-label">{$t("providerDetail.console")}</span>
               <code class="kv-value mono">{consoleDisplay(selected)}</code>
               <span class="kv-hint">
-                {#if copied === "console"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<Copy size={13} />{/if}
+                {#if copied === "console"}<Check size={13} /> {$t("providerDetail.copied")}{:else}<span class="copy-hint"><Copy size={13} /></span>{/if}
               </span>
             </button>
           {/if}
@@ -638,75 +720,16 @@
         {/if}
 
         {#if integrationTools.length > 0}
-          <Card title={$t("providerDetail.integrations")} collapsible>
-            <div class="integration-list">
-              {#each integrationTools as tool}
-                {@const state = integrationState[tool.id]}
-                <div class="integration-row" class:expanded={expandedIntegrations[tool.id]}>
-                  <button
-                    type="button"
-                    class="integration-toggle"
-                    aria-expanded={Boolean(expandedIntegrations[tool.id])}
-                    aria-controls={`integration-${tool.id}-content`}
-                    on:click={() => toggleIntegration(tool.id)}
-                  >
-                    <div class="integration-meta">
-                      <div class="integration-icon"><Terminal size={14} /></div>
-                      <div class="integration-text">
-                        <strong>{tool.name}</strong>
-                      </div>
-                    </div>
-                    <span class="integration-chevron">
-                      <ChevronDown size={15} aria-hidden="true" />
-                    </span>
-                  </button>
-                  {#if expandedIntegrations[tool.id]}
-                    <div class="integration-content" id={`integration-${tool.id}-content`}>
-                      {#if tool.id === "codex"}
-                        <div class="integration-mode">
-                          <div class="integration-mode-line">
-                            <span class="integration-mode-label">{$t("providerDetail.codexAuthMode")}</span>
-                            <SegmentedControl
-                              options={codexIntegrationModeOptions}
-                              value={codexIntegrationMode}
-                              ariaLabel={$t("providerDetail.codexAuthMode")}
-                              onChange={setCodexIntegrationMode}
-                            />
-                          </div>
-                          <span class="integration-mode-desc">{$t(codexModeDescriptionKey(codexIntegrationMode))}</span>
-                        </div>
-                      {/if}
-                      <div class="integration-actions">
-                        <Button variant="secondary" size="sm" on:click={() => previewIntegration(tool)} disabled={state.busy}>
-                          <Eye size={13} /> {$t("providerDetail.preview")}
-                        </Button>
-                        <Button variant="primary" size="sm" on:click={() => applyIntegration(tool)} disabled={state.busy}>
-                          <Check size={13} /> {$t("providerDetail.apply")}
-                        </Button>
-                      </div>
-                      {#if state.error}
-                        <Banner tone="danger">{resolveMessage($t, state.error)}</Banner>
-                      {/if}
-                      {#if state.applied}
-                        <Banner tone="success">
-                          {$t("providerDetail.configured", { title: state.applied.entryTitle })} <code>{state.applied.targetPath}</code>
-                        </Banner>
-                      {/if}
-                      {#if state.preview}
-                        <div class="integration-preview">
-                          <div class="integration-preview-meta">
-                            <strong>{state.preview.summary}</strong>
-                            <code>{state.preview.targetPath}</code>
-                          </div>
-                          <pre class="code-block" data-lang={detectLang(state.preview.targetPath)}>{@html highlightPreview(state.preview.preview, state.preview.targetPath)}</pre>
-                        </div>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          </Card>
+          <IntegrationCard
+            tools={integrationTools}
+            detections={toolDetections}
+            codexMode={codexIntegrationMode}
+            codexModeOptions={codexIntegrationModeOptions}
+            onCodexModeChange={setCodexIntegrationMode}
+            resetKey={selected.id}
+            onPreview={(tool) => onPreviewToolConfig(integrationRequest(tool, selected.id))}
+            onApply={(tool) => onApplyToolConfig(integrationRequest(tool, selected.id))}
+          />
         {/if}
       {/if}
     </div>
@@ -723,6 +746,18 @@
     {onUsageProbe}
     {onApplyUsageProbe}
   />
+
+  {#if pricingDialogOpen}
+    <PricingGroupDialog
+      group={pricingDialogGroup}
+      onSave={savePricingGroup}
+      onDeleteGroup={deletePricingGroup}
+      onDeleteVersion={onDeletePricingVersion}
+      onClose={() => {
+        pricingDialogOpen = false;
+      }}
+    />
+  {/if}
 {:else}
   <section class="detail empty">
     <div class="empty-card">
@@ -804,7 +839,7 @@
   .actions {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
   }
 
   .more-trigger {
@@ -910,10 +945,7 @@
     }
   }
 
-  button.kv-row.clickable {
-    width: 100%;
-    background: transparent;
-    border: 0;
+  .kv-row.clickable {
     cursor: pointer;
     transition: background-color 80ms ease;
 
@@ -921,7 +953,8 @@
       background: var(--surface-2);
     }
 
-    &:hover .kv-hint {
+    &:hover .copy-hint {
+      opacity: 1;
       color: var(--accent);
     }
 
@@ -931,68 +964,57 @@
     }
   }
 
-  /* Secret row: container + copy button + reveal button */
-  .kv-row.secret.clickable {
-    display: flex;
-    align-items: stretch;
-    padding: 0;
-    gap: 0;
-
-    &:hover {
-      background: color-mix(in oklab, var(--accent) 8%, var(--surface-2));
-    }
-  }
-
-  .kv-row-copy {
-    display: grid;
-    grid-template-columns: 110px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 12px;
-    flex: 1;
-    min-width: 0;
-    padding: 10px 16px;
+  button.kv-row.clickable {
+    width: 100%;
     background: transparent;
     border: 0;
-    cursor: pointer;
-    text-align: left;
-    color: inherit;
-    font: inherit;
-
-    &:hover .kv-hint {
-      color: var(--accent);
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--accent-ring);
-      outline-offset: -2px;
-    }
   }
 
-  .kv-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--text-tertiary);
-    font-size: 11px;
-    font-weight: 500;
-    transition: color 120ms ease;
-    white-space: nowrap;
+  /* Secret rows already sit on surface-2, so their hover state deepens it. */
+  .kv-row.secret.clickable:hover {
+    background: color-mix(in oklab, var(--text) 6%, var(--surface-2));
   }
 
-  .reveal-btn {
+  /* Copy affordance for click-to-copy rows: hidden until row hover
+     (1Password-style). Sized like .icon-btn so it lines up with the
+     reveal toggle on secret rows. */
+  .copy-hint {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    width: 36px;
-    margin-right: 10px;
+    width: 28px;
+    height: 28px;
+    opacity: 0;
+    transition: opacity 120ms ease, color 120ms ease;
+  }
+
+  .kv-hint.copied {
+    color: var(--accent);
+  }
+
+  /* Secret rows share the endpoint row's grid so label/value/action columns
+     line up; the badge, copy hint, and reveal toggle live in the trailing
+     column. Copy happens by clicking the row itself. */
+  .kv-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
     border-radius: 6px;
     color: var(--text-tertiary);
     background: transparent;
     transition: background-color 80ms ease, color 120ms ease;
     cursor: pointer;
-    align-self: center;
-    height: 28px;
 
     &:hover {
       background: color-mix(in oklab, var(--text) 8%, transparent);
@@ -1008,6 +1030,17 @@
       outline: 2px solid var(--accent-ring);
       outline-offset: 1px;
     }
+  }
+
+  .kv-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+    transition: color 120ms ease;
+    white-space: nowrap;
   }
 
   .kv-label {
@@ -1027,14 +1060,24 @@
     font-size: 13px;
     color: var(--text-tertiary);
 
+    /* Revealed secrets render like a readonly input: full value, no
+       ellipsis, horizontally scrollable. */
     &.revealed {
+      padding: 4px 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      text-overflow: clip;
+      user-select: all;
       color: var(--text);
-    }
-  }
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      scrollbar-width: none;
 
-  .kv-actions {
-    display: inline-flex;
-    gap: 2px;
+      &::-webkit-scrollbar {
+        display: none;
+      }
+    }
   }
 
   .chips {
@@ -1121,6 +1164,48 @@
     }
   }
 
+  .key-pricing {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 110px 34px;
+    align-items: end;
+    gap: 10px;
+  }
+
+  .key-pricing-advanced {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text-tertiary);
+    transition: background-color 80ms ease, border-color 120ms ease, color 120ms ease;
+
+    &:hover {
+      background: var(--surface-2);
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
+  }
+
+  .pricing-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    align-self: center;
+    flex-shrink: 0;
+    margin-right: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
   .add-secret-row {
     display: grid;
     grid-template-columns: 130px minmax(0, 1fr) auto auto;
@@ -1193,237 +1278,6 @@
     color: var(--danger);
   }
 
-  .integration-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    max-height: clamp(220px, 48vh, 520px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 14px 16px;
-    scrollbar-gutter: stable;
-  }
-
-  .integration-row {
-    display: flex;
-    flex-direction: column;
-    flex: 0 0 auto;
-    border: 1px solid var(--divider);
-    border-radius: var(--radius);
-    background: var(--surface-2);
-
-    &.expanded {
-      border-color: var(--border);
-    }
-  }
-
-  .integration-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    min-width: 0;
-    gap: 12px;
-    padding: 12px;
-    text-align: left;
-
-    &:hover {
-      background: color-mix(in oklab, var(--accent) 6%, transparent);
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--accent-ring);
-      outline-offset: -2px;
-      border-radius: var(--radius);
-    }
-  }
-
-  .integration-chevron {
-    display: inline-flex;
-    flex-shrink: 0;
-    color: var(--text-tertiary);
-    transition: transform 140ms ease;
-  }
-
-  .integration-row.expanded .integration-chevron {
-    transform: rotate(180deg);
-  }
-
-  .integration-meta {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  .integration-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius);
-    background: var(--surface);
-    color: var(--text-secondary);
-    flex-shrink: 0;
-  }
-
-  .integration-text {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-
-    strong {
-      font-size: 13px;
-    }
-  }
-
-  .integration-content {
-    display: grid;
-    gap: 10px;
-    padding: 0 12px 12px;
-  }
-
-  .integration-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .integration-mode {
-    display: grid;
-    gap: 4px;
-    padding-top: 2px;
-  }
-
-  .integration-mode-line {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-width: 0;
-  }
-
-  .integration-mode-label {
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .integration-mode-desc {
-    color: var(--text-tertiary);
-    font-size: 11px;
-    line-height: 1.35;
-  }
-
-  :global(.integration-mode .segmented) {
-    flex-shrink: 0;
-  }
-
-  :global(.integration-mode .segmented button) {
-    min-width: 0;
-    padding-inline: 8px;
-    white-space: nowrap;
-  }
-
-  .integration-preview {
-    display: grid;
-    gap: 8px;
-
-    .code-block {
-      margin: 0;
-      max-height: 320px;
-      overflow: auto;
-      padding: 12px 14px;
-      border-radius: var(--radius-sm);
-      background: color-mix(in oklab, var(--text) 4%, var(--surface));
-      border: 1px solid var(--divider);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.55;
-      color: var(--text);
-      white-space: pre;
-      tab-size: 2;
-    }
-  }
-
-  :global(.code-block .tok-key) {
-    color: var(--accent);
-  }
-
-  :global(.code-block .tok-str) {
-    color: var(--success);
-  }
-
-  :global(.code-block .tok-num) {
-    color: var(--warning);
-  }
-
-  :global(.code-block .tok-kw) {
-    color: var(--accent);
-    font-weight: 500;
-  }
-
-  :global(.code-block .tok-section) {
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  :global(.code-block .tok-comment) {
-    color: var(--text-tertiary);
-    font-style: italic;
-  }
-
-  :global(.code-block .tok-var) {
-    color: var(--accent);
-  }
-
-  :global(.code-block .diff-file) {
-    display: inline-block;
-    width: 100%;
-    color: var(--text-secondary);
-    font-weight: 600;
-    border-bottom: 1px solid var(--divider);
-  }
-
-  :global(.code-block .diff-add),
-  :global(.code-block .diff-remove),
-  :global(.code-block .diff-context) {
-    display: inline-block;
-    width: 1.2em;
-    user-select: none;
-  }
-
-  :global(.code-block .diff-add) {
-    color: var(--success);
-  }
-
-  :global(.code-block .diff-remove) {
-    color: var(--danger);
-  }
-
-  :global(.code-block .diff-context) {
-    color: var(--text-tertiary);
-  }
-
-  .integration-preview-meta {
-    display: grid;
-    gap: 4px;
-
-    code {
-      overflow-wrap: anywhere;
-      font-size: 11px;
-      color: var(--text-tertiary);
-    }
-
-    strong {
-      color: var(--text-secondary);
-      font-size: 12px;
-      font-weight: 600;
-    }
-  }
 
   .empty {
     display: flex;

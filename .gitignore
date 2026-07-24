@@ -17,6 +17,7 @@ apps/**/build/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/tauri.release.generated.json
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/swift-tray/.build/
 
 .DS_Store
 Thumbs.db
@@ -47,3 +48,6 @@ apps/extension/chrome-extension.pem
 *.aipdevice
 *.aipcheckpoint
 *.aipconflict
+
+# Wrangler local state
+.wrangler/

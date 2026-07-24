@@ -44,7 +44,7 @@ fn should_open_desktop_url(target: &str, vault_dir: &Path) -> bool {
 
 fn open_desktop_url(target: &str) -> Result<()> {
     let target = match target {
-        "main" | "unlock" | "quick-access" | "tray" => target,
+        "main" | "unlock" | "quick-access" | "server" | "tray" => target,
         _ => "main",
     };
     let url = format!("{}://launch/{target}", desktop_deep_link_scheme());

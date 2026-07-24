@@ -15,7 +15,7 @@ import {
   probeProviderUsage,
   previewDetectedSecret,
   recoverNativeHost,
-  saveDetectedSecret,
+  saveDetectedSecret as saveDetectedSecretNative,
   searchEntries,
   startNativeConnectionMonitor,
   updateProvider,
@@ -28,6 +28,38 @@ import {
   type ProviderUpdateRequest,
   type UsageProbeResult
 } from "./native-client";
+
+const MAX_FAVICON_BYTES = 96 * 1024;
+
+async function saveDetectedSecret(draft: DetectedSecretDraft) {
+  return saveDetectedSecretNative(await localizeDraftFavicon(draft));
+}
+
+async function localizeDraftFavicon(draft: DetectedSecretDraft): Promise<DetectedSecretDraft> {
+  const faviconUrl = await localizeFavicon(draft.faviconUrl);
+  return faviconUrl ? { ...draft, faviconUrl } : draft;
+}
+
+async function localizeFavicon(url: string | undefined): Promise<string | undefined> {
+  if (!url || url.startsWith("data:image/")) return url;
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return undefined;
+    const response = await fetch(parsed.href, { credentials: "omit", cache: "force-cache" });
+    const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (!response.ok || !type.startsWith("image/")) return undefined;
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength === 0 || buffer.byteLength > MAX_FAVICON_BYTES) return undefined;
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    return `data:${type};base64,${btoa(binary)}`;
+  } catch {
+    return undefined;
+  }
+}
 
 type PendingDraftRecord = {
   id: string;
@@ -843,10 +875,16 @@ async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]) {
     const response = await previewDetectedSecret(draft);
     if (response.ok && response.data?.isSaved) {
       savedCount += 1;
-      if (response.data.existingEntryId && (draft.gateway?.group || draft.gateway?.rate)) {
-        const synced = await saveDetectedSecret(draft);
+      const localizedDraft = await localizeDraftFavicon(draft);
+      if (
+        response.data.existingEntryId &&
+        (localizedDraft.gateway?.group ||
+          localizedDraft.gateway?.rate ||
+          localizedDraft.faviconUrl?.startsWith("data:image/"))
+      ) {
+        const synced = await saveDetectedSecretNative(localizedDraft);
         if (!synced.ok) {
-          errors.push({ error: synced.error ?? "Unable to sync gateway metadata" });
+          errors.push({ error: synced.error ?? "Unable to sync provider metadata" });
           unsaved.push(draft);
           continue;
         }
