@@ -125,7 +125,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         interface_type: request.interface_type,
         auth_scheme: request.auth_scheme,
         api_key: request.api_key.into_inner(),
-        secret_label: None,
+        secret_label: request.secret_label.and_then(non_empty),
         default_model: request.default_model.and_then(non_empty),
         model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
@@ -133,6 +133,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         gateway: request.gateway,
         tags: clean_strings(request.tags),
         notes: request.notes.and_then(non_empty),
+        secret_metadata: request.secret_metadata,
     }
 }
 
@@ -1567,7 +1568,7 @@ fn repair_bundled_native_host_manifest(app: &AppHandle) -> Result<NativeHostStat
 
 #[cfg(target_os = "macos")]
 fn configure_window_chrome(window: &tauri::WebviewWindow) {
-    const WINDOW_CORNER_RADIUS: f64 = 10.0;
+    const WINDOW_CORNER_RADIUS: f64 = 12.0;
 
     let _ = window.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)));
     let _ = window.with_webview(|webview| unsafe {
@@ -1581,6 +1582,9 @@ fn configure_window_chrome(window: &tauri::WebviewWindow) {
 
         if let Some(content_view) = ns_window.contentView() {
             round_macos_view(&content_view, WINDOW_CORNER_RADIUS);
+            if let Some(frame_view) = content_view.superview() {
+                round_macos_view(&frame_view, WINDOW_CORNER_RADIUS);
+            }
         }
 
         let webview_view: &NSView = &*webview.inner().cast();
@@ -1594,9 +1598,13 @@ fn configure_window_chrome(_: &tauri::WebviewWindow) {}
 
 #[cfg(target_os = "macos")]
 fn round_macos_view(view: &objc2_app_kit::NSView, radius: f64) {
+    use objc2_quartz_core::kCACornerCurveContinuous;
+
     view.setWantsLayer(true);
     if let Some(layer) = view.layer() {
         layer.setCornerRadius(radius);
+        let continuous_curve = unsafe { kCACornerCurveContinuous };
+        layer.setCornerCurve(continuous_curve);
         layer.setMasksToBounds(true);
         layer.setOpaque(false);
     }
@@ -1688,6 +1696,7 @@ pub fn run() {
             trash_empty,
             secret_reveal_field,
             secret_add,
+            secret_metadata_set,
             secret_remove,
             devices_list,
             device_revoke,
@@ -1789,12 +1798,12 @@ mod tests {
             auth_scheme: AuthScheme::GoogleApiKey,
             masked_secret: "AIza...test".to_string(),
             fingerprint: "fingerprint".to_string(),
-            secret_refs: vec![SecretRef {
-                id: "primary".to_string(),
-                label: "primary".to_string(),
-                masked: "AIza...test".to_string(),
-                fingerprint: "fingerprint".to_string(),
-            }],
+            secret_refs: vec![SecretRef::new(
+                "primary",
+                "primary",
+                "AIza...test",
+                "fingerprint",
+            )],
             default_model: None,
             model_aliases: Vec::new(),
             quota: None,

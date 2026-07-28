@@ -160,6 +160,17 @@ export type ServerUsageSummary = {
     cacheCreationTokens: number;
     estimatedCostMicros: number;
   }>;
+  models: Array<{
+    providerEntryId: string;
+    secretId: string;
+    model: string | null;
+    requestCount: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    estimatedCostMicros: number;
+  }>;
 };
 
 export type RecoveryKit = { recoveryKey: string };

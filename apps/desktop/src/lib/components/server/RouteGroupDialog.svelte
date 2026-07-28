@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
-  import { Button } from "@aipass/ui";
+  import { Button, SelectField } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { ChevronDown, ChevronUp, Trash2, X } from "lucide-svelte";
 
@@ -20,6 +20,7 @@
   let name = route?.name ?? "";
   let strategy: ProxyRouteStrategy = route?.strategy ?? "fallback";
   let protocol: ProxyProtocol = route?.inboundProtocol ?? "open_ai_responses";
+  let memberPickerValue = "";
   let members: Member[] = (route?.targets ?? []).flatMap((target) => {
     const entry = entries.find((item) => item.id === target.providerEntryId);
     const secret = entry?.secretRefs.find((item) => item.id === target.secretId);
@@ -37,6 +38,14 @@
         disabled: members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)
       }))
     );
+  $: strategyOptions = [
+    { value: "fallback", label: $t("server.strategyFallback") },
+    { value: "round_robin", label: $t("server.strategyRoundRobin") }
+  ];
+  $: protocolOptions = [
+    { value: "open_ai_responses", label: "OpenAI Responses" },
+    { value: "open_ai_chat_completions", label: "OpenAI Chat Completions" }
+  ];
 
   function handleOpenChange(next: boolean) {
     if (next) {
@@ -138,35 +147,32 @@
               <span>{$t("server.groupName")}</span>
               <input bind:value={name} placeholder={$t("server.groupName")} />
             </label>
-            <label class="field">
-              <span>{$t("server.strategy")}</span>
-              <select bind:value={strategy}>
-                <option value="fallback">{$t("server.strategyFallback")}</option>
-                <option value="round_robin">{$t("server.strategyRoundRobin")}</option>
-              </select>
-            </label>
+            <SelectField
+              label={$t("server.strategy")}
+              bind:value={strategy}
+              options={strategyOptions}
+            />
             {#if members.length > 0 && members[0].entry.interfaceType !== "anthropic_messages"}
-              <label class="field">
-                <span>{$t("server.protocol")}</span>
-                <select bind:value={protocol}>
-                  <option value="open_ai_responses">OpenAI Responses</option>
-                  <option value="open_ai_chat_completions">OpenAI Chat Completions</option>
-                </select>
-              </label>
+              <SelectField
+                label={$t("server.protocol")}
+                bind:value={protocol}
+                options={protocolOptions}
+              />
             {/if}
           </div>
 
           <div class="members-block">
             <div class="members-title"><span>{$t("server.members")}</span></div>
-            <select class="member-picker" value="" on:change={(event) => {
-              addMember(event.currentTarget.value);
-              event.currentTarget.value = "";
-            }}>
-              <option value="" disabled selected>{$t("server.addMember")}</option>
-              {#each credentialOptions as option (option.value)}
-                <option value={option.value} disabled={option.disabled}>{option.label}</option>
-              {/each}
-            </select>
+            <SelectField
+              bind:value={memberPickerValue}
+              placeholder={$t("server.addMember")}
+              options={credentialOptions}
+              onValueChange={(value) => {
+                if (!value) return;
+                addMember(value);
+                memberPickerValue = "";
+              }}
+            />
 
             {#each members as member, index (`${member.entry.id}::${member.secret.id}`)}
               <div class="member-row">
@@ -330,8 +336,7 @@
     }
   }
 
-  input,
-  select {
+  input {
     width: 100%;
     min-height: 34px;
     padding: 7px 9px;

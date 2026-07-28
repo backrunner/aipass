@@ -26,7 +26,8 @@
     | "consoleUrl"
     | "modelAlias"
     | "header"
-    | "gateway";
+    | "group"
+    | "billing";
 
   type OptionalField = {
     id: FieldId;
@@ -77,13 +78,21 @@
     { id: "modelAlias", label: "providerForm.modelAliases", section: "advanced", hasValue: () => Boolean(draft.modelAlias), clear: () => (draft.modelAlias = "") },
     { id: "header", label: "providerForm.customHeaders", section: "advanced", hasValue: () => Boolean(draft.header), clear: () => (draft.header = "") },
     {
-      id: "gateway",
-      label: "providerForm.gateway",
+      id: "group",
+      label: "providerForm.group",
+      section: "details",
+      hasValue: () => Boolean(draft.gatewayGroup),
+      clear: () => (draft.gatewayGroup = "")
+    },
+    {
+      id: "billing",
+      label: "providerForm.billing",
       section: "advanced",
-      hasValue: () => Boolean(draft.gatewayGroup || draft.gatewayRate),
+      hasValue: () => Boolean(draft.gatewayRate || draft.billingCurrency || draft.billingUnitPrice),
       clear: () => {
-        draft.gatewayGroup = "";
         draft.gatewayRate = "";
+        draft.billingCurrency = "";
+        draft.billingUnitPrice = "";
       }
     }
   ];
@@ -185,7 +194,7 @@
     <Field label={$t("providerForm.title")} class="title-field">
       <input bind:value={draft.title} placeholder={$t("providerForm.titlePlaceholder")} />
     </Field>
-    {#if showSecretLabel}
+    {#if showSecretLabel && formMode === "add"}
       <Field label={$t("providerForm.secretLabel")} class="secret-label-field">
         <input bind:value={draft.secretLabel} placeholder={$t("providerForm.secretLabelPlaceholder")} />
       </Field>
@@ -330,17 +339,30 @@
         </button>
       </div>
     {/if}
-    {#if visibleFields.has("gateway")}
-      <div class="removable-field" data-provider-field="gateway">
-        <div class="gateway-grid">
-          <Field label={$t("providerForm.gatewayGroup")}>
-            <input bind:value={draft.gatewayGroup} placeholder={$t("providerForm.gatewayGroupPlaceholder")} />
-          </Field>
+    {#if visibleFields.has("group")}
+      <div class="removable-field" data-provider-field="group">
+        <Field label={$t("providerForm.group")} hint={$t("providerForm.groupHint")}>
+          <input bind:value={draft.gatewayGroup} placeholder={$t("providerForm.gatewayGroupPlaceholder")} />
+        </Field>
+        <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.group") })} on:click={() => removeField("group")}>
+          <X size={13} />
+        </button>
+      </div>
+    {/if}
+    {#if visibleFields.has("billing")}
+      <div class="removable-field" data-provider-field="billing">
+        <div class="gateway-grid billing-grid">
           <Field label={$t("providerForm.gatewayRate")}>
             <input bind:value={draft.gatewayRate} placeholder="1x" />
           </Field>
+          <Field label={$t("providerForm.billingCurrency")}>
+            <input bind:value={draft.billingCurrency} placeholder="USD" />
+          </Field>
+          <Field label={$t("providerForm.billingUnitPrice")}>
+            <input bind:value={draft.billingUnitPrice} placeholder="$0.002 / 1k" />
+          </Field>
         </div>
-        <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.gateway") })} on:click={() => removeField("gateway")}>
+        <button type="button" class="remove-btn" aria-label={$t("providerForm.removeField", { label: $t("providerForm.billing") })} on:click={() => removeField("billing")}>
           <X size={13} />
         </button>
       </div>
@@ -473,6 +495,10 @@
     min-width: 0;
   }
 
+  .billing-grid {
+    grid-template-columns: minmax(0, 90px) minmax(0, 90px) minmax(0, 1fr);
+  }
+
   .chip-group {
     display: flex;
     flex-wrap: wrap;
@@ -512,7 +538,8 @@
   }
 
   @media (max-width: 540px) {
-    .gateway-grid {
+    .gateway-grid,
+    .billing-grid {
       grid-template-columns: 1fr;
     }
   }

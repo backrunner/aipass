@@ -10,7 +10,7 @@
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
-  import { Banner, Button } from "@aipass/ui";
+  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Button, groupFromDraft, parseHttpEndpoint } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
@@ -215,6 +215,8 @@
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
   let serverTokenTimer: ReturnType<typeof setTimeout> | undefined;
   let clipboardClearTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The secret this app last copied, so a lock can wipe it immediately. */
+  let pendingClipboardSecret = "";
   let lastSessionTouchAt = 0;
   let autoLockMinutes = 60;
   let clipboardClearSeconds = 45;
@@ -258,7 +260,7 @@
   let faviconBackfillBusy = false;
   let serverBusy = "";
   let serverToken = "";
-  let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [] };
+  let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [], models: [] };
   let serverUsageSeries: UsageTimeseriesPoint[] = [];
   let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
   let serverStatus: ProxyStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
@@ -688,7 +690,9 @@
     webdavPassword = "";
     hasSavedWebdavPassword = false;
     setAuthMode("unlock");
-    clearTimeout(clipboardClearTimer);
+    // Locking is exactly when a copied secret must not linger, so wipe it now
+    // rather than only cancelling the timer that would have wiped it.
+    void clearCopiedSecretFromClipboard();
     clearTimeout(revealTimer);
     clearTimeout(serverTokenTimer);
   }
@@ -706,7 +710,7 @@
     serverToken = "";
     serverConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
     serverStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
-    serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [] };
+    serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [], models: [] };
     serverUsageSeries = [];
     selectedRouteId = "";
   }
@@ -913,10 +917,21 @@
       quotaLimit: entry.quota?.limit ?? "",
       quotaRemaining: entry.quota?.remaining ?? "",
       quotaResetAt: entry.quota?.resetAt ?? "",
-      gatewayGroup: entry.gateway?.group ?? "",
-      gatewayRate: entry.gateway?.rate ?? "",
+      gatewayGroup: "",
+      gatewayRate: "",
+      billingCurrency: "",
+      billingUnitPrice: "",
       notes: entry.notes ?? ""
     };
+    // Group and billing live on the key; fall back to the entry's legacy
+    // gateway blob for records written before that move.
+    const primaryKey = entry.secretRefs[0];
+    draft.interfaceType = primaryKey?.interfaceType ?? entry.interfaceType;
+    applyBillingToDraft(
+      draft,
+      primaryKey?.group ?? entry.gateway?.group,
+      primaryKey?.billing ?? (entry.gateway?.rate ? { rate: entry.gateway.rate } : undefined)
+    );
     detailEditMode = true;
   }
 
@@ -936,6 +951,11 @@
     if (formMode === "add" && providerFilter === "all") {
       inferDraftFromEndpoint();
     }
+    const endpointValues = [...splitCsv(draft.endpoint), ...splitCsv(draft.consoleUrl)];
+    if (endpointValues.some((value) => !parseHttpEndpoint(value))) {
+      error = localizedMessage("providers.invalidEndpoint");
+      return;
+    }
     const provider = providerDefinitions.find((item) => item.id === draft.providerId);
     const request = {
       title: draft.title || provider?.displayName || $t("providerList.customProvider"),
@@ -951,16 +971,18 @@
       modelAliases: modelAliasPairs(draft.modelAlias),
       headers: headerPairs(draft.header),
       quota: quotaFromDraft(),
-      gateway: gatewayFromDraft(),
       tags: splitCsv(draft.tag),
       notes: draft.notes || undefined
     };
+    const secretMetadata = secretMetadataFromDraft();
     try {
       if (formMode === "add") {
         const id = await invokeTauri<string>("provider_add", {
           request: {
             ...request,
-            apiKey: draft.apiKey
+            apiKey: draft.apiKey,
+            secretLabel: draft.secretLabel || undefined,
+            secretMetadata
           }
         });
         selectedId = id;
@@ -972,6 +994,16 @@
             headers: draft.header.trim() ? headerPairs(draft.header) : undefined
           }
         });
+        // provider_update rewrites the entry; the key's own group / format /
+        // billing are set separately so other keys keep theirs.
+        const secretId = selected.secretRefs[0]?.id;
+        if (secretId) {
+          await invokeTauri("secret_metadata_set", {
+            id: selected.id,
+            secretId,
+            metadata: secretMetadata
+          });
+        }
       }
       draft.apiKey = "";
       showForm = false;
@@ -1158,7 +1190,9 @@
       ]);
       serverStatus = nextStatus;
       serverConfig = nextConfig;
-      serverUsage = usage;
+      // Older agents may omit the newer breakdown arrays; default them so the
+      // UI never has to deal with undefined.
+      serverUsage = { ...usage, providers: usage.providers ?? [], models: usage.models ?? [] };
     } catch (err) {
       console.warn("server state load failed", err);
     }
@@ -1819,11 +1853,16 @@
     };
   }
 
-  function gatewayFromDraft() {
-    if (!draft.gatewayGroup && !draft.gatewayRate) return undefined;
+  /**
+   * Group / wire format / billing for the key being saved. These are per-key,
+   * so a relay entry can hold one key per gateway group.
+   */
+  function secretMetadataFromDraft() {
+    const replacing = formMode === "edit";
     return {
-      group: draft.gatewayGroup || undefined,
-      rate: draft.gatewayRate || undefined
+      group: replacing ? draft.gatewayGroup.trim() : groupFromDraft(draft),
+      interfaceType: draft.interfaceType,
+      billing: replacing ? billingPatchFromDraft(draft) : billingFromDraft(draft)
     };
   }
 
@@ -1858,22 +1897,38 @@
 
   function scheduleClipboardClear(secret: string) {
     clearTimeout(clipboardClearTimer);
+    // Keep the value even when timed cleanup is disabled: locking the vault
+    // must still be able to remove the last secret this app copied.
+    pendingClipboardSecret = secret;
     if (clipboardClearSeconds <= 0) return;
     clipboardClearTimer = setTimeout(async () => {
-      try {
-        const current = await navigator.clipboard?.readText?.();
-        if (!current || current === secret) {
-          await navigator.clipboard?.writeText("");
-        }
-      } catch {
-        try {
-          await navigator.clipboard?.writeText("");
-        } catch {
-          // Best-effort clipboard cleanup.
-        }
-      }
+      await clearCopiedSecretFromClipboard();
       revealedSecrets = {};
     }, clipboardClearSeconds * 1000);
+  }
+
+  /**
+   * Wipes a secret this app put on the clipboard. The timer is cancelled first
+   * so a later lock cannot double-fire it, and the secret is forgotten whether
+   * or not the write succeeds.
+   */
+  async function clearCopiedSecretFromClipboard() {
+    clearTimeout(clipboardClearTimer);
+    const secret = pendingClipboardSecret;
+    pendingClipboardSecret = "";
+    if (!secret) return;
+    try {
+      const current = await navigator.clipboard?.readText?.();
+      if (!current || current === secret) {
+        await navigator.clipboard?.writeText("");
+      }
+    } catch {
+      try {
+        await navigator.clipboard?.writeText("");
+      } catch {
+        // Best-effort clipboard cleanup.
+      }
+    }
   }
 
   async function loadSyncSettings() {
@@ -2071,6 +2126,8 @@
           config={serverConfig}
           status={serverStatus}
           series={serverUsageSeries}
+          usage={serverUsage}
+          {entries}
           {selectedRouteId}
           busy={serverBusy}
           revealedToken={serverToken}
@@ -2280,7 +2337,7 @@
   .app-shell > :global(.titlebar) {
     position: absolute;
     inset: 0 0 auto 0;
-    z-index: 70;
+    z-index: 100;
   }
 
   .boot-shell {

@@ -1,18 +1,22 @@
 <script lang="ts">
   import { Badge, Banner, Button } from "@aipass/ui";
   import { Copy, Play, RotateCw, Server, Square } from "lucide-svelte";
+  import type { ProviderEntry } from "@aipass/schemas";
 
   import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyConfig, ProxyStatus, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
+  import type { MaybePromise, ProxyConfig, ProxyStatus, ServerUsageSummary, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
   import { formatCompact } from "../../utils/format";
   import { integrationToolDefinitions } from "../../utils/integrations";
   import Card from "../shared/Card.svelte";
   import IntegrationCard from "../integration/IntegrationCard.svelte";
+  import UsageBreakdown from "./UsageBreakdown.svelte";
   import UsageChart from "./UsageChart.svelte";
 
   export let config: ProxyConfig;
   export let status: ProxyStatus;
   export let series: UsageTimeseriesPoint[] = [];
+  export let usage: ServerUsageSummary;
+  export let entries: ProviderEntry[] = [];
   export let selectedRouteId = "";
   export let busy = "";
   export let revealedToken = "";
@@ -137,6 +141,10 @@
 
     <Card title={$t("server.usageChart")} padded={false}>
       <UsageChart {series} />
+    </Card>
+
+    <Card title={$t("server.usageBreakdown")} padded={false}>
+      <UsageBreakdown {usage} {entries} />
     </Card>
 
     <IntegrationCard

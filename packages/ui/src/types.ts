@@ -34,7 +34,11 @@ export type Draft = {
   quotaLimit: string;
   quotaRemaining: string;
   quotaResetAt: string;
+  /** Gateway group this key belongs to. Stored on the key, not the entry. */
   gatewayGroup: string;
+  /** Billing rate multiplier for the group, e.g. `1.5`. */
   gatewayRate: string;
+  billingCurrency: string;
+  billingUnitPrice: string;
   notes: string;
 };

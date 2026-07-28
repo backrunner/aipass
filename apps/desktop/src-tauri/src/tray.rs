@@ -410,8 +410,63 @@ fn hide_main_window(app: &AppHandle) {
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
+/// Coalesces status refreshes. A refresh talks to the agent over IPC with no
+/// deadline, so a wedged agent would otherwise let the 30s watchdog, every tray
+/// click and every proxy event stack up threads that never finish. At most one
+/// refresh runs at a time; requests arriving during one collapse into a single
+/// follow-up so the last state still gets published.
+static REFRESH_STATE: Mutex<RefreshState> = Mutex::new(RefreshState {
+    running: false,
+    pending: false,
+});
+
+struct RefreshState {
+    running: bool,
+    pending: bool,
+}
+
 fn refresh_status_async(app: AppHandle, feedback: TrayFeedback) {
-    thread::spawn(move || refresh_status(&app, &feedback));
+    if !begin_refresh() {
+        return;
+    }
+    thread::spawn(move || loop {
+        refresh_status(&app, &feedback);
+        if !finish_refresh() {
+            return;
+        }
+    });
+}
+
+/// True when the caller owns the refresh worker. Otherwise a refresh is already
+/// running and this request has been folded into it.
+fn begin_refresh() -> bool {
+    let mut state = refresh_state();
+    if state.running {
+        state.pending = true;
+        return false;
+    }
+    state.running = true;
+    true
+}
+
+/// True when requests arrived during the last pass and one more is needed.
+fn finish_refresh() -> bool {
+    let mut state = refresh_state();
+    if state.pending {
+        state.pending = false;
+        return true;
+    }
+    state.running = false;
+    false
+}
+
+/// The guarded flags cannot be left inconsistent by a panicking refresh, and
+/// latching `running` would stop tray updates for the rest of the session, so
+/// a poisoned lock is recovered rather than propagated.
+fn refresh_state() -> std::sync::MutexGuard<'static, RefreshState> {
+    REFRESH_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn spawn_status_refresher(app: AppHandle, feedback: TrayFeedback) {
@@ -958,6 +1013,31 @@ mod tests {
             }),
             proxy,
         }
+    }
+
+    /// Refreshes talk to the agent with no deadline, so concurrent requests
+    /// must collapse into one worker instead of stacking up threads.
+    #[test]
+    fn concurrent_refresh_requests_collapse_into_one_worker() {
+        *refresh_state() = RefreshState {
+            running: false,
+            pending: false,
+        };
+
+        assert!(begin_refresh(), "first request owns the worker");
+        assert!(
+            !begin_refresh(),
+            "second request folds into the running one"
+        );
+        assert!(!begin_refresh(), "further requests fold in too");
+
+        // The folded-in requests are served by exactly one extra pass.
+        assert!(finish_refresh(), "a pass is owed for the folded requests");
+        assert!(!finish_refresh(), "nothing further is owed");
+
+        // With the worker finished, a new request starts a fresh one.
+        assert!(begin_refresh());
+        assert!(!finish_refresh());
     }
 
     fn available_proxy(running: bool, active_routes: usize) -> ProxyTrayStatus {

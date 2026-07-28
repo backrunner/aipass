@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { InterfaceType, ProviderEntry, ProviderKind } from "@aipass/schemas";
+  import type { InterfaceType, ProviderEntry, ProviderKind, SecretRef } from "@aipass/schemas";
   import {
     Badge,
     Banner,
@@ -9,6 +9,7 @@
     ProviderFormFields,
     ProviderIcon,
     SelectField,
+    interfaceLabel,
     providerKindTone
   } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
@@ -182,7 +183,30 @@
     selected?.quota &&
       (selected.quota.label || selected.quota.limit || selected.quota.remaining || selected.quota.resetAt)
   );
-  $: hasGateway = Boolean(selected?.gateway && (selected.gateway.group || selected.gateway.rate));
+  /**
+   * Group, wire format and billing rule for one key. Falls back to the entry's
+   * values for records written before these moved onto the key.
+   */
+  function secretMeta(entry: ProviderEntry, secret: SecretRef) {
+    const chips: Array<{ label: string; value: string; mono?: boolean }> = [];
+    const group = secret.group ?? entry.gateway?.group;
+    if (group) chips.push({ label: $t("providerDetail.keyGroup"), value: group });
+    const format = secret.interfaceType ?? entry.interfaceType;
+    if (format) chips.push({ label: $t("providerDetail.keyFormat"), value: interfaceLabel[format] });
+    const rate = secret.billing?.rate ?? entry.gateway?.rate;
+    if (rate) chips.push({ label: $t("providerDetail.gatewayRate"), value: rate, mono: true });
+    if (secret.billing?.currency) {
+      chips.push({ label: $t("providerDetail.keyBilling"), value: secret.billing.currency });
+    }
+    if (secret.billing?.unitPrice) {
+      chips.push({
+        label: $t("providerDetail.billingUnitPrice"),
+        value: secret.billing.unitPrice,
+        mono: true
+      });
+    }
+    return chips;
+  }
   $: integrationTools = selected
     ? compatibleToolsFor({
         id: selected.id,
@@ -598,6 +622,19 @@
                 </button>
               </span>
             </div>
+            <!-- Group, wire format and billing belong to this key: one relay
+                 entry can hold a differently-configured key per group. -->
+            {#if secretMeta(selected, secret).length}
+              <div class="kv-row">
+                <span class="kv-label"></span>
+                <div class="chips kv-value">
+                  {#each secretMeta(selected, secret) as chip}
+                    <span class="chip" class:mono={chip.mono}>{chip.label}: {chip.value}</span>
+                  {/each}
+                </div>
+                <span></span>
+              </div>
+            {/if}
           {/each}
           {#if selected.defaultModel}
             <button
@@ -616,16 +653,6 @@
             <div class="kv-row">
               <span class="kv-label">{$t("providerDetail.aliases")}</span>
               <code class="kv-value mono">{selected.modelAliases.map(([alias, model]) => `${alias} → ${model}`).join(", ")}</code>
-              <span></span>
-            </div>
-          {/if}
-          {#if hasGateway}
-            <div class="kv-row">
-              <span class="kv-label">{$t("providerDetail.gateway")}</span>
-              <div class="chips kv-value">
-                {#if selected.gateway?.group}<span class="chip">{$t("providerDetail.gatewayGroup")}: {selected.gateway.group}</span>{/if}
-                {#if selected.gateway?.rate}<span class="chip mono">{$t("providerDetail.gatewayRate")}: {selected.gateway.rate}</span>{/if}
-              </div>
               <span></span>
             </div>
           {/if}

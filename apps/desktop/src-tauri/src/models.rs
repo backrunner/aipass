@@ -9,7 +9,7 @@ use aipass_agent_protocol::{
 };
 use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, QuotaInfo};
 use aipass_sync::SyncObject;
-use aipass_vault::EntrySummary;
+use aipass_vault::{EntrySummary, SecretMetadataInput};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -144,6 +144,7 @@ pub(crate) struct ProviderAddRequest {
     pub(crate) interface_type: InterfaceType,
     pub(crate) auth_scheme: AuthScheme,
     pub(crate) api_key: SensitiveString,
+    pub(crate) secret_label: Option<String>,
     pub(crate) default_model: Option<String>,
     #[serde(default)]
     pub(crate) model_aliases: Vec<(String, String)>,
@@ -154,6 +155,8 @@ pub(crate) struct ProviderAddRequest {
     #[serde(default)]
     pub(crate) tags: Vec<String>,
     pub(crate) notes: Option<String>,
+    #[serde(default)]
+    pub(crate) secret_metadata: SecretMetadataInput,
 }
 
 #[derive(Clone, Debug, Deserialize)]

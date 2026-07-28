@@ -189,7 +189,7 @@
     -webkit-user-select: none;
     position: absolute;
     inset: 0 0 auto 0;
-    z-index: 70;
+    z-index: 100;
   }
 
   .titlebar.blurred .items-list-slot {
@@ -213,6 +213,7 @@
     gap: 8px;
     padding: 0 var(--pane-content-inset);
     transition: opacity 120ms ease;
+    z-index: 101;
   }
 
   .brand {
@@ -280,7 +281,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-pop);
-    z-index: 80;
+    z-index: 110;
   }
 
   :global(.titlebar-menu-item) {

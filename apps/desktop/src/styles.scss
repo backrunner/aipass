@@ -1,16 +1,22 @@
 @use "@aipass/ui/styles/base.scss";
 
-// Desktop window shell — the rounded, shadowed Tauri window frame.
+// Keep the document and portal layers inside the same rounded window mask.
+
+:root {
+  --window-radius: 12px;
+}
 
 html,
 body {
   background: transparent;
+  border-radius: var(--window-radius);
+  overflow: hidden;
 }
 
 #app {
   height: 100%;
   background: var(--bg);
-  border-radius: 10px;
+  border-radius: var(--window-radius);
   overflow: hidden;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
 }

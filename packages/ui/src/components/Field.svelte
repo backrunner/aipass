@@ -1,5 +1,6 @@
 <script lang="ts">
   export let label: string;
+  export let hint = "";
   let className = "";
   export { className as class };
 </script>
@@ -7,6 +8,9 @@
 <label class={`field ${className}`}>
   <span class="field-label">{label}</span>
   <slot />
+  {#if hint}
+    <span class="field-hint">{hint}</span>
+  {/if}
 </label>
 
 <style lang="scss">
@@ -19,6 +23,12 @@
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 500;
+  }
+
+  .field-hint {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.4;
   }
 
   :global(.field input),

@@ -617,6 +617,27 @@ pub(crate) async fn secret_add(
     .await
 }
 
+/// Set a stored key's gateway group, wire format and billing rule. Unset
+/// fields keep their stored value.
+#[tauri::command]
+pub(crate) async fn secret_metadata_set(
+    app: AppHandle,
+    id: Uuid,
+    secret_id: String,
+    metadata: aipass_vault::SecretMetadataInput,
+) -> Result<(), String> {
+    let _: serde_json::Value = agent_request_async(
+        app,
+        AgentRequest::SecretMetadataSet {
+            id,
+            secret_id,
+            metadata,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) async fn secret_remove(app: AppHandle, id: Uuid, label: String) -> Result<(), String> {
     let _: serde_json::Value =
