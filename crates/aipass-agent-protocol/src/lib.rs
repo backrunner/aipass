@@ -1,16 +1,16 @@
 pub use aipass_config_writers::ToolId;
 use aipass_provider_registry::{
-    AuthScheme, GatewayMetadata, InterfaceType, ProviderEndpoint, QuotaInfo,
+    AuthScheme, BillingRule, GatewayMetadata, InterfaceType, ProviderEndpoint, QuotaInfo,
 };
 pub use aipass_proxy::{
-    ModelPricing, Protocol as ProxyProtocol, ProviderUsageAggregate, ProxyConfig, ProxyRouteConfig,
-    ProxyStatus, ProxyTargetConfig, RetryPolicy, RouteStrategy, UsageAggregate,
-    UsageTimeseriesPoint,
+    ModelPricing, ModelUsageAggregate, Protocol as ProxyProtocol, ProviderUsageAggregate,
+    ProxyConfig, ProxyRouteConfig, ProxyStatus, ProxyTargetConfig, RetryPolicy, RouteStrategy,
+    UsageAggregate, UsageTimeseriesPoint,
 };
 use aipass_sync::SyncObject;
 use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, ProviderEntryUpdateInput, RecoveryKit,
-    TtlGrantSummary,
+    SecretMetadataInput, TtlGrantSummary,
 };
 use anyhow::{bail, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -377,6 +377,24 @@ pub struct BrowserDetectedSecretFields {
     pub tags: Vec<String>,
     #[serde(default)]
     pub gateway: Option<GatewayMetadata>,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    #[serde(default)]
+    pub console_endpoint: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub model_aliases: Vec<(String, String)>,
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// Gateway group this key belongs to. Independent of the entry: two groups
+    /// on the same relay become two keys under one entry.
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub billing: Option<BillingRule>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -393,13 +411,28 @@ pub struct BrowserDetectedSecretPreview {
     pub auth_scheme: AuthScheme,
     pub masked_secret: String,
     pub fingerprint: String,
+    /// Entry this key will land in — either because the key is already stored,
+    /// or because an entry for the same site exists and will gain a key.
     #[serde(default)]
     pub existing_entry_id: Option<Uuid>,
+    /// Title of `existing_entry_id`, so the popup can say where it will go.
+    #[serde(default)]
+    pub existing_entry_title: Option<String>,
+    /// Set when this exact key is already stored on that entry.
+    #[serde(default)]
+    pub existing_secret_id: Option<String>,
+    /// Groups already stored on `existing_entry_id`, for duplicate-group hints.
+    #[serde(default)]
+    pub existing_groups: Vec<String>,
     #[serde(default)]
     pub is_saved: bool,
     pub tags: Vec<String>,
     #[serde(default)]
     pub gateway: Option<GatewayMetadata>,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub billing: Option<BillingRule>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -549,6 +582,14 @@ pub enum AgentRequest {
     },
     #[serde(rename = "secret.remove")]
     SecretRemove { id: Uuid, label: String },
+    /// Set a key's gateway group, wire format and billing rule. Unset fields
+    /// keep their stored value.
+    #[serde(rename = "secret.metadata_set")]
+    SecretMetadataSet {
+        id: Uuid,
+        secret_id: String,
+        metadata: SecretMetadataInput,
+    },
     #[serde(rename = "devices.list")]
     DevicesList,
     #[serde(rename = "device.revoke")]
@@ -637,6 +678,59 @@ pub enum AgentRequest {
     UiOpenQuickAccess,
     #[serde(rename = "agent.shutdown")]
     AgentShutdown,
+}
+
+/// Ceiling for a request that has no inherent duration of its own.
+const DEFAULT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Password-derivation, whole-vault rewrites and network sync legitimately run
+/// far longer than a normal request.
+const LONG_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// Slack added to requests that already carry their own deadline, so the agent
+/// gets a chance to answer with its own timeout error first.
+const RESPONSE_TIMEOUT_SLACK: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl AgentRequest {
+    /// How long a client should wait for this request's response.
+    ///
+    /// Without a deadline a wedged agent hangs the caller forever; with a
+    /// single global one, requests that are *legitimately* slow — waiting on
+    /// the unlock window, deriving a key, rewrapping every record, talking to
+    /// WebDAV — would be cut off mid-flight. So the bound follows the request.
+    pub fn response_timeout(&self) -> std::time::Duration {
+        match self {
+            // Waits on the user; the agent enforces the real deadline.
+            Self::SessionUnlock {
+                mode: SessionUnlockMode::NativeWindowWait { timeout_ms },
+            } => std::time::Duration::from_millis(*timeout_ms) + RESPONSE_TIMEOUT_SLACK,
+            // Probes carry their own upstream timeout.
+            Self::ProviderProbe {
+                timeout_seconds, ..
+            }
+            | Self::ProviderUsageProbe {
+                timeout_seconds, ..
+            } => std::time::Duration::from_secs(*timeout_seconds) + RESPONSE_TIMEOUT_SLACK,
+            // Argon2 derivation, full-vault rewrites, export/import.
+            Self::SessionUnlock { .. }
+            | Self::VaultCreate { .. }
+            | Self::VaultRecover { .. }
+            | Self::VaultChangePassword { .. }
+            | Self::VaultRotate { .. }
+            | Self::VaultExport { .. }
+            | Self::VaultImport { .. }
+            | Self::VaultReset
+            // Network and whole-collection work.
+            | Self::SyncLocal { .. }
+            | Self::SyncCloud { .. }
+            | Self::SyncWebDav { .. }
+            | Self::SyncConfigured
+            | Self::SyncConflicts { .. }
+            | Self::ProviderFaviconBackfill { .. }
+            | Self::TrashPurgeExpired
+            | Self::TrashEmpty
+            | Self::ServerPricingGroupUpsert { .. } => LONG_RESPONSE_TIMEOUT,
+            _ => DEFAULT_RESPONSE_TIMEOUT,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -744,6 +838,13 @@ pub fn error_code_name(code: &AgentErrorCode) -> &'static str {
 #[serde(rename_all = "camelCase")]
 pub struct SaveDetectedResult {
     pub entry_id: Uuid,
+    /// The key this save wrote to, new or existing.
+    #[serde(default)]
+    pub secret_id: Option<String>,
+    /// True when the key was added to an entry that already existed, rather
+    /// than creating a new entry.
+    #[serde(default)]
+    pub merged_into_existing: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -782,6 +883,8 @@ pub struct ServerUsageSummary {
     pub cache_creation_tokens: u64,
     pub estimated_cost_micros: u64,
     pub providers: Vec<ProviderUsageAggregate>,
+    #[serde(default)]
+    pub models: Vec<ModelUsageAggregate>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -898,6 +1001,78 @@ mod tests {
         let payload = "x".repeat(MAX_FRAME_BYTES);
         let err = write_frame(Vec::new(), &payload).unwrap_err();
         assert_eq!(err.to_string(), "frame too large");
+    }
+
+    /// An ordinary request must not be able to hang a caller indefinitely.
+    #[test]
+    fn ordinary_requests_use_the_default_response_timeout() {
+        assert_eq!(
+            AgentRequest::SessionStatus.response_timeout(),
+            DEFAULT_RESPONSE_TIMEOUT
+        );
+        assert_eq!(
+            AgentRequest::EntriesList { archived: false }.response_timeout(),
+            DEFAULT_RESPONSE_TIMEOUT
+        );
+    }
+
+    /// A request that waits on the user outlives the default bound, so the
+    /// client must follow the deadline the request itself carries.
+    #[test]
+    fn user_facing_waits_extend_past_their_own_deadline() {
+        let timeout = AgentRequest::SessionUnlock {
+            mode: SessionUnlockMode::NativeWindowWait {
+                timeout_ms: 120_000,
+            },
+        }
+        .response_timeout();
+
+        assert_eq!(
+            timeout,
+            std::time::Duration::from_secs(120) + RESPONSE_TIMEOUT_SLACK
+        );
+        assert!(timeout > DEFAULT_RESPONSE_TIMEOUT);
+    }
+
+    #[test]
+    fn probes_outlive_the_upstream_timeout_they_request() {
+        let timeout = AgentRequest::ProviderUsageProbe {
+            id: uuid::Uuid::nil(),
+            mode: UsageProbeMode::default(),
+            timeout_seconds: 45,
+            base_url: None,
+            access_token: None,
+            user_id: None,
+        }
+        .response_timeout();
+
+        assert_eq!(
+            timeout,
+            std::time::Duration::from_secs(45) + RESPONSE_TIMEOUT_SLACK
+        );
+    }
+
+    /// Key derivation and whole-vault rewrites are slow by nature; cutting them
+    /// off at the default bound would fail operations that were succeeding.
+    #[test]
+    fn slow_vault_work_gets_the_long_timeout() {
+        for request in [
+            AgentRequest::VaultRotate {
+                reason: "test".to_string(),
+            },
+            AgentRequest::SessionUnlock {
+                mode: SessionUnlockMode::Password {
+                    password: SensitiveString::new("pw".to_string()),
+                },
+            },
+            AgentRequest::TrashEmpty,
+        ] {
+            assert_eq!(
+                request.response_timeout(),
+                LONG_RESPONSE_TIMEOUT,
+                "{request:?}"
+            );
+        }
     }
 
     #[test]

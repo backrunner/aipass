@@ -249,6 +249,14 @@ mod tests {
                 api_key: "sk-ant-api03-browser-secret".into(),
                 tags: vec!["browser".to_string()],
                 gateway: None,
+                domains: Vec::new(),
+                console_endpoint: None,
+                default_model: None,
+                model_aliases: Vec::new(),
+                headers: Vec::new(),
+                notes: None,
+                group: None,
+                billing: None,
             },
             &config,
         );
@@ -287,31 +295,52 @@ mod tests {
         );
     }
 
+    /// Two gateway groups on one relay are one entry with two keys — not two
+    /// entries — and each key keeps its own group, wire format and billing.
     #[test]
-    fn save_detected_allows_multiple_keys_for_same_platform() {
+    fn save_detected_groups_same_site_keys_into_one_entry() {
         let agent = RunningAgent::start();
         agent.unlock();
         let config = agent.config();
-        for (title, api_key) in [
-            ("OpenRouter Product A", "sk-or-v1-product-a-secret"),
-            ("OpenRouter Product B", "sk-or-v1-product-b-secret"),
+        for (group, api_key, interface_type) in [
+            (
+                "default",
+                "sk-relay-default-secret",
+                aipass_provider_registry::InterfaceType::OpenAiCompatible,
+            ),
+            (
+                "claude",
+                "sk-relay-claude-secret",
+                aipass_provider_registry::InterfaceType::AnthropicMessages,
+            ),
         ] {
             let save = handle_request_with_config(
                 NativeRequest::SaveDetected {
                     id: Uuid::new_v4(),
                     extension_id: None,
-                    origin: "https://openrouter.ai".to_string(),
-                    url: "https://openrouter.ai/settings/keys".to_string(),
-                    title: Some(title.to_string()),
+                    origin: "https://relay.example.test".to_string(),
+                    url: "https://relay.example.test/token".to_string(),
+                    title: Some("Relay".to_string()),
                     favicon_url: None,
-                    secret_label: Some(title.replace("OpenRouter ", "")),
-                    endpoint: Some("https://openrouter.ai/api/v1".to_string()),
-                    provider_id: Some("openrouter".to_string()),
-                    interface_type: Some(aipass_provider_registry::InterfaceType::OpenAiCompatible),
+                    secret_label: None,
+                    endpoint: Some("https://relay.example.test/v1".to_string()),
+                    provider_id: Some("new_api".to_string()),
+                    interface_type: Some(interface_type),
                     auth_scheme: Some(aipass_provider_registry::AuthScheme::Bearer),
                     api_key: api_key.into(),
                     tags: vec!["browser".to_string()],
                     gateway: None,
+                    domains: Vec::new(),
+                    console_endpoint: None,
+                    default_model: None,
+                    model_aliases: Vec::new(),
+                    headers: Vec::new(),
+                    notes: None,
+                    group: Some(group.to_string()),
+                    billing: Some(aipass_provider_registry::BillingRule {
+                        rate: Some(format!("{}x", group.len())),
+                        ..Default::default()
+                    }),
                 },
                 &config,
             );
@@ -322,43 +351,50 @@ mod tests {
             NativeRequest::ContextLookup {
                 id: Uuid::new_v4(),
                 extension_id: None,
-                origin: "https://openrouter.ai".to_string(),
-                url: "https://openrouter.ai/settings/keys".to_string(),
+                origin: "https://relay.example.test".to_string(),
+                url: "https://relay.example.test/token".to_string(),
             },
             &config,
         );
         assert!(lookup.ok, "{lookup:?}");
         let entries = lookup.data["entries"].as_array().unwrap();
         let grants = lookup.data["grants"].as_array().unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(grants.len(), 2);
+        assert_eq!(entries.len(), 1, "both groups belong to one entry");
 
-        for entry in entries {
-            let entry_id = Uuid::parse_str(entry["id"].as_str().unwrap()).unwrap();
-            let entry_id_string = entry_id.to_string();
+        let entry = &entries[0];
+        let entry_id = Uuid::parse_str(entry["id"].as_str().unwrap()).unwrap();
+        let secret_refs = entry["secretRefs"].as_array().unwrap();
+        assert_eq!(secret_refs.len(), 2);
+        assert_eq!(secret_refs[0]["group"], "default");
+        assert_eq!(secret_refs[0]["interfaceType"], "openai_compatible");
+        assert_eq!(secret_refs[0]["billing"]["rate"], "7x");
+        assert_eq!(secret_refs[1]["group"], "claude");
+        assert_eq!(secret_refs[1]["interfaceType"], "anthropic_messages");
+        assert_eq!(secret_refs[1]["billing"]["rate"], "6x");
+
+        // One grant per key, so either group's key can be filled.
+        assert_eq!(grants.len(), 2);
+        for (secret_ref, expected) in secret_refs
+            .iter()
+            .zip(["sk-relay-default-secret", "sk-relay-claude-secret"])
+        {
+            let secret_id = secret_ref["id"].as_str().unwrap();
             let grant = grants
                 .iter()
-                .find(|grant| grant["entryId"].as_str() == Some(entry_id_string.as_str()))
-                .expect("grant for saved entry");
-            let grant_id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+                .find(|grant| grant["secretId"].as_str() == Some(secret_id))
+                .expect("grant for stored key");
             let fill = handle_request_with_config(
                 NativeRequest::SecretFill {
                     id: Uuid::new_v4(),
                     extension_id: None,
                     entry_id,
-                    field_id: "primary".to_string(),
-                    grant_id,
+                    field_id: secret_id.to_string(),
+                    grant_id: Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap(),
                 },
                 &config,
             );
             assert!(fill.ok, "{fill:?}");
-            let title = entry["title"].as_str().unwrap();
-            let secret = fill.data["secret"].as_str().unwrap();
-            if title.ends_with("A") {
-                assert_eq!(secret, "sk-or-v1-product-a-secret");
-            } else {
-                assert_eq!(secret, "sk-or-v1-product-b-secret");
-            }
+            assert_eq!(fill.data["secret"].as_str().unwrap(), expected);
         }
     }
 
@@ -388,6 +424,11 @@ mod tests {
                 gateway: None,
                 tags: vec!["browser".to_string()],
                 notes: None,
+                group: Some("vip".to_string()),
+                billing: Some(aipass_provider_registry::BillingRule {
+                    rate: Some("0.8x".to_string()),
+                    ..Default::default()
+                }),
             },
             &config,
         );
@@ -416,6 +457,10 @@ mod tests {
                 gateway: None,
                 tags: vec!["browser".to_string(), "edited".to_string()],
                 notes: Some("edited from extension".to_string()),
+                // An update that says nothing about the group or billing must
+                // leave the key's stored values alone.
+                group: None,
+                billing: None,
             },
             &config,
         );
@@ -434,6 +479,125 @@ mod tests {
         let entries = lookup.data["entries"].as_array().unwrap();
         assert_eq!(entries[0]["title"], "OpenRouter Edited");
         assert_eq!(entries[0]["notes"], "edited from extension");
+        // Group and billing were stored on the key at add time and survive an
+        // entry update that does not mention them.
+        let secret = &entries[0]["secretRefs"][0];
+        assert_eq!(secret["group"], "vip");
+        assert_eq!(secret["billing"]["rate"], "0.8x");
+
+        // An update that *does* carry a group and billing applies them to the
+        // primary key; these are per-key fields the entry itself cannot hold.
+        let regrouped = handle_request_with_config(
+            NativeRequest::ProviderUpdate {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                entry_id,
+                title: "OpenRouter Edited".to_string(),
+                provider_id: Some("openrouter".to_string()),
+                domain: vec!["openrouter.ai".to_string()],
+                favicon_url: None,
+                endpoint: Some("https://openrouter.ai/api/v1".to_string()),
+                endpoints: vec![],
+                console_endpoints: vec!["https://openrouter.ai/settings/keys".to_string()],
+                interface_type: aipass_provider_registry::InterfaceType::OpenAiCompatible,
+                auth_scheme: aipass_provider_registry::AuthScheme::Bearer,
+                api_key: None,
+                default_model: None,
+                model_aliases: vec![],
+                headers: None,
+                quota: None,
+                gateway: None,
+                tags: vec![],
+                notes: None,
+                group: Some("enterprise".to_string()),
+                billing: Some(aipass_provider_registry::BillingRule {
+                    rate: Some("2x".to_string()),
+                    ..Default::default()
+                }),
+            },
+            &config,
+        );
+        assert!(regrouped.ok, "{regrouped:?}");
+        let after_regroup = handle_request_with_config(
+            NativeRequest::ContextLookup {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://openrouter.ai".to_string(),
+                url: "https://openrouter.ai/settings/keys".to_string(),
+            },
+            &config,
+        );
+        assert!(after_regroup.ok, "{after_regroup:?}");
+        let regrouped_secret = &after_regroup.data["entries"][0]["secretRefs"][0];
+        assert_eq!(regrouped_secret["group"], "enterprise");
+        assert_eq!(regrouped_secret["billing"]["rate"], "2x");
+
+        let metadata = handle_request_with_config(
+            NativeRequest::SecretMetadataSet {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                entry_id,
+                secret_id: secret["id"].as_str().unwrap().to_string(),
+                group: Some("premium".to_string()),
+                interface_type: Some(aipass_provider_registry::InterfaceType::AnthropicMessages),
+                billing: Some(aipass_provider_registry::BillingRule {
+                    currency: Some("USD".to_string()),
+                    ..Default::default()
+                }),
+            },
+            &config,
+        );
+        assert!(metadata.ok, "{metadata:?}");
+
+        let after_metadata = handle_request_with_config(
+            NativeRequest::ContextLookup {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://openrouter.ai".to_string(),
+                url: "https://openrouter.ai/settings/keys".to_string(),
+            },
+            &config,
+        );
+        assert!(after_metadata.ok, "{after_metadata:?}");
+        let updated_secret = &after_metadata.data["entries"][0]["secretRefs"][0];
+        assert_eq!(updated_secret["group"], "premium");
+        assert_eq!(updated_secret["interfaceType"], "anthropic_messages");
+        assert_eq!(updated_secret["billing"]["currency"], "USD");
+        // Fields the caller left unset keep their stored value — here the rate
+        // the preceding update wrote.
+        assert_eq!(updated_secret["billing"]["rate"], "2x");
+
+        let cleared = handle_request_with_config(
+            NativeRequest::SecretMetadataSet {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                entry_id,
+                secret_id: secret["id"].as_str().unwrap().to_string(),
+                group: Some(String::new()),
+                interface_type: None,
+                billing: Some(aipass_provider_registry::BillingRule {
+                    rate: Some(String::new()),
+                    currency: Some(String::new()),
+                    ..Default::default()
+                }),
+            },
+            &config,
+        );
+        assert!(cleared.ok, "{cleared:?}");
+
+        let after_clear = handle_request_with_config(
+            NativeRequest::ContextLookup {
+                id: Uuid::new_v4(),
+                extension_id: None,
+                origin: "https://openrouter.ai".to_string(),
+                url: "https://openrouter.ai/settings/keys".to_string(),
+            },
+            &config,
+        );
+        assert!(after_clear.ok, "{after_clear:?}");
+        let cleared_secret = &after_clear.data["entries"][0]["secretRefs"][0];
+        assert!(cleared_secret["group"].is_null());
+        assert!(cleared_secret["billing"].is_null());
 
         let delete = handle_request_with_config(
             NativeRequest::ProviderDelete {
@@ -484,6 +648,8 @@ mod tests {
                 gateway: None,
                 tags: vec![],
                 notes: None,
+                group: None,
+                billing: None,
             },
             &config,
         );
@@ -530,6 +696,14 @@ mod tests {
                     group: Some("vip".to_string()),
                     rate: Some("0.8x".to_string()),
                 }),
+                domains: Vec::new(),
+                console_endpoint: None,
+                default_model: None,
+                model_aliases: Vec::new(),
+                headers: Vec::new(),
+                notes: None,
+                group: None,
+                billing: None,
             },
             &config,
         );
@@ -567,6 +741,15 @@ mod tests {
                 .and_then(|gateway| gateway.rate.as_deref()),
             Some("0.8x")
         );
+        // The group and its billing rule also land on the key itself.
+        assert_eq!(entries[0].secret_refs[0].group.as_deref(), Some("vip"));
+        assert_eq!(
+            entries[0].secret_refs[0]
+                .billing
+                .as_ref()
+                .and_then(|billing| billing.rate.as_deref()),
+            Some("0.8x")
+        );
 
         let refreshed = handle_request_with_config(
             NativeRequest::SaveDetected {
@@ -587,30 +770,39 @@ mod tests {
                     group: Some("premium".to_string()),
                     rate: Some("1.2x".to_string()),
                 }),
+                domains: Vec::new(),
+                console_endpoint: None,
+                default_model: None,
+                model_aliases: Vec::new(),
+                headers: Vec::new(),
+                notes: None,
+                group: None,
+                billing: None,
             },
             &config,
         );
         assert!(refreshed.ok, "{refreshed:?}");
-        let refreshed_entry = aipass_vault::Vault::open(
+        let refreshed_entries = aipass_vault::Vault::open(
             agent.dir.path(),
             &SecretString::new("correct horse battery staple"),
         )
         .unwrap()
         .search("gateway")
-        .unwrap()
-        .remove(0);
+        .unwrap();
+        // Re-detecting the same key updates that key in place; it never forks a
+        // second entry, and the group now lives on the key.
+        assert_eq!(refreshed_entries.len(), 1);
+        let refreshed_entry = &refreshed_entries[0];
+        assert_eq!(refreshed_entry.secret_refs.len(), 1);
         assert_eq!(
-            refreshed_entry
-                .gateway
-                .as_ref()
-                .and_then(|gateway| gateway.group.as_deref()),
+            refreshed_entry.secret_refs[0].group.as_deref(),
             Some("premium")
         );
         assert_eq!(
-            refreshed_entry
-                .gateway
+            refreshed_entry.secret_refs[0]
+                .billing
                 .as_ref()
-                .and_then(|gateway| gateway.rate.as_deref()),
+                .and_then(|billing| billing.rate.as_deref()),
             Some("1.2x")
         );
 
@@ -630,6 +822,8 @@ mod tests {
                 api_key: "sk-gateway-secret-value".into(),
                 tags: vec!["browser".to_string()],
                 gateway: None,
+                group: None,
+                billing: None,
             },
             &config,
         );
@@ -664,6 +858,8 @@ mod tests {
                 api_key: "sk-gateway-secret-value".into(),
                 tags: vec!["browser".to_string()],
                 gateway: None,
+                group: None,
+                billing: None,
             },
             &config,
         );

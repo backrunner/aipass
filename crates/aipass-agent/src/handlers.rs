@@ -69,14 +69,20 @@ fn dispatch_request(
             proxy.start(vault)
         })
         .map(AgentResponse::success),
-        AgentRequest::ServerStop => with_vault(state, false, |vault| {
+        AgentRequest::ServerStop => {
+            let session = state.session.lock().map_err(|_| {
+                ServiceError::new(AgentErrorCode::Internal, "session lock poisoned")
+            })?;
             let mut proxy = state
                 .proxy
                 .lock()
                 .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
-            proxy.stop_and_save(vault)
-        })
-        .map(AgentResponse::success),
+            let status = match &*session {
+                crate::session::SessionState::Locked => proxy.stop_while_locked(),
+                crate::session::SessionState::Unlocked(info) => proxy.stop_and_save(&info.vault),
+            }?;
+            Ok(AgentResponse::success(status))
+        }
         AgentRequest::ServerConfigGet => with_vault(state, true, |vault| {
             let mut proxy = state
                 .proxy
@@ -352,6 +358,16 @@ fn dispatch_request(
                 .map_err(map_vault_error)
         })
         .map(AgentResponse::success),
+        AgentRequest::SecretMetadataSet {
+            id,
+            secret_id,
+            metadata,
+        } => with_vault(state, false, |vault| {
+            vault
+                .set_secret_metadata(id, &secret_id, &metadata)
+                .map_err(map_vault_error)
+        })
+        .map(|updated| AgentResponse::success(json!({ "updated": updated }))),
         AgentRequest::SecretRemove { id, label } => with_vault(state, false, |vault| {
             vault.remove_secret(id, &label).map_err(map_vault_error)?;
             cleanup_proxy_provider_references(state, vault, id, Some(&label));
@@ -622,11 +638,10 @@ fn dispatch_request(
             Ok(detected_secret_preview(vault, &fields))
         })
         .map(AgentResponse::success),
-        AgentRequest::BrowserSaveDetected { fields } => with_vault(state, false, |vault| {
-            let entry_id = save_detected_secret(vault, fields)?;
-            Ok(SaveDetectedResult { entry_id })
-        })
-        .map(AgentResponse::success),
+        AgentRequest::BrowserSaveDetected { fields } => {
+            with_vault(state, false, |vault| save_detected_secret(vault, fields))
+                .map(AgentResponse::success)
+        }
         AgentRequest::BrowserIgnoreOrigin { origin } => {
             let ignored_origins = ignore_origin(&state.vault_dir, &origin)?;
             Ok(AgentResponse::success(BrowserIgnoreOriginResult {
@@ -687,17 +702,33 @@ fn cleanup_proxy_provider_references(
     }
 }
 
+/// One grant per stored key, so a relay entry holding a key per gateway group
+/// can be filled with any of them rather than only the first.
 fn create_browser_fill_grants(
     vault: &Vault,
     entries: &[EntrySummary],
     origin: &str,
 ) -> ServiceResult<Vec<TtlGrantSummary>> {
-    entries
-        .iter()
-        .map(|entry| {
-            vault
-                .create_secret_grant(entry.id, "chrome.fill", 120, Some(origin.to_string()))
-                .map_err(map_vault_error)
-        })
-        .collect()
+    let mut grants = Vec::new();
+    for entry in entries {
+        let issued = vault
+            .create_secret_grants_for_entry(
+                entry.id,
+                "chrome.fill",
+                120,
+                Some(origin.to_string()),
+                BROWSER_FILL_GRANT_LIMIT,
+            )
+            .map_err(map_vault_error)?;
+        if issued.is_empty() {
+            grants.push(
+                vault
+                    .create_secret_grant(entry.id, "chrome.fill", 120, Some(origin.to_string()))
+                    .map_err(map_vault_error)?,
+            );
+            continue;
+        }
+        grants.extend(issued);
+    }
+    Ok(grants)
 }

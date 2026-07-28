@@ -5,8 +5,8 @@ use aipass_crypto::{
     VaultEpochKey, VaultRootKey, WrappedDek, KEY_LEN,
 };
 use aipass_provider_registry::{
-    AuthScheme, GatewayMetadata, InterfaceType, ProviderEndpoint, ProviderEntry, ProviderKind,
-    QuotaInfo, SecretRef,
+    AuthScheme, BillingRule, GatewayMetadata, InterfaceType, ProviderEndpoint, ProviderEntry,
+    ProviderKind, QuotaInfo, SecretRef,
 };
 use aipass_storage::atomic_write_bytes;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
@@ -22,6 +22,8 @@ use zeroize::Zeroize;
 
 const VAULT_FORMAT: &str = "aipass-vault";
 const VAULT_VERSION: u16 = 2;
+/// Selects an entry's first key when a caller has no specific secret id.
+pub const PRIMARY_SECRET_FIELD: &str = "primary";
 
 #[derive(Debug, Error)]
 pub enum VaultError {
@@ -135,6 +137,78 @@ pub struct DeviceRecord {
     pub last_epoch: u64,
 }
 
+/// Per-key attributes that travel with a credential: which gateway group it
+/// belongs to, the wire format that group speaks, and how it bills.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretMetadataInput {
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub interface_type: Option<InterfaceType>,
+    #[serde(default)]
+    pub billing: Option<BillingRule>,
+}
+
+impl SecretMetadataInput {
+    pub fn is_empty(&self) -> bool {
+        self.group.is_none() && self.interface_type.is_none() && self.billing.is_none()
+    }
+
+    /// Overlay set fields onto an existing key, keeping what the caller left
+    /// unset. Returns whether anything changed.
+    pub fn apply_to(&self, secret: &mut SecretRef) -> bool {
+        let mut changed = false;
+        if let Some(group) = self.group.as_deref() {
+            let group = clean_optional(Some(group));
+            if secret.group != group {
+                secret.group = group;
+                changed = true;
+            }
+        }
+        if let Some(interface_type) = self.interface_type.clone() {
+            if secret.interface_type.as_ref() != Some(&interface_type) {
+                secret.interface_type = Some(interface_type);
+                changed = true;
+            }
+        }
+        if let Some(billing) = self.billing.as_ref() {
+            let previous = secret.billing.as_ref();
+            let merged = BillingRule {
+                rate: patch_optional(&billing.rate, previous.and_then(|old| old.rate.clone())),
+                currency: patch_optional(
+                    &billing.currency,
+                    previous.and_then(|old| old.currency.clone()),
+                ),
+                unit_price: patch_optional(
+                    &billing.unit_price,
+                    previous.and_then(|old| old.unit_price.clone()),
+                ),
+                note: patch_optional(&billing.note, previous.and_then(|old| old.note.clone())),
+            };
+            let merged = (!merged.is_empty()).then_some(merged);
+            if secret.billing != merged {
+                secret.billing = merged;
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
+/// Missing means preserve; a present blank string means clear.
+fn patch_optional(patch: &Option<String>, current: Option<String>) -> Option<String> {
+    match patch {
+        Some(value) => clean_optional(Some(value)),
+        None => current,
+    }
+}
+
+fn clean_optional(value: Option<&str>) -> Option<String> {
+    let trimmed = value?.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderEntryInput {
@@ -157,6 +231,9 @@ pub struct ProviderEntryInput {
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
+    /// Group / wire format / billing for the key created with this entry.
+    #[serde(default)]
+    pub secret_metadata: SecretMetadataInput,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -223,6 +300,9 @@ pub struct TtlGrantSummary {
     pub id: Uuid,
     pub purpose: String,
     pub entry_id: Option<Uuid>,
+    /// Which key of the entry this grant unlocks.
+    #[serde(default)]
+    pub secret_id: Option<String>,
     pub origin: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
@@ -637,7 +717,15 @@ impl Vault {
         let secret_id = Uuid::new_v4().to_string();
         let fingerprint = hmac_fingerprint(&self.index_key, &input.api_key);
         let secret_label = clean_secret_label(input.secret_label.as_deref())
+            .or_else(|| clean_optional(input.secret_metadata.group.as_deref()))
             .unwrap_or_else(|| "primary".to_string());
+        let mut primary_secret = SecretRef::new(
+            secret_id.clone(),
+            secret_label,
+            mask_secret(&input.api_key),
+            fingerprint,
+        );
+        input.secret_metadata.apply_to(&mut primary_secret);
         let entry = ProviderEntry {
             id,
             title: input.title,
@@ -649,12 +737,7 @@ impl Vault {
             endpoints: input.endpoints,
             interface_type: input.interface_type,
             auth_scheme: input.auth_scheme,
-            secret_refs: vec![SecretRef {
-                id: secret_id.clone(),
-                label: secret_label,
-                masked: mask_secret(&input.api_key),
-                fingerprint,
-            }],
+            secret_refs: vec![primary_secret],
             default_model: input.default_model,
             model_aliases: input.model_aliases,
             headers: input.headers,
@@ -681,6 +764,19 @@ impl Vault {
         label: impl Into<String>,
         secret: impl Into<String>,
     ) -> Result<String, VaultError> {
+        self.add_secret_with_metadata(id, label, secret, &SecretMetadataInput::default())
+    }
+
+    /// Add a credential to an existing entry, carrying its group, wire format
+    /// and billing rule. This is how a relay gateway ends up as one entry with
+    /// one key per group instead of one entry per group.
+    pub fn add_secret_with_metadata(
+        &self,
+        id: Uuid,
+        label: impl Into<String>,
+        secret: impl Into<String>,
+        metadata: &SecretMetadataInput,
+    ) -> Result<String, VaultError> {
         let label = label.into();
         let secret = secret.into();
         let path = self.record_path(id);
@@ -694,17 +790,73 @@ impl Vault {
             return Err(VaultError::DuplicateSecretLabel);
         }
         let secret_id = Uuid::new_v4().to_string();
-        plaintext.entry.secret_refs.push(SecretRef {
-            id: secret_id.clone(),
+        let mut secret_ref = SecretRef::new(
+            secret_id.clone(),
             label,
-            masked: mask_secret(&secret),
-            fingerprint: hmac_fingerprint(&self.index_key, &secret),
-        });
+            mask_secret(&secret),
+            hmac_fingerprint(&self.index_key, &secret),
+        );
+        metadata.apply_to(&mut secret_ref);
+        plaintext.entry.secret_refs.push(secret_ref);
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         plaintext.secrets.insert(secret_id.clone(), secret);
         self.write_provider_record(id, &plaintext)?;
         self.audit("secret.add", Some(id), None)?;
         Ok(secret_id)
+    }
+
+    /// Overlay group / wire format / billing onto an existing key. Fields left
+    /// unset in `metadata` keep their stored value. `label_or_id` accepts a
+    /// secret id, a label, or `"primary"` for the entry's first key — the same
+    /// convention as [`Self::reveal_secret_field`].
+    pub fn set_secret_metadata(
+        &self,
+        id: Uuid,
+        label_or_id: &str,
+        metadata: &SecretMetadataInput,
+    ) -> Result<bool, VaultError> {
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        let matched = plaintext
+            .entry
+            .secret_refs
+            .iter()
+            .any(|secret| secret.id == label_or_id || secret.label == label_or_id);
+        let secret = if matched {
+            plaintext
+                .entry
+                .secret_refs
+                .iter_mut()
+                .find(|secret| secret.id == label_or_id || secret.label == label_or_id)
+        } else if label_or_id == PRIMARY_SECRET_FIELD {
+            plaintext.entry.secret_refs.first_mut()
+        } else {
+            None
+        }
+        .ok_or(VaultError::RecordNotFound)?;
+        if !metadata.apply_to(secret) {
+            return Ok(false);
+        }
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("secret.metadata.update", Some(id), None)?;
+        Ok(true)
+    }
+
+    /// Locate the key inside an entry that holds `secret`, by fingerprint.
+    pub fn find_secret_id_by_value(
+        &self,
+        id: Uuid,
+        secret: &str,
+    ) -> Result<Option<String>, VaultError> {
+        let fingerprint = hmac_fingerprint(&self.index_key, secret);
+        let plaintext = self.decrypt_provider_path(&self.record_path(id))?;
+        Ok(plaintext
+            .entry
+            .secret_refs
+            .iter()
+            .find(|item| item.fingerprint == fingerprint)
+            .map(|item| item.id.clone()))
     }
 
     pub fn remove_secret(&self, id: Uuid, label_or_id: &str) -> Result<(), VaultError> {
@@ -758,12 +910,12 @@ impl Vault {
         let fingerprint = hmac_fingerprint(&self.index_key, &api_key);
         let mut secret_refs = old.entry.secret_refs;
         if secret_refs.is_empty() {
-            secret_refs.push(SecretRef {
-                id: secret_id.clone(),
-                label: "primary".to_string(),
-                masked: mask_secret(&api_key),
+            secret_refs.push(SecretRef::new(
+                secret_id.clone(),
+                "primary",
+                mask_secret(&api_key),
                 fingerprint,
-            });
+            ));
         } else if let Some(primary) = secret_refs.first_mut() {
             primary.masked = mask_secret(&api_key);
             primary.fingerprint = fingerprint;
@@ -1000,13 +1152,13 @@ impl Vault {
     }
 
     pub fn reveal_secret(&self, id: Uuid) -> Result<String, VaultError> {
-        self.reveal_secret_field(id, "primary")
+        self.reveal_secret_field(id, PRIMARY_SECRET_FIELD)
     }
 
     pub fn reveal_secret_field(&self, id: Uuid, label_or_id: &str) -> Result<String, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
-        let secret_id = if label_or_id == "primary" {
+        let secret_id = if label_or_id == PRIMARY_SECRET_FIELD {
             plaintext
                 .entry
                 .secret_refs
@@ -1039,8 +1191,23 @@ impl Vault {
         ttl_seconds: i64,
         origin: Option<String>,
     ) -> Result<TtlGrantSummary, VaultError> {
+        self.create_secret_field_grant(entry_id, "primary", purpose, ttl_seconds, origin)
+    }
+
+    /// Grant access to one specific key of an entry. Entries that hold a key
+    /// per gateway group need this: "primary" would always hand back the first
+    /// group's key.
+    pub fn create_secret_field_grant(
+        &self,
+        entry_id: Uuid,
+        field: &str,
+        purpose: impl Into<String>,
+        ttl_seconds: i64,
+        origin: Option<String>,
+    ) -> Result<TtlGrantSummary, VaultError> {
         let purpose = purpose.into();
-        let secret = self.reveal_secret(entry_id)?;
+        let secret = self.reveal_secret_field(entry_id, field)?;
+        let secret_id = self.find_secret_id_by_value(entry_id, &secret)?;
         let now = OffsetDateTime::now_utc();
         let expires_at = now + Duration::seconds(ttl_seconds.max(1));
         let id = Uuid::new_v4();
@@ -1048,7 +1215,7 @@ impl Vault {
             id,
             purpose: purpose.clone(),
             entry_id: Some(entry_id),
-            field_id: "primary".to_string(),
+            field_id: field.to_string(),
             origin: origin.clone(),
             secret,
             created_at: now,
@@ -1066,9 +1233,82 @@ impl Vault {
             id,
             purpose,
             entry_id: Some(entry_id),
+            secret_id,
             origin,
             expires_at,
         })
+    }
+
+    /// One grant per stored key, issued in a single pass.
+    ///
+    /// Calling [`Self::create_secret_field_grant`] per key would rewrite the
+    /// provider record and log a `secret.reveal` for every key each time the
+    /// browser looked up a site — for keys the user never touched. This reads
+    /// and writes the record once and audits the batch once.
+    pub fn create_secret_grants_for_entry(
+        &self,
+        entry_id: Uuid,
+        purpose: impl Into<String>,
+        ttl_seconds: i64,
+        origin: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<TtlGrantSummary>, VaultError> {
+        let purpose = purpose.into();
+        let path = self.record_path(entry_id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        let now = OffsetDateTime::now_utc();
+        let expires_at = now + Duration::seconds(ttl_seconds.max(1));
+
+        let targets: Vec<(String, String)> = plaintext
+            .entry
+            .secret_refs
+            .iter()
+            .take(limit.max(1))
+            .filter_map(|secret| {
+                plaintext
+                    .secrets
+                    .get(&secret.id)
+                    .map(|value| (secret.id.clone(), value.clone()))
+            })
+            .collect();
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut summaries = Vec::with_capacity(targets.len());
+        for (secret_id, secret) in targets {
+            let id = Uuid::new_v4();
+            let grant = TtlGrantPlaintext {
+                id,
+                purpose: purpose.clone(),
+                entry_id: Some(entry_id),
+                field_id: secret_id.clone(),
+                origin: origin.clone(),
+                secret,
+                created_at: now,
+                expires_at,
+            };
+            self.write_envelope(
+                self.grant_path(id),
+                id,
+                "ttl_grant",
+                1,
+                &serde_json::to_vec(&grant)?,
+            )?;
+            summaries.push(TtlGrantSummary {
+                id,
+                purpose: purpose.clone(),
+                entry_id: Some(entry_id),
+                secret_id: Some(secret_id),
+                origin: origin.clone(),
+                expires_at,
+            });
+        }
+
+        plaintext.entry.last_used_at = Some(now);
+        self.write_provider_record(entry_id, &plaintext)?;
+        self.audit("grant.create", Some(entry_id), Some(&purpose))?;
+        Ok(summaries)
     }
 
     pub fn consume_secret_grant(&self, grant_id: Uuid) -> Result<String, VaultError> {
@@ -1865,6 +2105,7 @@ mod tests {
             gateway: None,
             tags: vec!["prod".to_string()],
             notes: Some("sensitive note".to_string()),
+            secret_metadata: SecretMetadataInput::default(),
         }
     }
 
@@ -2140,6 +2381,53 @@ mod tests {
             vault.remove_secret(id, "primary"),
             Err(VaultError::LastSecret)
         ));
+    }
+
+    #[test]
+    fn metadata_patch_can_clear_group_and_individual_billing_fields() {
+        let mut secret = SecretRef::new("key", "primary", "sk-...test", "fingerprint");
+        secret.group = Some("vip".to_string());
+        secret.billing = Some(BillingRule {
+            rate: Some("1.5x".to_string()),
+            currency: Some("USD".to_string()),
+            unit_price: Some("0.002".to_string()),
+            note: None,
+        });
+
+        let changed = SecretMetadataInput {
+            group: Some("  ".to_string()),
+            interface_type: None,
+            billing: Some(BillingRule {
+                rate: Some(String::new()),
+                currency: None,
+                unit_price: Some(String::new()),
+                note: None,
+            }),
+        }
+        .apply_to(&mut secret);
+
+        assert!(changed);
+        assert_eq!(secret.group, None);
+        assert_eq!(
+            secret.billing,
+            Some(BillingRule {
+                rate: None,
+                currency: Some("USD".to_string()),
+                unit_price: None,
+                note: None,
+            })
+        );
+
+        SecretMetadataInput {
+            group: None,
+            interface_type: None,
+            billing: Some(BillingRule {
+                currency: Some(String::new()),
+                ..Default::default()
+            }),
+        }
+        .apply_to(&mut secret);
+        assert_eq!(secret.billing, None);
     }
 
     #[test]

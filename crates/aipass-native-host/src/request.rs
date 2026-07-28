@@ -10,7 +10,7 @@ use aipass_agent_protocol::{
     SessionStatus, SessionUnlockMode, UsageProbeResult,
 };
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
-use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
+use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput, PRIMARY_SECRET_FIELD};
 use anyhow::{bail, Result};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -173,6 +173,8 @@ fn handle_request_inner(
             api_key,
             tags,
             gateway,
+            group,
+            billing,
             ..
         } => {
             let result: BrowserDetectedSecretPreview = request_agent(
@@ -191,6 +193,14 @@ fn handle_request_inner(
                         api_key,
                         tags,
                         gateway,
+                        domains: Vec::new(),
+                        console_endpoint: None,
+                        default_model: None,
+                        model_aliases: Vec::new(),
+                        headers: Vec::new(),
+                        notes: None,
+                        group,
+                        billing,
                     },
                 },
             )?;
@@ -209,6 +219,14 @@ fn handle_request_inner(
             api_key,
             tags,
             gateway,
+            domains,
+            console_endpoint,
+            default_model,
+            model_aliases,
+            headers,
+            notes,
+            group,
+            billing,
             ..
         } => {
             let result: SaveDetectedResult = request_agent(
@@ -227,10 +245,40 @@ fn handle_request_inner(
                         api_key,
                         tags,
                         gateway,
+                        domains,
+                        console_endpoint,
+                        default_model,
+                        model_aliases,
+                        headers,
+                        notes,
+                        group,
+                        billing,
                     },
                 },
             )?;
             Ok(serde_json::to_value(result)?)
+        }
+        NativeRequest::SecretMetadataSet {
+            entry_id,
+            secret_id,
+            group,
+            interface_type,
+            billing,
+            ..
+        } => {
+            let result: serde_json::Value = request_agent(
+                config,
+                &AgentRequest::SecretMetadataSet {
+                    id: entry_id,
+                    secret_id: secret_id.clone(),
+                    metadata: aipass_vault::SecretMetadataInput {
+                        group,
+                        interface_type,
+                        billing,
+                    },
+                },
+            )?;
+            Ok(json!({ "entryId": entry_id, "secretId": secret_id, "result": result }))
         }
         NativeRequest::ProviderAdd {
             title,
@@ -250,6 +298,8 @@ fn handle_request_inner(
             gateway,
             tags,
             notes,
+            group,
+            billing,
             ..
         } => {
             let mut api_endpoints: Vec<ProviderEndpoint> = endpoints
@@ -264,6 +314,13 @@ fn handle_request_inner(
                     .filter_map(non_empty)
                     .map(ProviderEndpoint::console),
             );
+            let secret_metadata = aipass_vault::SecretMetadataInput {
+                group: group
+                    .and_then(non_empty)
+                    .or_else(|| gateway.as_ref().and_then(|value| value.group.clone())),
+                interface_type: Some(interface_type.clone()),
+                billing,
+            };
             let input = ProviderEntryInput {
                 title: non_empty(title).unwrap_or_else(|| "Custom Provider".to_string()),
                 provider_kind: provider_kind_for_id(provider_id.as_deref()),
@@ -285,6 +342,7 @@ fn handle_request_inner(
                 gateway,
                 tags: tags.into_iter().filter_map(non_empty).collect(),
                 notes: notes.and_then(non_empty),
+                secret_metadata,
             };
             let entry_id: Uuid = request_agent(config, &AgentRequest::ProviderAdd { input })?;
             Ok(json!({ "entryId": entry_id }))
@@ -308,6 +366,8 @@ fn handle_request_inner(
             gateway,
             tags,
             notes,
+            group,
+            billing,
             ..
         } => {
             let mut api_endpoints: Vec<ProviderEndpoint> = endpoints
@@ -322,6 +382,13 @@ fn handle_request_inner(
                     .filter_map(non_empty)
                     .map(ProviderEndpoint::console),
             );
+            let secret_metadata = aipass_vault::SecretMetadataInput {
+                // `Some("")` is an explicit clear from a full edit form;
+                // `None` comes from older clients and preserves stored data.
+                group: group.map(|value| value.trim().to_string()),
+                interface_type: Some(interface_type.clone()),
+                billing,
+            };
             let input = ProviderEntryUpdateInput {
                 title: non_empty(title).unwrap_or_else(|| "Custom Provider".to_string()),
                 provider_kind: provider_kind_for_id(provider_id.as_deref()),
@@ -350,6 +417,18 @@ fn handle_request_inner(
                     input,
                 },
             )?;
+            // ProviderUpdate rewrites the entry but never per-key fields, so
+            // the primary key's group / format / billing are set separately.
+            if !secret_metadata.is_empty() {
+                let _: serde_json::Value = request_agent(
+                    config,
+                    &AgentRequest::SecretMetadataSet {
+                        id: entry_id,
+                        secret_id: PRIMARY_SECRET_FIELD.to_string(),
+                        metadata: secret_metadata,
+                    },
+                )?;
+            }
             Ok(json!({ "entryId": entry_id }))
         }
         NativeRequest::ProviderUsageProbe {
@@ -422,6 +501,7 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::SecretFill { id, .. }
         | NativeRequest::SaveDetected { id, .. }
         | NativeRequest::PreviewDetected { id, .. }
+        | NativeRequest::SecretMetadataSet { id, .. }
         | NativeRequest::ProviderAdd { id, .. }
         | NativeRequest::ProviderUpdate { id, .. }
         | NativeRequest::ProviderUsageProbe { id, .. }
@@ -445,6 +525,7 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::SecretFill { extension_id, .. }
         | NativeRequest::SaveDetected { extension_id, .. }
         | NativeRequest::PreviewDetected { extension_id, .. }
+        | NativeRequest::SecretMetadataSet { extension_id, .. }
         | NativeRequest::ProviderAdd { extension_id, .. }
         | NativeRequest::ProviderUpdate { extension_id, .. }
         | NativeRequest::ProviderUsageProbe { extension_id, .. }

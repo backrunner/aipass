@@ -80,6 +80,41 @@ impl ProviderEndpoint {
     }
 }
 
+/// Per-key billing rule for relay gateways (new-api / sub2api and friends),
+/// where each group bills at its own multiplier over the list price.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BillingRule {
+    /// Group rate multiplier as shown by the gateway, e.g. `"1.5"`.
+    #[serde(default)]
+    pub rate: Option<String>,
+    /// Currency or quota unit the gateway bills in, e.g. `"USD"`, `"CNY"`.
+    #[serde(default)]
+    pub currency: Option<String>,
+    /// Price per unit of quota when the gateway publishes one.
+    #[serde(default)]
+    pub unit_price: Option<String>,
+    /// Free-form note carried from the gateway console.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl BillingRule {
+    pub fn is_empty(&self) -> bool {
+        [
+            self.rate.as_deref(),
+            self.currency.as_deref(),
+            self.unit_price.as_deref(),
+            self.note.as_deref(),
+        ]
+        .into_iter()
+        .all(|value| value.is_none_or(|value| value.trim().is_empty()))
+    }
+}
+
+/// A single stored credential. On relay gateways one provider entry holds one
+/// key per group, so the group, the wire format that group speaks, and its
+/// billing rule all live here rather than on the entry.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretRef {
@@ -87,6 +122,33 @@ pub struct SecretRef {
     pub label: String,
     pub masked: String,
     pub fingerprint: String,
+    /// Gateway group this key belongs to, independent of the entry.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Wire format this key speaks; falls back to the entry when unset.
+    #[serde(default)]
+    pub interface_type: Option<InterfaceType>,
+    #[serde(default)]
+    pub billing: Option<BillingRule>,
+}
+
+impl SecretRef {
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        masked: impl Into<String>,
+        fingerprint: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            masked: masked.into(),
+            fingerprint: fingerprint.into(),
+            group: None,
+            interface_type: None,
+            billing: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

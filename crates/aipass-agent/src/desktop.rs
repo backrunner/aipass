@@ -65,10 +65,32 @@ fn open_desktop_url(target: &str) -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command
-        .spawn()
-        .map(|_| ())
-        .context("failed to open AIPass URL")
+    let child = command.spawn().context("failed to open AIPass URL")?;
+    wait_for_url_opener(child)
+}
+
+/// How long to let the URL opener prove it failed before assuming it worked.
+const URL_OPENER_VERDICT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1_500);
+const URL_OPENER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// A spawned `open`/`xdg-open`/`start` says nothing about whether the deep link
+/// resolved: with no handler registered the helper still spawns fine and then
+/// exits non-zero. Waiting briefly for that exit is what lets the caller fall
+/// back to launching the binary directly instead of silently opening nothing.
+///
+/// A helper still running after the timeout has handed the URL off, so it is
+/// treated as success rather than blocking the caller any longer.
+fn wait_for_url_opener(mut child: std::process::Child) -> Result<()> {
+    let deadline = std::time::Instant::now() + URL_OPENER_VERDICT_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => anyhow::bail!("URL opener exited with {status}"),
+            Ok(None) if std::time::Instant::now() >= deadline => return Ok(()),
+            Ok(None) => std::thread::sleep(URL_OPENER_POLL_INTERVAL),
+            Err(err) => return Err(err).context("failed to wait for the AIPass URL opener"),
+        }
+    }
 }
 
 fn desktop_deep_link_scheme() -> &'static str {
@@ -134,10 +156,62 @@ fn push_unique(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 
 #[cfg(test)]
 mod tests {
-    use super::{desktop_deep_link_scheme, DEVELOPMENT_DEEP_LINK_SCHEME};
+    use super::{
+        desktop_deep_link_scheme, wait_for_url_opener, DEVELOPMENT_DEEP_LINK_SCHEME,
+        URL_OPENER_VERDICT_TIMEOUT,
+    };
+    use std::process::{Command, Stdio};
 
     #[test]
     fn debug_builds_use_the_development_deep_link_scheme() {
         assert_eq!(desktop_deep_link_scheme(), DEVELOPMENT_DEEP_LINK_SCHEME);
+    }
+
+    fn spawn(program: &str, args: &[&str]) -> std::process::Child {
+        Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn helper")
+    }
+
+    /// A URL opener that exits non-zero means no handler took the deep link,
+    /// so the caller must fall back to launching the binary directly.
+    #[cfg(unix)]
+    #[test]
+    fn failed_url_opener_is_reported_as_an_error() {
+        let child = spawn("sh", &["-c", "exit 1"]);
+        assert!(wait_for_url_opener(child).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_url_opener_is_reported_as_success() {
+        let child = spawn("sh", &["-c", "exit 0"]);
+        assert!(wait_for_url_opener(child).is_ok());
+    }
+
+    /// A helper that keeps running has already handed the URL off; the caller
+    /// must not be blocked waiting for it to exit.
+    #[cfg(unix)]
+    #[test]
+    fn slow_url_opener_is_not_waited_out() {
+        let child = spawn("sleep", &["30"]);
+        let pid = child.id();
+        let started = std::time::Instant::now();
+        let result = wait_for_url_opener(child);
+        let elapsed = started.elapsed();
+        // The helper outlives the wait by design, so reap it here rather than
+        // leaving a stray process behind for the rest of the run.
+        let _ = Command::new("kill").arg(pid.to_string()).status();
+
+        assert!(result.is_ok());
+        assert!(elapsed >= URL_OPENER_VERDICT_TIMEOUT);
+        assert!(
+            elapsed < URL_OPENER_VERDICT_TIMEOUT * 3,
+            "elapsed {elapsed:?}"
+        );
     }
 }

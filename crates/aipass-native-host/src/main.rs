@@ -101,6 +101,7 @@ fn native_request_id(request: &NativeRequest) -> uuid::Uuid {
         | NativeRequest::SecretFill { id, .. }
         | NativeRequest::SaveDetected { id, .. }
         | NativeRequest::PreviewDetected { id, .. }
+        | NativeRequest::SecretMetadataSet { id, .. }
         | NativeRequest::ProviderAdd { id, .. }
         | NativeRequest::ProviderUpdate { id, .. }
         | NativeRequest::ProviderUsageProbe { id, .. }
@@ -124,6 +125,7 @@ fn native_request_type(request: &NativeRequest) -> &'static str {
         NativeRequest::SecretFill { .. } => "secret.fill",
         NativeRequest::SaveDetected { .. } => "secret.saveDetected",
         NativeRequest::PreviewDetected { .. } => "secret.previewDetected",
+        NativeRequest::SecretMetadataSet { .. } => "secret.metadataSet",
         NativeRequest::ProviderAdd { .. } => "provider.add",
         NativeRequest::ProviderUpdate { .. } => "provider.update",
         NativeRequest::ProviderUsageProbe { .. } => "provider.usageProbe",

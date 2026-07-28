@@ -141,6 +141,8 @@ pub struct UsageAggregate {
     pub cache_creation_tokens: u64,
     pub estimated_cost_micros: u64,
     pub providers: Vec<ProviderUsageAggregate>,
+    #[serde(default)]
+    pub models: Vec<ModelUsageAggregate>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,6 +162,20 @@ pub struct UsageTimeseriesPoint {
 pub struct ProviderUsageAggregate {
     pub provider_entry_id: Uuid,
     pub secret_id: String,
+    pub request_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub estimated_cost_micros: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsageAggregate {
+    pub provider_entry_id: Uuid,
+    pub secret_id: String,
+    pub model: Option<String>,
     pub request_count: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -278,6 +294,8 @@ impl UsageStore {
     pub fn summary(&self, cost: impl Fn(&UsageRow) -> u64) -> Result<UsageAggregate, ProxyError> {
         let mut aggregate = UsageAggregate::default();
         let mut providers: HashMap<(Uuid, String), (ProviderUsageAggregate, i64)> = HashMap::new();
+        let mut models: HashMap<(Uuid, String, Option<String>), (ModelUsageAggregate, i64)> =
+            HashMap::new();
         self.visit_rows_since(None, |_, row| {
             let row_cost = cost(&row);
             aggregate.request_count = aggregate.request_count.saturating_add(1);
@@ -319,6 +337,39 @@ impl UsageStore {
             provider.estimated_cost_micros =
                 provider.estimated_cost_micros.saturating_add(row_cost);
             *last_started = (*last_started).max(row.started_at);
+
+            let model_key = (
+                row.provider_entry_id,
+                row.secret_id.clone(),
+                row.model.clone(),
+            );
+            let (model, last_started) = models.entry(model_key.clone()).or_insert_with(|| {
+                (
+                    ModelUsageAggregate {
+                        provider_entry_id: model_key.0,
+                        secret_id: model_key.1,
+                        model: model_key.2,
+                        request_count: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                        estimated_cost_micros: 0,
+                    },
+                    0,
+                )
+            });
+            model.request_count = model.request_count.saturating_add(1);
+            model.input_tokens = model.input_tokens.saturating_add(row.input_tokens);
+            model.output_tokens = model.output_tokens.saturating_add(row.output_tokens);
+            model.cache_read_tokens = model
+                .cache_read_tokens
+                .saturating_add(row.cache_read_tokens);
+            model.cache_creation_tokens = model
+                .cache_creation_tokens
+                .saturating_add(row.cache_creation_tokens);
+            model.estimated_cost_micros = model.estimated_cost_micros.saturating_add(row_cost);
+            *last_started = (*last_started).max(row.started_at);
         })?;
         let mut providers: Vec<(ProviderUsageAggregate, i64)> = providers.into_values().collect();
         providers.sort_by_key(|provider| std::cmp::Reverse(provider.1));
@@ -326,6 +377,9 @@ impl UsageStore {
             .into_iter()
             .map(|(provider, _)| provider)
             .collect();
+        let mut models: Vec<(ModelUsageAggregate, i64)> = models.into_values().collect();
+        models.sort_by_key(|model| std::cmp::Reverse(model.1));
+        aggregate.models = models.into_iter().map(|(model, _)| model).collect();
         Ok(aggregate)
     }
 
@@ -1752,45 +1806,79 @@ mod tests {
         let store = UsageStore::open(temp.path().join("usage.sqlite")).unwrap();
         let provider_a = Uuid::new_v4();
         let provider_b = Uuid::new_v4();
-        let record = |provider_entry_id, secret_id: &str, started_at, input_tokens| UsageRecord {
-            id: Uuid::new_v4(),
-            started_at,
-            duration_ms: 1,
-            route_id: Uuid::new_v4(),
-            provider_entry_id,
-            secret_id: secret_id.into(),
-            model: Some("gpt-test".into()),
-            inbound_protocol: ProxyProtocol::OpenAiResponses,
-            upstream_protocol: ProxyProtocol::OpenAiResponses,
-            status: 200,
-            attempts: 1,
-            input_tokens,
-            output_tokens: 2,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            estimated_cost_micros: 0,
-        };
-        store.record(&record(provider_a, "key", 10, 100)).unwrap();
-        store.record(&record(provider_a, "key", 20, 50)).unwrap();
-        store.record(&record(provider_b, "key", 30, 10)).unwrap();
+        let record =
+            |provider_entry_id, secret_id: &str, model: Option<&str>, started_at, input_tokens| {
+                UsageRecord {
+                    id: Uuid::new_v4(),
+                    started_at,
+                    duration_ms: 1,
+                    route_id: Uuid::new_v4(),
+                    provider_entry_id,
+                    secret_id: secret_id.into(),
+                    model: model.map(str::to_string),
+                    inbound_protocol: ProxyProtocol::OpenAiResponses,
+                    upstream_protocol: ProxyProtocol::OpenAiResponses,
+                    status: 200,
+                    attempts: 1,
+                    input_tokens,
+                    output_tokens: 2,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    estimated_cost_micros: 0,
+                }
+            };
+        store
+            .record(&record(provider_a, "key", Some("gpt-test"), 10, 100))
+            .unwrap();
+        store
+            .record(&record(provider_a, "key", Some("claude-test"), 20, 50))
+            .unwrap();
+        store
+            .record(&record(provider_b, "key", Some("gpt-test"), 30, 10))
+            .unwrap();
+        store
+            .record(&record(provider_b, "key", None, 40, 5))
+            .unwrap();
 
         // Stored estimated_cost_micros is 0; the injected resolver recomputes
         // cost per row at query time.
         let summary = store.summary(|row| row.input_tokens * 2).unwrap();
-        assert_eq!(summary.request_count, 3);
-        assert_eq!(summary.input_tokens, 160);
-        assert_eq!(summary.output_tokens, 6);
-        assert_eq!(summary.estimated_cost_micros, 320);
+        assert_eq!(summary.request_count, 4);
+        assert_eq!(summary.input_tokens, 165);
+        assert_eq!(summary.output_tokens, 8);
+        assert_eq!(summary.estimated_cost_micros, 330);
         assert_eq!(summary.providers.len(), 2);
         // Providers are ordered by most recent usage first.
         assert_eq!(summary.providers[0].provider_entry_id, provider_b);
-        assert_eq!(summary.providers[0].estimated_cost_micros, 20);
+        assert_eq!(summary.providers[0].estimated_cost_micros, 30);
+        assert_eq!(summary.providers[0].request_count, 2);
         assert_eq!(summary.providers[1].provider_entry_id, provider_a);
         assert_eq!(summary.providers[1].request_count, 2);
         assert_eq!(summary.providers[1].estimated_cost_micros, 300);
+        assert_eq!(summary.models.len(), 4);
+        // Models are aggregated per (provider, model) and ordered by most
+        // recent usage first, including records without a detected model.
+        assert_eq!(summary.models[0].model, None);
+        assert_eq!(summary.models[0].provider_entry_id, provider_b);
+        assert_eq!(summary.models[0].request_count, 1);
+        assert_eq!(summary.models[0].estimated_cost_micros, 10);
+        assert_eq!(summary.models[1].model.as_deref(), Some("gpt-test"));
+        assert_eq!(summary.models[1].provider_entry_id, provider_b);
+        assert_eq!(summary.models[1].request_count, 1);
+        assert_eq!(summary.models[1].input_tokens, 10);
+        assert_eq!(summary.models[1].estimated_cost_micros, 20);
+        assert_eq!(summary.models[2].model.as_deref(), Some("claude-test"));
+        assert_eq!(summary.models[2].provider_entry_id, provider_a);
+        assert_eq!(summary.models[2].estimated_cost_micros, 100);
+        // The same model on a different provider stays a separate row.
+        assert_eq!(summary.models[3].model.as_deref(), Some("gpt-test"));
+        assert_eq!(summary.models[3].provider_entry_id, provider_a);
+        assert_eq!(summary.models[3].request_count, 1);
+        assert_eq!(summary.models[3].input_tokens, 100);
+        assert_eq!(summary.models[3].estimated_cost_micros, 200);
 
         let rows = store.iter_rows().unwrap();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].started_at, 10);
         assert_eq!(rows[0].model.as_deref(), Some("gpt-test"));
     }

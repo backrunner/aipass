@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use time::OffsetDateTime;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 const CONFIG_FILE: &str = "server-config.aipstate";
 const CONFIG_PURPOSE: &str = "proxy-server-config";
@@ -31,6 +32,9 @@ pub struct ProxyService {
     config: ProxyConfig,
     handle: Option<ProxyHandle>,
     usage: Arc<UsageStore>,
+    /// A stop requested while locked cannot rewrite encrypted configuration.
+    /// Keep the intent until the next unlocked config load can persist it.
+    pending_disabled_persist: bool,
 }
 
 impl ProxyService {
@@ -41,6 +45,7 @@ impl ProxyService {
             config: ProxyConfig::default(),
             handle: None,
             usage,
+            pending_disabled_persist: false,
         })
     }
 
@@ -76,6 +81,7 @@ impl ProxyService {
     pub fn load_config(&mut self, vault: &Vault) -> ServiceResult<ProxyConfig> {
         let path = self.vault_dir.join(CONFIG_FILE);
         if !path.exists() {
+            self.pending_disabled_persist = false;
             return Ok(self.config.clone());
         }
         let persisted: PersistedProxyConfig =
@@ -85,8 +91,13 @@ impl ProxyService {
             .decrypt_local_state(CONFIG_PURPOSE, &persisted.payload)
             .map_err(map_vault_error)?;
         self.config = serde_json::from_slice(&bytes).map_err(ServiceError::internal)?;
-        if normalize_unavailable_conversion(&mut self.config) {
+        let normalized = normalize_unavailable_conversion(&mut self.config);
+        if self.pending_disabled_persist {
+            self.config.enabled = false;
+        }
+        if normalized || self.pending_disabled_persist {
             self.save_config(vault)?;
+            self.pending_disabled_persist = false;
         }
         Ok(self.config.clone())
     }
@@ -196,7 +207,17 @@ impl ProxyService {
         Ok(self.status())
     }
 
+    /// Stop the runtime while the vault is locked. The encrypted enabled flag
+    /// is reconciled on the next unlocked config load.
+    pub fn stop_while_locked(&mut self) -> ServiceResult<ProxyStatus> {
+        self.pending_disabled_persist = true;
+        self.stop()
+    }
+
     pub fn stop_and_save(&mut self, vault: &Vault) -> ServiceResult<ProxyStatus> {
+        // Locking wipes management tokens from memory. Reload before saving so
+        // an unlock-then-stop sequence cannot persist those blank placeholders.
+        self.load_config(vault)?;
         let previous_enabled = self.config.enabled;
         self.config.enabled = false;
         if let Err(err) = self.save_config(vault) {
@@ -208,9 +229,12 @@ impl ProxyService {
     }
 
     pub fn lock_for_session(&mut self) {
-        let _ = self.stop();
+        // ProxyHandle owns a separate runtime snapshot containing the resolved
+        // route credentials. Keep that snapshot alive so an already-running
+        // proxy remains available while the vault session is locked, but wipe
+        // the redundant route tokens cached by the management service.
         for route in &mut self.config.routes {
-            route.token.clear();
+            route.token.zeroize();
         }
     }
 
@@ -319,6 +343,7 @@ impl ProxyService {
             cache_creation_tokens: summary.cache_creation_tokens,
             estimated_cost_micros: summary.estimated_cost_micros,
             providers: summary.providers,
+            models: summary.models,
         })
     }
 
@@ -632,7 +657,10 @@ fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
 mod tests {
     use super::*;
     use aipass_crypto::SecretString;
-    use aipass_proxy::{ProxyRouteConfig, RetryPolicy, RouteStrategy};
+    use aipass_proxy::{ProxyRouteConfig, ProxyTargetConfig, RetryPolicy, RouteStrategy};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
 
     fn config_with_token(token: &str, fingerprint: &str) -> ProxyConfig {
         ProxyConfig {
@@ -703,6 +731,155 @@ mod tests {
         let stored = service.config(&creation.vault).expect("load stored config");
         assert_eq!(stored.routes[0].token, token);
         assert_eq!(stored.routes[0].token_fingerprint, fingerprint_token(token));
+    }
+
+    #[test]
+    fn locking_session_keeps_runtime_credentials_available_to_proxy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+
+        let upstream = TcpListener::bind("127.0.0.1:0").expect("bind upstream");
+        let upstream_addr = upstream.local_addr().expect("upstream address");
+        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        let upstream_thread = std::thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().expect("accept proxy request");
+            let mut request = vec![0_u8; 8192];
+            let count = stream.read(&mut request).expect("read proxy request");
+            request.truncate(count);
+            request_tx
+                .send(String::from_utf8_lossy(&request).to_string())
+                .expect("capture proxy request");
+            let body = r#"{"id":"response-test","status":"completed","output":[]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write upstream response");
+        });
+
+        let proxy_probe = TcpListener::bind("127.0.0.1:0").expect("reserve proxy address");
+        let proxy_addr = proxy_probe.local_addr().expect("proxy address");
+        drop(proxy_probe);
+        let local_token = "aipass-local-token";
+        let upstream_api_key = "upstream-secret";
+        service.config = config_with_token(local_token, &fingerprint_token(local_token));
+        let runtime_route = ResolvedRoute {
+            config: service.config.routes[0].clone(),
+            local_token: String::new(),
+            targets: vec![ResolvedTarget {
+                config: ProxyTargetConfig {
+                    id: Uuid::new_v4(),
+                    provider_entry_id: Uuid::new_v4(),
+                    secret_id: "primary".into(),
+                    label: "primary".into(),
+                    base_url: format!("http://{upstream_addr}/v1"),
+                    auth_scheme: "bearer".into(),
+                    headers: Vec::new(),
+                    group: None,
+                    priority: 0,
+                    weight: 1,
+                    enabled: true,
+                },
+                api_key: upstream_api_key.into(),
+            }],
+        };
+        service.handle = Some(
+            ProxyHandle::start(
+                RuntimeConfig::from_routes(proxy_addr.to_string(), vec![runtime_route]),
+                service.usage.clone(),
+            )
+            .expect("start proxy"),
+        );
+
+        service.lock_for_session();
+
+        assert!(service.status().running);
+        assert!(service.config.routes[0].token.is_empty());
+        assert_eq!(
+            service.config.routes[0].token_fingerprint,
+            fingerprint_token(local_token)
+        );
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{proxy_addr}/v1/responses"))
+            .bearer_auth(local_token)
+            .json(&serde_json::json!({"model": "gpt-test", "input": "hello"}))
+            .send()
+            .expect("request through locked proxy");
+        assert!(response.status().is_success());
+        let upstream_request = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("upstream request");
+        assert!(upstream_request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer upstream-secret"));
+        upstream_thread.join().expect("upstream thread");
+    }
+
+    #[test]
+    fn stop_while_locked_is_persisted_after_the_next_unlock() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = aipass_vault::Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        service.config = config_with_token("local-token", &fingerprint_token("local-token"));
+        service.config.enabled = true;
+        service
+            .save_config(&creation.vault)
+            .expect("save enabled config");
+
+        let stopped = service.stop_while_locked().expect("stop while locked");
+        assert!(!stopped.running);
+        assert!(!stopped.enabled);
+        assert!(service.pending_disabled_persist);
+
+        service
+            .load_config(&creation.vault)
+            .expect("reconcile after unlock");
+        assert!(!service.config.enabled);
+        assert!(!service.pending_disabled_persist);
+
+        let mut reloaded = ProxyService::new(temp.path()).expect("reloaded service");
+        assert!(
+            !reloaded
+                .load_config(&creation.vault)
+                .expect("load persisted config")
+                .enabled
+        );
+    }
+
+    #[test]
+    fn stopping_after_unlock_does_not_persist_lock_scrubbed_tokens() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = aipass_vault::Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        service.config = config_with_token("local-token", &fingerprint_token("local-token"));
+        service.config.enabled = true;
+        service
+            .save_config(&creation.vault)
+            .expect("save enabled config");
+
+        service.lock_for_session();
+        assert!(service.config.routes[0].token.is_empty());
+        service
+            .stop_and_save(&creation.vault)
+            .expect("stop after unlock");
+
+        let mut reloaded = ProxyService::new(temp.path()).expect("reloaded service");
+        let config = reloaded
+            .load_config(&creation.vault)
+            .expect("load stopped config");
+        assert!(!config.enabled);
+        assert_eq!(config.routes[0].token, "local-token");
     }
 
     #[test]

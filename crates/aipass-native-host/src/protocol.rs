@@ -4,7 +4,9 @@ use std::io::{Read, Write};
 use uuid::Uuid;
 
 use aipass_agent_protocol::{SensitiveString, UsageProbeMode};
-use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, QuotaInfo};
+use aipass_provider_registry::{
+    AuthScheme, BillingRule, GatewayMetadata, InterfaceType, QuotaInfo,
+};
 use zeroize::Zeroize;
 
 pub const MAX_NATIVE_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -75,6 +77,22 @@ pub enum NativeRequest {
         api_key: SensitiveString,
         tags: Vec<String>,
         gateway: Option<GatewayMetadata>,
+        #[serde(default)]
+        domains: Vec<String>,
+        #[serde(default)]
+        console_endpoint: Option<String>,
+        #[serde(default)]
+        default_model: Option<String>,
+        #[serde(default)]
+        model_aliases: Vec<(String, String)>,
+        #[serde(default)]
+        headers: Vec<(String, String)>,
+        #[serde(default)]
+        notes: Option<String>,
+        #[serde(default)]
+        group: Option<String>,
+        #[serde(default)]
+        billing: Option<BillingRule>,
     },
     #[serde(rename = "secret.previewDetected")]
     PreviewDetected {
@@ -93,6 +111,24 @@ pub enum NativeRequest {
         api_key: SensitiveString,
         tags: Vec<String>,
         gateway: Option<GatewayMetadata>,
+        #[serde(default)]
+        group: Option<String>,
+        #[serde(default)]
+        billing: Option<BillingRule>,
+    },
+    /// Set a stored key's group, wire format and billing rule.
+    #[serde(rename = "secret.metadataSet")]
+    SecretMetadataSet {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+        secret_id: String,
+        #[serde(default)]
+        group: Option<String>,
+        #[serde(default)]
+        interface_type: Option<InterfaceType>,
+        #[serde(default)]
+        billing: Option<BillingRule>,
     },
     #[serde(rename = "provider.add")]
     ProviderAdd {
@@ -121,6 +157,12 @@ pub enum NativeRequest {
         #[serde(default)]
         tags: Vec<String>,
         notes: Option<String>,
+        /// Group for the key created with this entry; falls back to
+        /// `gateway.group` for older extension builds.
+        #[serde(default)]
+        group: Option<String>,
+        #[serde(default)]
+        billing: Option<BillingRule>,
     },
     #[serde(rename = "provider.update")]
     ProviderUpdate {
@@ -150,6 +192,12 @@ pub enum NativeRequest {
         #[serde(default)]
         tags: Vec<String>,
         notes: Option<String>,
+        /// Group and billing for the entry's primary key. Applied to that key
+        /// only, so an entry's other groups keep their own values.
+        #[serde(default)]
+        group: Option<String>,
+        #[serde(default)]
+        billing: Option<BillingRule>,
     },
     #[serde(rename = "provider.usageProbe")]
     ProviderUsageProbe {

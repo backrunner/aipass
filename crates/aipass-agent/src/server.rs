@@ -38,7 +38,8 @@ use aipass_sync::{
     sync_webdav, ConflictRecord, HttpWebDavClient, SyncReport, WebDavClient,
 };
 use aipass_vault::{
-    EncryptedVaultExport, EntrySummary, ProviderEntryInput, TtlGrantSummary, Vault,
+    EncryptedVaultExport, EntrySummary, ProviderEntryInput, SecretMetadataInput, TtlGrantSummary,
+    Vault,
 };
 use anyhow::{bail, Context, Result};
 use interprocess::local_socket::{prelude::*, Listener, ListenerNonblockingMode, Stream};
@@ -454,7 +455,19 @@ fn normalize_origin(origin: &str) -> Result<String> {
     Ok(normalized)
 }
 
-fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> ServiceResult<Uuid> {
+fn non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn save_detected_secret(
+    vault: &Vault,
+    fields: BrowserDetectedSecretFields,
+) -> ServiceResult<SaveDetectedResult> {
     let domain = host_from_origin(&fields.origin);
     let provider_guess = fields
         .provider_id
@@ -465,79 +478,159 @@ fn save_detected_secret(vault: &Vault, fields: BrowserDetectedSecretFields) -> S
         .map(|id| provider_kind_for_id(Some(id)))
         .unwrap_or(aipass_provider_registry::ProviderKind::Unknown);
     let preview = detected_secret_preview(vault, &fields);
+    let secret_metadata = detected_secret_metadata(&preview);
     if let Some(existing_entry_id) = preview.existing_entry_id {
-        merge_detected_gateway(vault, existing_entry_id, preview.gateway)?;
+        // Deliberately no entry-level gateway write here: an entry can now hold
+        // several groups, so stamping one of them onto the entry would be wrong.
         if preview
             .favicon_url
             .as_deref()
             .is_some_and(|favicon| favicon.starts_with("data:image/"))
         {
             vault
-                .replace_provider_favicon_url(existing_entry_id, preview.favicon_url.unwrap())
+                .replace_provider_favicon_url(
+                    existing_entry_id,
+                    preview.favicon_url.clone().unwrap(),
+                )
                 .map_err(map_vault_error)?;
         }
-        return Ok(existing_entry_id);
+
+        // The exact key is already stored: refresh its group / format / billing
+        // rather than storing it twice.
+        if let Some(secret_id) = preview.existing_secret_id.clone() {
+            if !secret_metadata.is_empty() {
+                vault
+                    .set_secret_metadata(existing_entry_id, &secret_id, &secret_metadata)
+                    .map_err(map_vault_error)?;
+            }
+            return Ok(SaveDetectedResult {
+                entry_id: existing_entry_id,
+                secret_id: Some(secret_id),
+                merged_into_existing: true,
+            });
+        }
+
+        // A different key for a site we already track — most often a second
+        // gateway group. It belongs on the same entry as another key.
+        let existing = vault
+            .get_provider_summary(existing_entry_id)
+            .map_err(map_vault_error)?;
+        let label = unique_secret_label(
+            &existing,
+            preview
+                .secret_label
+                .as_deref()
+                .or(preview.group.as_deref())
+                .unwrap_or("key"),
+        );
+        let secret_id = vault
+            .add_secret_with_metadata(
+                existing_entry_id,
+                label,
+                fields.api_key.into_inner(),
+                &secret_metadata,
+            )
+            .map_err(map_vault_error)?;
+        return Ok(SaveDetectedResult {
+            entry_id: existing_entry_id,
+            secret_id: Some(secret_id),
+            merged_into_existing: true,
+        });
     }
     let api_key = fields.api_key.into_inner();
-    vault
+    let mut domains = vec![domain];
+    for extra in &fields.domains {
+        let cleaned = extra.trim();
+        if !cleaned.is_empty() && !domains.iter().any(|item| item == cleaned) {
+            domains.push(cleaned.to_string());
+        }
+    }
+    let mut endpoints: Vec<ProviderEndpoint> = preview
+        .endpoint
+        .clone()
+        .into_iter()
+        .map(ProviderEndpoint::api)
+        .collect();
+    endpoints.extend(
+        fields
+            .console_endpoint
+            .clone()
+            .and_then(non_empty)
+            .into_iter()
+            .map(ProviderEndpoint::console),
+    );
+    let entry_id = vault
         .add_provider(ProviderEntryInput {
             title: preview.title,
             provider_kind,
             provider_id: preview.provider_id,
-            domains: vec![domain],
+            domains,
             favicon_url: preview.favicon_url,
-            endpoints: preview
-                .endpoint
-                .clone()
-                .into_iter()
-                .map(ProviderEndpoint::api)
-                .collect(),
+            endpoints,
             interface_type: preview.interface_type,
             auth_scheme: preview.auth_scheme,
-            api_key,
+            api_key: api_key.clone(),
             secret_label: preview.secret_label,
-            default_model: None,
-            model_aliases: Vec::new(),
-            headers: Vec::new(),
+            default_model: fields.default_model.clone().and_then(non_empty),
+            model_aliases: fields
+                .model_aliases
+                .iter()
+                .filter_map(|(alias, model)| {
+                    Some((non_empty(alias.clone())?, non_empty(model.clone())?))
+                })
+                .collect(),
+            headers: fields.headers.clone(),
             quota: None,
             gateway: preview.gateway,
             tags: preview.tags,
-            notes: None,
+            notes: fields.notes.clone().and_then(non_empty),
+            secret_metadata,
         })
-        .map_err(map_vault_error)
+        .map_err(map_vault_error)?;
+    let secret_id = vault
+        .find_secret_id_by_value(entry_id, &api_key)
+        .map_err(map_vault_error)?;
+    Ok(SaveDetectedResult {
+        entry_id,
+        secret_id,
+        merged_into_existing: false,
+    })
 }
 
-fn merge_detected_gateway(
-    vault: &Vault,
-    entry_id: Uuid,
-    detected: Option<aipass_provider_registry::GatewayMetadata>,
-) -> ServiceResult<()> {
-    let Some(detected) = detected else {
-        return Ok(());
-    };
-    let current = vault
-        .get_provider_summary(entry_id)
-        .map_err(map_vault_error)?;
-    let merged = aipass_provider_registry::GatewayMetadata {
-        group: detected.group.or_else(|| {
-            current
-                .gateway
-                .as_ref()
-                .and_then(|gateway| gateway.group.clone())
-        }),
-        rate: detected.rate.or_else(|| {
-            current
-                .gateway
-                .as_ref()
-                .and_then(|gateway| gateway.rate.clone())
-        }),
-    };
-    if current.gateway.as_ref() == Some(&merged) {
-        return Ok(());
+/// The per-key attributes a detected draft carries. The wire format is always
+/// recorded on the key: on a relay one group may speak Anthropic while another
+/// speaks OpenAI, and the entry can only name one of them.
+fn detected_secret_metadata(preview: &BrowserDetectedSecretPreview) -> SecretMetadataInput {
+    SecretMetadataInput {
+        group: preview.group.clone(),
+        interface_type: Some(preview.interface_type.clone()),
+        billing: preview.billing.clone().filter(|rule| !rule.is_empty()),
     }
-    vault
-        .update_provider_usage(entry_id, current.quota, Some(merged))
-        .map_err(map_vault_error)
+}
+
+/// Labels are unique within an entry, so a second key from the same group gets
+/// a numeric suffix instead of failing the save.
+fn unique_secret_label(entry: &EntrySummary, preferred: &str) -> String {
+    let preferred = preferred.trim();
+    let base = if preferred.is_empty() {
+        "key"
+    } else {
+        preferred
+    };
+    if !entry.secret_refs.iter().any(|secret| secret.label == base) {
+        return base.to_string();
+    }
+    for suffix in 2..100 {
+        let candidate = format!("{base} {suffix}");
+        if !entry
+            .secret_refs
+            .iter()
+            .any(|secret| secret.label == candidate)
+        {
+            return candidate;
+        }
+    }
+    format!("{base} {}", Uuid::new_v4())
 }
 
 fn detected_secret_preview(
@@ -598,12 +691,37 @@ fn detected_secret_preview(
         })
         .unwrap_or_else(|| "Browser Provider".to_string());
     let tags = fields.tags.clone();
-    let existing_entry_id = vault
+
+    // Resolve where this key belongs. An exact key match wins; otherwise any
+    // entry already tracking this site adopts the key, so a relay with several
+    // groups stays one entry with one key per group.
+    let stored = vault
         .search(fields.api_key.expose())
         .ok()
-        .and_then(|matches| matches.into_iter().next().map(|entry| entry.id));
+        .and_then(|matches| matches.into_iter().next());
+    let existing_secret_id = stored.as_ref().and_then(|entry| {
+        vault
+            .find_secret_id_by_value(entry.id, fields.api_key.expose())
+            .ok()
+            .flatten()
+    });
+    let is_saved = stored.is_some();
+    let target = stored.or_else(|| {
+        vault
+            .lookup_by_origin(&fields.origin)
+            .ok()
+            .into_iter()
+            .flatten()
+            .next()
+    });
 
-    let is_saved = existing_entry_id.is_some();
+    let gateway = clean_gateway(fields.gateway.clone());
+    // Group is its own field now; accept it from the dedicated field and fall
+    // back to the legacy entry-level gateway blob for older drafts.
+    let group = clean_gateway_field(fields.group.as_deref().unwrap_or_default(), 48)
+        .or_else(|| gateway.as_ref().and_then(|value| value.group.clone()));
+    let billing = clean_billing(fields.billing.clone(), gateway.as_ref());
+
     BrowserDetectedSecretPreview {
         title,
         secret_label: clean_secret_label(fields.secret_label.as_deref()),
@@ -614,11 +732,51 @@ fn detected_secret_preview(
         auth_scheme,
         masked_secret: mask_secret(fields.api_key.expose()),
         fingerprint: vault.fingerprint_secret(fields.api_key.expose()),
-        existing_entry_id,
+        existing_entry_id: target.as_ref().map(|entry| entry.id),
+        existing_entry_title: target.as_ref().map(|entry| entry.title.clone()),
+        existing_secret_id,
+        existing_groups: target
+            .as_ref()
+            .map(|entry| {
+                entry
+                    .secret_refs
+                    .iter()
+                    .filter_map(|secret| secret.group.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
         is_saved,
         tags,
-        gateway: clean_gateway(fields.gateway.clone()),
+        gateway,
+        group,
+        billing,
     }
+}
+
+/// Billing details are scraped from a console page, so they get the same
+/// length and secret-shaped sanitising as the other gateway fields. The legacy
+/// entry-level `gateway.rate` seeds the rate when no rule was sent.
+fn clean_billing(
+    billing: Option<aipass_provider_registry::BillingRule>,
+    gateway: Option<&aipass_provider_registry::GatewayMetadata>,
+) -> Option<aipass_provider_registry::BillingRule> {
+    const MAX_LEN: usize = 48;
+    const MAX_NOTE_LEN: usize = 160;
+    let mut rule = billing.unwrap_or_default();
+    rule.rate = rule
+        .rate
+        .and_then(|value| clean_gateway_field(&value, MAX_LEN))
+        .or_else(|| gateway.and_then(|value| value.rate.clone()));
+    rule.currency = rule
+        .currency
+        .and_then(|value| clean_gateway_field(&value, MAX_LEN));
+    rule.unit_price = rule
+        .unit_price
+        .and_then(|value| clean_gateway_field(&value, MAX_LEN));
+    rule.note = rule
+        .note
+        .and_then(|value| clean_gateway_field(&value, MAX_NOTE_LEN));
+    (!rule.is_empty()).then_some(rule)
 }
 
 fn clean_secret_label(value: Option<&str>) -> Option<String> {

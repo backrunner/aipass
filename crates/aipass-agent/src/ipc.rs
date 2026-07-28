@@ -104,9 +104,33 @@ pub fn load_or_create_auth_token(vault_dir: impl AsRef<Path>) -> Result<Sensitiv
             file.sync_all()?;
             Ok(token)
         }
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => read_auth_token_at_path(&path),
+        // Another process won the race, or a previous run left the file behind.
+        // A readable token wins; an unusable one (truncated by a crash mid-write)
+        // is replaced, since no client can be authenticating with it anyway.
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+            match read_auth_token_at_path(&path) {
+                Ok(existing) => Ok(existing),
+                Err(_) => {
+                    write_auth_token_at_path(&path, &token)?;
+                    Ok(token)
+                }
+            }
+        }
         Err(err) => Err(err.into()),
     }
+}
+
+fn write_auth_token_at_path(path: &Path, token: &SensitiveString) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    file.write_all(token.expose().as_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }
 
 pub fn read_auth_token(vault_dir: impl AsRef<Path>) -> Result<SensitiveString> {
@@ -183,6 +207,27 @@ mod tests {
         let token = read_auth_token_at_path(&path).expect("read token");
 
         assert_eq!(token.expose(), "secret");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    /// A crash mid-write can leave an empty token file. Without replacing it
+    /// the agent could never start again, since `create_new` keeps failing and
+    /// the file never becomes readable.
+    #[test]
+    fn unusable_auth_token_file_is_replaced() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("token");
+        fs::write(&path, "").expect("write empty token");
+
+        let replacement = SensitiveString::new("regenerated".to_string());
+        write_auth_token_at_path(&path, &replacement).expect("replace token");
+
+        let token = read_auth_token_at_path(&path).expect("read token");
+        assert_eq!(token.expose(), "regenerated");
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600

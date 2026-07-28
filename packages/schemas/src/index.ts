@@ -27,11 +27,47 @@ export interface ProviderEndpoint {
   apiVersion?: string;
 }
 
+/**
+ * Per-key billing rule for relay gateways (new-api / sub2api and friends),
+ * where each group bills at its own multiplier over the list price.
+ */
+export interface BillingRule {
+  /** Group rate multiplier as shown by the gateway, e.g. `"1.5"`. */
+  rate?: string;
+  /** Currency or quota unit the gateway bills in. */
+  currency?: string;
+  /** Price per unit of quota when the gateway publishes one. */
+  unitPrice?: string;
+  note?: string;
+}
+
+/**
+ * A single stored credential. On relay gateways one entry holds one key per
+ * group, so the group, the wire format that group speaks, and its billing rule
+ * all live here rather than on the entry.
+ */
 export interface SecretRef {
   id: string;
   label: string;
   masked: string;
   fingerprint: string;
+  /** Gateway group this key belongs to, independent of the entry. */
+  group?: string;
+  /** Wire format this key speaks; falls back to the entry when unset. */
+  interfaceType?: InterfaceType;
+  billing?: BillingRule;
+}
+
+export function billingRuleIsEmpty(rule?: BillingRule | null): boolean {
+  return !rule || (!rule.rate && !rule.currency && !rule.unitPrice && !rule.note);
+}
+
+/** The wire format a key speaks, falling back to the entry's. */
+export function secretInterfaceType(
+  secret: Pick<SecretRef, "interfaceType"> | undefined,
+  entryInterfaceType: InterfaceType
+): InterfaceType {
+  return secret?.interfaceType ?? entryInterfaceType;
 }
 
 export interface QuotaInfo {

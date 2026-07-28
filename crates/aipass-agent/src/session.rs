@@ -279,8 +279,9 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
     state.session_changed.notify_all();
     // Transition the session first. Any vault operation already in flight must
     // finish before this lock is acquired, and no new one can start after it.
-    // Stopping the proxy afterwards prevents an in-flight server command from
-    // restarting it between the proxy stop and the session transition.
+    // The proxy runtime owns its resolved credentials and intentionally keeps
+    // serving while locked; only redundant credentials in its management
+    // configuration are cleared here.
     if let Ok(mut proxy) = state.proxy.lock() {
         proxy.lock_for_session();
     }
@@ -790,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn lock_marks_session_locked_before_waiting_for_proxy() {
+    fn lock_marks_session_locked_before_sanitizing_proxy_config() {
         let temp = tempdir().expect("tempdir");
         let state = test_state(temp.path().join("vault"));
         create_vault(&state, "correct horse battery staple".to_string()).expect("create vault");

@@ -325,6 +325,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     gateway: None,
                     tags: tag,
                     notes,
+                    secret_metadata: Default::default(),
                 },
             })?;
             output(

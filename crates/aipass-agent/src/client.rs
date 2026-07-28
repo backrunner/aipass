@@ -9,12 +9,44 @@ use aipass_agent_protocol::{
 };
 use anyhow::Result;
 use serde::de::DeserializeOwned;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const AGENT_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const AGENT_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// A send should never take as long as the work behind a response.
+const REQUEST_SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn apply_request_timeouts(
+    stream: &interprocess::local_socket::Stream,
+    response_timeout: Duration,
+) -> std::result::Result<(), AgentCommandError> {
+    use interprocess::local_socket::traits::Stream as _;
+    stream
+        .set_send_timeout(Some(REQUEST_SEND_TIMEOUT))
+        .and_then(|()| stream.set_recv_timeout(Some(response_timeout)))
+        .map_err(|err| AgentCommandError {
+            code: Some(AgentErrorCode::Internal),
+            message: format!("failed to set agent request timeout: {err}"),
+        })
+}
+
+/// A timed-out agent is reported as unavailable rather than an internal fault,
+/// so callers retry or fall back to their "agent not reachable" path.
+fn timeout_aware_error(err: anyhow::Error) -> AgentCommandError {
+    let timed_out = err
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|err| matches!(err.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock));
+    if timed_out {
+        return AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: format!("agent did not respond in time: {err}"),
+        };
+    }
+    AgentCommandError::internal(err)
+}
 
 #[derive(Clone, Debug)]
 pub struct AgentClientConfig {
@@ -82,13 +114,17 @@ impl AgentClient {
                 code: Some(AgentErrorCode::ServiceUnavailable),
                 message: err.to_string(),
             })?;
+        // Without a deadline a wedged agent hangs the caller forever — the tray
+        // polls on a timer and the desktop issues these from UI commands, so a
+        // stuck read is never recovered from.
+        apply_request_timeouts(&stream, request.response_timeout())?;
         let payload = AuthenticatedAgentRequest {
             protocol_version: AGENT_PROTOCOL_VERSION,
             auth_token,
             request: request.clone(),
         };
-        write_frame(&mut stream, &payload).map_err(AgentCommandError::internal)?;
-        read_frame(&mut stream).map_err(AgentCommandError::internal)
+        write_frame(&mut stream, &payload).map_err(timeout_aware_error)?;
+        read_frame(&mut stream).map_err(timeout_aware_error)
     }
 
     pub fn request<T: DeserializeOwned>(
@@ -262,6 +298,49 @@ fn decode_response<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A socket that accepts a connection and then never answers is exactly
+    /// the wedged-agent case: without a receive timeout the caller blocks
+    /// forever, which used to freeze the tray and every desktop command.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_silent_agent_times_out_instead_of_hanging() {
+        use interprocess::local_socket::{prelude::*, GenericFilePath, ListenerOptions};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("silent.sock");
+        let name = path
+            .clone()
+            .to_fs_name::<GenericFilePath>()
+            .expect("socket name");
+        let listener = ListenerOptions::new()
+            .name(name)
+            .create_sync()
+            .expect("listener");
+        // Accept and hold the connection open without ever replying.
+        let accepted = thread::spawn(move || {
+            let _held = listener.accept();
+            thread::sleep(Duration::from_secs(30));
+        });
+
+        let connect_name = path.to_fs_name::<GenericFilePath>().expect("connect name");
+        let stream = interprocess::local_socket::Stream::connect(connect_name).expect("connect");
+        apply_request_timeouts(&stream, Duration::from_millis(250)).expect("set timeouts");
+
+        let started = Instant::now();
+        let result = read_frame::<AgentResponse>(&stream);
+        let elapsed = started.elapsed();
+
+        assert!(result.is_err(), "expected the silent agent to time out");
+        assert!(elapsed < Duration::from_secs(5), "elapsed {elapsed:?}");
+        // The caller sees an unavailable agent, not an internal fault, so it
+        // falls back to its "agent not reachable" handling.
+        let err = timeout_aware_error(result.unwrap_err());
+        assert_eq!(err.code, Some(AgentErrorCode::ServiceUnavailable));
+
+        drop(stream);
+        drop(accepted);
+    }
 
     #[test]
     fn resident_agent_startup_suppresses_tray_launch() {
