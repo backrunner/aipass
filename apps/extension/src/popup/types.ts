@@ -1,4 +1,4 @@
-import type { AuthScheme, InterfaceType, ProviderKind } from "@aipass/schemas";
+import type { AuthScheme, BillingRule, InterfaceType, ProviderKind } from "@aipass/schemas";
 import type { Draft } from "@aipass/ui";
 
 export type NativeResponse<T = unknown> = { ok?: boolean; protocolVersion?: number; error?: string; data?: T };
@@ -14,7 +14,15 @@ export type Entry = {
   authScheme: AuthScheme;
   maskedSecret: string;
   fingerprint: string;
-  secretRefs?: Array<{ id: string; label: string; masked: string; fingerprint: string }>;
+  secretRefs?: Array<{
+    id: string;
+    label: string;
+    masked: string;
+    fingerprint: string;
+    group?: string;
+    interfaceType?: InterfaceType;
+    billing?: BillingRule;
+  }>;
   faviconUrl?: string;
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;
@@ -38,7 +46,7 @@ export type Entry = {
   deletedAt?: string;
 };
 
-export type Grant = { id: string; entryId?: string; expiresAt: string };
+export type Grant = { id: string; entryId?: string; secretId?: string; expiresAt: string };
 
 export type LookupData = { entries: Entry[]; grants: Grant[] };
 
@@ -66,6 +74,9 @@ export type SafeDraft = {
   tags?: string[];
   editMode?: boolean;
   resumeSave?: boolean;
+  /** Gateway group for this key, independent of the entry. */
+  group?: string;
+  billing?: BillingRule;
   gateway?: {
     group?: string;
     rate?: string;
@@ -82,9 +93,16 @@ export type DraftPreview = {
   authScheme: AuthScheme;
   maskedSecret: string;
   fingerprint: string;
+  /** Entry this key will land in — an exact match, or the same-site entry. */
   existingEntryId?: string;
+  existingEntryTitle?: string;
+  /** Set only when this exact key is already stored. */
+  existingSecretId?: string;
+  existingGroups?: string[];
   isSaved?: boolean;
   tags: string[];
+  group?: string;
+  billing?: BillingRule;
   gateway?: {
     group?: string;
     rate?: string;

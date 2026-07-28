@@ -21,6 +21,7 @@ import {
   updateProvider,
   unlockWithPassword,
   type ContextLookupData,
+  type BillingRule,
   type DetectedSecretDraft,
   type NativeResponse,
   type ProviderAddRequest,
@@ -28,6 +29,7 @@ import {
   type ProviderUpdateRequest,
   type UsageProbeResult
 } from "./native-client";
+import { isSecretCaptureAllowed } from "./content/page-capture-policy";
 
 const MAX_FAVICON_BYTES = 96 * 1024;
 
@@ -44,8 +46,11 @@ async function localizeFavicon(url: string | undefined): Promise<string | undefi
   if (!url || url.startsWith("data:image/")) return url;
   try {
     const parsed = new URL(url);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return undefined;
-    const response = await fetch(parsed.href, { credentials: "omit", cache: "force-cache" });
+    if (!["http:", "https:"].includes(parsed.protocol)) return undefined;
+    const response = await fetch(parsed.href, {
+      credentials: "omit",
+      cache: "force-cache"
+    });
     const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
     if (!response.ok || !type.startsWith("image/")) return undefined;
     const buffer = await response.arrayBuffer();
@@ -94,7 +99,10 @@ let entryCacheMutationVersion = 0;
 const PENDING_DRAFT_TTL_MS = 5 * 60 * 1000;
 const ENTRY_CACHE_SCHEMA_VERSION = 1;
 const ENTRY_CACHE_KEY_PREFIX = `aipass.entries.v${ENTRY_CACHE_SCHEMA_VERSION}.`;
-const memoryEntryCache = new Map<string, EntryCacheSnapshotV1>();
+const DISMISSED_KEYS_KEY_PREFIX = "aipass.dismissedKeys.v1.";
+/** Bounds one page's dismissal list; oldest entries fall off first. */
+const DISMISSED_KEYS_PER_SCOPE = 64;
+const memoryEntryCache = new Map<string, unknown>();
 const usageRefreshPromises = new Map<string, Promise<UsageRefreshResponse>>();
 const automaticUsageRefreshAt = new Map<string, number>();
 const AUTOMATIC_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -115,17 +123,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     draft?: Partial<DetectedSecretDraft> | null;
     drafts?: Array<Partial<DetectedSecretDraft>> | null;
     draftId?: string;
-    draftPatches?: Array<{ draftId?: string; draft?: Partial<DetectedSecretDraft> | null }>;
+    draftPatches?: Array<{
+      draftId?: string;
+      draft?: Partial<DetectedSecretDraft> | null;
+    }>;
     entryIds?: string[];
     limit?: number;
     tabId?: number;
     password?: string;
     request?: ProviderAddRequest | ProviderUpdateRequest;
+    secretId?: string;
+    /** Page a dismissal applies to: origin + path. */
+    scope?: string;
+    /** Digests of dismissed keys; never the keys themselves. */
+    digests?: string[];
   };
 
   if (typed.type === "aipass.ping") {
-    pingWithSessionTracking()
-      .then(sendResponse);
+    pingWithSessionTracking().then(sendResponse);
     return true;
   }
 
@@ -190,12 +205,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.fill" && typed.entryId && typed.grantId) {
-    fillSecret(typed.entryId, typed.grantId).then(sendResponse);
+    fillSecret(typed.entryId, typed.grantId, typed.secretId).then(sendResponse);
     return true;
   }
 
   if (typed.type === "aipass.detectedSecretDraft" && typed.draft) {
-    if (!isDetectedSecretDraft(typed.draft)) {
+    if (!isCaptureEligibleDetectedSecretDraft(typed.draft)) {
       sendResponse({ ok: false, error: "Invalid API key draft" });
       return false;
     }
@@ -205,7 +220,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.saveDetectedDraftsNow" && Array.isArray(typed.drafts)) {
-    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    const drafts = typed.drafts.filter(isCaptureEligibleDetectedSecretDraft);
     if (!drafts.length) {
       sendResponse({ ok: false, error: "Invalid API key draft" });
       return false;
@@ -215,9 +230,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.filterUnsavedDetectedDrafts" && Array.isArray(typed.drafts)) {
-    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    const drafts = typed.drafts.filter(isCaptureEligibleDetectedSecretDraft);
     if (!drafts.length) {
-      sendResponse({ ok: true, data: { drafts: [], savedCount: 0, checkedCount: 0 } });
+      sendResponse({
+        ok: true,
+        data: { drafts: [], savedCount: 0, checkedCount: 0 }
+      });
       return false;
     }
     filterUnsavedDetectedDrafts(drafts).then(sendResponse);
@@ -225,7 +243,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.editDetectedDrafts" && Array.isArray(typed.drafts)) {
-    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    const drafts = typed.drafts.filter(isCaptureEligibleDetectedSecretDraft);
     if (!drafts.length) {
       sendResponse({ ok: false, error: "Invalid API key draft" });
       return false;
@@ -241,7 +259,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (typed.type === "aipass.detectedSecretDrafts" && Array.isArray(typed.drafts)) {
-    const drafts = typed.drafts.filter(isDetectedSecretDraft);
+    const drafts = typed.drafts.filter(isCaptureEligibleDetectedSecretDraft);
     for (const draft of drafts) {
       enqueuePendingDraft(draft);
     }
@@ -304,6 +322,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (typed.type === "aipass.dismissDetectedKeys" && typeof typed.scope === "string") {
+    rememberDismissedKeys(typed.scope, asStringArray(typed.digests)).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (typed.type === "aipass.dismissedDetectedKeys" && typeof typed.scope === "string") {
+    readDismissedKeys(typed.scope).then((digests) => sendResponse({ ok: true, data: { digests } }));
+    return true;
+  }
+
   if (typed.type === "aipass.ignoreOrigin" && typed.origin) {
     const origin = typed.origin;
     ignoreOrigin(typed.origin).then((response) => {
@@ -364,7 +392,10 @@ function rememberSessionStatus(response: NativeResponse<{ locked?: boolean; vaul
   activeVaultUnlocked = Boolean(vaultNamespace && !response.data?.locked);
 }
 
-async function cachedEntriesList(): Promise<{ ok: true; data: CachedEntriesData }> {
+async function cachedEntriesList(): Promise<{
+  ok: true;
+  data: CachedEntriesData;
+}> {
   if (!activeVaultUnlocked || !activeVaultNamespace) {
     return cachedEntriesResponse();
   }
@@ -375,11 +406,7 @@ async function cachedEntriesList(): Promise<{ ok: true; data: CachedEntriesData 
   return cachedEntriesResponse(snapshot.entries, snapshot.updatedAt, true);
 }
 
-function cachedEntriesResponse(
-  entries: ProviderSummary[] = [],
-  updatedAt?: number,
-  stale = false
-): { ok: true; data: CachedEntriesData } {
+function cachedEntriesResponse(entries: ProviderSummary[] = [], updatedAt?: number, stale = false): { ok: true; data: CachedEntriesData } {
   return {
     ok: true,
     data: {
@@ -407,7 +434,10 @@ async function refreshEntryCacheInner(reason: string): Promise<NativeResponse<Co
   const response = await listEntries();
   if (response.ok && activeVaultUnlocked && activeVaultNamespace && refreshVersion === entryCacheMutationVersion) {
     await writeEntryCache(activeVaultNamespace, response.data?.entries ?? []);
-    debugLog("entry cache refreshed", { reason, count: response.data?.entries?.length ?? 0 });
+    debugLog("entry cache refreshed", {
+      reason,
+      count: response.data?.entries?.length ?? 0
+    });
   }
   return response;
 }
@@ -421,10 +451,7 @@ async function backfillFaviconsAndPatchCache(entryIds: string[], limit?: number)
   return response;
 }
 
-function mergeProviderSummaries(
-  current: ProviderSummary[],
-  updated: ProviderSummary[]
-): ProviderSummary[] {
+function mergeProviderSummaries(current: ProviderSummary[], updated: ProviderSummary[]): ProviderSummary[] {
   const byId = new Map(updated.map((entry) => [entry.id, entry]));
   return current.map((entry) => {
     const next = byId.get(entry.id);
@@ -469,11 +496,13 @@ function refreshProviderUsage(entryId: string, force: boolean): Promise<UsageRef
   }
   automaticUsageRefreshAt.set(entryId, Date.now());
   const refresh = refreshProviderUsageInner(entryId)
-    .catch((err): UsageRefreshResponse => ({
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-      data: {}
-    }))
+    .catch(
+      (err): UsageRefreshResponse => ({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        data: {}
+      })
+    )
     .finally(() => {
       usageRefreshPromises.delete(entryId);
     });
@@ -484,11 +513,19 @@ function refreshProviderUsage(entryId: string, force: boolean): Promise<UsageRef
 async function refreshProviderUsageInner(entryId: string): Promise<UsageRefreshResponse> {
   const probe = await probeProviderUsage(entryId);
   if (!probe.ok) {
-    return { ok: false, error: probe.error ?? "Unable to refresh usage", data: {} };
+    return {
+      ok: false,
+      error: probe.error ?? "Unable to refresh usage",
+      data: {}
+    };
   }
   const result = probe.data;
   if (!result?.ok) {
-    return { ok: false, error: result?.error ?? "Unable to refresh usage", data: { result } };
+    return {
+      ok: false,
+      error: result?.error ?? "Unable to refresh usage",
+      data: { result }
+    };
   }
 
   const entry = await providerEntryById(entryId);
@@ -496,15 +533,15 @@ async function refreshProviderUsageInner(entryId: string): Promise<UsageRefreshR
   const gateway = mergeUsageGateway(entry?.gateway, result.gateway);
   const apply = await applyProviderUsage(entryId, quota, gateway);
   if (!apply.ok) {
-    return { ok: false, error: apply.error ?? "Unable to apply usage", data: { result } };
+    return {
+      ok: false,
+      error: apply.error ?? "Unable to apply usage",
+      data: { result }
+    };
   }
 
   entryCacheMutationVersion += 1;
-  await mutateEntryCache((entries) =>
-    entries.map((item) =>
-      item.id === entryId ? { ...item, quota, gateway, updatedAt: new Date().toISOString() } : item
-    )
-  );
+  await mutateEntryCache((entries) => entries.map((item) => (item.id === entryId ? { ...item, quota, gateway, updatedAt: new Date().toISOString() } : item)));
   scheduleEntryCacheRefresh("provider.usageRefresh");
   return { ok: true, data: { result, quota, gateway } };
 }
@@ -523,10 +560,7 @@ async function providerEntryById(entryId: string): Promise<ProviderSummary | und
   return undefined;
 }
 
-function mergeUsageQuota(
-  current: ProviderSummary["quota"],
-  probed: UsageProbeResult["quota"]
-): ProviderSummary["quota"] {
+function mergeUsageQuota(current: ProviderSummary["quota"], probed: UsageProbeResult["quota"]): ProviderSummary["quota"] {
   const next = {
     label: probed?.label ?? current?.label,
     limit: probed?.limit ?? current?.limit,
@@ -536,10 +570,7 @@ function mergeUsageQuota(
   return next.label || next.limit || next.remaining || next.resetAt ? next : undefined;
 }
 
-function mergeUsageGateway(
-  current: ProviderSummary["gateway"],
-  probed: UsageProbeResult["gateway"]
-): ProviderSummary["gateway"] {
+function mergeUsageGateway(current: ProviderSummary["gateway"], probed: UsageProbeResult["gateway"]): ProviderSummary["gateway"] {
   const next = {
     group: probed?.group ?? current?.group,
     rate: probed?.rate ?? current?.rate
@@ -610,7 +641,8 @@ async function patchCachedEntryFromUpdate(request: ProviderUpdateRequest) {
             defaultModel: request.defaultModel,
             modelAliases: request.modelAliases,
             quota: request.quota,
-            gateway: request.gateway,
+            gateway: request.gateway ?? entry.gateway,
+            secretRefs: patchedSecretRefs(entry, request),
             tags: request.tags,
             notes: request.notes,
             headerNames: request.headers?.map(([name]) => name) ?? entry.headerNames,
@@ -621,10 +653,42 @@ async function patchCachedEntryFromUpdate(request: ProviderUpdateRequest) {
   );
 }
 
-function entryEndpointsFromRequest(
-  existing: ProviderSummary["endpoints"],
-  request: ProviderUpdateRequest
-): ProviderSummary["endpoints"] {
+/**
+ * Group, wire format and billing are per-key, and an update carries them for
+ * the primary key only — the entry's other groups keep their own values.
+ */
+function patchedSecretRefs(entry: ProviderSummary, request: ProviderUpdateRequest): ProviderSummary["secretRefs"] {
+  const secretRefs = entry.secretRefs;
+  if (!secretRefs?.length) return secretRefs;
+  const [primary, ...rest] = secretRefs;
+  return [
+    {
+      ...primary,
+      group: patchedMetadataValue(primary.group, request.group),
+      interfaceType: request.interfaceType ?? primary.interfaceType,
+      billing: patchedBilling(primary.billing, request.billing)
+    },
+    ...rest
+  ];
+}
+
+function patchedMetadataValue(current: string | undefined, patch: string | undefined) {
+  if (patch === undefined) return current;
+  return patch.trim() || undefined;
+}
+
+function patchedBilling(current: BillingRule | undefined, patch: BillingRule | undefined): BillingRule | undefined {
+  if (!patch) return current;
+  const next: BillingRule = {
+    rate: patchedMetadataValue(current?.rate, patch.rate),
+    currency: patchedMetadataValue(current?.currency, patch.currency),
+    unitPrice: patchedMetadataValue(current?.unitPrice, patch.unitPrice),
+    note: patchedMetadataValue(current?.note, patch.note)
+  };
+  return next.rate || next.currency || next.unitPrice || next.note ? next : undefined;
+}
+
+function entryEndpointsFromRequest(existing: ProviderSummary["endpoints"], request: ProviderUpdateRequest): ProviderSummary["endpoints"] {
   const apiUrls = [...request.endpoints, request.endpoint].filter((url): url is string => Boolean(url?.trim()));
   const consoleUrls = request.consoleEndpoints.filter((url) => Boolean(url.trim()));
   const apiEndpoints = apiUrls.map((url, index) => ({
@@ -676,15 +740,40 @@ function isEntryCacheSnapshot(value: unknown, vaultNamespace: string): value is 
   const snapshot = value as Partial<EntryCacheSnapshotV1> | undefined;
   return Boolean(
     snapshot &&
-      snapshot.schemaVersion === ENTRY_CACHE_SCHEMA_VERSION &&
-      snapshot.vaultNamespace === vaultNamespace &&
-      typeof snapshot.updatedAt === "number" &&
-      Array.isArray(snapshot.entries)
+    snapshot.schemaVersion === ENTRY_CACHE_SCHEMA_VERSION &&
+    snapshot.vaultNamespace === vaultNamespace &&
+    typeof snapshot.updatedAt === "number" &&
+    Array.isArray(snapshot.entries)
   );
 }
 
 function entryCacheKey(vaultNamespace: string): string {
   return `${ENTRY_CACHE_KEY_PREFIX}${vaultNamespace}`;
+}
+
+/**
+ * Keys the user dismissed a save prompt for, per page, so the prompt stays
+ * gone across reloads. Values are digests supplied by the content script —
+ * this store never holds key material. Session-scoped: it clears with the
+ * browser session.
+ */
+async function rememberDismissedKeys(scope: string, digests: string[]): Promise<void> {
+  if (!digests.length) return;
+  const existing = await readDismissedKeys(scope);
+  const merged = Array.from(new Set([...existing, ...digests])).slice(-DISMISSED_KEYS_PER_SCOPE);
+  await storageSet(dismissedKeysCacheKey(scope), merged);
+}
+
+async function readDismissedKeys(scope: string): Promise<string[]> {
+  return asStringArray(await storageGet<string[]>(dismissedKeysCacheKey(scope)));
+}
+
+function dismissedKeysCacheKey(scope: string): string {
+  return `${DISMISSED_KEYS_KEY_PREFIX}${scope}`;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 async function storageGet<T>(key: string): Promise<T | undefined> {
@@ -700,7 +789,7 @@ async function storageGet<T>(key: string): Promise<T | undefined> {
 async function storageSet<T>(key: string, value: T): Promise<void> {
   const storage = chrome.storage?.session;
   if (!storage) {
-    memoryEntryCache.set(key, value as EntryCacheSnapshotV1);
+    memoryEntryCache.set(key, value);
     return;
   }
   await new Promise<void>((resolve) => {
@@ -724,10 +813,7 @@ function getPendingDraftRecord(draftId?: string): PendingDraftRecord | undefined
   return pendingDrafts.find((item) => item.id === draftId);
 }
 
-function mergePendingDraft(
-  patch?: Partial<DetectedSecretDraft> | null,
-  draftId?: string
-): DetectedSecretDraft | null {
+function mergePendingDraft(patch?: Partial<DetectedSecretDraft> | null, draftId?: string): DetectedSecretDraft | null {
   const record = getPendingDraftRecord(draftId);
   if (!record) return null;
   return {
@@ -739,6 +825,16 @@ function mergePendingDraft(
 
 function isDetectedSecretDraft(draft: Partial<DetectedSecretDraft>): draft is DetectedSecretDraft {
   return Boolean(draft.title && draft.origin && draft.url && draft.apiKey);
+}
+
+function isCaptureEligibleDetectedSecretDraft(
+  draft: Partial<DetectedSecretDraft>
+): draft is DetectedSecretDraft {
+  return (
+    isDetectedSecretDraft(draft) &&
+    isSecretCaptureAllowed(draft.url) &&
+    isSecretCaptureAllowed(draft.origin)
+  );
 }
 
 function safePendingDraft(record: PendingDraftRecord) {
@@ -768,11 +864,7 @@ function clearPendingDrafts() {
   updateActionBadge();
 }
 
-function enqueuePendingDraft(
-  draft: DetectedSecretDraft,
-  mode: PendingDraftRecord["mode"] = "review",
-  saveAfterUnlock = false
-) {
+function enqueuePendingDraft(draft: DetectedSecretDraft, mode: PendingDraftRecord["mode"] = "review", saveAfterUnlock = false) {
   const key = pendingDraftKey(draft);
   const expiresAt = Date.now() + PENDING_DRAFT_TTL_MS;
   const existing = pendingDrafts.find((item) => item.key === key);
@@ -782,7 +874,14 @@ function enqueuePendingDraft(
     existing.mode = mode;
     existing.saveAfterUnlock = existing.saveAfterUnlock || saveAfterUnlock;
   } else {
-    pendingDrafts.push({ id: crypto.randomUUID(), key, draft, expiresAt, mode, saveAfterUnlock });
+    pendingDrafts.push({
+      id: crypto.randomUUID(),
+      key,
+      draft,
+      expiresAt,
+      mode,
+      saveAfterUnlock
+    });
   }
   schedulePendingDraftCleanup();
   updateActionBadge();
@@ -812,29 +911,28 @@ function schedulePendingDraftCleanup() {
     pendingDraftTimer = undefined;
     return;
   }
-  pendingDraftTimer = setTimeout(() => {
-    pruneExpiredPendingDrafts();
-    schedulePendingDraftCleanup();
-  }, Math.max(0, nextExpiry - Date.now()));
+  pendingDraftTimer = setTimeout(
+    () => {
+      pruneExpiredPendingDrafts();
+      schedulePendingDraftCleanup();
+    },
+    Math.max(0, nextExpiry - Date.now())
+  );
 }
 
 function updateActionBadge() {
   if (!chrome.action?.setBadgeText) return;
   const count = pendingDrafts.length;
-  chrome.action.setBadgeText({ text: count ? String(Math.min(count, 99)) : "" });
+  chrome.action.setBadgeText({
+    text: count ? String(Math.min(count, 99)) : ""
+  });
   if (count && chrome.action.setBadgeBackgroundColor) {
     chrome.action.setBadgeBackgroundColor({ color: "#2563eb" });
   }
 }
 
 function pendingDraftKey(draft: DetectedSecretDraft): string {
-  return [
-    draft.origin,
-    draft.url,
-    draft.providerId ?? "",
-    draft.endpoint ?? "",
-    draft.apiKey ?? ""
-  ].join("|");
+  return [draft.origin, draft.url, draft.providerId ?? "", draft.endpoint ?? "", draft.apiKey ?? ""].join("|");
 }
 
 async function savePendingDraft(draft: DetectedSecretDraft, draftId?: string) {
@@ -878,13 +976,17 @@ async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]) {
       const localizedDraft = await localizeDraftFavicon(draft);
       if (
         response.data.existingEntryId &&
-        (localizedDraft.gateway?.group ||
+        (localizedDraft.group ||
+          localizedDraft.billing ||
+          localizedDraft.gateway?.group ||
           localizedDraft.gateway?.rate ||
           localizedDraft.faviconUrl?.startsWith("data:image/"))
       ) {
         const synced = await saveDetectedSecretNative(localizedDraft);
         if (!synced.ok) {
-          errors.push({ error: synced.error ?? "Unable to sync provider metadata" });
+          errors.push({
+            error: synced.error ?? "Unable to sync provider metadata"
+          });
           unsaved.push(draft);
           continue;
         }
@@ -894,7 +996,9 @@ async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]) {
       continue;
     }
     if (!response.ok) {
-      errors.push({ error: response.error ?? "Unable to preview detected key" });
+      errors.push({
+        error: response.error ?? "Unable to preview detected key"
+      });
     }
     unsaved.push(draft);
   }
@@ -914,7 +1018,10 @@ async function filterUnsavedDetectedDrafts(drafts: DetectedSecretDraft[]) {
 }
 
 async function savePendingDraftBatch(
-  draftPatches: Array<{ draftId?: string; draft?: Partial<DetectedSecretDraft> | null }>
+  draftPatches: Array<{
+    draftId?: string;
+    draft?: Partial<DetectedSecretDraft> | null;
+  }>
 ) {
   const saved: Array<{ draftId?: string; entryId?: string }> = [];
   const errors: Array<{ draftId?: string; error: string }> = [];
@@ -935,7 +1042,10 @@ async function savePendingDraftBatch(
       markPendingDraftForSaveAfterUnlock(draft, item.draftId);
       lockedCount += 1;
     } else {
-      errors.push({ draftId: item.draftId, error: response.error ?? "Unable to save detected key" });
+      errors.push({
+        draftId: item.draftId,
+        error: response.error ?? "Unable to save detected key"
+      });
     }
   }
   if (lockedCount) {
@@ -1018,7 +1128,10 @@ async function resumePendingSaves() {
       return saveRequiresUnlockResponse(records.length - saved.length, opened, saved, errors);
     }
     record.saveAfterUnlock = false;
-    errors.push({ draftId: record.id, error: response.error ?? "Unable to save detected key" });
+    errors.push({
+      draftId: record.id,
+      error: response.error ?? "Unable to save detected key"
+    });
   }
   if (saved.length) {
     scheduleEntryCacheRefresh("secret.resumePendingSaves");
@@ -1117,7 +1230,10 @@ async function scanActiveTab(tabId: number) {
     debugLog("scan active tab: content injected", { tabId });
     return { ok: true, data: { scanned: true } };
   } catch (err) {
-    debugLog("scan active tab: failed", { tabId, error: err instanceof Error ? err.message : String(err) });
+    debugLog("scan active tab: failed", {
+      tabId,
+      error: err instanceof Error ? err.message : String(err)
+    });
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err)

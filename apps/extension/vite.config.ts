@@ -27,6 +27,8 @@ function classicContentScriptBuild(): Plugin {
         this.addWatchFile(script.entry);
       }
       this.addWatchFile(resolve(__dirname, "src/content/secret-scanner.ts"));
+      this.addWatchFile(resolve(__dirname, "src/content/page-capture-policy.ts"));
+      this.addWatchFile(resolve(__dirname, "src/content/standalone-secret.ts"));
       this.addWatchFile(resolve(__dirname, "../../packages/schemas/src/index.ts"));
     },
     async closeBundle() {

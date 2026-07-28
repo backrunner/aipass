@@ -2,18 +2,23 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it, vi } from "vitest";
 
 const sentMessages: unknown[] = [];
+/** Mirrors the worker's per-page dismissal store so hydration is exercised. */
+const dismissedKeyStore = new Map<string, string[]>();
 
 function setLocation(hostname: string, path = "/settings/keys") {
+  const url = new URL(`https://${hostname}${path}`);
   vi.stubGlobal("location", {
     hostname,
-    pathname: path,
+    pathname: url.pathname,
+    hash: url.hash,
     origin: `https://${hostname}`,
-    href: `https://${hostname}${path}`
+    href: url.href
   });
 }
 
 function installChromeStub(options: { localBuild?: boolean; savedDetectedDrafts?: boolean; lockedVault?: boolean } = {}) {
   sentMessages.length = 0;
+  dismissedKeyStore.clear();
   vi.stubGlobal("chrome", {
     runtime: {
       getManifest: () => (options.localBuild ? {} : { update_url: "https://clients2.google.com/service/update2/crx" }),
@@ -22,6 +27,17 @@ function installChromeStub(options: { localBuild?: boolean; savedDetectedDrafts?
         const typed = message as { type?: string };
         if (typed.type === "aipass.isOriginIgnored") {
           callback?.({ ok: true, data: { ignored: false } });
+          return;
+        }
+        if (typed.type === "aipass.dismissDetectedKeys") {
+          const { scope = "", digests = [] } = typed as { scope?: string; digests?: string[] };
+          dismissedKeyStore.set(scope, [...(dismissedKeyStore.get(scope) ?? []), ...digests]);
+          callback?.({ ok: true });
+          return;
+        }
+        if (typed.type === "aipass.dismissedDetectedKeys") {
+          const { scope = "" } = typed as { scope?: string };
+          callback?.({ ok: true, data: { digests: dismissedKeyStore.get(scope) ?? [] } });
           return;
         }
         if (typed.type === "aipass.filterUnsavedDetectedDrafts") {
@@ -102,6 +118,67 @@ describe("content detector", () => {
     assert.equal(detectFromDocument(doc), null);
   });
 
+  it("never scans search, public source, or public content pages", async () => {
+    const { detectAllFromDocument } = await import("./detector");
+    const pages = [
+      ["www.google.com", "/search"],
+      ["www.bing.com", "/search"],
+      ["github.com", "/console/token"],
+      ["medium.com", "/example/api-key-guide"],
+      ["www.youtube.com", "/watch"],
+      ["www.bilibili.com", "/video/BV1example"]
+    ];
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>API Keys</h1><p>OpenAI gateway 渠道 分组 倍率</p><code>sk-publicPageSecret1234567890</code>`,
+      "text/html"
+    );
+
+    for (const [hostname, path] of pages) {
+      setLocation(hostname, path);
+      assert.deepEqual(detectAllFromDocument(doc), [], `must not scan https://${hostname}${path}`);
+    }
+  });
+
+  it("does not prompt for DOM or clipboard keys on excluded pages", async () => {
+    setLocation("github.com", "/example/project/settings/keys");
+    document.title = "New API keys in source";
+    document.body.innerHTML =
+      `<h1>API Keys</h1><p>OpenAI gateway</p><code>sk-publicClipboardSecret1234567890</code>`;
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-publicClipboardSecret1234567890" }
+      })
+    );
+    await flushTimers();
+
+    assert.equal(document.getElementById("aipass-extension-toast"), null);
+    assert.equal(
+      sentMessages.some((message) => {
+        const type = (message as { type?: string }).type;
+        return type === "aipass.filterUnsavedDetectedDrafts" || type === "aipass.saveDetectedDraftsNow";
+      }),
+      false
+    );
+  });
+
+  it("ignores key patterns embedded in prose, commands, or larger text values", async () => {
+    setLocation("platform.openai.com", "/docs/examples");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<h1>API key examples</h1>
+       <pre>curl https://api.openai.com/v1/models -H "Authorization: Bearer sk-inlineExampleSecret1234567890"</pre>
+       <label>API key command<input value="export OPENAI_API_KEY=sk-inlineInputSecret1234567890" /></label>
+       <article><p>The sample key sk-inlineProseSecret1234567890 is not a generated credential block.</p></article>`,
+      "text/html"
+    );
+
+    assert.deepEqual(detectAllFromDocument(doc), []);
+  });
+
   it("detects New API self-hosted dashboards from UI text", async () => {
     setLocation("ai.example.test", "/token");
     const { detectFromDocument } = await import("./detector");
@@ -157,6 +234,118 @@ describe("content detector", () => {
     assert.equal(drafts[0]?.endpoint, "https://relay.example.test/v1");
   });
 
+  it("allows embedded row keys on high-confidence New API management pages", async () => {
+    setLocation("relay.example.test", "/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>渠道管理</h1><p>Compatible with LiteLLM clients</p>
+       <table><tbody><tr><td>Production credential sk-managedRowSecret1234567890 Copy</td><td>分组: vip</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "new_api");
+    assert.equal(drafts[0]?.apiKey, "sk-managedRowSecret1234567890");
+  });
+
+  it("relaxes embedded rows when the New API hostname and route are explicit", async () => {
+    setLocation("newapi.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>API Keys</title><h1>Key Management</h1>
+       <table><tbody><tr><td>Production credential sk-hostIdentifiedSecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "new_api");
+    assert.equal(drafts[0]?.apiKey, "sk-hostIdentifiedSecret1234567890");
+  });
+
+  it("prefers an explicit gateway hostname over incidental competitor text", async () => {
+    setLocation("newapi.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>Key Management</title><h1>API Keys</h1>
+       <p>Supports importing Sub2API custom keys.</p>
+       <table><tbody><tr><td>Production credential sk-hostPrioritySecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "new_api");
+    assert.equal(drafts[0]?.apiKey, "sk-hostPrioritySecret1234567890");
+  });
+
+  it("relaxes embedded rows on English New API management UIs", async () => {
+    setLocation("relay.example.test", "/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>Token Management</h1><button>Create Token</button>
+       <table><tbody><tr><td>Production credential sk-englishManagedSecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "new_api");
+    assert.equal(drafts[0]?.apiKey, "sk-englishManagedSecret1234567890");
+  });
+
+  it("recognizes New API management pages behind hash routes", async () => {
+    setLocation("relay.example.test", "/#/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>Token Management</h1>
+       <table><tbody><tr><td>Production credential sk-hashRouteSecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "new_api");
+    assert.equal(drafts[0]?.apiKey, "sk-hashRouteSecret1234567890");
+  });
+
+  it("does not relax embedded keys from New API branding alone", async () => {
+    setLocation("blog.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>API Keys</h1>
+       <table><tbody><tr><td>Tutorial example sk-brandOnlyEmbeddedSecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    assert.deepEqual(detectAllFromDocument(doc), []);
+  });
+
+  it("keeps embedded row keys strict on generic gateway-like pages", async () => {
+    setLocation("relay.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<h1>OpenAI API Keys</h1><label>Base URL</label><code>https://relay.example.test/v1</code>
+       <table><tbody><tr><td>Documentation example sk-genericEmbeddedSecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    assert.deepEqual(detectAllFromDocument(doc), []);
+  });
+
+  it("does not identify Sub2API from one generic create-key action", async () => {
+    setLocation("relay.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<h1>OpenAI API Keys</h1><button>Create API Key</button>
+       <table><tbody><tr><td>Example sk-genericCreateActionSecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    assert.deepEqual(detectAllFromDocument(doc), []);
+  });
+
   it("detects One API copy fallback inputs", async () => {
     setLocation("one.example.test", "/user/setting");
     const { detectFromDocument } = await import("./detector");
@@ -168,6 +357,21 @@ describe("content detector", () => {
     assert.equal(draft?.providerId, "one_api");
     assert.equal(draft?.endpoint, "https://one.example.test/v1");
     assert.equal(draft?.apiKey, "sk-oneapiSystemToken1234567890");
+  });
+
+  it("relaxes embedded rows on English One API management UIs", async () => {
+    setLocation("relay.example.test", "/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>One API</title><h1>Token Management</h1><button>Create Token</button>
+       <table><tbody><tr><td>Production credential sk-oneApiEnglishSecret1234567890 Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "one_api");
+    assert.equal(drafts[0]?.apiKey, "sk-oneApiEnglishSecret1234567890");
   });
 
   it("infers LiteLLM endpoints as OpenAI-compatible", async () => {
@@ -207,6 +411,21 @@ describe("content detector", () => {
     assert.equal(draft?.providerId, "sub2api");
     assert.equal(draft?.endpoint, "https://sub2api.example.test/v1");
     assert.equal(draft?.apiKey, "productA_key_1234567890abcdef");
+  });
+
+  it("allows embedded custom keys on high-confidence Sub2API management pages", async () => {
+    setLocation("sub2api.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>sub2api</title><h1>Custom Key Management</h1>
+       <table><tbody><tr><td>Production credential productA_key_1234567890abcdef Copy</td></tr></tbody></table>`,
+      "text/html"
+    );
+
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.providerId, "sub2api");
+    assert.equal(drafts[0]?.apiKey, "productA_key_1234567890abcdef");
   });
 
   it("uses the site name from Sub2API document titles", async () => {
@@ -340,6 +559,12 @@ describe("content detector", () => {
     assert.equal(drafts[1]?.secretLabel, "default");
     assert.equal(drafts[1]?.gateway?.group, "default");
     assert.equal(drafts[1]?.gateway?.rate, "1x");
+    // Group and rate are per-key: the group gets its own field and the rate
+    // becomes that key's billing rule.
+    assert.equal(drafts[0]?.group, "vip");
+    assert.equal(drafts[0]?.billing?.rate, "0.8x");
+    assert.equal(drafts[1]?.group, "default");
+    assert.equal(drafts[1]?.billing?.rate, "1x");
   });
 
   it("extracts New API group and rate metadata from token rows", async () => {
@@ -458,6 +683,141 @@ describe("content detector", () => {
       "aipass.saveDetectedDraftsNow"
     );
     assert.equal(detection?.drafts?.[0]?.secretLabel, "primary");
+  });
+
+  /**
+   * New API lists 分组 per token but publishes 倍率 once per group in the group
+   * picker, so each token must resolve its own group's multiplier.
+   */
+  it("pairs each token's group with that group's published multiplier", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title>
+       <label for="group-select">分组</label>
+       <select id="group-select">
+         <option value="default">default (倍率: 1)</option>
+         <option value="vip">vip (倍率: 1.5)</option>
+         <option value="claude">claude (倍率: 3)</option>
+       </select>
+       <table>
+        <thead><tr><th>名称</th><th>密钥</th><th>分组</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>Claude Token</td><td>sk-newapiClaudeSecret1234567890</td><td>claude</td><td>已启用</td></tr>
+          <tr><td>Cheap Token</td><td>sk-newapiDefaultSecret0987654321</td><td>default</td><td>已启用</td></tr>
+          <tr><td>Vip Token</td><td>sk-newapiVipSecret5678901234</td><td>vip</td><td>已启用</td></tr>
+        </tbody>
+       </table>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 3);
+    assert.deepEqual(
+      drafts.map((draft) => [draft.group, draft.billing?.rate]),
+      [
+        ["claude", "3"],
+        ["default", "1"],
+        ["vip", "1.5"]
+      ]
+    );
+  });
+
+  /**
+   * The multiplier must come from the token's own group. A rate published for
+   * a different group is not a fallback.
+   */
+  it("does not borrow another group's multiplier", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title>
+       <p>当前分组: default，倍率: 1</p>
+       <table>
+        <thead><tr><th>名称</th><th>密钥</th><th>分组</th></tr></thead>
+        <tbody>
+          <tr><td>Unlisted</td><td>sk-newapiUnlistedSecret1234567890</td><td>enterprise</td></tr>
+        </tbody>
+       </table>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.group, "enterprise");
+    assert.equal(drafts[0]?.billing?.rate, undefined);
+  });
+
+  /**
+   * SPA consoles wrap everything in one container, so the nearest block around
+   * a key can be the whole page. A 倍率 printed elsewhere on it belongs to some
+   * other group and must not be attached to this key.
+   */
+  it("ignores a page-wide multiplier that is not scoped to the key", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const filler = "渠道管理 兑换码 日志 设置 ".repeat(60);
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title>
+       <div id="app">
+         <nav>分组: default 倍率: 1</nav>
+         <h2>API Key</h2>
+         <p>${filler}</p>
+         <code>sk-newapiLooseSecret1234567890</code>
+       </div>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.billing?.rate, undefined);
+  });
+
+  /** sub2api prints the pairing in a 分组/倍率 table beside the key list. */
+  it("reads group multipliers from a pricing table", async () => {
+    setLocation("sub2api.example.test", "/keys");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>sub2api</title>
+       <table>
+        <thead><tr><th>分组</th><th>倍率</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>default</td><td>1x</td><td>标准</td></tr>
+          <tr><td>pro</td><td>0.5x</td><td>优惠</td></tr>
+        </tbody>
+       </table>
+       <table>
+        <thead><tr><th>名称</th><th>API Key</th><th>分组</th></tr></thead>
+        <tbody>
+          <tr><td>Pro Key</td><td>proKey_key_1234567890abcdef</td><td>pro</td></tr>
+        </tbody>
+       </table>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.group, "pro");
+    assert.equal(drafts[0]?.billing?.rate, "0.5x");
+  });
+
+  /** A 倍率 column on the token row itself still wins over the published map. */
+  it("prefers the token row's own multiplier over the group table", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    const { detectAllFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title>
+       <select id="group" aria-label="分组">
+         <option>vip (倍率: 1.5)</option>
+       </select>
+       <table>
+        <thead><tr><th>名称</th><th>密钥</th><th>分组</th><th>倍率</th></tr></thead>
+        <tbody>
+          <tr><td>Promo</td><td>sk-newapiPromoSecret1234567890</td><td>vip</td><td>0.2x</td></tr>
+        </tbody>
+       </table>`,
+      "text/html"
+    );
+    const drafts = detectAllFromDocument(doc);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.group, "vip");
+    assert.equal(drafts[0]?.billing?.rate, "0.2x");
   });
 
   it("rejects over-long or secret-shaped group values", async () => {
@@ -661,6 +1021,18 @@ describe("content detector", () => {
       `<title>New API launch notes</title><article><h1>New API</h1><p>Copy this sample key name.</p><code>sk-blogSampleSecret1234567890</code></article>`,
       "text/html"
     );
+    assert.equal(detectFromDocument(doc), null);
+  });
+
+  it("does not treat a public article copy button as key-page evidence", async () => {
+    setLocation("blog.example.test", "/posts/openai-model-guide");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>OpenAI model guide</title><article><h1>Using an OpenAI model</h1>
+       <button>Copy</button><code>sk-publicArticleSample1234567890</code></article>`,
+      "text/html"
+    );
+
     assert.equal(detectFromDocument(doc), null);
   });
 
@@ -868,7 +1240,11 @@ describe("content detector", () => {
     assert.equal(document.getElementById("aipass-extension-toast"), null);
   });
 
-  it("prompts again when the user copies a dismissed key", async () => {
+  /**
+   * Dismissing a prompt is a decision about that key: re-copying it on the
+   * same page must not bring the prompt back.
+   */
+  it("never prompts again for a key the user dismissed", async () => {
     setLocation("one.example.test", "/token");
     document.title = "One API";
     document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
@@ -892,16 +1268,100 @@ describe("content detector", () => {
 
     copy();
     await flushTimers();
-    clickPromptAction("save");
-    // Consume the save message here so its favicon-localization delay cannot
-    // leak it into the next test's message list.
-    await waitForMessage("aipass.saveDetectedDraftsNow");
+    assert.equal(document.getElementById("aipass-extension-toast"), null);
 
+    // The dismissal short-circuits before the saved-state check, so no second
+    // round trip is made for a key we already know the user declined.
     const filters = sentMessages.filter((message) => {
       const typed = message as { type?: string };
       return typed.type === "aipass.filterUnsavedDetectedDrafts";
     });
-    assert.equal(filters.length, 2);
+    assert.equal(filters.length, 1);
+    // The dismissal is recorded by digest, never by key material.
+    const dismissals = sentMessages.filter((message) => {
+      const typed = message as { type?: string };
+      return typed.type === "aipass.dismissDetectedKeys";
+    }) as Array<{ scope?: string; digests?: string[] }>;
+    assert.equal(dismissals.length, 1);
+    assert.equal(dismissals[0]?.scope, "https://one.example.test/token");
+    assert.equal(dismissals[0]?.digests?.length, 1);
+    assert.ok(
+      !JSON.stringify(dismissals[0]).includes("sk-repeatCopiedSecret"),
+      "dismissal record must not contain key material"
+    );
+  });
+
+  /** A dismissal on one page must not silence the same key on another. */
+  it("keeps prompting for a dismissed key on a different page", async () => {
+    setLocation("one.example.test", "/token");
+    document.title = "One API";
+    document.body.innerHTML = "<h1>One API</h1><button>复制</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-perPageDismissSecret1234567890" }
+      })
+    );
+    await flushTimers();
+    const host = document.getElementById("aipass-extension-toast");
+    host?.shadowRoot?.querySelector<HTMLButtonElement>(".close-button")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    setLocation("one.example.test", "/user/setting");
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: { text: "sk-perPageDismissSecret1234567890" }
+      })
+    );
+    await flushTimers();
+    assert.ok(document.getElementById("aipass-extension-toast"), "expected a prompt on the new page");
+    clickPromptAction("save");
+    await waitForMessage("aipass.saveDetectedDraftsNow");
+  });
+
+  /**
+   * Dismissal is keyed by the key itself, so metadata that resolves
+   * differently on a later pass cannot resurrect the prompt.
+   */
+  it("keeps a key dismissed when its scraped group and rate change", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    document.title = "New API";
+    document.body.innerHTML =
+      `<h1>令牌</h1>
+       <table>
+        <thead><tr><th>名称</th><th>密钥</th><th>分组</th></tr></thead>
+        <tbody><tr><td>Prod</td><td>sk-newapi…7890</td><td>default</td></tr></tbody>
+       </table>`;
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    const copy = () =>
+      window.dispatchEvent(
+        new CustomEvent("aipass.clipboardSecret", {
+          detail: { text: "sk-newapiChurnSecret1234567890" }
+        })
+      );
+    copy();
+    await flushTimers();
+    const host = document.getElementById("aipass-extension-toast");
+    assert.ok(host, "expected an initial prompt");
+    host.shadowRoot?.querySelector<HTMLButtonElement>(".close-button")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    // The console re-renders with a different group and a multiplier column.
+    document.body.innerHTML =
+      `<h1>令牌</h1>
+       <table>
+        <thead><tr><th>名称</th><th>密钥</th><th>分组</th><th>倍率</th></tr></thead>
+        <tbody><tr><td>Prod</td><td>sk-newapi…7890</td><td>vip</td><td>1.5x</td></tr></tbody>
+       </table>`;
+    copy();
+    await flushTimers();
+    assert.equal(document.getElementById("aipass-extension-toast"), null);
   });
 
   it("prompts before saving copied New API keys on custom domains", async () => {
@@ -927,6 +1387,67 @@ describe("content detector", () => {
     assert.equal(detection?.drafts?.[0]?.apiKey, "sk-newApiCopiedSecret1234567890");
     assert.equal(detection?.drafts?.[0]?.endpoint, "https://relay.example.test/v1");
     assert.equal(detection?.drafts?.[0]?.title, "Acme Gateway");
+  });
+
+  it("accepts embedded clipboard keys on high-confidence New API pages", async () => {
+    setLocation("relay.example.test", "/console/token");
+    document.title = "New API";
+    document.body.innerHTML = "<h1>渠道管理</h1><span>分组</span><button>复制连接信息</button>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: {
+          text: "sk-managedClipboardSecret1234567890",
+          sourceText: 'export OPENAI_API_KEY="sk-managedClipboardSecret1234567890"'
+        }
+      })
+    );
+    await flushTimers();
+    clickPromptAction("save");
+
+    const detection = await waitForMessage<
+      { drafts?: Array<{ providerId?: string; apiKey?: string }> }
+    >("aipass.saveDetectedDraftsNow");
+    assert.equal(detection?.drafts?.[0]?.providerId, "new_api");
+    assert.equal(detection?.drafts?.[0]?.apiKey, "sk-managedClipboardSecret1234567890");
+  });
+
+  it("revalidates bridge source text before accepting embedded clipboard keys", async () => {
+    setLocation("relay.example.test", "/keys");
+    document.title = "OpenAI API Keys";
+    document.body.innerHTML =
+      "<h1>OpenAI API Keys</h1><button>Create API Key</button><p>OpenAI-compatible gateway</p>";
+    installChromeStub();
+    vi.resetModules();
+    await import("./detector");
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.secretCapturePolicy", {
+        detail: { allowEmbeddedSecrets: true }
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent("aipass.clipboardSecret", {
+        detail: {
+          text: "sk-forgedPolicySecret1234567890",
+          sourceText:
+            'curl https://api.example.test/v1 -H "Authorization: Bearer sk-forgedPolicySecret1234567890"'
+        }
+      })
+    );
+    await flushTimers();
+
+    assert.equal(document.getElementById("aipass-extension-toast"), null);
+    assert.equal(
+      sentMessages.some((message) => {
+        const type = (message as { type?: string }).type;
+        return type === "aipass.filterUnsavedDetectedDrafts" || type === "aipass.saveDetectedDraftsNow";
+      }),
+      false
+    );
   });
 
   it("prompts before saving copied sub2api custom keys", async () => {

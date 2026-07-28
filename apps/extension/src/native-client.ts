@@ -35,9 +35,7 @@ let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
 let reconnectDelay = RECONNECT_INITIAL_MS;
 let lastPortError = "Native host unavailable";
 let nativeRecoveryInProgress = false;
-let nativeRecoveryPromise:
-  | Promise<NativeResponse<NativeSessionStatus>>
-  | undefined;
+let nativeRecoveryPromise: Promise<NativeResponse<NativeSessionStatus>> | undefined;
 const pendingNativeRequests = new Map<string, PendingNativeRequest>();
 
 export interface NativeSessionStatus {
@@ -66,7 +64,15 @@ export interface ProviderSummary {
   authScheme: string;
   maskedSecret: string;
   fingerprint: string;
-  secretRefs?: Array<{ id: string; label: string; masked: string; fingerprint: string }>;
+  secretRefs?: Array<{
+    id: string;
+    label: string;
+    masked: string;
+    fingerprint: string;
+    group?: string;
+    interfaceType?: string;
+    billing?: BillingRule;
+  }>;
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;
   quota?: {
@@ -93,6 +99,8 @@ export interface FillGrant {
   id: string;
   purpose: string;
   entryId?: string;
+  /** Which key of the entry this grant unlocks. */
+  secretId?: string;
   origin?: string;
   expiresAt: string;
 }
@@ -110,6 +118,13 @@ export interface FaviconBackfillResult {
   errors: Array<{ entryId?: string; message: string }>;
 }
 
+export interface BillingRule {
+  rate?: string;
+  currency?: string;
+  unitPrice?: string;
+  note?: string;
+}
+
 export interface DetectedSecretDraft {
   providerId?: string;
   title: string;
@@ -123,10 +138,19 @@ export interface DetectedSecretDraft {
   interfaceType?: string;
   authScheme?: string;
   tags?: string[];
+  /** Gateway group for this key, independent of the entry. */
+  group?: string;
+  billing?: BillingRule;
   gateway?: {
     group?: string;
     rate?: string;
   };
+  domains?: string[];
+  consoleEndpoint?: string;
+  defaultModel?: string;
+  modelAliases?: [string, string][];
+  headers?: [string, string][];
+  notes?: string;
 }
 
 export interface DetectedSecretPreview {
@@ -139,9 +163,17 @@ export interface DetectedSecretPreview {
   authScheme: string;
   maskedSecret: string;
   fingerprint: string;
+  /** Entry this key will land in — an exact match, or the same-site entry. */
   existingEntryId?: string;
+  existingEntryTitle?: string;
+  /** Set only when this exact key is already stored. */
+  existingSecretId?: string;
+  /** Groups already stored on the target entry. */
+  existingGroups?: string[];
   isSaved?: boolean;
   tags: string[];
+  group?: string;
+  billing?: BillingRule;
   gateway?: {
     group?: string;
     rate?: string;
@@ -177,7 +209,9 @@ export function startNativeConnectionMonitor() {
   if (!supportsNativePort()) return;
   connectNativePort();
   scheduleNativeHeartbeat();
-  chrome.alarms?.create(RECONNECT_ALARM, { periodInMinutes: RECONNECT_ALARM_PERIOD_MINUTES });
+  chrome.alarms?.create(RECONNECT_ALARM, {
+    periodInMinutes: RECONNECT_ALARM_PERIOD_MINUTES
+  });
 }
 
 export function handleNativeReconnectAlarm(alarmName: string) {
@@ -194,10 +228,7 @@ type NativeRequestOptions = {
   timeoutMs?: number;
 };
 
-export function nativeRequest<T>(
-  message: Record<string, unknown>,
-  options: NativeRequestOptions = {}
-): Promise<NativeResponse<T>> {
+export function nativeRequest<T>(message: Record<string, unknown>, options: NativeRequestOptions = {}): Promise<NativeResponse<T>> {
   const id = String(message.id ?? crypto.randomUUID());
   const request = withExtensionId({ ...message, id });
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -226,10 +257,7 @@ export function nativeRequest<T>(
   });
 }
 
-function sendOneShotNativeMessage<T>(
-  id: string,
-  message: Record<string, unknown>
-): Promise<NativeResponse<T>> {
+function sendOneShotNativeMessage<T>(id: string, message: Record<string, unknown>): Promise<NativeResponse<T>> {
   return new Promise((resolve) => {
     chrome.runtime.sendNativeMessage(NATIVE_HOST, message, (response) => {
       if (chrome.runtime.lastError) {
@@ -408,10 +436,7 @@ export async function recoverNativeHost(): Promise<NativeResponse<NativeSessionS
 
 async function recoverNativeHostInner(): Promise<NativeResponse<NativeSessionStatus>> {
   nativeRecoveryInProgress = true;
-  let lastResponse = nativeErrorResponse<NativeSessionStatus>(
-    crypto.randomUUID(),
-    lastPortError
-  );
+  let lastResponse = nativeErrorResponse<NativeSessionStatus>(crypto.randomUUID(), lastPortError);
   try {
     for (const delayMs of RECOVERY_RETRY_DELAYS_MS) {
       if (delayMs > 0) {
@@ -419,7 +444,9 @@ async function recoverNativeHostInner(): Promise<NativeResponse<NativeSessionSta
       }
       clearReconnectTimer();
       disconnectNativePort();
-      lastResponse = await nativePing({ timeoutMs: RECOVERY_REQUEST_TIMEOUT_MS });
+      lastResponse = await nativePing({
+        timeoutMs: RECOVERY_REQUEST_TIMEOUT_MS
+      });
       if (lastResponse.ok) {
         reconnectDelay = RECONNECT_INITIAL_MS;
         return lastResponse;
@@ -436,11 +463,14 @@ async function recoverNativeHostInner(): Promise<NativeResponse<NativeSessionSta
 }
 
 function nativePing(options: NativeRequestOptions = {}): Promise<NativeResponse<NativeSessionStatus>> {
-  return nativeRequest({
-    id: crypto.randomUUID(),
-    type: "ping",
-    protocol_version: 1
-  }, options);
+  return nativeRequest(
+    {
+      id: crypto.randomUUID(),
+      type: "ping",
+      protocol_version: 1
+    },
+    options
+  );
 }
 
 export function openNativeUnlock(): Promise<NativeResponse<NativeSessionStatus>> {
@@ -487,10 +517,7 @@ export function listEntries(): Promise<NativeResponse<ContextLookupData>> {
   });
 }
 
-export function backfillFavicons(
-  entryIds: string[],
-  limit = 4
-): Promise<NativeResponse<FaviconBackfillResult>> {
+export function backfillFavicons(entryIds: string[], limit = 4): Promise<NativeResponse<FaviconBackfillResult>> {
   return nativeRequest({
     id: crypto.randomUUID(),
     type: "provider.faviconBackfill",
@@ -524,12 +551,12 @@ export function ignoreOrigin(origin: string): Promise<NativeResponse<{ ignoredOr
   });
 }
 
-export function fillSecret(entryId: string, grantId: string): Promise<NativeResponse<{ secret: string }>> {
+export function fillSecret(entryId: string, grantId: string, secretId = "primary"): Promise<NativeResponse<{ secret: string }>> {
   return nativeRequest({
     id: crypto.randomUUID(),
     type: "secret.fill",
     entry_id: entryId,
-    field_id: "primary",
+    field_id: secretId,
     grant_id: grantId
   });
 }
@@ -548,8 +575,16 @@ export interface ProviderAddRequest {
   defaultModel?: string;
   modelAliases: Array<[string, string]>;
   headers: Array<[string, string]>;
-  quota?: { label?: string; limit?: string; remaining?: string; resetAt?: string };
+  quota?: {
+    label?: string;
+    limit?: string;
+    remaining?: string;
+    resetAt?: string;
+  };
   gateway?: { group?: string; rate?: string };
+  /** Group and billing rule for the key created with this entry. */
+  group?: string;
+  billing?: BillingRule;
   tags: string[];
   notes?: string;
 }
@@ -579,6 +614,8 @@ export function addProvider(request: ProviderAddRequest): Promise<NativeResponse
     headers: request.headers,
     quota: request.quota,
     gateway: request.gateway,
+    group: request.group,
+    billing: request.billing,
     tags: request.tags,
     notes: request.notes
   });
@@ -604,16 +641,14 @@ export function updateProvider(request: ProviderUpdateRequest): Promise<NativeRe
     headers: request.headers,
     quota: request.quota,
     gateway: request.gateway,
+    group: request.group,
+    billing: request.billing,
     tags: request.tags,
     notes: request.notes
   });
 }
 
-export function probeProviderUsage(
-  entryId: string,
-  mode: UsageProbeMode = "auto",
-  timeoutSeconds = 15
-): Promise<NativeResponse<UsageProbeResult>> {
+export function probeProviderUsage(entryId: string, mode: UsageProbeMode = "auto", timeoutSeconds = 15): Promise<NativeResponse<UsageProbeResult>> {
   return nativeRequest({
     id: crypto.randomUUID(),
     type: "provider.usageProbe",
@@ -660,7 +695,15 @@ export function saveDetectedSecret(draft: DetectedSecretDraft): Promise<NativeRe
     auth_scheme: draft.authScheme,
     api_key: draft.apiKey,
     tags: draft.tags?.length ? draft.tags : [],
-    gateway: draft.gateway
+    gateway: draft.gateway,
+    domains: draft.domains ?? [],
+    console_endpoint: draft.consoleEndpoint,
+    default_model: draft.defaultModel,
+    model_aliases: draft.modelAliases ?? [],
+    headers: draft.headers ?? [],
+    notes: draft.notes,
+    group: draft.group,
+    billing: draft.billing
   });
 }
 
@@ -679,6 +722,25 @@ export function previewDetectedSecret(draft: DetectedSecretDraft): Promise<Nativ
     auth_scheme: draft.authScheme,
     api_key: draft.apiKey,
     tags: draft.tags?.length ? draft.tags : [],
-    gateway: draft.gateway
+    gateway: draft.gateway,
+    group: draft.group,
+    billing: draft.billing
+  });
+}
+
+/** Update a stored key's group, wire format and billing rule. */
+export function setSecretMetadata(
+  entryId: string,
+  secretId: string,
+  metadata: { group?: string; interfaceType?: string; billing?: BillingRule }
+): Promise<NativeResponse<{ entryId: string; secretId: string }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "secret.metadataSet",
+    entry_id: entryId,
+    secret_id: secretId,
+    group: metadata.group,
+    interface_type: metadata.interfaceType,
+    billing: metadata.billing
   });
 }

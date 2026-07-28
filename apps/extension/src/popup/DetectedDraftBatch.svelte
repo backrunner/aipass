@@ -1,10 +1,19 @@
 <script lang="ts">
-  import { providerDefinitions, type ProviderKind } from "@aipass/schemas";
-  import { Banner, Button, IconButton, ProviderIcon } from "@aipass/ui";
+  import { providerDefinitions, type InterfaceType, type ProviderKind } from "@aipass/schemas";
+  import { Banner, Button, IconButton, interfaceLabel, ProviderIcon } from "@aipass/ui";
   import { t } from "@aipass/ui/i18n";
   import { Ban, X } from "lucide-svelte";
 
   import type { DraftItem } from "./types";
+
+  const interfaceValues: InterfaceType[] = [
+    "openai_compatible",
+    "anthropic_messages",
+    "gemini",
+    "azure_openai",
+    "bedrock",
+    "custom_http"
+  ];
 
   export let visibleDraftItems: DraftItem[] = [];
   export let selectedDraftCount = 0;
@@ -25,6 +34,22 @@
     if (providerId === "custom_openai_compatible") return "OpenAI-compatible";
     if (providerId === "custom_http") return "HTTP API";
     return displayName;
+  }
+
+  /**
+   * A key whose site is already stored joins that entry as another key rather
+   * than creating a second entry — say so before the user saves.
+   */
+  function mergeTargetTitle(item: DraftItem): string | undefined {
+    const preview = item.preview;
+    if (!preview?.existingEntryId || preview.isSaved) return undefined;
+    return preview.existingEntryTitle || item.draft.title;
+  }
+
+  function duplicateGroup(item: DraftItem): string | undefined {
+    const group = item.draft.gatewayGroup.trim();
+    if (!group || item.preview?.isSaved) return undefined;
+    return item.preview?.existingGroups?.includes(group) ? group : undefined;
   }
 </script>
 
@@ -84,14 +109,36 @@
               <input bind:value={item.draft.endpoint} on:blur={() => onInferDraftFromEndpoint(item)} on:input={onSchedulePreview} />
             </label>
             <label>
-              <span>{$t("providerForm.gatewayGroup")}</span>
+              <span>{$t("providerForm.group")}</span>
               <input bind:value={item.draft.gatewayGroup} placeholder={$t("providerForm.gatewayGroupPlaceholder")} on:input={onSchedulePreview} />
+            </label>
+            <label>
+              <span>{$t("providerForm.interface")}</span>
+              <select bind:value={item.draft.interfaceType} on:change={onSchedulePreview}>
+                {#each interfaceValues as value}
+                  <option {value}>{interfaceLabel[value]}</option>
+                {/each}
+              </select>
             </label>
             <label>
               <span>{$t("providerForm.gatewayRate")}</span>
               <input bind:value={item.draft.gatewayRate} placeholder="1x" on:input={onSchedulePreview} />
             </label>
+            <label>
+              <span>{$t("providerForm.billingCurrency")}</span>
+              <input bind:value={item.draft.billingCurrency} placeholder="USD" on:input={onSchedulePreview} />
+            </label>
           </div>
+
+          {#if duplicateGroup(item)}
+            <p class="draft-note warn">
+              {$t("ext.duplicateGroupNote", { group: duplicateGroup(item) ?? "" })}
+            </p>
+          {:else if mergeTargetTitle(item)}
+            <p class="draft-note">
+              {$t("ext.mergeIntoEntryNote", { title: mergeTargetTitle(item) ?? "" })}
+            </p>
+          {/if}
         </div>
       {/each}
     </div>
@@ -252,6 +299,17 @@
 
     select {
       appearance: auto;
+    }
+  }
+
+  .draft-note {
+    margin: 0;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.4;
+
+    &.warn {
+      color: var(--warning, var(--text-secondary));
     }
   }
 

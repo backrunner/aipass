@@ -29,7 +29,11 @@ function installChromeStub() {
           callback({
             id: "1",
             ok: true,
-            data: { protocolVersion: 1, locked: nativePingLocked, vaultNamespace: "test-vault" }
+            data: {
+              protocolVersion: 1,
+              locked: nativePingLocked,
+              vaultNamespace: "test-vault"
+            }
           });
           return;
         }
@@ -47,7 +51,11 @@ function installChromeStub() {
           callback({
             id: "1",
             ok: true,
-            data: { locked: false, exists: true, vaultNamespace: "test-vault" }
+            data: {
+              locked: false,
+              exists: true,
+              vaultNamespace: "test-vault"
+            }
           });
           return;
         }
@@ -56,7 +64,11 @@ function installChromeStub() {
           return;
         }
         if (type === "settings.ignoreOrigin") {
-          callback({ id: "1", ok: true, data: { ignoredOrigins: [message.origin] } });
+          callback({
+            id: "1",
+            ok: true,
+            data: { ignoredOrigins: [message.origin] }
+          });
           return;
         }
         if (type === "secret.previewDetected") {
@@ -88,7 +100,11 @@ function installChromeStub() {
             callback(queued);
             return;
           }
-          callback({ id: "1", ok: true, data: { entryId: crypto.randomUUID() } });
+          callback({
+            id: "1",
+            ok: true,
+            data: { entryId: crypto.randomUUID() }
+          });
           return;
         }
         if (type === "provider.usageProbe") {
@@ -107,7 +123,13 @@ function installChromeStub() {
           return;
         }
         if (type === "provider.usageApply") {
-          callback(nativeUsageApplyResponses.shift() ?? { id: "1", ok: true, data: { entryId: message.entry_id } });
+          callback(
+            nativeUsageApplyResponses.shift() ?? {
+              id: "1",
+              ok: true,
+              data: { entryId: message.entry_id }
+            }
+          );
           return;
         }
         if (type === "provider.faviconBackfill") {
@@ -118,7 +140,12 @@ function installChromeStub() {
               checked: 1,
               updated: 1,
               skipped: 0,
-              entries: [{ id: "entry-1", faviconUrl: "https://example.com/favicon.ico" }],
+              entries: [
+                {
+                  id: "entry-1",
+                  faviconUrl: "https://example.com/favicon.ico"
+                }
+              ],
               errors: []
             }
           });
@@ -148,12 +175,7 @@ function installChromeStub() {
           }
           if (keys && typeof keys === "object") {
             callback(
-              Object.fromEntries(
-                Object.entries(keys).map(([key, fallback]) => [
-                  key,
-                  storageSessionData.has(key) ? storageSessionData.get(key) : fallback
-                ])
-              )
+              Object.fromEntries(Object.entries(keys).map(([key, fallback]) => [key, storageSessionData.has(key) ? storageSessionData.get(key) : fallback]))
             );
             return;
           }
@@ -228,15 +250,77 @@ describe("service worker pending drafts", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
   });
 
+  /**
+   * Dismissals survive a page reload, so a key the user declined never
+   * prompts again on that page for the rest of the browser session.
+   */
+  it("persists dismissed keys per page and replays them to the content script", async () => {
+    await import("./service-worker");
+
+    const stored = (await dispatchMessage({
+      type: "aipass.dismissDetectedKeys",
+      scope: "https://relay.example.test/console/token",
+      digests: ["digest-a", "digest-b"]
+    })) as { ok?: boolean };
+    assert.equal(stored.ok, true);
+
+    const replayed = (await dispatchMessage({
+      type: "aipass.dismissedDetectedKeys",
+      scope: "https://relay.example.test/console/token"
+    })) as { ok?: boolean; data?: { digests?: string[] } };
+    assert.equal(replayed.ok, true);
+    assert.deepEqual(replayed.data?.digests, ["digest-a", "digest-b"]);
+
+    // A second dismissal on the same page merges rather than replacing.
+    await dispatchMessage({
+      type: "aipass.dismissDetectedKeys",
+      scope: "https://relay.example.test/console/token",
+      digests: ["digest-b", "digest-c"]
+    });
+    const merged = (await dispatchMessage({
+      type: "aipass.dismissedDetectedKeys",
+      scope: "https://relay.example.test/console/token"
+    })) as { data?: { digests?: string[] } };
+    assert.deepEqual(merged.data?.digests, ["digest-a", "digest-b", "digest-c"]);
+
+    // Another page keeps its own list.
+    const otherPage = (await dispatchMessage({
+      type: "aipass.dismissedDetectedKeys",
+      scope: "https://relay.example.test/user/setting"
+    })) as { data?: { digests?: string[] } };
+    assert.deepEqual(otherPage.data?.digests, []);
+  });
+
+  it("forwards the selected secret id when consuming a multi-key grant", async () => {
+    await import("./service-worker");
+
+    const filled = (await dispatchMessage({
+      type: "aipass.fill",
+      entryId: "entry-1",
+      grantId: "grant-secondary",
+      secretId: "secret-secondary"
+    })) as { ok?: boolean };
+
+    assert.equal(filled.ok, true);
+    const fillMessage = nativeMessages.find((message) => message.type === "secret.fill");
+    assert.equal(fillMessage?.entry_id, "entry-1");
+    assert.equal(fillMessage?.grant_id, "grant-secondary");
+    assert.equal(fillMessage?.field_id, "secret-secondary");
+  });
+
   it("serves cached entries after an unlocked ping and reloads them from session storage", async () => {
     await import("./service-worker");
 
     await dispatchMessage({ type: "aipass.ping" });
     nativeListResponses.push(listResponse([providerEntry()]));
-    const fresh = (await dispatchMessage({ type: "aipass.entriesList" })) as { ok?: boolean };
+    const fresh = (await dispatchMessage({ type: "aipass.entriesList" })) as {
+      ok?: boolean;
+    };
     assert.equal(fresh.ok, true);
 
-    const cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+    const cached = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
       ok?: boolean;
       data?: { entries?: Array<{ id?: string }>; stale?: boolean };
     };
@@ -248,7 +332,9 @@ describe("service worker pending drafts", () => {
     listeners.length = 0;
     await import("./service-worker");
     await dispatchMessage({ type: "aipass.ping" });
-    const reloaded = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+    const reloaded = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
       data?: { entries?: Array<{ id?: string }> };
     };
     assert.equal(reloaded.data?.entries?.[0]?.id, "entry-1");
@@ -263,7 +349,9 @@ describe("service worker pending drafts", () => {
 
     nativePingLocked = true;
     await dispatchMessage({ type: "aipass.ping" });
-    const cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+    const cached = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
       data?: { entries?: unknown[]; stale?: boolean };
     };
     assert.equal(cached.data?.entries?.length, 0);
@@ -279,12 +367,17 @@ describe("service worker pending drafts", () => {
 
     nativePingLocked = true;
     await dispatchMessage({ type: "aipass.ping" });
-    let cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+    let cached = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
       data?: { entries?: Array<{ id?: string }> };
     };
     assert.equal(cached.data?.entries?.length, 0);
 
-    await dispatchMessage({ type: "aipass.unlockPassword", password: "correct horse battery staple" });
+    await dispatchMessage({
+      type: "aipass.unlockPassword",
+      password: "correct horse battery staple"
+    });
     cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
       data?: { entries?: Array<{ id?: string }> };
     };
@@ -299,10 +392,14 @@ describe("service worker pending drafts", () => {
     await dispatchMessage({ type: "aipass.entriesList" });
 
     nativeListResponses.push({ id: "1", ok: false, error: "boom", data: {} });
-    const failedRefresh = (await dispatchMessage({ type: "aipass.entriesList" })) as { ok?: boolean };
+    const failedRefresh = (await dispatchMessage({
+      type: "aipass.entriesList"
+    })) as { ok?: boolean };
     assert.equal(failedRefresh.ok, false);
 
-    const cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+    const cached = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
       data?: { entries?: Array<{ id?: string }> };
     };
     assert.equal(cached.data?.entries?.[0]?.id, "entry-1");
@@ -315,12 +412,7 @@ describe("service worker pending drafts", () => {
     nativeListResponses.push(listResponse([providerEntry(), providerEntry({ id: "entry-2", title: "Anthropic" })]));
     await dispatchMessage({ type: "aipass.entriesList" });
 
-    nativeListResponses.push(
-      listResponse([
-        providerEntry({ title: "Edited Provider" }),
-        providerEntry({ id: "entry-2", title: "Anthropic" })
-      ])
-    );
+    nativeListResponses.push(listResponse([providerEntry({ title: "Edited Provider" }), providerEntry({ id: "entry-2", title: "Anthropic" })]));
     const updated = (await dispatchMessage({
       type: "aipass.providerUpdate",
       request: {
@@ -341,7 +433,9 @@ describe("service worker pending drafts", () => {
     assert.equal(updated.ok, true);
     await settleAsyncWork();
 
-    let cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+    let cached = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
       data?: { entries?: Array<{ id?: string; title?: string }> };
     };
     assert.equal(cached.data?.entries?.find((entry) => entry.id === "entry-1")?.title, "Edited Provider");
@@ -356,7 +450,86 @@ describe("service worker pending drafts", () => {
     cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
       data?: { entries?: Array<{ id?: string }> };
     };
-    assert.equal(cached.data?.entries?.some((entry) => entry.id === "entry-1"), false);
+    assert.equal(
+      cached.data?.entries?.some((entry) => entry.id === "entry-1"),
+      false
+    );
+  });
+
+  it("rejects drafts from excluded pages before queueing, filtering, or saving", async () => {
+    await import("./service-worker");
+
+    const excludedDrafts = [
+      {
+        title: "Search result",
+        origin: "https://www.google.com",
+        url: "https://www.google.com/search?q=sk-test",
+        apiKey: "sk-searchResultSecret1234567890"
+      },
+      {
+        title: "Repository source",
+        origin: "https://github.com",
+        url: "https://github.com/example/project/blob/main/config.ts",
+        apiKey: "sk-repositorySecret1234567890"
+      },
+      {
+        title: "Video description",
+        origin: "https://www.youtube.com",
+        url: "https://www.youtube.com/watch?v=example",
+        apiKey: "sk-videoDescriptionSecret1234567890"
+      }
+    ];
+
+    const rejected = (await dispatchMessage({
+      type: "aipass.detectedSecretDraft",
+      draft: excludedDrafts[1]
+    })) as { ok?: boolean };
+    assert.equal(rejected.ok, false);
+
+    const malformed = (await dispatchMessage({
+      type: "aipass.detectedSecretDraft",
+      draft: {
+        title: "Malformed source",
+        origin: "not an origin",
+        url: "not a URL",
+        apiKey: "sk-malformedSourceSecret1234567890"
+      }
+    })) as { ok?: boolean };
+    assert.equal(malformed.ok, false);
+
+    const queued = (await dispatchMessage({
+      type: "aipass.detectedSecretDrafts",
+      drafts: [
+        ...excludedDrafts,
+        {
+          title: "OpenRouter",
+          origin: "https://openrouter.ai",
+          url: "https://openrouter.ai/settings/keys",
+          apiKey: "sk-or-v1-allowedSecret1234567890"
+        }
+      ]
+    })) as { ok?: boolean; count?: number };
+    assert.equal(queued.ok, true);
+    assert.equal(queued.count, 1);
+
+    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+      data?: { drafts?: Array<{ title?: string }> };
+    };
+    assert.deepEqual(pending.data?.drafts?.map((draft) => draft.title), ["OpenRouter"]);
+
+    const filtered = (await dispatchMessage({
+      type: "aipass.filterUnsavedDetectedDrafts",
+      drafts: excludedDrafts
+    })) as { data?: { drafts?: unknown[]; checkedCount?: number } };
+    assert.deepEqual(filtered.data?.drafts, []);
+    assert.equal(filtered.data?.checkedCount, 0);
+
+    const saved = (await dispatchMessage({
+      type: "aipass.saveDetectedDraftsNow",
+      drafts: excludedDrafts
+    })) as { ok?: boolean };
+    assert.equal(saved.ok, false);
+    assert.equal(nativeMessages.some((message) => message.type === "secret.saveDetected"), false);
   });
 
   it("queues multiple detected drafts instead of overwriting them", async () => {
@@ -385,16 +558,22 @@ describe("service worker pending drafts", () => {
       }
     });
 
-    const firstPending = (await dispatchMessage({ type: "aipass.pendingDraft" })) as {
+    const firstPending = (await dispatchMessage({
+      type: "aipass.pendingDraft"
+    })) as {
       ok?: boolean;
       data?: { draft?: { title?: string } | null };
     };
     assert.equal(firstPending.data?.draft?.title, "OpenRouter A");
 
-    const saveFirst = (await dispatchMessage({ type: "aipass.savePendingDraft" })) as { ok?: boolean };
+    const saveFirst = (await dispatchMessage({
+      type: "aipass.savePendingDraft"
+    })) as { ok?: boolean };
     assert.equal(saveFirst.ok, true);
 
-    const secondPending = (await dispatchMessage({ type: "aipass.pendingDraft" })) as {
+    const secondPending = (await dispatchMessage({
+      type: "aipass.pendingDraft"
+    })) as {
       ok?: boolean;
       data?: { draft?: { title?: string } | null };
     };
@@ -431,9 +610,18 @@ describe("service worker pending drafts", () => {
       ]
     });
 
-    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+    const pending = (await dispatchMessage({
+      type: "aipass.pendingDrafts"
+    })) as {
       ok?: boolean;
-      data?: { drafts?: Array<{ draftId?: string; apiKey?: string; secretLabel?: string; gateway?: { group?: string; rate?: string } }> };
+      data?: {
+        drafts?: Array<{
+          draftId?: string;
+          apiKey?: string;
+          secretLabel?: string;
+          gateway?: { group?: string; rate?: string };
+        }>;
+      };
     };
     const drafts = pending.data?.drafts ?? [];
     assert.equal(drafts.length, 2);
@@ -460,6 +648,56 @@ describe("service worker pending drafts", () => {
       data?: { drafts?: unknown[] };
     };
     assert.equal(after.data?.drafts?.length, 0);
+  });
+
+  /**
+   * Two groups on one relay are two keys, so each save carries its own group,
+   * wire format and billing rule down to the native host.
+   */
+  it("sends per-key group, interface and billing for each detected key", async () => {
+    await import("./service-worker");
+
+    const saved = (await dispatchMessage({
+      type: "aipass.saveDetectedDraftsNow",
+      drafts: [
+        {
+          title: "Relay",
+          origin: "https://relay.example.test",
+          url: "https://relay.example.test/token",
+          providerId: "new_api",
+          endpoint: "https://relay.example.test/v1",
+          apiKey: "sk-relay-default-secret-1234567890",
+          interfaceType: "openai_compatible",
+          group: "default",
+          billing: { rate: "1x", currency: "USD" }
+        },
+        {
+          title: "Relay",
+          origin: "https://relay.example.test",
+          url: "https://relay.example.test/token",
+          providerId: "new_api",
+          endpoint: "https://relay.example.test/v1",
+          apiKey: "sk-relay-claude-secret-0987654321",
+          interfaceType: "anthropic_messages",
+          group: "claude",
+          billing: { rate: "1.5x", currency: "USD" }
+        }
+      ]
+    })) as { ok?: boolean; data?: { saved?: unknown[] } };
+    assert.equal(saved.ok, true);
+    assert.equal(saved.data?.saved?.length, 2);
+
+    const saveMessages = nativeMessages.filter((message) => message.type === "secret.saveDetected");
+    assert.equal(saveMessages.length, 2);
+    assert.equal(saveMessages[0]?.group, "default");
+    assert.equal(saveMessages[0]?.interface_type, "openai_compatible");
+    assert.deepEqual(saveMessages[0]?.billing, { rate: "1x", currency: "USD" });
+    assert.equal(saveMessages[1]?.group, "claude");
+    assert.equal(saveMessages[1]?.interface_type, "anthropic_messages");
+    assert.deepEqual(saveMessages[1]?.billing, {
+      rate: "1.5x",
+      currency: "USD"
+    });
   });
 
   it("saves detected drafts immediately without queueing review state", async () => {
@@ -490,7 +728,9 @@ describe("service worker pending drafts", () => {
     const saveMessage = nativeMessages.find((message) => message.type === "secret.saveDetected");
     assert.equal(saveMessage?.favicon_url, "data:image/png;base64,iVBORw==");
 
-    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+    const pending = (await dispatchMessage({
+      type: "aipass.pendingDrafts"
+    })) as {
       ok?: boolean;
       data?: { drafts?: unknown[] };
     };
@@ -546,7 +786,10 @@ describe("service worker pending drafts", () => {
           apiKey: "sk-or-v1-direct-secret1234"
         }
       ]
-    })) as { ok?: boolean; data?: { drafts?: unknown[]; savedCount?: number; checkedCount?: number } };
+    })) as {
+      ok?: boolean;
+      data?: { drafts?: unknown[]; savedCount?: number; checkedCount?: number };
+    };
     assert.equal(filtered.ok, true);
     assert.equal(filtered.data?.drafts?.length, 0);
     assert.equal(filtered.data?.savedCount, 1);
@@ -613,7 +856,13 @@ describe("service worker pending drafts", () => {
     const response = (await dispatchMessage({
       type: "aipass.providerUsageRefresh",
       entryId: "entry-1"
-    })) as { ok?: boolean; data?: { gateway?: { group?: string; rate?: string }; quota?: { remaining?: string } } };
+    })) as {
+      ok?: boolean;
+      data?: {
+        gateway?: { group?: string; rate?: string };
+        quota?: { remaining?: string };
+      };
+    };
     assert.equal(response.ok, true);
     assert.equal(response.data?.gateway?.group, "premium");
     assert.equal(response.data?.gateway?.rate, "0.8x");
@@ -651,7 +900,12 @@ describe("service worker pending drafts", () => {
       ]
     })) as {
       ok?: boolean;
-      data?: { drafts?: unknown[]; savedCount?: number; checkedCount?: number; locked?: boolean };
+      data?: {
+        drafts?: unknown[];
+        savedCount?: number;
+        checkedCount?: number;
+        locked?: boolean;
+      };
     };
 
     assert.equal(filtered.ok, true);
@@ -659,12 +913,20 @@ describe("service worker pending drafts", () => {
     assert.equal(filtered.data?.savedCount, 0);
     assert.equal(filtered.data?.checkedCount, 1);
     assert.equal(filtered.data?.locked, true);
-    assert.equal(nativeMessages.some((message) => message.type === "secret.previewDetected"), false);
+    assert.equal(
+      nativeMessages.some((message) => message.type === "secret.previewDetected"),
+      false
+    );
   });
 
   it("opens the popup and resumes direct saves after unlocking", async () => {
     await import("./service-worker");
-    nativeSaveResponses.push({ id: "1", ok: false, error: "locked: vault is locked", data: {} });
+    nativeSaveResponses.push({
+      id: "1",
+      ok: false,
+      error: "locked: vault is locked",
+      data: {}
+    });
 
     const locked = (await dispatchMessage({
       type: "aipass.saveDetectedDraftsNow",
@@ -678,22 +940,33 @@ describe("service worker pending drafts", () => {
           apiKey: "sk-or-v1-direct-secret1234"
         }
       ]
-    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number } };
+    })) as {
+      ok?: boolean;
+      data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number };
+    };
     assert.equal(locked.ok, true);
     assert.equal(locked.data?.requiresUnlock, true);
     assert.equal(locked.data?.opened, true);
     assert.equal(locked.data?.pending, 1);
     assert.equal(openPopup.mock.calls.length, 1);
 
-    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+    const pending = (await dispatchMessage({
+      type: "aipass.pendingDrafts"
+    })) as {
       ok?: boolean;
       data?: { drafts?: Array<{ resumeSave?: boolean; apiKey?: string }> };
     };
     assert.equal(pending.data?.drafts?.[0]?.resumeSave, true);
     assert.equal(pending.data?.drafts?.[0]?.apiKey, undefined);
 
-    nativeSaveResponses.push({ id: "1", ok: true, data: { entryId: "saved-after-unlock" } });
-    const resumed = (await dispatchMessage({ type: "aipass.resumePendingSaves" })) as {
+    nativeSaveResponses.push({
+      id: "1",
+      ok: true,
+      data: { entryId: "saved-after-unlock" }
+    });
+    const resumed = (await dispatchMessage({
+      type: "aipass.resumePendingSaves"
+    })) as {
       ok?: boolean;
       data?: { saved?: unknown[] };
     };
@@ -710,7 +983,12 @@ describe("service worker pending drafts", () => {
   it("detects locked state when a save failure looks like a native host error", async () => {
     await import("./service-worker");
     nativePingLocked = true;
-    nativeSaveResponses.push({ id: "1", ok: false, error: "Native host unavailable", data: {} });
+    nativeSaveResponses.push({
+      id: "1",
+      ok: false,
+      error: "Native host unavailable",
+      data: {}
+    });
 
     const locked = (await dispatchMessage({
       type: "aipass.saveDetectedDraftsNow",
@@ -724,7 +1002,10 @@ describe("service worker pending drafts", () => {
           apiKey: "sk-or-v1-direct-secret1234"
         }
       ]
-    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number } };
+    })) as {
+      ok?: boolean;
+      data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number };
+    };
 
     assert.equal(locked.ok, true);
     assert.equal(locked.data?.requiresUnlock, true);
@@ -749,16 +1030,24 @@ describe("service worker pending drafts", () => {
           apiKey: "sk-or-v1-direct-secret1234"
         }
       ]
-    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number } };
+    })) as {
+      ok?: boolean;
+      data?: { requiresUnlock?: boolean; opened?: boolean; pending?: number };
+    };
 
     assert.equal(locked.ok, true);
     assert.equal(locked.data?.requiresUnlock, true);
     assert.equal(locked.data?.opened, true);
     assert.equal(locked.data?.pending, 1);
     assert.equal(openPopup.mock.calls.length, 1);
-    assert.equal(nativeMessages.some((message) => message.type === "secret.saveDetected"), false);
+    assert.equal(
+      nativeMessages.some((message) => message.type === "secret.saveDetected"),
+      false
+    );
 
-    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+    const pending = (await dispatchMessage({
+      type: "aipass.pendingDrafts"
+    })) as {
       ok?: boolean;
       data?: { drafts?: Array<{ resumeSave?: boolean; apiKey?: string }> };
     };
@@ -779,22 +1068,34 @@ describe("service worker pending drafts", () => {
         apiKey: "sk-oneapi-pending-secret1234"
       }
     });
-    const before = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+    const before = (await dispatchMessage({
+      type: "aipass.pendingDrafts"
+    })) as {
       ok?: boolean;
       data?: { drafts?: Array<{ draftId?: string }> };
     };
     const draftId = before.data?.drafts?.[0]?.draftId;
-    nativeSaveResponses.push({ id: "1", ok: false, error: "locked: vault is locked", data: {} });
+    nativeSaveResponses.push({
+      id: "1",
+      ok: false,
+      error: "locked: vault is locked",
+      data: {}
+    });
 
     const locked = (await dispatchMessage({
       type: "aipass.savePendingDrafts",
       draftPatches: [{ draftId, draft: { title: "One API Edited" } }]
-    })) as { ok?: boolean; data?: { requiresUnlock?: boolean; opened?: boolean } };
+    })) as {
+      ok?: boolean;
+      data?: { requiresUnlock?: boolean; opened?: boolean };
+    };
     assert.equal(locked.ok, true);
     assert.equal(locked.data?.requiresUnlock, true);
     assert.equal(locked.data?.opened, true);
 
-    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+    const pending = (await dispatchMessage({
+      type: "aipass.pendingDrafts"
+    })) as {
       ok?: boolean;
       data?: { drafts?: Array<{ title?: string; resumeSave?: boolean }> };
     };
@@ -822,7 +1123,9 @@ describe("service worker pending drafts", () => {
     assert.equal(staged.data?.opened, true);
     assert.equal(openPopup.mock.calls.length, 1);
 
-    const pending = (await dispatchMessage({ type: "aipass.pendingDrafts" })) as {
+    const pending = (await dispatchMessage({
+      type: "aipass.pendingDrafts"
+    })) as {
       ok?: boolean;
       data?: { drafts?: Array<{ editMode?: boolean; apiKey?: string }> };
     };
@@ -862,7 +1165,9 @@ describe("service worker pending drafts", () => {
     })) as { ok?: boolean };
     assert.equal(ignored.ok, true);
 
-    const pending = (await dispatchMessage({ type: "aipass.pendingDraft" })) as {
+    const pending = (await dispatchMessage({
+      type: "aipass.pendingDraft"
+    })) as {
       ok?: boolean;
       data?: { draft?: unknown | null };
     };
@@ -887,6 +1192,8 @@ describe("service worker pending drafts", () => {
         modelAliases: [],
         headers: [],
         tags: ["browser"],
+        group: "",
+        billing: { rate: "", currency: "", unitPrice: "" },
         environment: "browser"
       }
     })) as { ok?: boolean };
@@ -901,6 +1208,12 @@ describe("service worker pending drafts", () => {
     const updateMessage = nativeMessages.find((message) => message.type === "provider.update");
     assert.equal(updateMessage?.entry_id, "entry-1");
     assert.equal(updateMessage?.title, "Edited Provider");
+    assert.equal(updateMessage?.group, "");
+    assert.deepEqual(updateMessage?.billing, {
+      rate: "",
+      currency: "",
+      unitPrice: ""
+    });
 
     const deleteMessage = nativeMessages.find((message) => message.type === "provider.delete");
     assert.equal(deleteMessage?.entry_id, "entry-1");

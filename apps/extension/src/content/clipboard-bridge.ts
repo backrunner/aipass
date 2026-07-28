@@ -1,7 +1,11 @@
+import { secretCaptureExclusion } from "./page-capture-policy";
+import { isStandaloneSecretBlock } from "./standalone-secret";
+
 const CLIPBOARD_SECRET_EVENT = "aipass.clipboardSecret";
 const CLIPBOARD_SECRET_MESSAGE_SOURCE = "aipass.clipboardBridge";
 const DEBUG_MODE_EVENT = "aipass.debugMode";
 const FRAMEWORK_SECRET_SCAN_EVENT = "aipass.frameworkSecretScan";
+const SECRET_CAPTURE_POLICY_EVENT = "aipass.secretCapturePolicy";
 const SECRET_PATTERNS = [
   /sk-ant-[A-Za-z0-9_-]{12,}/,
   /sk-or-v1-[A-Za-z0-9_-]{16,}/,
@@ -26,13 +30,16 @@ const FRAMEWORK_SCAN_OBJECT_LIMIT = 220;
 const FRAMEWORK_SCAN_STRING_LIMIT = 420;
 const FRAMEWORK_SCAN_DEPTH_LIMIT = 8;
 const FRAMEWORK_SCAN_SECRET_LIMIT = 12;
+const MANAGED_EMBEDDED_SECRET_VALUE_LIMIT = 512;
 let debugEnabled = false;
 let copyListenerInstalled = false;
+let allowEmbeddedManagedSecrets = false;
 let frameworkScanTimer: number | undefined;
 const emittedFrameworkSecretSignatures = new Map<string, string>();
 
 type FrameworkSecret = {
   text: string;
+  sourceText?: string;
   label?: string;
   gateway?: {
     group?: string;
@@ -40,16 +47,18 @@ type FrameworkSecret = {
   };
 };
 
-type FrameworkMetadata = Omit<FrameworkSecret, "text">;
+type FrameworkMetadata = Omit<FrameworkSecret, "text" | "sourceText">;
 
-installClipboardBridge();
+if (!currentSecretCaptureExclusion()) installClipboardBridge();
 
 function installClipboardBridge() {
   try {
+    if (currentSecretCaptureExclusion()) return;
     const win = window as Window & { __AIPASS_CLIPBOARD_BRIDGE__?: boolean };
     if (win.__AIPASS_CLIPBOARD_BRIDGE__) return;
     win.__AIPASS_CLIPBOARD_BRIDGE__ = true;
     installDebugModeListener();
+    installCapturePolicyListener();
     installFrameworkScanListener();
     document.addEventListener("copy", emitSelectedSecret, { capture: true, passive: true });
     patchClipboardWriteText();
@@ -59,6 +68,18 @@ function installClipboardBridge() {
   }
 }
 
+function installCapturePolicyListener() {
+  window.addEventListener(SECRET_CAPTURE_POLICY_EVENT, (event) => {
+    try {
+      const detail = (event as CustomEvent<{ allowEmbeddedSecrets?: boolean }>).detail;
+      allowEmbeddedManagedSecrets = Boolean(detail?.allowEmbeddedSecrets);
+      debugLog("capture policy updated", { allowEmbeddedManagedSecrets });
+    } catch {
+      allowEmbeddedManagedSecrets = false;
+    }
+  });
+}
+
 function installDebugModeListener() {
   window.addEventListener(DEBUG_MODE_EVENT, (event) => {
     try {
@@ -66,7 +87,7 @@ function installDebugModeListener() {
       debugEnabled = Boolean(detail?.enabled);
       debugLog("debug enabled", {
         host: location.hostname,
-        path: location.pathname,
+        path: currentPageRoute(),
         copyListenerInstalled
       });
     } catch {
@@ -89,6 +110,7 @@ function installFrameworkScanListener() {
 
 function emitSelectedSecret(event: Event) {
   try {
+    if (currentSecretCaptureExclusion()) return;
     const clipboardEvent = event as ClipboardEvent;
     window.setTimeout(() => {
       try {
@@ -157,13 +179,14 @@ function deferEmitSecret(text: string) {
 
 function emitSecret(text: string) {
   try {
+    if (currentSecretCaptureExclusion()) return;
     const secret = extractSecret(text);
     if (!secret) {
       debugLog("clipboard text ignored", { valueLength: text.length });
       return;
     }
     debugLog("clipboard secret emitted", { valueLength: text.length, secretLength: secret.length });
-    emitSecretCandidate({ text: secret });
+    emitSecretCandidate({ text: secret, sourceText: text });
   } catch {
     // The page's copy flow should not depend on AIPass detection.
   }
@@ -183,7 +206,16 @@ function emitSecretCandidate(candidate: FrameworkSecret) {
 }
 
 function extractSecret(value: string): string | undefined {
-  return extractSecretFromValue(value, canUseContextualSecret());
+  const secret = extractSecretFromValue(value, canUseContextualSecret());
+  if (!secret) return undefined;
+  return isStandaloneSecretBlock(value, secret) || canUseEmbeddedManagedSecret(value)
+    ? secret
+    : undefined;
+}
+
+function canUseEmbeddedManagedSecret(value: string, context?: string): boolean {
+  if (!allowEmbeddedManagedSecrets || value.length > MANAGED_EMBEDDED_SECRET_VALUE_LIMIT) return false;
+  return context === undefined || hasFrameworkKeyContext(context);
 }
 
 function extractSecretFromValue(value: string, allowContextual: boolean): string | undefined {
@@ -203,7 +235,7 @@ function isCustomKeyPattern(pattern: RegExp): boolean {
 function canUseContextualSecret(): boolean {
   const text = [
     location.hostname,
-    location.pathname,
+    currentPageRoute(),
     document.title,
     ...limitedElements<HTMLElement>(CONTEXTUAL_SCAN_SELECTOR, MAX_CONTEXT_ELEMENTS).map((element) => element.textContent ?? "")
   ]
@@ -213,7 +245,7 @@ function canUseContextualSecret(): boolean {
     /(\bcustom[_ -]?key\b|自定义密钥|sub2api|subscription\s*to\s*api)/i.test(text);
   debugLog("contextual clipboard scan", {
     allowed,
-    path: location.pathname,
+    path: currentPageRoute(),
     title: document.title.slice(0, 80)
   });
   return allowed;
@@ -234,12 +266,14 @@ function normalizeSecretMatch(value: string | undefined): string {
 }
 
 function scheduleFrameworkSecretScan() {
+  if (currentSecretCaptureExclusion()) return;
   if (frameworkScanTimer !== undefined) window.clearTimeout(frameworkScanTimer);
   frameworkScanTimer = window.setTimeout(scanFrameworkSecrets, 80);
 }
 
 function scanFrameworkSecrets() {
   try {
+    if (currentSecretCaptureExclusion()) return;
     const roots = frameworkStateRoots();
     if (!roots.length) {
       debugLog("framework scan skipped", { reason: "no vue roots" });
@@ -298,7 +332,12 @@ function findFrameworkSecrets(roots: unknown[], allowContextual: boolean): Frame
       stringCount += 1;
       if (stringCount > FRAMEWORK_SCAN_STRING_LIMIT) break;
       const secret = extractSecretFromValue(value, allowContextual || hasFrameworkKeyContext(item.context));
-      if (secret) mergeFrameworkSecret(candidates, { text: secret, ...item.metadata });
+      if (
+        secret &&
+        (isStandaloneSecretBlock(value, secret) || canUseEmbeddedManagedSecret(value, item.context))
+      ) {
+        mergeFrameworkSecret(candidates, { text: secret, sourceText: value, ...item.metadata });
+      }
       continue;
     }
     if (!value || typeof value !== "object" || item.depth >= FRAMEWORK_SCAN_DEPTH_LIMIT) continue;
@@ -332,6 +371,7 @@ function mergeFrameworkSecret(candidates: Map<string, FrameworkSecret>, candidat
   const existing = candidates.get(candidate.text);
   candidates.set(candidate.text, {
     text: candidate.text,
+    sourceText: candidate.sourceText ?? existing?.sourceText,
     label: candidate.label ?? existing?.label,
     gateway: mergeGatewayMetadata(existing?.gateway, candidate.gateway)
   });
@@ -421,4 +461,15 @@ function debugLog(event: string, data?: Record<string, unknown>) {
   } catch {
     // The bridge must stay invisible to the page if logging fails.
   }
+}
+
+function currentSecretCaptureExclusion() {
+  if (typeof location === "undefined") return undefined;
+  return secretCaptureExclusion({ hostname: location.hostname });
+}
+
+function currentPageRoute(): string {
+  if (typeof location === "undefined") return "";
+  const hashPath = location.hash?.match(/^#!?(\/[^?]*)/)?.[1];
+  return hashPath || location.pathname;
 }

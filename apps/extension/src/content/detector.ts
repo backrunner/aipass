@@ -4,6 +4,7 @@ import {
   maskSecret,
   providerDefinitions,
   type AuthScheme,
+  type BillingRule,
   type InterfaceType,
   type ProviderDefinition
 } from "@aipass/schemas";
@@ -20,6 +21,7 @@ import {
   type SecretCandidate
 } from "./secret-scanner";
 import { endpointForProvider } from "../provider-endpoint";
+import { secretCaptureExclusion } from "./page-capture-policy";
 
 export interface DetectedSecretDraft {
   providerId?: string;
@@ -33,6 +35,12 @@ export interface DetectedSecretDraft {
   endpoint?: string;
   interfaceType?: InterfaceType;
   authScheme?: AuthScheme;
+  /**
+   * Gateway group this key belongs to. Its own field, not part of the entry:
+   * two groups on one relay become two keys under a single entry.
+   */
+  group?: string;
+  billing?: BillingRule;
   gateway?: {
     group?: string;
     rate?: string;
@@ -45,13 +53,14 @@ const ENDPOINT_CONTEXT_PATTERN =
   /(?:api\s*(?:base|endpoint|url)|base\s*url|endpoint|接口(?:地址|端点)|端点|中转地址|请求地址|入口地址)/i;
 const HTTP_URL_PATTERN = /https?:\/\/[^\s"'<>`)\]}]+/gi;
 const KEY_PAGE_TEXT_PATTERN =
-  /(api\s*key|api\s*keys|token|tokens|secret\s*key|virtual\s+key|令牌|密钥|复制|copy|系统访问令牌|下游密钥|下游\s*api\s*key)/i;
+  /(\bapi\s*keys?\b|\btokens?\b|\bsecret\s*key\b|\bvirtual\s+key\b|令牌|密钥|系统访问令牌|下游密钥|下游\s*api\s*key)/i;
 const AI_GATEWAY_TEXT_PATTERN =
   /(openai|anthropic|claude|gemini|generativelanguage|chat\s*completions?|base\s*url|api\s*base|gateway|proxy|relay|router|llm|ai\s*provider|virtual\s+key|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|ark|together|fireworks|groq|xai|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face|中转|网关|聚合|渠道|模型|下游|上游|分发|倍率|分组|路由)/i;
 const CLIPBOARD_SECRET_EVENT = "aipass.clipboardSecret";
 const CLIPBOARD_SECRET_MESSAGE_SOURCE = "aipass.clipboardBridge";
 const DEBUG_MODE_EVENT = "aipass.debugMode";
 const FRAMEWORK_SECRET_SCAN_EVENT = "aipass.frameworkSecretScan";
+const SECRET_CAPTURE_POLICY_EVENT = "aipass.secretCapturePolicy";
 const TOAST_HOST_ID = "aipass-extension-toast";
 const ENDPOINT_INPUT_SCAN_LIMIT = 160;
 const ENDPOINT_TEXT_SCAN_LIMIT = 80;
@@ -67,6 +76,18 @@ const GENERIC_TITLE_SEGMENT_PATTERN =
   /^(?:api\s*(?:keys?|密钥)(?:\s*(?:management|settings)|管理|设置)?|keys?|tokens?|secret\s*keys?|virtual\s*keys?|key\s*management|token\s*management|dashboard|console|settings?|management|user\s*settings?|密钥(?:管理|设置)?|令牌(?:管理|设置)?|系统访问令牌|下游密钥|控制台|仪表盘|后台|管理后台)$/i;
 const sentDraftKeys = new Set<string>();
 const shownToastKeys = new Set<string>();
+/**
+ * Keys the user has explicitly dismissed on this page. Once dismissed, a key
+ * never prompts again here — not from a rescan, and not from a re-copy.
+ */
+const dismissedDraftIdentities = new Set<string>();
+/**
+ * Persisted dismissals per page scope. Keyed by scope because a single-page
+ * app changes route without reloading the content script: a key dismissed on
+ * the token page must not be suppressed on the settings page.
+ */
+const persistedDismissedDigests = new Map<string, Set<string>>();
+const dismissedHydrations = new Map<string, Promise<void>>();
 const recentClipboardSecrets = new Set<string>();
 let toastSequence = 0;
 let draftScanTimer: ReturnType<typeof setTimeout> | undefined;
@@ -79,6 +100,8 @@ let lastClipboardInteraction: { element: Element; at: number } | undefined;
 
 type ClipboardSecretPayload = {
   text?: string;
+  /** Original copied/state value, retained so isolated-world policy can revalidate layout. */
+  sourceText?: string;
   label?: string;
   gateway?: {
     group?: string;
@@ -95,11 +118,20 @@ type GatewaySignature = {
   ui?: RegExp;
 };
 
+type GatewayMatch = {
+  signature: GatewaySignature;
+  brandMatched: boolean;
+  hostBrandMatched: boolean;
+  routeMatched: boolean;
+  uiMatched: boolean;
+};
+
 type PageRecognition = {
   provider?: ProviderDefinition;
   gatewayName?: string;
   siteName?: string;
   knownGateway: boolean;
+  relaxedSecretLayout: boolean;
   tokenPage: boolean;
   aiGatewayEvidence: boolean;
   endpoint?: string;
@@ -144,6 +176,8 @@ type ToastOptions = {
   keyChip?: string;
   icon?: ToastIcon;
   autoDismissMs: number;
+  /** Runs only when the user closes the toast, not when it auto-expires. */
+  onUserDismiss?: () => void;
   actions?: ToastAction[];
 };
 
@@ -155,7 +189,7 @@ const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
     displayName: "sub2api",
     brand: /\bsub2api\b/i,
     routes: /^\/(?:keys|api[-_]?keys?|key-usage)(?:\/|$)/i,
-    ui: /\bcustom_key\b|custom\s+key|create\s+(?:api\s*)?key|use\s+key|import\s+to\s+ccs|key\s*usage|自定义密钥|创建密钥|使用密钥|导入到\s*CCS|subscription\s*to\s*api/i
+    ui: /\bcustom_key\b|custom\s+key|import\s+to\s+ccs|key\s*usage|自定义密钥|导入到\s*CCS|subscription\s*to\s*api|(?=[\s\S]*\bcreate\s+(?:api\s*)?key\b)(?=[\s\S]*\buse\s+key\b)|(?=[\s\S]*创建密钥)(?=[\s\S]*使用密钥)/i
   },
   {
     id: "litellm",
@@ -170,7 +204,7 @@ const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
     brand: /\bone[-_ ]?api\b/i,
     weakBrand: true,
     routes: /^\/(?:token(?:\/|$)|token\/(?:add|edit)(?:\/|$)|user\/setting(?:\/|$)|keys?(?:\/|$)|api[-_]?keys?(?:\/|$))/i,
-    ui: /系统令牌|one[-_ ]?api/i
+    ui: /系统令牌|令牌管理|密钥管理|system\s+token|token\s+management|create\s+token|key\s+management/i
   },
   {
     id: "new_api",
@@ -178,7 +212,7 @@ const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
     brand: /\bnew[-_ ]?api\b/i,
     weakBrand: true,
     routes: /^\/(?:console\/token(?:\/|$)|token(?:\/|$)|token\/(?:add|edit)(?:\/|$)|keys?(?:\/|$)|api[-_]?keys?(?:\/|$))/i,
-    ui: /渠道|兑换码|分组|倍率|复制连接信息|new[-_ ]?api/i
+    ui: /渠道|兑换码|分组|倍率|复制连接信息|token\s+management|create\s+token|channel\s+management|redemption\s+codes?|copy\s+connection(?:\s+info(?:rmation)?)?|(?=[\s\S]*\bgroup\b)(?=[\s\S]*\b(?:rate|ratio|multiplier)\b)/i
   },
   {
     id: "veloera",
@@ -214,17 +248,19 @@ const KNOWN_GATEWAY_SIGNATURES: GatewaySignature[] = [
     displayName: "AnyRouter",
     brand: /\banyrouter\b|agentrouter/i,
     routes: /^\/(?:app\/tokens|console\/token|token|keys|dashboard)(?:\/|$)/i,
-    ui: /api\s*key|令牌|密钥|渠道|分组|倍率|openai|anthropic|claude/i
+    ui: /渠道|渠道组|模型组|分组|倍率|复制连接信息|virtual\s+key/i
   }
 ];
 
 export function detectFromDocument(doc: Document = document): DetectedSecretDraft | null {
+  if (currentSecretCaptureExclusion()) return null;
   const recognition = recognizePage(doc);
   const candidates = findSecretCandidates(doc, recognition);
   return buildDraft(doc, candidates[0], recognition, false);
 }
 
 export function detectAllFromDocument(doc: Document = document): DetectedSecretDraft[] {
+  if (currentSecretCaptureExclusion()) return [];
   return detectDraftsFromDocument(doc).drafts;
 }
 
@@ -268,8 +304,19 @@ function buildDraft(
     endpoint,
     interfaceType: provider?.interfaces[0] ?? inferInterfaceFromEndpoint(endpoint),
     authScheme: provider?.authSchemes[0] ?? "bearer",
+    group: candidate?.gateway?.group,
+    billing: billingFromCandidate(candidate),
     gateway: candidate?.gateway
   };
+}
+
+/**
+ * Relay consoles publish the group's rate multiplier (倍率) next to the token.
+ * That is a per-key billing rule, so it travels with the key.
+ */
+function billingFromCandidate(candidate?: SecretCandidate): BillingRule | undefined {
+  const rate = candidate?.gateway?.rate?.trim();
+  return rate ? { rate } : undefined;
 }
 
 function titleFromRecognition(recognition: PageRecognition, endpoint?: string): string {
@@ -330,7 +377,8 @@ function findSecretCandidates(doc: Document, recognition: PageRecognition = reco
     providerId: recognition.provider?.id,
     tokenManagementPage: isTokenManagementPage(recognition),
     allowOpenAiStyle: canUseOpenAiStyleSecrets(recognition),
-    allowCustomKey: canUseCustomKeySecrets(recognition)
+    allowCustomKey: canUseCustomKeySecrets(recognition),
+    allowEmbeddedSecrets: recognition.relaxedSecretLayout
   });
 }
 
@@ -497,7 +545,8 @@ function endpointCandidates(values: string[], context: string): Array<{ url: str
 
 function recognizePage(doc: Document): PageRecognition {
   const detectedEndpoint = findEndpoint(doc);
-  const signature = matchGatewaySignature(doc);
+  const gatewayMatch = matchGatewaySignature(doc);
+  const signature = gatewayMatch?.signature;
   const endpointProvider = detectedEndpoint ? inferKnownProviderFromEndpoint(detectedEndpoint) : undefined;
   const provider =
     matchProviderByDomain(location.hostname) ??
@@ -505,30 +554,56 @@ function recognizePage(doc: Document): PageRecognition {
     endpointProvider;
   const endpoint = endpointForProvider(provider, detectedEndpoint, location.origin);
   const siteName = siteNameFromDocumentTitle(doc.title, signature, provider);
-  const tokenPage = SELF_HOSTED_TOKEN_PATH_PATTERN.test(location.pathname) || hasSelfHostedKeyPageText(doc);
+  const tokenPage = SELF_HOSTED_TOKEN_PATH_PATTERN.test(currentPageRoute()) || hasSelfHostedKeyPageText(doc);
   const aiGatewayEvidence = Boolean(provider) || Boolean(signature) || hasAiGatewayEvidence(doc, endpoint);
+  const relaxedSecretLayout = isHighConfidenceGatewayManagementPage(gatewayMatch, tokenPage);
   return {
     provider,
     gatewayName: signature?.displayName,
     siteName,
     knownGateway: Boolean(signature),
+    relaxedSecretLayout,
     tokenPage,
     aiGatewayEvidence,
     endpoint
   };
 }
 
-function matchGatewaySignature(doc: Document): GatewaySignature | undefined {
+function matchGatewaySignature(doc: Document): GatewayMatch | undefined {
   const haystack = gatewayHaystack(doc);
-  return KNOWN_GATEWAY_SIGNATURES.find((signature) => {
+  const route = currentPageRoute();
+  const matches: GatewayMatch[] = [];
+  for (const signature of KNOWN_GATEWAY_SIGNATURES) {
+    const hostBrandMatched = signature.brand.test(location.hostname);
     const brandMatched = signature.brand.test(haystack);
-    const routeMatched = Boolean(signature.routes?.test(location.pathname));
+    const routeMatched = Boolean(signature.routes?.test(route));
     const uiMatched = Boolean(signature.ui?.test(haystack));
-    if (brandMatched && !signature.weakBrand) return true;
-    if (signature.weakBrand) return brandMatched && routeMatched;
-    if (brandMatched && (routeMatched || uiMatched)) return true;
-    return routeMatched && uiMatched;
-  });
+    const matched = signature.weakBrand
+      ? brandMatched && routeMatched
+      : brandMatched || (routeMatched && uiMatched);
+    if (matched) matches.push({ signature, brandMatched, hostBrandMatched, routeMatched, uiMatched });
+  }
+  return matches.sort((left, right) => gatewayMatchScore(right) - gatewayMatchScore(left))[0];
+}
+
+function gatewayMatchScore(match: GatewayMatch): number {
+  return (
+    Number(match.hostBrandMatched) * 4 +
+    Number(match.brandMatched) * 4 +
+    Number(match.routeMatched) * 4 +
+    Number(match.uiMatched) * 2
+  );
+}
+
+function isHighConfidenceGatewayManagementPage(
+  match: GatewayMatch | undefined,
+  tokenPage: boolean,
+): boolean {
+  if (!tokenPage || !match?.signature.id || !match.routeMatched) return false;
+  if (match.signature.weakBrand) {
+    return match.brandMatched && (match.hostBrandMatched || match.uiMatched);
+  }
+  return match.brandMatched || match.uiMatched;
 }
 
 function inferKnownProviderFromEndpoint(endpoint: string): ProviderDefinition | undefined {
@@ -541,7 +616,7 @@ function inferKnownProviderFromEndpoint(endpoint: string): ProviderDefinition | 
 function gatewayHaystack(doc: Document): string {
   return [
     location.hostname,
-    location.pathname,
+    currentPageRoute(),
     doc.title,
     ...limitedElements<HTMLElement>(
       doc,
@@ -647,9 +722,20 @@ function isUnpackedExtensionBuild(): boolean {
 function pageDebugContext(): Record<string, unknown> {
   return {
     host: typeof location === "undefined" ? "" : location.hostname,
-    path: typeof location === "undefined" ? "" : location.pathname,
+    path: typeof location === "undefined" ? "" : currentPageRoute(),
     title: typeof document === "undefined" ? "" : sanitizeTitleSegment(document.title) ?? ""
   };
+}
+
+function currentSecretCaptureExclusion() {
+  if (typeof location === "undefined") return undefined;
+  return secretCaptureExclusion({ hostname: location.hostname });
+}
+
+function currentPageRoute(): string {
+  if (typeof location === "undefined") return "";
+  const hashPath = location.hash?.match(/^#!?(\/[^?]*)/)?.[1];
+  return hashPath || location.pathname;
 }
 
 function recognitionDebugContext(recognition: PageRecognition): Record<string, unknown> {
@@ -660,6 +746,7 @@ function recognitionDebugContext(recognition: PageRecognition): Record<string, u
     tokenPage: recognition.tokenPage,
     aiGatewayEvidence: recognition.aiGatewayEvidence,
     knownGateway: recognition.knownGateway,
+    relaxedSecretLayout: recognition.relaxedSecretLayout,
     endpointDetected: Boolean(recognition.endpoint)
   };
 }
@@ -677,8 +764,27 @@ function announceDebugModeToPageWorld() {
   }
 }
 
+function announceSecretCapturePolicy(recognition: PageRecognition) {
+  if (typeof window === "undefined" || currentSecretCaptureExclusion()) return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent(SECRET_CAPTURE_POLICY_EVENT, {
+        detail: { allowEmbeddedSecrets: recognition.relaxedSecretLayout }
+      })
+    );
+  } catch {
+    // Main-world policy synchronization is best effort.
+  }
+}
+
 function requestFrameworkSecretScan(recognition: PageRecognition) {
-  if (!canUseContextualClipboardSecret(recognition) || typeof window === "undefined") return;
+  if (
+    currentSecretCaptureExclusion() ||
+    !canUseContextualClipboardSecret(recognition) ||
+    typeof window === "undefined"
+  ) {
+    return;
+  }
   const now = Date.now();
   if (now - lastFrameworkScanRequestedAt < FRAMEWORK_SCAN_MIN_INTERVAL_MS) return;
   lastFrameworkScanRequestedAt = now;
@@ -696,8 +802,14 @@ function requestFrameworkSecretScan(recognition: PageRecognition) {
 
 async function sendDraftIfAllowed() {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
+  const exclusion = currentSecretCaptureExclusion();
+  if (exclusion) {
+    debugLog("scan: skipped excluded page", { reason: exclusion, ...pageDebugContext() });
+    return;
+  }
   debugLog("scan: start", pageDebugContext());
   const detection = detectDraftsFromDocument(document);
+  announceSecretCapturePolicy(detection.recognition);
   debugLog("scan: result", {
     ...recognitionDebugContext(detection.recognition),
     candidateCount: detection.candidateCount,
@@ -720,7 +832,12 @@ async function sendDraftIfAllowed() {
     debugLog("scan: skipped ignored origin", { origin });
     return;
   }
-  const freshDrafts = takeUnsentDrafts(drafts);
+  const undismissedDrafts = await withoutDismissedDrafts(drafts);
+  if (!undismissedDrafts.length) {
+    debugLog("scan: skipped dismissed drafts", { draftCount: drafts.length });
+    return;
+  }
+  const freshDrafts = takeUnsentDrafts(undismissedDrafts);
   if (!freshDrafts.length) {
     debugLog("scan: skipped duplicate drafts", { draftCount: drafts.length });
     return;
@@ -736,14 +853,22 @@ async function sendDraftIfAllowed() {
 
 async function sendDraftForClipboardSecret(secret: string, metadata: Omit<ClipboardSecretPayload, "text"> = {}) {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
+  const exclusion = currentSecretCaptureExclusion();
+  if (exclusion) {
+    debugLog("clipboard: skipped excluded page", { reason: exclusion, ...pageDebugContext() });
+    return;
+  }
   debugLog("clipboard: event received", { valueLength: secret.length });
   const recognition = recognizePage(document);
-  const candidate = extractSecret(secret, {
+  announceSecretCapturePolicy(recognition);
+  const sourceText = metadata.sourceText ?? secret;
+  const candidate = extractSecret(sourceText, {
     providerId: recognition.provider?.id,
     allowOpenAiStyle: canUseOpenAiStyleSecrets(recognition),
-    allowCustomKey: canUseCustomKeySecrets(recognition)
+    allowCustomKey: canUseCustomKeySecrets(recognition),
+    allowEmbeddedSecrets: recognition.relaxedSecretLayout
   });
-  if (!candidate) {
+  if (!candidate || (metadata.sourceText !== undefined && candidate !== secret)) {
     debugLog("clipboard: no secret candidate", recognitionDebugContext(recognition));
     return;
   }
@@ -773,7 +898,13 @@ async function sendDraftForClipboardSecret(secret: string, metadata: Omit<Clipbo
     debugLog("clipboard: skipped ignored origin", { origin: draft.origin });
     return;
   }
-  const unsavedDrafts = await filterUnsavedDetectedDrafts([draft]);
+  // A dismissed key stays dismissed even when the user copies it again.
+  const undismissedDrafts = await withoutDismissedDrafts([draft]);
+  if (!undismissedDrafts.length) {
+    debugLog("clipboard: skipped dismissed draft", { title: draft.title });
+    return;
+  }
+  const unsavedDrafts = await filterUnsavedDetectedDrafts(undismissedDrafts);
   if (!unsavedDrafts.length) {
     debugLog("clipboard: skipped saved draft", { title: draft.title });
     return;
@@ -803,6 +934,9 @@ function showDetectedDraftPrompt(drafts: DetectedSecretDraft[]) {
     keyChip: count === 1 ? first?.maskedSecret : undefined,
     icon,
     autoDismissMs: 20000,
+    // Closing the prompt is a decision about these keys, not a postponement:
+    // they never prompt again on this page.
+    onUserDismiss: () => markDraftsDismissed(drafts),
     actions: [
       {
         label: "Save",
@@ -893,7 +1027,9 @@ function draftInitials(draft?: DetectedSecretDraft): string {
 function takeUnsentDrafts(drafts: DetectedSecretDraft[]): DetectedSecretDraft[] {
   const fresh: DetectedSecretDraft[] = [];
   for (const draft of drafts) {
-    const key = draftKey(draft);
+    // Keyed by identity, not by scraped metadata: a rescan that resolves a
+    // group or rate differently is the same key and must not re-prompt.
+    const key = draftIdentity(draft);
     if (sentDraftKeys.has(key)) continue;
     sentDraftKeys.add(key);
     fresh.push(draft);
@@ -935,6 +1071,154 @@ function draftKey(draft: DetectedSecretDraft): string {
     draft.gateway?.group ?? "",
     draft.gateway?.rate ?? ""
   ].join("|");
+}
+
+/**
+ * Identifies "this key on this page" for prompt suppression. Deliberately
+ * excludes scraped metadata: a group or rate that resolves differently between
+ * scans is still the same key, and must not resurrect a dismissed prompt.
+ */
+function draftIdentity(draft: DetectedSecretDraft): string {
+  return `${draftScope(draft)}|${draft.apiKey ?? draft.maskedSecret ?? ""}`;
+}
+
+/**
+ * The "page" a dismissal applies to: origin + path, ignoring query and hash.
+ * Taken from the draft's own URL rather than the live location, so a
+ * single-page route change between prompting and dismissing cannot file the
+ * dismissal against the wrong page.
+ */
+function draftScope(draft: DetectedSecretDraft): string {
+  return scopeFromUrl(draft.url) ?? draft.origin ?? pageScope();
+}
+
+function scopeFromUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function pageScope(): string {
+  if (typeof location === "undefined") return "";
+  return `${location.origin}${location.pathname}`;
+}
+
+/** Records an explicit dismissal so the key never prompts again on this page. */
+function markDraftsDismissed(drafts: DetectedSecretDraft[]) {
+  const fresh = drafts.filter((draft) => !dismissedDraftIdentities.has(draftIdentity(draft)));
+  if (!fresh.length) return;
+  for (const draft of fresh) {
+    dismissedDraftIdentities.add(draftIdentity(draft));
+  }
+  debugLog("dismiss: suppressing keys", { count: fresh.length });
+  void persistDismissedDrafts(fresh);
+}
+
+/**
+ * Persists dismissals through the worker so they survive a reload of the same
+ * page. Only a digest of each key is stored — never the key itself. Drafts are
+ * grouped by page so one prompt spanning routes still files correctly.
+ */
+async function persistDismissedDrafts(drafts: DetectedSecretDraft[]) {
+  const byScope = new Map<string, string[]>();
+  for (const draft of drafts) {
+    const digest = await secretDigest(draft.apiKey ?? "");
+    if (!digest) continue;
+    const scope = draftScope(draft);
+    byScope.set(scope, [...(byScope.get(scope) ?? []), digest]);
+  }
+  for (const [scope, digests] of byScope) {
+    persistedDismissedDigests.set(
+      scope,
+      new Set([...(persistedDismissedDigests.get(scope) ?? []), ...digests])
+    );
+    await sendRuntimeMessage({
+      type: "aipass.dismissDetectedKeys",
+      scope,
+      digests
+    });
+  }
+}
+
+/** Loads one page scope's persisted dismissals, once per scope. */
+function hydrateDismissedDrafts(scope: string): Promise<void> {
+  const inFlight = dismissedHydrations.get(scope);
+  if (inFlight) return inFlight;
+  const hydration = (async () => {
+    const response = await sendRuntimeMessage<RuntimeResponse<{ digests?: string[] }>>({
+      type: "aipass.dismissedDetectedKeys",
+      scope
+    });
+    const digests = response?.ok ? response.data?.digests ?? [] : [];
+    if (digests.length) {
+      persistedDismissedDigests.set(scope, new Set(digests));
+      debugLog("dismiss: restored", { count: digests.length, scope });
+    }
+  })().catch(() => {
+    // A missing worker must never block prompting; in-memory state still applies.
+  });
+  dismissedHydrations.set(scope, hydration);
+  return hydration;
+}
+
+/** Drops keys the user already dismissed here, so they never prompt again. */
+async function withoutDismissedDrafts(drafts: DetectedSecretDraft[]): Promise<DetectedSecretDraft[]> {
+  const kept: DetectedSecretDraft[] = [];
+  for (const draft of drafts) {
+    const scope = draftScope(draft);
+    await hydrateDismissedDrafts(scope);
+    if (dismissedDraftIdentities.has(draftIdentity(draft))) continue;
+    const persisted = persistedDismissedDigests.get(scope);
+    if (persisted?.size) {
+      const digest = await secretDigest(draft.apiKey ?? "");
+      if (digest && persisted.has(digest)) {
+        // Mirror into memory so later scans skip the digest round trip.
+        dismissedDraftIdentities.add(draftIdentity(draft));
+        continue;
+      }
+    }
+    kept.push(draft);
+  }
+  return kept;
+}
+
+/**
+ * Non-reversible digest of a key, used as its dismissal marker. Falls back to
+ * a plain string hash where SubtleCrypto is unavailable (non-secure contexts);
+ * either way the raw key never leaves the page for this purpose.
+ */
+async function secretDigest(secret: string): Promise<string> {
+  if (!secret) return "";
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (subtle) {
+      const bytes = new TextEncoder().encode(secret);
+      const digest = await subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+    }
+  } catch {
+    // Fall through to the non-crypto hash below.
+  }
+  return fallbackDigest(secret);
+}
+
+/** FNV-1a over two offsets; enough entropy to separate a page's few keys. */
+function fallbackDigest(value: string): string {
+  const hash = (seed: number) => {
+    let result = seed;
+    for (let index = 0; index < value.length; index += 1) {
+      result ^= value.charCodeAt(index);
+      result = Math.imul(result, 0x01000193) >>> 0;
+    }
+    return result.toString(16).padStart(8, "0");
+  };
+  return `fnv:${hash(0x811c9dc5)}${hash(0x7fffffff)}`;
 }
 
 function clipboardInteractionMetadata(secret: string): Omit<SecretCandidate, "secret"> | undefined {
@@ -1286,7 +1570,10 @@ function showToast(key: string, options: ToastOptions) {
   close.title = "Dismiss";
   close.setAttribute("aria-label", "Dismiss AIPass notification");
   close.append(createCloseIcon());
-  close.addEventListener("click", dismiss);
+  close.addEventListener("click", () => {
+    options.onUserDismiss?.();
+    dismiss();
+  });
   head.append(brand, close);
 
   const body = document.createElement("div");
@@ -1509,12 +1796,22 @@ function relativeLuminance(color: { r: number; g: number; b: number }): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-debugLog("content loaded", pageDebugContext());
-announceDebugModeToPageWorld();
-installDraftMutationObserver();
-installClipboardSecretListener();
+const initialSecretCaptureExclusion = currentSecretCaptureExclusion();
+debugLog("content loaded", {
+  ...pageDebugContext(),
+  captureExcluded: Boolean(initialSecretCaptureExclusion),
+  exclusionReason: initialSecretCaptureExclusion
+});
 installFillMessageListener();
-void runDraftScan();
+if (initialSecretCaptureExclusion) {
+  debugLog("capture disabled on excluded page", { reason: initialSecretCaptureExclusion });
+} else {
+  announceDebugModeToPageWorld();
+  announceSecretCapturePolicy(recognizePage(document));
+  installDraftMutationObserver();
+  installClipboardSecretListener();
+  void runDraftScan();
+}
 
 function installFillMessageListener() {
   if (typeof chrome === "undefined" || typeof document === "undefined" || listenerAlreadyInstalled()) return;
@@ -1553,12 +1850,13 @@ function installFillMessageListener() {
 }
 
 function installClipboardSecretListener() {
-  if (typeof window === "undefined" || clipboardListenerAlreadyInstalled()) return;
+  if (typeof window === "undefined" || currentSecretCaptureExclusion() || clipboardListenerAlreadyInstalled()) return;
   markClipboardListenerInstalled();
   debugLog("clipboard listener installed");
   document.addEventListener(
     "pointerdown",
     (event) => {
+      if (currentSecretCaptureExclusion()) return;
       if (event.target instanceof Element) {
         lastClipboardInteraction = { element: event.target, at: Date.now() };
       }
@@ -1578,6 +1876,7 @@ function installClipboardSecretListener() {
 }
 
 function handleClipboardSecret(payload: ClipboardSecretPayload | undefined) {
+  if (currentSecretCaptureExclusion()) return;
   const value = payload?.text;
   if (typeof value !== "string" || recentClipboardSecrets.has(value)) return;
   recentClipboardSecrets.add(value);
@@ -1586,7 +1885,14 @@ function handleClipboardSecret(payload: ClipboardSecretPayload | undefined) {
 }
 
 function installDraftMutationObserver() {
-  if (typeof chrome === "undefined" || typeof document === "undefined" || mutationObserverAlreadyInstalled()) return;
+  if (
+    typeof chrome === "undefined" ||
+    typeof document === "undefined" ||
+    currentSecretCaptureExclusion() ||
+    mutationObserverAlreadyInstalled()
+  ) {
+    return;
+  }
   markMutationObserverInstalled();
   debugLog("mutation observer installing");
   const observer = new MutationObserver(() => scheduleDraftScan());
@@ -1607,6 +1913,7 @@ function installDraftMutationObserver() {
 }
 
 function scheduleDraftScan() {
+  if (currentSecretCaptureExclusion()) return;
   if (draftScanInFlight) {
     draftScanQueued = true;
     debugLog("scan: queued while running");

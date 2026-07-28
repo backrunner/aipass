@@ -8,8 +8,48 @@ function flushFrameworkScan() {
 describe("clipboard bridge", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.unstubAllGlobals();
+    window.dispatchEvent(
+      new CustomEvent("aipass.secretCapturePolicy", {
+        detail: { allowEmbeddedSecrets: false }
+      })
+    );
     document.title = "";
     document.body.innerHTML = "";
+  });
+
+  it("does not inspect or patch clipboard writes on excluded pages", async () => {
+    vi.stubGlobal("location", {
+      hostname: "github.com",
+      pathname: "/example/project/settings/keys",
+      origin: "https://github.com",
+      href: "https://github.com/example/project/settings/keys"
+    });
+    const calls: string[] = [];
+    class PageClipboard {
+      writeText(text: string): Promise<void> {
+        calls.push(text);
+        return Promise.resolve();
+      }
+    }
+    const clipboard = new PageClipboard();
+    const originalWriteText = PageClipboard.prototype.writeText;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard
+    });
+    const observed: Array<{ text?: string; sourceText?: string }> = [];
+    window.addEventListener("aipass.clipboardSecret", (event) => {
+      observed.push((event as CustomEvent<(typeof observed)[number]>).detail ?? {});
+    });
+
+    await import("./clipboard-bridge");
+    await navigator.clipboard.writeText("sk-publicSourceSecret1234567890");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(PageClipboard.prototype.writeText, originalWriteText);
+    assert.deepEqual(calls, ["sk-publicSourceSecret1234567890"]);
+    assert.deepEqual(observed, []);
   });
 
   it("observes navigator.clipboard.writeText without changing the write result", async () => {
@@ -26,20 +66,46 @@ describe("clipboard bridge", () => {
       configurable: true,
       value: clipboard
     });
-    const observed: string[] = [];
+    const observed: Array<{ text?: string; sourceText?: string }> = [];
     window.addEventListener("aipass.clipboardSecret", (event) => {
-      observed.push((event as CustomEvent<{ text?: string }>).detail?.text ?? "");
+      observed.push((event as CustomEvent<(typeof observed)[number]>).detail ?? {});
     });
 
-    // @ts-expect-error Dynamic import is used here only to execute the script in Vitest.
     await import("./clipboard-bridge");
     const result = await navigator.clipboard.writeText("sk-written1234567890");
+    await navigator.clipboard.writeText(
+      'curl https://api.example.test -H "Authorization: Bearer sk-embeddedInCommand1234567890"'
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    window.dispatchEvent(
+      new CustomEvent("aipass.secretCapturePolicy", {
+        detail: { allowEmbeddedSecrets: true }
+      })
+    );
+    await navigator.clipboard.writeText(
+      'curl https://api.example.test -H "Authorization: Bearer sk-managedCommandSecret1234567890"'
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.notEqual(PageClipboard.prototype.writeText, originalWriteText);
     assert.equal(result, undefined);
-    assert.deepEqual(calls, ["sk-written1234567890"]);
-    assert.deepEqual(observed, ["sk-written1234567890"]);
+    assert.deepEqual(calls, [
+      "sk-written1234567890",
+      'curl https://api.example.test -H "Authorization: Bearer sk-embeddedInCommand1234567890"',
+      'curl https://api.example.test -H "Authorization: Bearer sk-managedCommandSecret1234567890"'
+    ]);
+    assert.deepEqual(observed, [
+      {
+        text: "sk-written1234567890",
+        sourceText: "sk-written1234567890"
+      },
+      {
+        text: "sk-managedCommandSecret1234567890",
+        sourceText:
+          'curl https://api.example.test -H "Authorization: Bearer sk-managedCommandSecret1234567890"'
+      }
+    ]);
   });
 
   it("does not emit clipboard secrets when navigator.clipboard.writeText fails", async () => {
@@ -55,7 +121,6 @@ describe("clipboard bridge", () => {
       observed.push((event as CustomEvent<{ text?: string }>).detail?.text ?? "");
     });
 
-    // @ts-expect-error Dynamic import is used here only to execute the script in Vitest.
     await import("./clipboard-bridge");
     await assert.rejects(() => navigator.clipboard.writeText("sk-denied1234567890"));
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -74,7 +139,6 @@ describe("clipboard bridge", () => {
       observed.push((event as CustomEvent<{ text?: string }>).detail?.text ?? "");
     });
 
-    // @ts-expect-error Dynamic import is used here only to execute the script in Vitest.
     await import("./clipboard-bridge");
     const event = new Event("copy", { bubbles: true, cancelable: true });
     const copyAllowed = document.dispatchEvent(event);
@@ -105,6 +169,7 @@ describe("clipboard bridge", () => {
     const keyRecord = {
       name: "Production",
       key: "productA_key_1234567890abcdef",
+      example: "curl -H 'Authorization: Bearer sk-frameworkExample1234567890' https://api.example.test",
       group: "vip",
       rate: "0.8x"
     };
@@ -124,8 +189,7 @@ describe("clipboard bridge", () => {
       }
     );
 
-    // clipboard-bridge is intentionally a classic content script without exports.
-    // @ts-expect-error Dynamic import is used here only to execute the script in Vitest.
+    // clipboard-bridge is intentionally executed for its content-script side effects.
     await import("./clipboard-bridge");
     window.dispatchEvent(new CustomEvent("aipass.frameworkSecretScan", { detail: { enabled: true } }));
     await flushFrameworkScan();
@@ -134,6 +198,7 @@ describe("clipboard bridge", () => {
     assert.equal(emitted[0]?.label, "Production");
     assert.equal(emitted[0]?.gateway?.group, "vip");
     assert.equal(emitted[0]?.gateway?.rate, "0.8x");
+    assert.equal(emitted.length, 1);
 
     keyRecord.group = "enterprise";
     keyRecord.rate = "1.2x";

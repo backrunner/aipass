@@ -10,11 +10,15 @@
     type ProviderKind
   } from "@aipass/schemas";
   import {
+    applyBillingToDraft,
     Badge,
     Banner,
+    billingFromDraft,
+    billingPatchFromDraft,
     Brand,
     Button,
     emptyDraft,
+    groupFromDraft,
     IconButton,
     ProviderFormFields,
     ProviderIcon,
@@ -305,12 +309,14 @@
     passwordUnlockBusy = false;
   }
 
-  async function useEntry(entry: Entry) {
+  async function useEntry(entry: Entry, requestedSecretId?: string) {
     if (usingEntryId) return;
-    usingEntryId = entry.id;
+    const secretId = requestedSecretId ?? entrySecrets(entry)[0]?.id;
+    const useKey = `${entry.id}:${secretId ?? "primary"}`;
+    usingEntryId = useKey;
     statusText = "";
     statusError = false;
-    const grant = await freshGrantForEntry(entry);
+    const grant = await freshGrantForEntry(entry, secretId);
     if (!grant) {
       statusText = $t("ext.grantExpired");
       statusError = true;
@@ -320,7 +326,8 @@
     const fill = await sendToWorker<{ secret: string }>({
       type: "aipass.fill",
       entryId: entry.id,
-      grantId: grant.id
+      grantId: grant.id,
+      secretId
     });
     if (!fill?.ok || typeof fill.data?.secret !== "string" || !fill.data.secret) {
       statusText = fill?.error ?? $t("ext.fillFailed");
@@ -348,7 +355,7 @@
       );
     }
     await navigator.clipboard?.writeText(secret);
-    copied = entry.id;
+    copied = useKey;
     statusError = false;
     setTimeout(() => (copied = ""), 1400);
     usingEntryId = "";
@@ -377,9 +384,10 @@
     }
   }
 
-  async function freshGrantForEntry(entry: Entry): Promise<Grant | undefined> {
+  async function freshGrantForEntry(entry: Entry, secretId?: string): Promise<Grant | undefined> {
     const origin = currentOrigin || originFromUrl(currentUrl) || "aipass://popup";
-    const query = entry.fingerprint || entry.maskedSecret || entry.title;
+    const secret = entrySecrets(entry).find((item) => item.id === secretId);
+    const query = secret?.fingerprint || entry.fingerprint || entry.maskedSecret || entry.title;
     const response = await sendToWorker<LookupData>({
       type: "aipass.search",
       origin,
@@ -395,7 +403,14 @@
     entries = mergeEntries(entries, nextEntries);
     searchResults = mergeEntries(searchResults, nextEntries);
     searchGrants = mergeGrants(searchGrants, nextGrants);
-    return nextGrants.find((item) => item.entryId === entry.id);
+    const exact = nextGrants.find(
+      (item) => item.entryId === entry.id && (!secretId || item.secretId === secretId)
+    );
+    if (exact) return exact;
+    const primarySecretId = entrySecrets(entry)[0]?.id;
+    if (secretId && secretId !== primarySecretId) return undefined;
+    // Older agents issue one primary grant without a secretId.
+    return nextGrants.find((item) => item.entryId === entry.id && !item.secretId);
   }
 
   async function saveSelectedDrafts() {
@@ -547,7 +562,7 @@
       providerDefinitions.find((item) => item.id === pending.providerId) ?? matchProviderByDomain(pending.origin);
     const next = emptyDraft();
     next.providerId = pending.providerId ?? definition?.id ?? "";
-    next.title = pending.title || definition?.displayName || "Browser Provider";
+    next.title = pending.title || definition?.displayName || $t("ext.browserProvider");
     next.secretLabel = pending.secretLabel ?? "";
     next.domain = hostFromOrigin(pending.origin);
     next.consoleUrl = pending.url ?? "";
@@ -558,8 +573,11 @@
     next.interfaceType = pending.interfaceType ?? definition?.interfaces[0] ?? "custom_http";
     next.authScheme = pending.authScheme ?? definition?.authSchemes[0] ?? "custom_header";
     next.tag = (pending.tags ?? []).join(", ");
-    next.gatewayGroup = pending.gateway?.group ?? "";
-    next.gatewayRate = pending.gateway?.rate ?? "";
+    applyBillingToDraft(
+      next,
+      pending.group ?? pending.gateway?.group,
+      pending.billing ?? (pending.gateway?.rate ? { rate: pending.gateway.rate } : undefined)
+    );
     return next;
   }
 
@@ -583,8 +601,15 @@
     next.defaultModel = entry.defaultModel ?? "";
     next.modelAlias = (entry.modelAliases ?? []).map(([alias, model]) => `${alias}=${model}`).join(", ");
     next.tag = displayTags(entry).join(", ");
-    next.gatewayGroup = entry.gateway?.group ?? "";
-    next.gatewayRate = entry.gateway?.rate ?? "";
+    // Group and billing live on the key; fall back to the entry's legacy
+    // gateway blob for records written before that move.
+    const primaryKey = entrySecrets(entry)[0];
+    next.interfaceType = primaryKey?.interfaceType ?? entry.interfaceType;
+    applyBillingToDraft(
+      next,
+      primaryKey?.group ?? entry.gateway?.group,
+      primaryKey?.billing ?? (entry.gateway?.rate ? { rate: entry.gateway.rate } : undefined)
+    );
     next.quotaLabel = entry.quota?.label ?? "";
     next.quotaLimit = entry.quota?.limit ?? "";
     next.quotaRemaining = entry.quota?.remaining ?? "";
@@ -690,13 +715,6 @@
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    const gateway =
-      draft.gatewayGroup.trim() || draft.gatewayRate.trim()
-        ? {
-            group: draft.gatewayGroup.trim() || undefined,
-            rate: draft.gatewayRate.trim() || undefined
-          }
-        : undefined;
     const definition = providerDefinitions.find((provider) => provider.id === draft.providerId);
     const endpoint = endpointForProvider(
       definition,
@@ -705,7 +723,7 @@
     );
     return {
       providerId: draft.providerId || undefined,
-      title: draft.title.trim() || "Browser Provider",
+      title: draft.title.trim() || $t("ext.browserProvider"),
       secretLabel: draft.secretLabel.trim() || undefined,
       faviconUrl: resolvedDraftFaviconUrl(draft),
       endpoint: endpoint || undefined,
@@ -713,7 +731,19 @@
       authScheme: draft.authScheme,
       apiKey: includeApiKey ? draft.apiKey.trim() || undefined : undefined,
       tags: tags.length ? tags : [],
-      gateway
+      // Group and billing belong to the key, not the entry. These fields are
+      // authoritative here, so the scraped gateway blob is cleared alongside
+      // them — otherwise clearing a group in the form would silently fall back
+      // to the value the page was scraped with.
+      group: groupFromDraft(draft),
+      billing: billingFromDraft(draft),
+      gateway: undefined,
+      domains: splitCsv(draft.domain),
+      consoleEndpoint: splitCsv(draft.consoleUrl)[0],
+      defaultModel: draft.defaultModel.trim() || undefined,
+      modelAliases: pairsFromCsv(draft.modelAlias),
+      headers: pairsFromCsv(draft.header),
+      notes: draft.notes.trim() || undefined
     };
   }
 
@@ -957,6 +987,31 @@
         ];
   }
 
+  /**
+   * Group, wire format and billing rule for one key. Falls back to the entry's
+   * values for records written before these moved onto the key.
+   */
+  function secretMeta(entry: Entry, secret: ReturnType<typeof entrySecrets>[number]) {
+    const chips: Array<{ label: string; value: string; mono?: boolean }> = [];
+    const group = secret.group ?? entry.gateway?.group;
+    if (group) chips.push({ label: $t("providerDetail.keyGroup"), value: group });
+    const format = secret.interfaceType ?? entry.interfaceType;
+    if (format) chips.push({ label: $t("providerDetail.keyFormat"), value: interfaceLabel(format) });
+    const rate = secret.billing?.rate ?? entry.gateway?.rate;
+    if (rate) chips.push({ label: $t("providerDetail.gatewayRate"), value: rate, mono: true });
+    if (secret.billing?.currency) {
+      chips.push({ label: $t("providerDetail.keyBilling"), value: secret.billing.currency });
+    }
+    if (secret.billing?.unitPrice) {
+      chips.push({
+        label: $t("providerDetail.billingUnitPrice"),
+        value: secret.billing.unitPrice,
+        mono: true
+      });
+    }
+    return chips;
+  }
+
   function mergeEntries(primary: Entry[], secondary: Entry[]): Entry[] {
     const byId = new Map<string, Entry>();
     for (const entry of primary) byId.set(entry.id, entry);
@@ -1119,7 +1174,7 @@
     host: string
   ): string {
     if (definition?.kind === "official" || definition?.kind === "third_party") return definition.displayName;
-    return siteName || definition?.displayName || host || "Browser Provider";
+    return siteName || definition?.displayName || host || $t("ext.browserProvider");
   }
 
   function openEditEntry(entry: Entry) {
@@ -1150,7 +1205,7 @@
       type: "aipass.providerUpdate",
       request: {
         id: editingEntryId,
-        title: addDraft.title || "Browser Provider",
+        title: addDraft.title || $t("ext.browserProvider"),
         providerId: addDraft.providerId || undefined,
         domain: splitCsv(addDraft.domain),
         faviconUrl: resolvedDraftFaviconUrl(addDraft),
@@ -1164,7 +1219,8 @@
         modelAliases: pairsFromCsv(addDraft.modelAlias),
         headers: addDraft.header.trim() ? pairsFromCsv(addDraft.header) : undefined,
         quota: quotaFrom(addDraft),
-        gateway: gatewayFrom(addDraft),
+        group: addDraft.gatewayGroup.trim(),
+        billing: billingPatchFromDraft(addDraft),
         tags: splitCsv(addDraft.tag),
         notes: addDraft.notes || undefined
       }
@@ -1238,7 +1294,7 @@
   async function submitAddProvider() {
     if (addBusy) return;
     if (!editingDraftId && !addDraft.apiKey.trim()) {
-      statusText = $t("ext.addProviderFailed");
+      statusText = $t("ext.apiKeyRequired");
       statusError = true;
       return;
     }
@@ -1278,7 +1334,7 @@
     const response = await sendToWorker<{ entryId: string }>({
       type: "aipass.providerAdd",
       request: {
-        title: addDraft.title || definition?.displayName || "Browser Provider",
+        title: addDraft.title || definition?.displayName || $t("ext.browserProvider"),
         providerId: addDraft.providerId || definition?.id,
         domain: splitCsv(addDraft.domain),
         faviconUrl: resolvedDraftFaviconUrl(addDraft),
@@ -1292,7 +1348,8 @@
         modelAliases: pairsFromCsv(addDraft.modelAlias),
         headers: pairsFromCsv(addDraft.header),
         quota: quotaFrom(addDraft),
-        gateway: gatewayFrom(addDraft),
+        group: groupFromDraft(addDraft),
+        billing: billingFromDraft(addDraft),
         tags: splitCsv(addDraft.tag),
         notes: addDraft.notes || undefined
       }
@@ -1383,11 +1440,6 @@
       remaining: draft.quotaRemaining || undefined,
       resetAt: draft.quotaResetAt || undefined
     };
-  }
-
-  function gatewayFrom(draft: Draft) {
-    if (!draft.gatewayGroup && !draft.gatewayRate) return undefined;
-    return { group: draft.gatewayGroup || undefined, rate: draft.gatewayRate || undefined };
   }
 
   function supportsUsageRefresh(entry: Entry): boolean {
@@ -1523,10 +1575,10 @@
         variant="primary"
         block
         on:click={() => useEntry(entry)}
-        loading={usingEntryId === entry.id}
+        loading={usingEntryId === `${entry.id}:${entrySecrets(entry)[0]?.id ?? "primary"}`}
         disabled={Boolean(usingEntryId)}
       >
-        {#if copied === entry.id}<Check size={15} />{:else}<KeyRound size={15} />{/if}
+        {#if copied === `${entry.id}:${entrySecrets(entry)[0]?.id ?? "primary"}`}<Check size={15} />{:else}<KeyRound size={15} />{/if}
         {$t("ext.use")}
       </Button>
 
@@ -1540,8 +1592,30 @@
                 {secret.label || $t("providerDetail.apiKey")}
               </span>
               <code class="kv-value mono">{secret.masked}</code>
-              <span class="kv-hint"></span>
+              <span class="kv-hint">
+                <IconButton
+                  label={`${$t("ext.use")} ${secret.label || $t("providerDetail.apiKey")}`}
+                  size="sm"
+                  disabled={Boolean(usingEntryId)}
+                  on:click={() => useEntry(entry, secret.id)}
+                >
+                  {#if copied === `${entry.id}:${secret.id}`}<Check size={13} />{:else}<KeyRound size={13} />{/if}
+                </IconButton>
+              </span>
             </div>
+            <!-- Group, wire format and billing belong to this key: one relay
+                 entry can hold a differently-configured key per group. -->
+            {#if secretMeta(entry, secret).length}
+              <div class="kv-row">
+                <span class="kv-label"></span>
+                <span class="kv-value chips">
+                  {#each secretMeta(entry, secret) as chip}
+                    <span class="chip" class:mono={chip.mono}>{chip.label}: {chip.value}</span>
+                  {/each}
+                </span>
+                <span></span>
+              </div>
+            {/if}
           {/each}
           {@render kvRow($t("providerDetail.endpoint"), entryEndpoint(entry), `endpoint:${entry.id}`)}
           {@render kvRow($t("providerDetail.console"), entryConsole(entry), `console:${entry.id}`)}
@@ -1552,16 +1626,6 @@
               <code class="kv-value mono">
                 {entry.modelAliases.map(([alias, model]) => `${alias} → ${model}`).join(", ")}
               </code>
-              <span></span>
-            </div>
-          {/if}
-          {#if entry.gateway && (entry.gateway.group || entry.gateway.rate)}
-            <div class="kv-row">
-              <span class="kv-label">{$t("providerDetail.gateway")}</span>
-              <span class="kv-value chips">
-                {#if entry.gateway.group}<span class="chip">{$t("providerDetail.gatewayGroup")}: {entry.gateway.group}</span>{/if}
-                {#if entry.gateway.rate}<span class="chip mono">{$t("providerDetail.gatewayRate")}: {entry.gateway.rate}</span>{/if}
-              </span>
               <span></span>
             </div>
           {/if}
@@ -1719,7 +1783,7 @@
           </IconButton>
         </div>
         <ProviderFormFields
-          formMode={editingDraftId ? "edit" : "add"}
+          formMode="add"
           bind:draft={addDraft}
           compactProviderSelect
           showSecretLabel={false}
