@@ -62,7 +62,9 @@
   .veil {
     position: fixed;
     inset: 0;
-    z-index: 90;
+    /* Above the title bar's highest layer (AppTitleBar tops out at 110) so
+       the unlock sweep also covers the AIPass logo/title strip. */
+    z-index: 120;
     overflow: hidden;
     pointer-events: none;
   }
