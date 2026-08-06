@@ -568,6 +568,7 @@
             <button
               type="button"
               class="kv-row clickable"
+              class:copied-flash={copied === "endpoint"}
               on:click={() => onCopyValue("endpoint", endpointDisplay(selected))}
             >
               <span class="kv-label">{$t("providerDetail.endpoint")}</span>
@@ -581,6 +582,7 @@
             {@const pricingAssignment = assignmentFor(secret.id)}
             <div
               class="kv-row secret clickable"
+              class:copied-flash={copied === `secret:${secret.label}`}
               role="button"
               tabindex="0"
               aria-label={$t("providerDetail.copySecret", { label: index === 0 ? $t("providerDetail.apiKey") : secret.label })}
@@ -640,6 +642,7 @@
             <button
               type="button"
               class="kv-row clickable"
+              class:copied-flash={copied === "model"}
               on:click={() => onCopyValue("model", selected.defaultModel ?? "")}
             >
               <span class="kv-label">{$t("providerDetail.defaultModel")}</span>
@@ -660,6 +663,7 @@
             <button
               type="button"
               class="kv-row clickable"
+              class:copied-flash={copied === "console"}
               on:click={() => onCopyValue("console", consoleDisplay(selected))}
             >
               <span class="kv-label">{$t("providerDetail.console")}</span>
@@ -997,6 +1001,26 @@
     border: 0;
   }
 
+  /* 1Password-style copy feedback: the whole row flashes green and fades
+     back to its own background. Secret rows fade to surface-2 instead of
+     transparent via --row-bg. */
+  .kv-row.clickable.copied-flash {
+    animation: kv-copy-flash 900ms ease-out;
+  }
+
+  .kv-row.secret {
+    --row-bg: var(--surface-2);
+  }
+
+  @keyframes kv-copy-flash {
+    from {
+      background-color: var(--success-soft);
+    }
+    to {
+      background-color: var(--row-bg, transparent);
+    }
+  }
+
   /* Secret rows already sit on surface-2, so their hover state deepens it. */
   .kv-row.secret.clickable:hover {
     background: color-mix(in oklab, var(--text) 6%, var(--surface-2));
@@ -1063,6 +1087,9 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    /* Keep the trailing cell as tall as the 28px .copy-hint it replaces, so
+       the row height does not shrink while the "copied" label is shown. */
+    min-height: 28px;
     color: var(--text-tertiary);
     font-size: 11px;
     font-weight: 500;
