@@ -119,11 +119,11 @@
       <div class="dialog-footer">
         <span class="dialog-note">{$t("integration.backupNote")}</span>
         <div class="dialog-actions">
-          <Dialog.Close>
-            {#snippet child({ props })}
-              <Button variant="ghost" {...props} disabled={busy}>{$t("common.cancel")}</Button>
-            {/snippet}
-          </Dialog.Close>
+          <!-- Button does not forward Dialog.Close child props (onclick), so
+               closing is wired through the controlled onOpenChange instead. -->
+          <Button variant="ghost" on:click={() => onOpenChange(false)} disabled={busy}>
+            {$t("common.cancel")}
+          </Button>
           {#if allowConfirm}
             <Button variant="primary" on:click={() => onConfirm()} disabled={busy}>
               {$t("server.writeConfig")}

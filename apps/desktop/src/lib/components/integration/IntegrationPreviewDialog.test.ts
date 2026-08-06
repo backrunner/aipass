@@ -75,3 +75,11 @@ test("shows localized subtitle instead of the raw english summary", () => {
   expect(document.body.textContent).toContain("Demo");
   expect(document.body.textContent).not.toContain("Configure Codex live config");
 });
+
+test("cancel button closes the dialog through onOpenChange", () => {
+  const calls: boolean[] = [];
+  mountDialog({ onOpenChange: (next: boolean) => calls.push(next) });
+
+  clickButton(/取消|Cancel/i);
+  expect(calls).toEqual([false]);
+});

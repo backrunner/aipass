@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { Banner, Button, Badge } from "@aipass/ui";
-  import { Eye, Terminal } from "lucide-svelte";
+  import { Eye, Terminal, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type {
@@ -31,20 +32,43 @@
   const emptyState = (): ToolState => ({ busy: false, error: "" });
 
   let toolState: Record<string, ToolState> = {};
+  let appliedTimers: Record<string, ReturnType<typeof setTimeout>> = {};
   let previewOpen = false;
   let previewReadonly = false;
   let activePreview: ToolConfigPreview | undefined;
   let pendingTool: IntegrationToolDefinition | undefined;
   let confirming = false;
 
+  const APPLIED_NOTICE_MS = 4000;
+
+  function clearAppliedTimer(toolId: string) {
+    const timer = appliedTimers[toolId];
+    if (timer) clearTimeout(timer);
+    const { [toolId]: _removed, ...rest } = appliedTimers;
+    appliedTimers = rest;
+  }
+
+  function clearAllAppliedTimers() {
+    for (const timer of Object.values(appliedTimers)) clearTimeout(timer);
+    appliedTimers = {};
+  }
+
+  function dismissApplied(tool: IntegrationToolDefinition) {
+    clearAppliedTimer(tool.id);
+    patchState(tool, { applied: undefined });
+  }
+
   let lastResetKey = resetKey;
   $: if (resetKey !== lastResetKey) {
     lastResetKey = resetKey;
     toolState = {};
+    clearAllAppliedTimers();
     activePreview = undefined;
     pendingTool = undefined;
     previewOpen = false;
   }
+
+  onDestroy(clearAllAppliedTimers);
 
   $: stateFor = (tool: IntegrationToolDefinition): ToolState => toolState[tool.id] ?? emptyState();
 
@@ -83,6 +107,8 @@
     try {
       const applied = await onApply(tool);
       patchState(tool, { applied, error: "" });
+      clearAppliedTimer(tool.id);
+      appliedTimers[tool.id] = setTimeout(() => dismissApplied(tool), APPLIED_NOTICE_MS);
       previewOpen = false;
     } catch (err) {
       patchState(tool, { error: String(err) });
@@ -137,7 +163,17 @@
           {/if}
           {#if state.applied}
             <Banner tone="success">
-              {$t("providerDetail.configured", { title: state.applied.entryTitle })} <code>{state.applied.targetPath}</code>
+              <span class="applied-message">
+                {$t("providerDetail.configured", { title: state.applied.entryTitle })} <code>{state.applied.targetPath}</code>
+              </span>
+              <button
+                type="button"
+                class="applied-close"
+                aria-label={$t("common.close")}
+                on:click={() => dismissApplied(tool)}
+              >
+                <X size={14} />
+              </button>
             </Banner>
           {/if}
         </div>
@@ -214,6 +250,27 @@
     .tool-options-label {
       color: var(--text-tertiary);
       font-size: 11px;
+    }
+  }
+
+  .applied-message {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .applied-close {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    opacity: 0.7;
+
+    &:hover {
+      opacity: 1;
+      background: rgba(15, 17, 16, 0.08);
     }
   }
 </style>

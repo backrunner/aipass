@@ -65,7 +65,6 @@
   import { passwordStrength } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry } from "./lib/utils/server";
-  import { integrationToolName } from "./lib/utils/integrations";
   import { checkForUpdates, installUpdate } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
@@ -1472,8 +1471,6 @@
 
   async function applyProxyIntegration(tool: ToolConfigTarget, routeId: string): Promise<ToolConfigApplyResult> {
     const applied = await invokeTauri<ToolConfigApplyResult>("tool_config_proxy_apply", { tool, routeId });
-    notice = localizedMessage("server.configWritten");
-    setTimeout(() => (notice = ""), 2200);
     return applied;
   }
 
@@ -1669,11 +1666,6 @@
     error = "";
     try {
       const result = await invokeTauri<ToolConfigApplyResult>("tool_config_apply", { request });
-      notice = localizedMessage("notice.toolConfigured", {
-        title: result.entryTitle,
-        tool: integrationToolName(result.tool)
-      });
-      setTimeout(() => (notice = ""), 2200);
       return result;
     } catch (err) {
       error = String(err);
