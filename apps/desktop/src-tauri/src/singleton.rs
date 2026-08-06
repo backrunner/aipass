@@ -284,6 +284,11 @@ fn singleton_socket_path() -> Result<PathBuf> {
     Ok(desktop_runtime_dir()?.join(singleton_socket_name(current_desktop_instance())))
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn current_singleton_socket_path() -> Result<PathBuf> {
+    singleton_socket_path()
+}
+
 fn current_desktop_instance() -> DesktopInstanceKind {
     if !cfg!(debug_assertions) {
         DesktopInstanceKind::Release
@@ -300,6 +305,15 @@ fn singleton_socket_name(instance: DesktopInstanceKind) -> &'static str {
         DesktopInstanceKind::PackagedDevelopment => "desktop-dev-bundle.sock",
         DesktopInstanceKind::LiveDevelopment => "desktop-dev-server.sock",
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn should_install_tray_autostart() -> bool {
+    should_install_tray_autostart_for(current_desktop_instance())
+}
+
+fn should_install_tray_autostart_for(instance: DesktopInstanceKind) -> bool {
+    matches!(instance, DesktopInstanceKind::PackagedDevelopment)
 }
 
 #[cfg(target_os = "windows")]
@@ -340,8 +354,9 @@ fn desktop_runtime_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        current_desktop_instance, incoming_version_replaces_current, singleton_socket_name,
-        DesktopInstanceKind, SingletonCommand, SingletonRequest,
+        current_desktop_instance, incoming_version_replaces_current,
+        should_install_tray_autostart_for, singleton_socket_name, DesktopInstanceKind,
+        SingletonCommand, SingletonRequest,
     };
 
     #[test]
@@ -388,6 +403,19 @@ mod tests {
             DesktopInstanceKind::LiveDevelopment
         };
         assert_eq!(current_desktop_instance(), expected);
+    }
+
+    #[test]
+    fn only_packaged_development_registers_tray_autostart() {
+        assert!(!should_install_tray_autostart_for(
+            DesktopInstanceKind::Release
+        ));
+        assert!(should_install_tray_autostart_for(
+            DesktopInstanceKind::PackagedDevelopment
+        ));
+        assert!(!should_install_tray_autostart_for(
+            DesktopInstanceKind::LiveDevelopment
+        ));
     }
 
     #[test]

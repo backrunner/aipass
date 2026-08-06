@@ -79,6 +79,39 @@ pub(crate) fn ensure_agent_running_for_desktop(client: &AgentClient) -> Result<(
     }
 }
 
+pub(crate) fn install_tray_autostart_for_current_desktop(
+    desktop_binary: &Path,
+    vault_dir: &Path,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let singleton_socket =
+            singleton::current_singleton_socket_path().map_err(|err| err.to_string())?;
+        aipass_agent::install_tray_autostart_with_socket(
+            desktop_binary,
+            vault_dir,
+            &singleton_socket,
+        )
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        aipass_agent::install_tray_autostart(desktop_binary, vault_dir)
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn stop_tray_autostart_for_current_desktop(vault_dir: &Path) -> Result<(), String> {
+    let singleton_socket =
+        singleton::current_singleton_socket_path().map_err(|err| err.to_string())?;
+    aipass_agent::stop_tray_autostart_with_socket(vault_dir, &singleton_socket)
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
 fn agent_request<T: DeserializeOwned>(app: &AppHandle, request: AgentRequest) -> Result<T, String> {
     let client = agent_client(app)?;
     ensure_agent_running_for_desktop(&client)?;
@@ -1552,6 +1585,38 @@ fn ensure_agent_resident_async(app: AppHandle) {
                 return;
             }
         };
+
+        #[cfg(target_os = "macos")]
+        match aipass_agent::agent_binary_path() {
+            Ok(agent_binary) => {
+                if let Err(err) =
+                    aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
+                {
+                    eprintln!("failed to refresh AIPass agent autostart: {err}");
+                }
+            }
+            Err(err) => {
+                eprintln!("failed to resolve AIPass agent binary: {err}");
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        if singleton::should_install_tray_autostart() {
+            match std::env::current_exe() {
+                Ok(desktop_binary) => {
+                    if let Err(err) = install_tray_autostart_for_current_desktop(
+                        &desktop_binary,
+                        &client.config.vault_dir,
+                    ) {
+                        eprintln!("failed to refresh AIPass tray autostart: {err}");
+                    }
+                }
+                Err(err) => {
+                    eprintln!("failed to resolve AIPass desktop binary: {err}");
+                }
+            }
+        }
+
         if let Err(err) = ensure_agent_running_for_desktop(&client) {
             eprintln!("failed to ensure AIPass agent is running: {err}");
         }

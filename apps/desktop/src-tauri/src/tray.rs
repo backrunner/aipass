@@ -1,5 +1,6 @@
 use crate::{
     agent_client, agent_error_to_string, agent_request_no_unlock, ensure_agent_running_for_desktop,
+    install_tray_autostart_for_current_desktop,
 };
 use aipass_agent_protocol::{AgentRequest, LockReason, ProxyStatus, SessionStatus};
 #[cfg(target_os = "macos")]
@@ -625,8 +626,7 @@ fn install_login_agent_async(app: AppHandle, feedback: TrayFeedback) {
             let desktop_binary = std::env::current_exe().map_err(|err| err.to_string())?;
             aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
                 .map_err(|err| err.to_string())?;
-            aipass_agent::install_tray_autostart(&desktop_binary, &client.config.vault_dir)
-                .map_err(|err| err.to_string())?;
+            install_tray_autostart_for_current_desktop(&desktop_binary, &client.config.vault_dir)?;
             ensure_agent_running_for_desktop(&client)
         });
         match result {
@@ -646,7 +646,9 @@ fn quit_aipass_async(app: AppHandle) {
     thread::spawn(move || {
         #[cfg(target_os = "macos")]
         if let Ok(client) = agent_client(&app) {
-            if let Err(err) = aipass_agent::stop_tray_autostart(&client.config.vault_dir) {
+            if let Err(err) =
+                crate::stop_tray_autostart_for_current_desktop(&client.config.vault_dir)
+            {
                 eprintln!("failed to stop AIPass tray autostart before quit: {err}");
             }
         }

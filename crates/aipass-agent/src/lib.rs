@@ -19,6 +19,11 @@ pub use autostart::{
     uninstall_autostart as uninstall_agent_autostart, uninstall_tray_autostart,
     AgentAutostartStatus, TrayAutostartStatus,
 };
+#[cfg(target_os = "macos")]
+pub use autostart::{
+    install_tray_autostart_with_socket, stop_tray_autostart_with_socket,
+    uninstall_tray_autostart_with_socket,
+};
 pub use client::{AgentClient, AgentClientConfig, AgentCommandError};
 pub use launcher::{agent_binary_candidates, agent_binary_path};
 pub use paths::{
