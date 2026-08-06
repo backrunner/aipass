@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
+  import { Table } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { ServerUsageSummary } from "../../types";
@@ -139,6 +140,7 @@
     </table>
   {:else}
     <div class="usage-empty">
+      <span class="usage-empty-icon"><Table size={18} /></span>
       <strong class="usage-empty-title">{$t("server.usageEmpty")}</strong>
       <span class="usage-empty-desc">{$t("server.usageEmptyDesc")}</span>
     </div>
@@ -220,8 +222,20 @@
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 18px 16px;
+    padding: 22px 16px;
     text-align: center;
+    color: var(--text-tertiary);
+  }
+
+  .usage-empty-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-bottom: 4px;
+    border-radius: 999px;
+    background: var(--surface-2);
     color: var(--text-tertiary);
   }
 

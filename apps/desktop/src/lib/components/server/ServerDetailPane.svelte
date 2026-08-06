@@ -143,7 +143,7 @@
       <UsageChart {series} />
     </Card>
 
-    <Card title={$t("server.usageBreakdown")} padded={false}>
+    <Card title={$t("server.usageBreakdown")} padded={false} collapsible>
       <UsageBreakdown {usage} {entries} />
     </Card>
 
