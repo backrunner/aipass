@@ -81,6 +81,13 @@
       color: var(--text);
       font-size: 13px;
 
+      /* @aipass/ui Field.svelte paints a global `.field input:focus` ring;
+         the wrapper .control already owns the focus highlight, so the bare
+         input must stay quiet or a second ring hugs the text column. */
+      &:focus {
+        box-shadow: none;
+      }
+
       &::placeholder {
         color: var(--text-tertiary);
       }
