@@ -20,6 +20,7 @@
     ThemePreference
   } from "../../types";
   import { checkForUpdates, installUpdate, type UpdateCheckResult } from "../../services/updates";
+  import { buildTimeLabel } from "../../build";
   import { Badge, Banner, Button, Field, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
@@ -185,6 +186,7 @@
   $: updateErrorText = resolveMessage($t, updateError);
 
   let appVersion = "";
+  const buildTime = buildTimeLabel();
   onMount(() => {
     void (async () => {
       try {
@@ -626,6 +628,12 @@
                     <span class="row-desc">AIPass v{appVersion}</span>
                   </div>
                 {/if}
+                <div class="row">
+                  <div class="row-text">
+                    <span class="row-label">{$t("settings.buildTime")}</span>
+                  </div>
+                  <span class="row-desc">{buildTime}</span>
+                </div>
                 {#if updateCheck?.available}
                   <div class="update-summary">
                     <div class="update-summary-text">
