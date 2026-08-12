@@ -24,7 +24,11 @@ const preview: ToolConfigPreview = {
 let app: Record<string, unknown> | undefined;
 
 afterEach(async () => {
-  if (app) await unmount(app as never);
+  if (app) {
+    await unmount(app as never);
+    // bits-ui releases the shared body scroll lock on a 24 ms timer.
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
+  }
   app = undefined;
   document.body.innerHTML = "";
 });
