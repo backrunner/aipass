@@ -30,6 +30,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -54,6 +55,36 @@ use std::ffi::OsString;
 #[derive(Default)]
 struct AppState {
     auth_tasks: AuthTasks,
+    window: Mutex<DesktopWindowState>,
+}
+
+#[derive(Default)]
+struct DesktopWindowState {
+    frontend_ready: bool,
+    target: String,
+}
+
+impl DesktopWindowState {
+    fn set_target(&mut self, target: &str) -> bool {
+        self.target = normalize_window_target(target).to_string();
+        self.frontend_ready
+    }
+
+    fn complete_startup(&mut self) -> String {
+        self.frontend_ready = true;
+        normalize_window_target(&self.target).to_string()
+    }
+}
+
+impl AppState {
+    fn window_state(&self) -> MutexGuard<'_, DesktopWindowState> {
+        self.window.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    pub(crate) fn window_target(&self) -> String {
+        let target = self.window_state().target.clone();
+        normalize_window_target(&target).to_string()
+    }
 }
 
 fn agent_client(_app: &AppHandle) -> Result<AgentClient, String> {
@@ -189,6 +220,7 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
             .api_key
             .map(|value| value.into_inner())
             .and_then(non_empty),
+        secret_label: request.secret_label.and_then(non_empty),
         default_model: request.default_model.and_then(non_empty),
         model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
@@ -1539,7 +1571,14 @@ fn launch_window_target() -> String {
         .unwrap_or_else(|| "main".to_string())
 }
 
-fn configure_window_target(app: &AppHandle, target: &str) {
+fn normalize_window_target(target: &str) -> &str {
+    match target {
+        "main" | "unlock" | "quick-access" | "server" | "tray" => target,
+        _ => "main",
+    }
+}
+
+fn prepare_window_target(app: &AppHandle, target: &str) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -1550,9 +1589,6 @@ fn configure_window_target(app: &AppHandle, target: &str) {
         return;
     }
 
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-
     let (title, width, height) = match target {
         "unlock" => ("AIPass Unlock", 420.0, 560.0),
         "quick-access" => ("AIPass Quick Access", 520.0, 640.0),
@@ -1562,18 +1598,73 @@ fn configure_window_target(app: &AppHandle, target: &str) {
     let _ = window.set_size(Size::Logical(LogicalSize { width, height }));
     configure_window_chrome(&window);
     let _ = window.center();
-    let _ = window.show();
+}
+
+fn reveal_window_target(app: &AppHandle, target: &str) -> Result<(), String> {
+    if target == "tray" {
+        prepare_window_target(app, target);
+        return Ok(());
+    }
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main desktop window is unavailable".to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        let _ = app.show();
+    }
+
+    window.show().map_err(|err| err.to_string())?;
+    let _ = window.unminimize();
     let _ = window.set_focus();
+    Ok(())
 }
 
 pub(crate) fn activate_window_target(app: &AppHandle, target: &str) {
-    if target == "tray" {
-        return;
+    let state = app.state::<AppState>();
+    let mut window_state = state.window_state();
+    let frontend_ready = window_state.set_target(target);
+    let target = window_state.target.clone();
+    prepare_window_target(app, &target);
+    if frontend_ready {
+        let _ = reveal_window_target(app, &target);
     }
-    configure_window_target(app, target);
+    drop(window_state);
+
     if target == "server" {
         let _ = app.emit("open-server-workspace", ());
     }
+}
+
+pub(crate) fn reveal_existing_window_target(app: &AppHandle, target: &str) -> bool {
+    if app.get_webview_window("main").is_none() {
+        return false;
+    }
+
+    let state = app.state::<AppState>();
+    let mut window_state = state.window_state();
+    let frontend_ready = window_state.set_target(target);
+    let target = window_state.target.clone();
+    if frontend_ready {
+        let _ = reveal_window_target(app, &target);
+    }
+    drop(window_state);
+    if target == "server" {
+        let _ = app.emit("open-server-workspace", ());
+    }
+    true
+}
+
+pub(crate) fn complete_desktop_startup(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut window_state = state.window_state();
+    let target = window_state.complete_startup();
+    prepare_window_target(app, &target);
+    let result = reveal_window_target(app, &target);
+    drop(window_state);
+    result
 }
 
 fn ensure_agent_resident_async(app: AppHandle) {
@@ -1693,7 +1784,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .manage(AppState::default())
         .setup(move |app| {
-            configure_window_target(app.handle(), &launch_target);
+            activate_window_target(app.handle(), &launch_target);
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
@@ -1719,6 +1810,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             window_target,
+            desktop_ready,
             vault_status,
             session_touch,
             preferences_load,
@@ -1761,6 +1853,7 @@ pub fn run() {
             trash_empty,
             secret_reveal_field,
             secret_add,
+            secret_update,
             secret_metadata_set,
             secret_remove,
             devices_list,
@@ -1812,6 +1905,25 @@ mod tests {
         assert_eq!(endpoints[0].kind, EndpointKind::Api);
         assert_eq!(endpoints[1].kind, EndpointKind::Api);
         assert_eq!(endpoints[2].kind, EndpointKind::Console);
+    }
+
+    #[test]
+    fn desktop_window_stays_gated_until_frontend_is_ready() {
+        let mut state = DesktopWindowState::default();
+
+        assert!(!state.set_target("main"));
+        assert!(!state.set_target("server"));
+        assert_eq!(state.complete_startup(), "server");
+        assert!(state.set_target("main"));
+    }
+
+    #[test]
+    fn desktop_window_target_defaults_to_main() {
+        let mut state = DesktopWindowState::default();
+
+        assert_eq!(state.complete_startup(), "main");
+        assert!(state.set_target("unknown"));
+        assert_eq!(state.target, "main");
     }
 
     #[test]

@@ -89,9 +89,10 @@
   export let onDelete: () => MaybePromise = () => {};
   export let onArchive: () => MaybePromise = () => {};
   export let onTrash: () => MaybePromise = () => {};
-  export let onRevealSecret: (label: string) => MaybePromise = () => {};
-  export let onCopySecretByLabel: (label: string) => MaybePromise = () => {};
-  export let onRemoveSecret: (label: string) => MaybePromise = () => {};
+  export let onRevealSecret: (secretId: string) => MaybePromise = () => {};
+  export let onCopySecret: (secretId: string) => MaybePromise = () => {};
+  export let onUpdateSecret: (secretId: string, label: string, apiKey?: string) => MaybePromise = () => {};
+  export let onRemoveSecret: (secretId: string) => MaybePromise = () => {};
   export let onAddSecret: () => MaybePromise = () => {};
   export let onCopyValue: (label: string, value: string) => MaybePromise = () => {};
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
@@ -130,6 +131,9 @@
   export let onDeletePricingVersion: (groupId: string, effectiveFrom: number) => MaybePromise = () => {};
 
   let showAddSecret = false;
+  let editingSecretId = "";
+  let editingSecretLabel = "";
+  let editingSecretValue = "";
   let usageDialogOpen = false;
   type CodexIntegrationMode = CodexApiKeyMode;
   let codexIntegrationMode: CodexIntegrationMode = "experimental_bearer_token";
@@ -178,7 +182,35 @@
     ? pricingGroups.find((item) => item.id === pricingDialogGroupId)
     : undefined;
 
-  $: primaryLabel = selected?.secretRefs[0]?.label ?? "primary";
+  $: if (editingSecretId && !selected?.secretRefs.some((secret) => secret.id === editingSecretId)) {
+    cancelSecretEdit();
+  }
+
+  function beginSecretEdit(secret: SecretRef) {
+    editingSecretId = secret.id;
+    editingSecretLabel = secret.label;
+    editingSecretValue = "";
+  }
+
+  function cancelSecretEdit() {
+    editingSecretId = "";
+    editingSecretLabel = "";
+    editingSecretValue = "";
+  }
+
+  async function saveSecretEdit() {
+    if (!editingSecretId || !editingSecretLabel.trim()) return;
+    try {
+      await onUpdateSecret(
+        editingSecretId,
+        editingSecretLabel.trim(),
+        editingSecretValue.trim() || undefined
+      );
+      cancelSecretEdit();
+    } catch {
+      // Parent keeps the visible error and this editor remains open.
+    }
+  }
   $: hasQuota = Boolean(
     selected?.quota &&
       (selected.quota.label || selected.quota.limit || selected.quota.remaining || selected.quota.resetAt)
@@ -423,6 +455,12 @@
           <section class="form-section">
             <h3 class="section-title">{$t("providerDetail.apiKey")} · {$t("pricing.group")}</h3>
             <div class="section-fields">
+              <Field label={$t("providerDetail.secretLabel")}>
+                <input
+                  bind:value={draft.secretLabel}
+                  placeholder={$t("providerForm.secretLabelPlaceholder")}
+                />
+              </Field>
               <div class="key-pricing">
                 <SelectField
                   label={$t("pricing.group")}
@@ -473,19 +511,49 @@
             <div class="section-fields">
               {#each selected.secretRefs.slice(1) as secret}
                 {@const assignment = assignmentFor(secret.id)}
-                <div class="key-row">
-                  <span class="key-row-label">{secret.label}</span>
-                  <code class="key-row-value mono">{revealedSecrets[secret.label] || fullyMasked()}</code>
-                  <button
-                    type="button"
-                    class="key-row-remove"
-                    aria-label={$t("providerDetail.removeKey")}
-                    on:click={() => onRemoveSecret(secret.label)}
-                    disabled={secretBusy === secret.label}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
+                {#if editingSecretId === secret.id}
+                  <div class="secret-edit-row">
+                    <input
+                      bind:value={editingSecretLabel}
+                      aria-label={$t("providerDetail.secretLabel")}
+                      placeholder={$t("providerDetail.secretLabelPlaceholder")}
+                    />
+                    <input
+                      bind:value={editingSecretValue}
+                      aria-label={$t("providerDetail.secretValue")}
+                      type="password"
+                      autocomplete="off"
+                      placeholder={$t("providerForm.keepCurrent")}
+                    />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={secretBusy === secret.id || !editingSecretLabel.trim()}
+                      on:click={saveSecretEdit}
+                    >{$t("common.save")}</Button>
+                    <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
+                      <Undo2 size={13} />
+                    </IconButton>
+                  </div>
+                {:else}
+                  <div class="key-row">
+                    <span class="key-row-label">{secret.label}</span>
+                    <code class="key-row-value mono">{revealedSecrets[secret.id] || fullyMasked()}</code>
+                    <div class="key-row-actions">
+                      <IconButton size="sm" label={$t("providerDetail.editKey")} on:click={() => beginSecretEdit(secret)}>
+                        <Pencil size={13} />
+                      </IconButton>
+                      <IconButton
+                        size="sm"
+                        label={$t("providerDetail.removeKey")}
+                        on:click={() => onRemoveSecret(secret.id)}
+                        disabled={secretBusy === secret.id}
+                      >
+                        <Trash2 size={13} />
+                      </IconButton>
+                    </div>
+                  </div>
+                {/if}
                 <div class="key-pricing">
                   <SelectField
                     label={$t("pricing.group")}
@@ -578,52 +646,86 @@
               </span>
             </button>
           {/if}
-          {#each selected.secretRefs as secret, index}
+          {#each selected.secretRefs as secret}
             {@const pricingAssignment = assignmentFor(secret.id)}
-            <div
-              class="kv-row secret clickable"
-              class:copied-flash={copied === `secret:${secret.label}`}
-              role="button"
-              tabindex="0"
-              aria-label={$t("providerDetail.copySecret", { label: index === 0 ? $t("providerDetail.apiKey") : secret.label })}
-              on:click={() => onCopySecretByLabel(secret.label)}
-              on:keydown|self={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onCopySecretByLabel(secret.label);
-                }
-              }}
-            >
-              <span class="kv-label">
-                <KeyRound size={13} />
-                {index === 0 ? $t("providerDetail.apiKey") : secret.label}
-              </span>
-              <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.label])}>
-                {revealedSecrets[secret.label] || fullyMasked()}
-              </code>
-              <span class="kv-actions">
-                {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
-                  <span class="pricing-badge">
-                    {#if pricingAssignment.groupId}{pricingGroupName(pricingAssignment.groupId)}{/if}
-                    {#if pricingAssignment.multiplier !== 1}×{pricingAssignment.multiplier}{/if}
-                  </span>
-                {/if}
-                {#if copied === `secret:${secret.label}`}
-                  <span class="kv-hint copied"><Check size={13} /> {$t("providerDetail.copied")}</span>
-                {:else}
-                  <span class="copy-hint"><Copy size={13} /></span>
-                {/if}
-                <button
-                  type="button"
-                  class="icon-btn"
-                  aria-label={revealedSecrets[secret.label] ? $t("providerDetail.hideSecret", { label: secret.label }) : $t("providerDetail.revealSecret", { label: secret.label })}
-                  aria-pressed={Boolean(revealedSecrets[secret.label])}
-                  on:click|stopPropagation={() => onRevealSecret(secret.label)}
-                >
-                  {#if revealedSecrets[secret.label]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-                </button>
-              </span>
-            </div>
+            {#if editingSecretId === secret.id}
+              <div class="credential-inline-editor">
+                <input
+                  bind:value={editingSecretLabel}
+                  aria-label={$t("providerDetail.secretLabel")}
+                  placeholder={$t("providerDetail.secretLabelPlaceholder")}
+                />
+                <input
+                  bind:value={editingSecretValue}
+                  aria-label={$t("providerDetail.secretValue")}
+                  type="password"
+                  autocomplete="off"
+                  placeholder={$t("providerForm.keepCurrent")}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={secretBusy === secret.id || !editingSecretLabel.trim()}
+                  on:click={saveSecretEdit}
+                >{$t("common.save")}</Button>
+                <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
+                  <Undo2 size={13} />
+                </IconButton>
+              </div>
+            {:else}
+              <div
+                class="kv-row secret clickable"
+                class:copied-flash={copied === `secret:${secret.id}`}
+                role="button"
+                tabindex="0"
+                aria-label={$t("providerDetail.copySecret", { label: secret.label })}
+                on:click={() => onCopySecret(secret.id)}
+                on:keydown|self={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onCopySecret(secret.id);
+                  }
+                }}
+              >
+                <span class="kv-label">
+                  <KeyRound size={13} />
+                  {secret.label}
+                </span>
+                <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>
+                  {revealedSecrets[secret.id] || fullyMasked()}
+                </code>
+                <span class="kv-actions">
+                  {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
+                    <span class="pricing-badge">
+                      {#if pricingAssignment.groupId}{pricingGroupName(pricingAssignment.groupId)}{/if}
+                      {#if pricingAssignment.multiplier !== 1}×{pricingAssignment.multiplier}{/if}
+                    </span>
+                  {/if}
+                  {#if copied === `secret:${secret.id}`}
+                    <span class="kv-hint copied"><Check size={13} /> {$t("providerDetail.copied")}</span>
+                  {:else}
+                    <span class="copy-hint"><Copy size={13} /></span>
+                  {/if}
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    aria-label={$t("providerDetail.editKey")}
+                    on:click|stopPropagation={() => beginSecretEdit(secret)}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    aria-label={revealedSecrets[secret.id] ? $t("providerDetail.hideSecret", { label: secret.label }) : $t("providerDetail.revealSecret", { label: secret.label })}
+                    aria-pressed={Boolean(revealedSecrets[secret.id])}
+                    on:click|stopPropagation={() => onRevealSecret(secret.id)}
+                  >
+                    {#if revealedSecrets[secret.id]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+                  </button>
+                </span>
+              </div>
+            {/if}
             <!-- Group, wire format and billing belong to this key: one relay
                  entry can hold a differently-configured key per group. -->
             {#if secretMeta(selected, secret).length}
@@ -638,6 +740,42 @@
               </div>
             {/if}
           {/each}
+          <div class="credential-add-row">
+            {#if showAddSecret}
+              <div class="add-secret-row">
+                <input
+                  bind:value={newSecretLabel}
+                  aria-label={$t("providerDetail.secretLabel")}
+                  placeholder={$t("providerDetail.secretLabelPlaceholder")}
+                />
+                <input
+                  bind:value={newSecretKey}
+                  aria-label={$t("providerDetail.secretValue")}
+                  type="password"
+                  autocomplete="off"
+                  placeholder={$t("providerDetail.apiKey")}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={secretBusy === "add" || !newSecretLabel.trim() || !newSecretKey.trim()}
+                  on:click={() => onAddSecret()}
+                >{$t("common.save")}</Button>
+                <IconButton
+                  size="sm"
+                  label={$t("common.cancel")}
+                  on:click={() => { showAddSecret = false; newSecretKey = ""; }}
+                >
+                  <Undo2 size={13} />
+                </IconButton>
+              </div>
+            {:else}
+              <button type="button" class="add-chip" on:click={() => (showAddSecret = true)}>
+                <Plus size={12} />
+                <span>{$t("providerDetail.addKey")}</span>
+              </button>
+            {/if}
+          </div>
           {#if selected.defaultModel}
             <button
               type="button"
@@ -1202,6 +1340,12 @@
     font-size: 13px;
   }
 
+  .key-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .key-row-remove {
     display: inline-flex;
     align-items: center;
@@ -1250,7 +1394,7 @@
     gap: 4px;
     align-self: center;
     flex-shrink: 0;
-    margin-right: 4px;
+    margin-inline-end: 4px;
     padding: 3px 8px;
     border-radius: 999px;
     background: var(--accent-soft);
@@ -1260,6 +1404,8 @@
     white-space: nowrap;
   }
 
+  .secret-edit-row,
+  .credential-inline-editor,
   .add-secret-row {
     display: grid;
     grid-template-columns: 130px minmax(0, 1fr) auto auto;
@@ -1267,6 +1413,8 @@
     align-items: center;
 
     input {
+      width: 100%;
+      min-width: 0;
       min-height: 32px;
       padding: 0 10px;
       border: 1px solid var(--border);
@@ -1282,6 +1430,17 @@
         box-shadow: 0 0 0 3px var(--accent-ring);
       }
     }
+  }
+
+  .credential-inline-editor {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--divider);
+    background: var(--surface-2);
+  }
+
+  .credential-add-row {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--divider);
   }
 
   .add-chip {
@@ -1385,5 +1544,14 @@
       justify-content: flex-end;
     }
 
+    .secret-edit-row,
+    .credential-inline-editor,
+    .add-secret-row {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+
+      > input:first-of-type {
+        grid-column: 1 / -1;
+      }
+    }
   }
 </style>

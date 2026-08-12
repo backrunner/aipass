@@ -54,16 +54,13 @@ async fn agent_request_no_unlock_async<T: DeserializeOwned + Send + 'static>(
 }
 
 #[tauri::command]
-pub(crate) fn window_target() -> Option<String> {
-    std::env::var("AIPASS_WINDOW_TARGET")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| {
-            matches!(
-                value.as_str(),
-                "main" | "unlock" | "quick-access" | "server" | "tray"
-            )
-        })
+pub(crate) fn window_target(state: State<'_, AppState>) -> Option<String> {
+    Some(state.window_target())
+}
+
+#[tauri::command]
+pub(crate) fn desktop_ready(app: AppHandle) -> Result<(), String> {
+    crate::complete_desktop_startup(&app)
 }
 
 #[tauri::command]
@@ -435,6 +432,7 @@ pub(crate) async fn vault_lock(app: AppHandle) -> Result<VaultStatus, String> {
         },
     )
     .await?;
+    let _ = refresh_app.emit(crate::tray::VAULT_STATUS_CHANGED_EVENT, ());
     let _ = refresh_app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
     Ok(VaultStatus {
         exists: status.exists,
@@ -615,6 +613,27 @@ pub(crate) async fn secret_add(
         },
     )
     .await
+}
+
+#[tauri::command]
+pub(crate) async fn secret_update(
+    app: AppHandle,
+    id: Uuid,
+    secret_id: String,
+    label: String,
+    api_key: Option<SensitiveString>,
+) -> Result<(), String> {
+    let _: serde_json::Value = agent_request_async(
+        app,
+        AgentRequest::SecretUpdate {
+            id,
+            secret_id,
+            label,
+            secret: api_key,
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Set a stored key's gateway group, wire format and billing rule. Unset

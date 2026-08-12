@@ -291,6 +291,7 @@ fn handle_request_inner(
             interface_type,
             auth_scheme,
             api_key,
+            secret_label,
             default_model,
             model_aliases,
             headers,
@@ -331,7 +332,7 @@ fn handle_request_inner(
                 interface_type,
                 auth_scheme,
                 api_key: api_key.into_inner(),
-                secret_label: None,
+                secret_label: secret_label.and_then(non_empty),
                 default_model: default_model.and_then(non_empty),
                 model_aliases: model_aliases
                     .into_iter()
@@ -359,6 +360,7 @@ fn handle_request_inner(
             interface_type,
             auth_scheme,
             api_key,
+            secret_label,
             default_model,
             model_aliases,
             headers,
@@ -399,6 +401,7 @@ fn handle_request_inner(
                 interface_type,
                 auth_scheme,
                 api_key: api_key.map(|value| value.into_inner()).and_then(non_empty),
+                secret_label,
                 default_model: default_model.and_then(non_empty),
                 model_aliases: model_aliases
                     .into_iter()

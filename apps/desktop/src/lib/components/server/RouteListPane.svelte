@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { Badge, SwitchField } from "@aipass/ui";
-  import { ChevronDown, ChevronUp, Plus, Server, Trash2 } from "lucide-svelte";
+  import { ContextMenu, Switch } from "bits-ui";
+  import { ChevronDown, ChevronUp, Pencil, Plus, Server, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProxyRouteConfig } from "../../types";
@@ -12,7 +12,7 @@
   export let selectedRouteId = "";
   export let busy = "";
   export let onSelect: (routeId: string) => MaybePromise = () => {};
-  export let onSave: (route: ProxyRouteConfig) => MaybePromise = () => {};
+  export let onSave: (route: ProxyRouteConfig) => MaybePromise<boolean | void> = () => {};
   export let onDelete: (routeId: string) => MaybePromise = () => {};
   export let onToggle: (routeId: string, enabled: boolean) => MaybePromise = () => {};
   export let onMove: (routeId: string, direction: -1 | 1) => MaybePromise = () => {};
@@ -26,10 +26,14 @@
   }
 
   function openEdit(route: ProxyRouteConfig) {
-    selectedRouteId = route.id;
-    onSelect(route.id);
+    selectRoute(route);
     editingRoute = route;
     dialogOpen = true;
+  }
+
+  function selectRoute(route: ProxyRouteConfig) {
+    selectedRouteId = route.id;
+    void onSelect(route.id);
   }
 
   function closeDialog() {
@@ -38,7 +42,7 @@
   }
 
   function saveDialog(route: ProxyRouteConfig) {
-    void onSave(route);
+    return onSave(route);
   }
 </script>
 
@@ -63,50 +67,104 @@
       </div>
     {/if}
     {#each routes as route, index (route.id)}
-      <div
-        role="option"
-        tabindex="0"
-        aria-selected={selectedRouteId === route.id}
-        class="entry"
-        class:selected={selectedRouteId === route.id}
-        on:click={() => openEdit(route)}
-        on:keydown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            openEdit(route);
-          }
-        }}
-      >
-        <div class="entry-main">
-          <div class="entry-top">
-            <span class="title">{route.name}</span>
-            <Badge size="sm">
-              {route.strategy === "round_robin" ? $t("server.strategyRoundRobin") : $t("server.strategyFallback")}
-            </Badge>
-          </div>
-          <span class="subtitle">{$t("server.memberCount", { count: route.targets.length })}</span>
-        </div>
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-        <div class="entry-side" on:click|stopPropagation>
-          <SwitchField
-            label={$t("server.enabled")}
-            checked={route.enabled}
-            disabled={Boolean(busy)}
-            onCheckedChange={(enabled) => onToggle(route.id, enabled)}
-          />
-          <div class="entry-actions">
-            <button type="button" title={$t("server.moveUp")} aria-label={$t("server.moveUp")} disabled={Boolean(busy) || index === 0} on:click={() => onMove(route.id, -1)}>
+      <ContextMenu.Root>
+        <ContextMenu.Trigger>
+          {#snippet child({ props })}
+            <div
+              {...props}
+              role="option"
+              tabindex="0"
+              aria-selected={selectedRouteId === route.id}
+              class="entry"
+              class:selected={selectedRouteId === route.id}
+              on:click={(event) => {
+                if (!(event.target as Element).closest("[data-route-control]")) selectRoute(route);
+              }}
+              on:contextmenu={() => selectRoute(route)}
+              on:keydown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  selectRoute(route);
+                }
+              }}
+            >
+              <span class="entry-icon" aria-hidden="true"><Server size={16} /></span>
+              <div class="entry-content">
+                <div class="entry-line entry-line-primary">
+                  <span class="title">{route.name}</span>
+                  <span class="entry-toggle" data-route-control>
+                    <Switch.Root
+                      class="route-switch"
+                      checked={route.enabled}
+                      disabled={Boolean(busy)}
+                      aria-label={`${route.name}: ${$t("server.enabled")}`}
+                      onCheckedChange={(enabled) => onToggle(route.id, enabled)}
+                    >
+                      <Switch.Thumb class="route-switch-thumb" />
+                    </Switch.Root>
+                  </span>
+                </div>
+                <div class="entry-line entry-line-secondary">
+                  <span class="subtitle">
+                    {route.strategy === "round_robin" ? $t("server.strategyRoundRobin") : $t("server.strategyFallback")}
+                    <span aria-hidden="true"> · </span>
+                    {$t("server.memberCount", { count: route.targets.length })}
+                  </span>
+                  <span class="entry-actions" data-route-control>
+                    <button
+                      type="button"
+                      class="entry-action"
+                      title={$t("server.moveUp")}
+                      aria-label={$t("server.moveUp")}
+                      disabled={Boolean(busy) || index === 0}
+                      on:click={() => onMove(route.id, -1)}
+                    ><ChevronUp size={13} /></button>
+                    <button
+                      type="button"
+                      class="entry-action"
+                      title={$t("server.moveDown")}
+                      aria-label={$t("server.moveDown")}
+                      disabled={Boolean(busy) || index === routes.length - 1}
+                      on:click={() => onMove(route.id, 1)}
+                    ><ChevronDown size={13} /></button>
+                    <button
+                      type="button"
+                      class="entry-action danger"
+                      title={$t("server.deleteGroup")}
+                      aria-label={$t("server.deleteGroup")}
+                      disabled={Boolean(busy)}
+                      on:click={() => onDelete(route.id)}
+                    ><Trash2 size={13} /></button>
+                  </span>
+                </div>
+              </div>
+            </div>
+          {/snippet}
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content class="route-menu">
+            <ContextMenu.Item class="route-menu-item" disabled={Boolean(busy)} onSelect={() => openEdit(route)}>
+              <Pencil size={14} />
+              <span>{$t("server.editGroup")}</span>
+            </ContextMenu.Item>
+            <ContextMenu.Separator class="route-menu-separator" />
+            <ContextMenu.Item class="route-menu-item" disabled={Boolean(busy) || index === 0} onSelect={() => onMove(route.id, -1)}>
               <ChevronUp size={14} />
-            </button>
-            <button type="button" title={$t("server.moveDown")} aria-label={$t("server.moveDown")} disabled={Boolean(busy) || index === routes.length - 1} on:click={() => onMove(route.id, 1)}>
+              <span>{$t("server.moveUp")}</span>
+            </ContextMenu.Item>
+            <ContextMenu.Item class="route-menu-item" disabled={Boolean(busy) || index === routes.length - 1} onSelect={() => onMove(route.id, 1)}>
               <ChevronDown size={14} />
-            </button>
-            <button type="button" class="danger" title={$t("server.deleteGroup")} aria-label={$t("server.deleteGroup")} disabled={Boolean(busy)} on:click={() => onDelete(route.id)}>
+              <span>{$t("server.moveDown")}</span>
+            </ContextMenu.Item>
+            <ContextMenu.Separator class="route-menu-separator" />
+            <ContextMenu.Item class="route-menu-item danger" disabled={Boolean(busy)} onSelect={() => onDelete(route.id)}>
               <Trash2 size={14} />
-            </button>
-          </div>
-        </div>
-      </div>
+              <span>{$t("server.deleteGroup")}</span>
+            </ContextMenu.Item>
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
     {/each}
   </div>
 </section>
@@ -137,7 +195,7 @@
 
   .pane-heading {
     min-width: 0;
-    padding-left: 4px;
+    padding-inline-start: 4px;
 
     h2 {
       margin: 0;
@@ -166,7 +224,7 @@
     transition: background-color 80ms ease, color 120ms ease, transform 120ms ease;
 
     &:active {
-      transform: scale(0.97);
+      transform: scale(0.96);
     }
 
     &.primary {
@@ -196,16 +254,22 @@
 
   .entry {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: 32px minmax(0, 1fr);
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     width: 100%;
+    min-height: 68px;
     padding: 10px 12px;
     border-radius: var(--radius);
     text-align: left;
     position: relative;
     cursor: pointer;
     transition: background-color 80ms ease;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: -2px;
+    }
 
     &:hover {
       background: var(--surface-2);
@@ -220,18 +284,37 @@
     }
   }
 
-  .entry-main {
+  .entry-icon {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+  }
+
+  .entry-content {
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 4px;
   }
 
-  .entry-top {
+  .entry-line {
     display: flex;
     align-items: center;
-    gap: 8px;
+    justify-content: space-between;
     min-width: 0;
+    gap: 10px;
+  }
+
+  .entry-line-primary {
+    min-height: 22px;
+  }
+
+  .entry-line-secondary {
+    min-height: 24px;
   }
 
   .title {
@@ -252,42 +335,129 @@
     color: var(--text-tertiary);
   }
 
-  .entry-side {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 4px;
-  }
-
   .entry-actions {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto;
     gap: 2px;
+  }
 
-    button {
-      display: grid;
-      place-items: center;
-      width: 24px;
-      height: 24px;
-      border-radius: var(--radius-sm);
-      color: var(--text-tertiary);
-      transition: background-color 80ms ease, color 120ms ease;
+  .entry-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    transition: background-color 80ms ease, color 120ms ease, transform 120ms ease;
 
-      &:hover:not(:disabled) {
-        background: var(--surface);
-        color: var(--text);
-      }
-
-      &.danger:hover:not(:disabled) {
-        color: var(--danger);
-        background: var(--danger-soft);
-      }
-
-      &:disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
-      }
+    &:hover:not(:disabled) {
+      background: var(--surface);
+      color: var(--text);
     }
+
+    &:active:not(:disabled) {
+      transform: scale(0.96);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent-ring);
+      outline-offset: 1px;
+    }
+
+    &:disabled {
+      opacity: 0.32;
+      cursor: not-allowed;
+    }
+
+    &.danger:hover:not(:disabled) {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+  }
+
+  .entry-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  :global(.route-switch) {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    width: 36px;
+    height: 20px;
+    padding: 2px;
+    border-radius: 999px;
+    background: var(--border);
+    transition: background-color 150ms ease;
+  }
+
+  :global(.route-switch[data-state="checked"]) {
+    background: var(--accent);
+  }
+
+  :global(.route-switch[data-disabled]) {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  :global(.route-switch-thumb) {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    transition: transform 150ms ease;
+  }
+
+  :global(.route-switch[data-state="checked"] .route-switch-thumb) {
+    transform: translateX(16px);
+  }
+
+  :global(.route-menu) {
+    min-width: 188px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    z-index: 60;
+  }
+
+  :global(.route-menu-item) {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 32px;
+    padding: 6px 9px;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    outline: 0;
+  }
+
+  :global(.route-menu-item[data-highlighted]) {
+    background: var(--accent-soft);
+  }
+
+  :global(.route-menu-item[data-disabled]) {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  :global(.route-menu-item.danger) {
+    color: var(--danger);
+  }
+
+  :global(.route-menu-separator) {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--divider);
   }
 
   .empty {

@@ -26,6 +26,7 @@
   } from "@aipass/ui";
   import { t } from "@aipass/ui/i18n";
   import { Ban, Check, Copy, ExternalLink, Eye, EyeOff, KeyRound, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-svelte";
+  import { onDestroy } from "svelte";
 
   import { siteUrlForEntry } from "../entry-site-url";
   import { endpointForProvider, parseHttpEndpoint, providerForEndpoint } from "../provider-endpoint";
@@ -92,6 +93,8 @@
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let previewRequestId = 0;
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
+  let sessionPollTimer: ReturnType<typeof setInterval> | undefined;
+  let sessionReconcileBusy = false;
   let showAddForm = false;
   let addBusy = false;
   let addDraft: Draft = emptyDraft();
@@ -191,10 +194,30 @@
     scheduleFaviconBackfill(entries);
   }
 
+  async function reconcileExternalSession() {
+    if (unlockBusy || sessionReconcileBusy) return;
+    sessionReconcileBusy = true;
+    try {
+      const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
+      const next: Connection = !ping?.ok ? "missing" : ping.data?.locked ? "locked" : "connected";
+      if (next !== connection) await refresh({ scanActiveTab: false });
+    } finally {
+      sessionReconcileBusy = false;
+    }
+  }
+
+  sessionPollTimer = setInterval(() => void reconcileExternalSession(), 2000);
+
+  onDestroy(() => {
+    clearInterval(sessionPollTimer);
+    clearTimeout(previewTimer);
+    clearTimeout(statusTimer);
+  });
+
   function scheduleFaviconBackfill(currentEntries: Entry[]) {
     if (faviconBackfillBusy) return;
     const missing = currentEntries
-      .filter((entry) => !entry.faviconUrl?.trim() && !faviconBackfillAttemptedIds.has(entry.id))
+      .filter((entry) => !entry.faviconUrl?.startsWith("data:image/") && !faviconBackfillAttemptedIds.has(entry.id))
       .slice(0, 4);
     if (!missing.length) return;
     for (const entry of missing) {

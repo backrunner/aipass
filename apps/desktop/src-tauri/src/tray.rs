@@ -45,7 +45,7 @@ const MENU_PROXY_REFRESH: &str = "tray-proxy-refresh";
 const MENU_QUIT: &str = "tray-quit";
 const PROXY_STATUS_CHANGED_EVENT: &str = "proxy-status-changed";
 pub(crate) const REFRESH_PROXY_TRAY_EVENT: &str = "refresh-proxy-tray-status";
-const OPEN_SERVER_WORKSPACE_EVENT: &str = "open-server-workspace";
+pub(crate) const VAULT_STATUS_CHANGED_EVENT: &str = "vault-status-changed";
 const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 static AGENT_START_LOCK: Mutex<()> = Mutex::new(());
@@ -367,7 +367,7 @@ fn install_close_to_tray(app: &App) {
 }
 
 fn open_main_window(app: &AppHandle) -> Result<(), String> {
-    if show_existing_main_window(app) {
+    if activate_existing_main_window(app, "main") {
         return Ok(());
     }
 
@@ -377,9 +377,7 @@ fn open_main_window(app: &AppHandle) -> Result<(), String> {
 }
 
 fn open_server_window(app: &AppHandle) -> Result<(), String> {
-    if show_existing_main_window(app) {
-        app.emit(OPEN_SERVER_WORKSPACE_EVENT, ())
-            .map_err(|err| err.to_string())?;
+    if activate_existing_main_window(app, "server") {
         return Ok(());
     }
 
@@ -388,27 +386,12 @@ fn open_server_window(app: &AppHandle) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
-fn show_existing_main_window(app: &AppHandle) -> bool {
-    if let Some(window) = app.get_webview_window("main") {
-        #[cfg(target_os = "macos")]
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-        #[cfg(target_os = "macos")]
-        let _ = app.show();
-
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-        return true;
-    }
-    false
+fn activate_existing_main_window(app: &AppHandle, target: &str) -> bool {
+    crate::reveal_existing_window_target(app, target)
 }
 
 fn hide_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    crate::activate_window_target(app, "tray");
 }
 
 /// Coalesces status refreshes. A refresh talks to the agent over IPC with no
@@ -586,9 +569,14 @@ fn lock_vault_async(app: AppHandle, feedback: TrayFeedback) {
                 reason: LockReason::Manual,
             },
         );
-        if let Err(err) = result {
-            eprintln!("failed to lock AIPass vault from tray: {err}");
-            feedback.agent_transient("Agent: lock failed");
+        match result {
+            Ok(_) => {
+                let _ = app.emit(VAULT_STATUS_CHANGED_EVENT, ());
+            }
+            Err(err) => {
+                eprintln!("failed to lock AIPass vault from tray: {err}");
+                feedback.agent_transient("Agent: lock failed");
+            }
         }
         refresh_status(&app, &feedback);
     });
@@ -609,7 +597,10 @@ pub(crate) fn unlock_vault_with_password(app: AppHandle, password: String) {
             },
         );
         match result {
-            Ok(_) => crate::tray_swift::report_unlock_result(None),
+            Ok(_) => {
+                crate::tray_swift::report_unlock_result(None);
+                let _ = app.emit(VAULT_STATUS_CHANGED_EVENT, ());
+            }
             Err(err) => {
                 eprintln!("failed to unlock AIPass vault from tray: {err}");
                 crate::tray_swift::report_unlock_result(Some(short_error(&err).to_string()));

@@ -15,12 +15,13 @@
     lastFaviconUrl = faviconUrl;
     faviconBroken = false;
   }
-  $: showFavicon = Boolean(faviconUrl) && !faviconBroken;
+  $: cachedFaviconUrl = faviconUrl?.startsWith("data:image/") ? faviconUrl : undefined;
+  $: showFavicon = Boolean(cachedFaviconUrl) && !faviconBroken;
 </script>
 
 <span class={`provider-icon tone-${tone} size-${size}`} aria-hidden="true">
   {#if showFavicon}
-    <img src={faviconUrl} alt="" on:error={() => (faviconBroken = true)} />
+    <img src={cachedFaviconUrl} alt="" on:error={() => (faviconBroken = true)} />
   {:else}
     <span class="initials">{initials(title || "?")}</span>
   {/if}

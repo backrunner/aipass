@@ -13,15 +13,12 @@ http.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["brotli", "deflate", "gzip", "zstd"] }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
 uuid.workspace = true
 zeroize.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

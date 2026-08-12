@@ -176,6 +176,7 @@ pub(crate) struct ProviderUpdateRequest {
     pub(crate) interface_type: InterfaceType,
     pub(crate) auth_scheme: AuthScheme,
     pub(crate) api_key: Option<SensitiveString>,
+    pub(crate) secret_label: Option<String>,
     pub(crate) default_model: Option<String>,
     #[serde(default)]
     pub(crate) model_aliases: Vec<(String, String)>,

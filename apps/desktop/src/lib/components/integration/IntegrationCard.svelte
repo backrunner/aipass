@@ -122,7 +122,9 @@
 
 <Card title={$t("server.integrate")} collapsible>
   <div class="integrate-body">
-    <slot />
+    {#if $$slots.default}
+      <div class="integration-context"><slot /></div>
+    {/if}
 
     <div class="tool-list">
       {#each sortedTools as tool (tool.id)}
@@ -130,7 +132,10 @@
         {@const installed = toolInstalled(tool)}
         <div class="tool-block" class:missing={detections.length > 0 && !installed}>
           <div class="tool-row">
-            <span class="tool-name"><Terminal size={14} /> {tool.name}</span>
+            <span class="tool-identity">
+              <span class="tool-icon" aria-hidden="true"><Terminal size={15} /></span>
+              <span class="tool-name">{tool.name}</span>
+            </span>
             <span class="tool-side">
               {#if detections.length > 0}
                 <Badge tone={installed ? "success" : "neutral"} size="sm">
@@ -196,7 +201,14 @@
   .integrate-body {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+  }
+
+  .integration-context {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px 14px;
+    border-bottom: 1px solid var(--divider);
   }
 
   .tool-list {
@@ -207,8 +219,9 @@
   .tool-block {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 12px 16px;
+    gap: 10px;
+    min-height: 56px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--divider);
 
     &:last-child {
@@ -227,10 +240,28 @@
     gap: 12px;
   }
 
-  .tool-name {
+  .tool-identity {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .tool-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    color: var(--text-secondary);
+  }
+
+  .tool-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 13px;
     font-weight: 600;
   }
@@ -246,6 +277,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    margin-inline-start: 42px;
 
     .tool-options-label {
       color: var(--text-tertiary);
@@ -271,6 +303,22 @@
     &:hover {
       opacity: 1;
       background: rgba(15, 17, 16, 0.08);
+    }
+  }
+
+  @media (max-width: 620px) {
+    .tool-row {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .tool-side {
+      width: 100%;
+      justify-content: flex-end;
+    }
+
+    .tool-options {
+      margin-inline-start: 0;
     }
   }
 </style>

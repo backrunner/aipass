@@ -64,7 +64,7 @@
   } from "./lib/types";
   import { passwordStrength } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
-  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry } from "./lib/utils/server";
+  import { buildRouteTarget, buildSingleEntryRoute, enforceSingleEnabledRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
   import { checkForUpdates, installUpdate } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
@@ -97,8 +97,11 @@
   }
 
   let unlistenVaultAuth: (() => void) | undefined;
+  let unlistenVaultStatus: (() => void) | undefined;
   let unlistenOpenServer: (() => void) | undefined;
   let unlistenProxyStatus: (() => void) | undefined;
+  let sessionPollTimer: ReturnType<typeof setInterval> | undefined;
+  let sessionRefreshInFlight = false;
   const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
   const finishedVaultAuthTasks = new Map<string, VaultAuthTaskStatus>();
 
@@ -212,7 +215,6 @@
   let providerFilter: ProviderFilter = "all";
   let revealedSecrets: Record<string, string> = {};
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
-  let serverTokenTimer: ReturnType<typeof setTimeout> | undefined;
   let clipboardClearTimer: ReturnType<typeof setTimeout> | undefined;
   /** The secret this app last copied, so a lock can wipe it immediately. */
   let pendingClipboardSecret = "";
@@ -258,8 +260,7 @@
   let searchRequestId = 0;
   let faviconBackfillBusy = false;
   let serverBusy = "";
-  let serverToken = "";
-  let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [], models: [] };
+  let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
   let serverUsageSeries: UsageTimeseriesPoint[] = [];
   let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
   let serverStatus: ProxyStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
@@ -396,63 +397,125 @@
     }
   }
 
-  onMount(() => {
-    const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
-    activityEvents.forEach((event) => window.addEventListener(event, markActivity, { passive: true }));
-    void (async () => {
-      if (hasTauriRuntime()) {
-        unlistenVaultAuth = await listen<VaultAuthTaskStatus>("vault-auth-finished", ({ payload }) => {
-          settleVaultAuthTask(payload);
-        });
-        unlistenOpenServer = await listen("open-server-workspace", () => {
-          pendingServerView = true;
-          void openPendingServerView();
-        });
-        unlistenProxyStatus = await listen("proxy-status-changed", () => {
-          if (showServer && status.exists && !status.locked) {
-            void loadServer();
-          }
-        });
+  async function reconcileVaultStatus() {
+    if (!statusReady || authBusy || lockTransitioning || sessionRefreshInFlight) return;
+    sessionRefreshInFlight = true;
+    const wasUnlocked = status.exists && !status.locked;
+    try {
+      const next = await invokeTauri<VaultStatus>("vault_status");
+      const nowUnlocked = next.exists && !next.locked;
+      if (next.exists === status.exists && next.locked === status.locked) return;
+      status = next;
+      if (wasUnlocked && !nowUnlocked) {
+        password = "";
+        setAuthMode("unlock");
+        return;
       }
-      await loadPreferences();
-      await loadSyncSettings();
-      await refreshStatus();
-      if (hasTauriRuntime()) {
-        windowTarget =
-          (await invokeTauri<"main" | "unlock" | "quick-access" | "server" | "tray" | null>(
-            "window_target"
-          )) ?? "main";
-        if (windowTarget === "unlock") {
-          setAuthMode("unlock");
-        }
-        pendingServerView ||= windowTarget === "server";
-        if (windowTarget === "main") {
-          scheduleAutoUpdateCheck();
-        }
-      }
-      if (!status.locked && status.exists) {
+      if (!wasUnlocked && nowUnlocked) {
+        password = "";
+        showUnlockPassword = false;
+        setAuthMode("unlock");
         await loadEntries();
         await loadServer();
         void loadPricing();
         await openPendingServerView();
       }
+    } catch (err) {
+      console.warn("vault status reconciliation failed", err);
+    } finally {
+      sessionRefreshInFlight = false;
+    }
+  }
+
+  function reconcileVisibleVaultStatus() {
+    if (document.visibilityState === "visible") void reconcileVaultStatus();
+  }
+
+  onMount(() => {
+    const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
+    activityEvents.forEach((event) => window.addEventListener(event, markActivity, { passive: true }));
+    void (async () => {
+      try {
+        if (hasTauriRuntime()) {
+          unlistenVaultAuth = await listen<VaultAuthTaskStatus>("vault-auth-finished", ({ payload }) => {
+            settleVaultAuthTask(payload);
+          });
+          unlistenVaultStatus = await listen("vault-status-changed", () => {
+            void reconcileVaultStatus();
+          });
+          unlistenOpenServer = await listen("open-server-workspace", () => {
+            pendingServerView = true;
+            void openPendingServerView();
+          });
+          unlistenProxyStatus = await listen("proxy-status-changed", () => {
+            if (showServer && status.exists && !status.locked) {
+              void loadServer();
+            }
+          });
+        }
+        await Promise.all([loadPreferences(), refreshStatus()]);
+        await loadSyncSettings();
+        if (hasTauriRuntime()) {
+          windowTarget =
+            (await invokeTauri<"main" | "unlock" | "quick-access" | "server" | "tray" | null>(
+              "window_target"
+            )) ?? "main";
+          if (windowTarget === "unlock") {
+            setAuthMode("unlock");
+          }
+          pendingServerView ||= windowTarget === "server";
+          if (windowTarget === "main") {
+            scheduleAutoUpdateCheck();
+          }
+        }
+        if (!status.locked && status.exists) {
+          await loadEntries();
+          await loadServer();
+          void loadPricing();
+          await openPendingServerView();
+        }
+      } catch (err) {
+        if (!statusReady) {
+          status = { exists: true, locked: true };
+          statusReady = true;
+          setAuthMode("unlock");
+        }
+        error = String(err);
+      } finally {
+        if (hasTauriRuntime()) {
+          await tick();
+          try {
+            await invokeTauri<void>("desktop_ready");
+          } catch (err) {
+            console.error("failed to reveal initialized desktop window", err);
+          }
+        }
+      }
     })();
+    if (hasTauriRuntime()) {
+      window.addEventListener("focus", reconcileVisibleVaultStatus);
+      document.addEventListener("visibilitychange", reconcileVisibleVaultStatus);
+      sessionPollTimer = setInterval(reconcileVisibleVaultStatus, 2000);
+    }
   });
 
   onDestroy(() => {
     unlistenVaultAuth?.();
+    unlistenVaultStatus?.();
     unlistenOpenServer?.();
     unlistenProxyStatus?.();
     pendingVaultAuthTasks.clear();
     finishedVaultAuthTasks.clear();
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
     activityEvents.forEach((event) => window.removeEventListener(event, markActivity));
+    window.removeEventListener("focus", reconcileVisibleVaultStatus);
+    document.removeEventListener("visibilitychange", reconcileVisibleVaultStatus);
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
-    clearTimeout(serverTokenTimer);
     clearTimeout(searchTimer);
     clearTimeout(updateCheckTimer);
     clearInterval(serverPollTimer);
+    clearInterval(sessionPollTimer);
   });
 
   async function refreshStatus() {
@@ -465,6 +528,10 @@
         setAuthMode("unlock");
       }
     } catch (err) {
+      if (hasTauriRuntime()) {
+        status = { exists: true, locked: true };
+        setAuthMode("unlock");
+      }
       error = String(err);
     } finally {
       statusReady = true;
@@ -693,7 +760,6 @@
     // rather than only cancelling the timer that would have wiped it.
     void clearCopiedSecretFromClipboard();
     clearTimeout(revealTimer);
-    clearTimeout(serverTokenTimer);
   }
 
   function clearSensitiveUnlockedState() {
@@ -705,11 +771,9 @@
     usageProbeResult = undefined;
     showSettings = false;
     showServer = false;
-    clearTimeout(serverTokenTimer);
-    serverToken = "";
     serverConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
     serverStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
-    serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, providers: [], models: [] };
+    serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
     serverUsageSeries = [];
     selectedRouteId = "";
   }
@@ -744,7 +808,7 @@
   function scheduleFaviconBackfill(currentEntries: ProviderEntry[]) {
     if (faviconBackfillBusy) return;
     const missing = currentEntries
-      .filter((entry) => !entry.faviconUrl?.trim() && !faviconBackfillAttemptedIds.has(entry.id))
+      .filter((entry) => !entry.faviconUrl?.startsWith("data:image/") && !faviconBackfillAttemptedIds.has(entry.id))
       .slice(0, 4);
     if (!missing.length) return;
     for (const entry of missing) {
@@ -966,6 +1030,7 @@
       interfaceType: draft.interfaceType,
       authScheme: draft.authScheme,
       apiKey: draft.apiKey || undefined,
+      secretLabel: draft.secretLabel.trim() || undefined,
       defaultModel: draft.defaultModel || undefined,
       modelAliases: modelAliasPairs(draft.modelAlias),
       headers: headerPairs(draft.header),
@@ -980,7 +1045,6 @@
           request: {
             ...request,
             apiKey: draft.apiKey,
-            secretLabel: draft.secretLabel || undefined,
             secretMetadata
           }
         });
@@ -1014,31 +1078,32 @@
 
   async function copySecret() {
     if (!selected) return;
-    await copySecretByLabel(selected.secretRefs[0]?.label ?? "primary");
+    const secretId = selected.secretRefs[0]?.id;
+    if (secretId) await copySecretById(secretId);
   }
 
-  async function revealSecretByLabel(label: string) {
+  async function revealSecretById(secretId: string) {
     if (!selected) return;
-    if (revealedSecrets[label]) {
+    if (revealedSecrets[secretId]) {
       const next = { ...revealedSecrets };
-      delete next[label];
+      delete next[secretId];
       revealedSecrets = next;
       return;
     }
-    const secret = await invokeTauri<string>("secret_reveal_field", { id: selected.id, field: label });
-    revealedSecrets = { ...revealedSecrets, [label]: secret };
+    const secret = await invokeTauri<string>("secret_reveal_field", { id: selected.id, field: secretId });
+    revealedSecrets = { ...revealedSecrets, [secretId]: secret };
     clearTimeout(revealTimer);
     revealTimer = setTimeout(() => {
       revealedSecrets = {};
     }, Math.max(5, Math.min(120, clipboardClearSeconds || 30)) * 1000);
   }
 
-  async function copySecretByLabel(label: string) {
+  async function copySecretById(secretId: string) {
     if (!selected) return;
-    const secret = await invokeTauri<string>("secret_reveal_field", { id: selected.id, field: label });
+    const secret = await invokeTauri<string>("secret_reveal_field", { id: selected.id, field: secretId });
     await navigator.clipboard?.writeText(secret);
     scheduleClipboardClear(secret);
-    copied = `secret:${label}`;
+    copied = `secret:${secretId}`;
     setTimeout(() => {
       copied = "";
     }, 1800);
@@ -1057,6 +1122,7 @@
       newSecretLabel = "fallback";
       newSecretKey = "";
       await loadEntries();
+      await loadServer();
       notice = localizedMessage("notice.secretAdded");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
@@ -1066,14 +1132,40 @@
     }
   }
 
-  async function removeSecondarySecret(label: string) {
+  async function updateSecret(secretId: string, label: string, apiKey?: string) {
+    if (!selected || !label.trim()) return;
+    error = "";
+    secretBusy = secretId;
+    try {
+      await invokeTauri("secret_update", {
+        id: selected.id,
+        secretId,
+        label: label.trim(),
+        apiKey: apiKey?.trim() || undefined
+      });
+      const nextRevealed = { ...revealedSecrets };
+      delete nextRevealed[secretId];
+      revealedSecrets = nextRevealed;
+      await loadEntries();
+      await loadServer();
+      notice = localizedMessage("notice.secretUpdated");
+      setTimeout(() => (notice = ""), 1800);
+    } catch (err) {
+      error = String(err);
+      throw err;
+    } finally {
+      secretBusy = "";
+    }
+  }
+
+  async function removeSecondarySecret(secretId: string) {
     if (!selected || selected.secretRefs.length <= 1) return;
     error = "";
-    secretBusy = label;
+    secretBusy = secretId;
     try {
-      await invokeTauri("secret_remove", { id: selected.id, label });
+      await invokeTauri("secret_remove", { id: selected.id, label: secretId });
       const nextRevealed = { ...revealedSecrets };
-      delete nextRevealed[label];
+      delete nextRevealed[secretId];
       revealedSecrets = nextRevealed;
       await loadEntries();
       void loadServer();
@@ -1191,7 +1283,15 @@
       serverConfig = nextConfig;
       // Older agents may omit the newer breakdown arrays; default them so the
       // UI never has to deal with undefined.
-      serverUsage = { ...usage, providers: usage.providers ?? [], models: usage.models ?? [] };
+      serverUsage = {
+        ...usage,
+        attemptCount: usage.attemptCount ?? 0,
+        completedAttempts: usage.completedAttempts ?? 0,
+        successfulAttempts: usage.successfulAttempts ?? 0,
+        successRateBps: usage.successRateBps ?? 0,
+        providers: usage.providers ?? [],
+        models: usage.models ?? []
+      };
     } catch (err) {
       console.warn("server state load failed", err);
     }
@@ -1297,8 +1397,6 @@
     showTrash = false;
     showFavorites = false;
     showSettings = false;
-    clearTimeout(serverTokenTimer);
-    serverToken = "";
     await loadServer();
   }
 
@@ -1308,15 +1406,17 @@
     await setServerView();
   }
 
-  async function saveServerConfig(config: ProxyConfig) {
-    if (serverBusy) return;
+  async function saveServerConfig(config: ProxyConfig): Promise<boolean> {
+    if (serverBusy) return false;
     serverBusy = "save";
     error = "";
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config });
       serverStatus = await invokeTauri<ProxyStatus>("server_status");
+      return true;
     } catch (err) {
       error = String(err);
+      return false;
     } finally {
       serverBusy = "";
     }
@@ -1358,16 +1458,11 @@
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
       const result = await invokeTauri<ServerTokenResponse>("server_token_rotate", { routeId });
-      clearTimeout(serverTokenTimer);
-      serverToken = result.token;
-      serverTokenTimer = setTimeout(() => {
-        if (serverToken === result.token) serverToken = "";
-      }, 60_000);
       serverConfig = {
         ...serverConfig,
         routes: serverConfig.routes.map((route) =>
           route.id === routeId
-            ? { ...route, token: "", tokenFingerprint: result.fingerprint }
+            ? { ...route, token: result.token }
             : route
         )
       };
@@ -1378,7 +1473,7 @@
     }
   }
 
-  async function copyServerToken(token: string = serverToken) {
+  async function copyServerToken(token: string) {
     if (!token) return;
     await navigator.clipboard?.writeText(token);
     scheduleClipboardClear(token);
@@ -1386,24 +1481,29 @@
 
   async function saveRouteGroup(route: ProxyRouteConfig) {
     const exists = serverConfig.routes.some((item) => item.id === route.id);
-    const routes = exists
+    const nextRoutes = exists
       ? serverConfig.routes.map((item) => (item.id === route.id ? route : item))
       : [...serverConfig.routes, route];
-    if (!exists) selectedRouteId = route.id;
-    await saveServerConfig({ ...serverConfig, routes });
+    const routes = enforceSingleEnabledRoute(nextRoutes, route.enabled ? route.id : undefined);
+    const saved = await saveServerConfig({ ...serverConfig, routes });
+    if (saved && !exists) selectedRouteId = route.id;
+    return saved;
   }
 
   async function deleteRouteGroup(routeId: string) {
     if (!confirm($t("server.deleteGroupConfirm"))) return;
     const routes = serverConfig.routes.filter((route) => route.id !== routeId);
-    if (selectedRouteId === routeId) selectedRouteId = routes[0]?.id ?? "";
-    await saveServerConfig({ ...serverConfig, routes });
+    const saved = await saveServerConfig({ ...serverConfig, routes });
+    if (saved && selectedRouteId === routeId) selectedRouteId = routes[0]?.id ?? "";
   }
 
   async function toggleRouteGroup(routeId: string, enabled: boolean) {
     await saveServerConfig({
       ...serverConfig,
-      routes: serverConfig.routes.map((route) => (route.id === routeId ? { ...route, enabled } : route))
+      routes: enforceSingleEnabledRoute(
+        serverConfig.routes.map((route) => (route.id === routeId ? { ...route, enabled } : route)),
+        enabled ? routeId : undefined
+      )
     });
   }
 
@@ -1418,13 +1518,13 @@
 
   async function addEntryAsRoute(entry: ProviderEntry, groupId?: string) {
     error = "";
-    if (!proxySupportedEntry(entry)) {
-      error = localizedMessage("providers.routeUnsupportedInterface");
-      return;
-    }
     const secret = entry.secretRefs[0];
     if (!secret) {
       error = localizedMessage("providers.routeNoSecret");
+      return;
+    }
+    if (!proxySupportedEntry(entry, secret)) {
+      error = localizedMessage("providers.routeUnsupportedInterface");
       return;
     }
     if (!entry.endpoints.some((endpoint) => endpoint.kind === "api" && endpoint.url)) {
@@ -1447,19 +1547,37 @@
     if (groupId) {
       const group = serverConfig.routes.find((route) => route.id === groupId);
       if (!group) return;
+      const protocol = routeProtocolFor(entry, secret);
+      if (protocol !== group.inboundProtocol) {
+        error = localizedMessage("providers.routeProtocolMismatch");
+        return;
+      }
+      if (
+        group.targets.some(
+          (target) => target.providerEntryId === entry.id && target.secretId === secret.id
+        )
+      ) {
+        error = localizedMessage("providers.routeAlreadyMember");
+        return;
+      }
       const target = buildRouteTarget(entry, secret, group.targets.length);
       if (!target) return;
-      await saveServerConfig({
+      const saved = await saveServerConfig({
         ...serverConfig,
         routes: serverConfig.routes.map((route) =>
           route.id === groupId ? { ...route, targets: [...route.targets, target] } : route
         )
       });
+      if (!saved) return;
     } else {
       const route = buildSingleEntryRoute(entry, secret);
       if (!route) return;
+      const saved = await saveServerConfig({
+        ...serverConfig,
+        routes: enforceSingleEnabledRoute([...serverConfig.routes, route], route.id)
+      });
+      if (!saved) return;
       selectedRouteId = route.id;
-      await saveServerConfig({ ...serverConfig, routes: [...serverConfig.routes, route] });
     }
     notice = localizedMessage("providers.routeAdded");
     setTimeout(() => (notice = ""), 1800);
@@ -2122,7 +2240,6 @@
           {entries}
           {selectedRouteId}
           busy={serverBusy}
-          revealedToken={serverToken}
           {toolDetections}
           onStart={startServer}
           onStop={stopServer}
@@ -2181,8 +2298,9 @@
         onDelete={deleteSelected}
         onArchive={archiveSelected}
         onTrash={trashSelected}
-        onRevealSecret={revealSecretByLabel}
-        onCopySecretByLabel={copySecretByLabel}
+        onRevealSecret={revealSecretById}
+        onCopySecret={copySecretById}
+        onUpdateSecret={updateSecret}
         onRemoveSecret={removeSecondarySecret}
         onAddSecret={addSecondarySecret}
         onCopyValue={copyValue}

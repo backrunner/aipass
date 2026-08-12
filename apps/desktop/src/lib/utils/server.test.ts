@@ -1,7 +1,14 @@
 import type { ProviderEntry } from "@aipass/schemas";
 import { describe, expect, it } from "vitest";
 
-import { buildRouteTarget, proxySupportedEntry, routeProtocolFor } from "./server";
+import type { ProxyRouteConfig } from "../types";
+import {
+  advertisedProxyAddress,
+  buildRouteTarget,
+  enforceSingleEnabledRoute,
+  proxySupportedEntry,
+  routeProtocolFor
+} from "./server";
 
 function entry(interfaceType: ProviderEntry["interfaceType"], providerId?: string): ProviderEntry {
   return {
@@ -30,7 +37,44 @@ describe("local proxy route helpers", () => {
     expect(target?.headers).toContainEqual(["anthropic-version", "2023-06-01"]);
   });
 
+  it("uses per-secret protocol and group metadata", () => {
+    const relay = entry("openai_compatible", "openrouter");
+    relay.secretRefs[0] = {
+      ...relay.secretRefs[0],
+      interfaceType: "anthropic_messages",
+      group: "premium"
+    };
+
+    expect(routeProtocolFor(relay, relay.secretRefs[0])).toBe("anthropic_messages");
+    expect(buildRouteTarget(relay, relay.secretRefs[0], 0)?.group).toBe("premium");
+  });
+
   it("does not expose Gemini-native entries as proxy routes", () => {
     expect(proxySupportedEntry(entry("gemini"))).toBe(false);
+  });
+
+  it("advertises a usable loopback address for wildcard listeners", () => {
+    expect(advertisedProxyAddress("0.0.0.0:8787")).toBe("127.0.0.1:8787");
+    expect(advertisedProxyAddress("[::]:8787")).toBe("[::1]:8787");
+    expect(advertisedProxyAddress("127.0.0.1:8787")).toBe("127.0.0.1:8787");
+  });
+
+  it("enables only the preferred route group", () => {
+    const first = { id: "first", enabled: true } as ProxyRouteConfig;
+    const second = { id: "second", enabled: true } as ProxyRouteConfig;
+
+    const routes = enforceSingleEnabledRoute([first, second], "second");
+
+    expect(routes.map((route) => [route.id, route.enabled])).toEqual([
+      ["first", false],
+      ["second", true]
+    ]);
+  });
+
+  it("allows all route groups to be disabled", () => {
+    const first = { id: "first", enabled: false } as ProxyRouteConfig;
+    const second = { id: "second", enabled: false } as ProxyRouteConfig;
+
+    expect(enforceSingleEnabledRoute([first, second]).every((route) => !route.enabled)).toBe(true);
   });
 });

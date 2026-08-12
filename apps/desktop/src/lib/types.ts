@@ -61,7 +61,6 @@ export type ProxyRouteConfig = {
   id: string;
   name: string;
   token: string;
-  tokenFingerprint: string;
   strategy: ProxyRouteStrategy;
   inboundProtocol: ProxyProtocol;
   upstreamProtocol: ProxyProtocol;
@@ -98,7 +97,7 @@ export type ProxyStatus = {
   recentTokens: number;
 };
 
-export type ServerTokenResponse = { routeId: string; token: string; fingerprint: string };
+export type ServerTokenResponse = { routeId: string; token: string };
 export type UsageTimeseriesPoint = {
   date: string;
   requestCount: number;
@@ -150,6 +149,11 @@ export type ServerUsageSummary = {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   estimatedCostMicros: number;
+  attemptCount: number;
+  completedAttempts: number;
+  successfulAttempts: number;
+  successRateBps: number;
+  averageFirstTokenMs?: number;
   providers: Array<{
     providerEntryId: string;
     secretId: string;
@@ -159,6 +163,11 @@ export type ServerUsageSummary = {
     cacheReadTokens: number;
     cacheCreationTokens: number;
     estimatedCostMicros: number;
+    attemptCount: number;
+    completedAttempts: number;
+    successfulAttempts: number;
+    successRateBps: number;
+    averageFirstTokenMs?: number;
   }>;
   models: Array<{
     providerEntryId: string;
@@ -170,6 +179,11 @@ export type ServerUsageSummary = {
     cacheReadTokens: number;
     cacheCreationTokens: number;
     estimatedCostMicros: number;
+    attemptCount: number;
+    completedAttempts: number;
+    successfulAttempts: number;
+    successRateBps: number;
+    averageFirstTokenMs?: number;
   }>;
 };
 

@@ -42,16 +42,17 @@ use aipass_vault::{
     Vault,
 };
 use anyhow::{bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use interprocess::local_socket::{prelude::*, Listener, ListenerNonblockingMode, Stream};
 use reqwest::blocking::{Client as HttpClient, RequestBuilder};
-use reqwest::header::{ACCEPT, CONTENT_TYPE, RANGE};
+use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use reqwest::Url;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::net::IpAddr;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -68,6 +69,7 @@ const CONNECTION_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const FAVICON_BACKFILL_DEFAULT_LIMIT: usize = 4;
 const FAVICON_BACKFILL_MAX_LIMIT: usize = 8;
 const FAVICON_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_FAVICON_BYTES: usize = 96 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
@@ -138,6 +140,7 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         session_changed: Condvar::new(),
         last_lock_reason: Mutex::new(Some(LockReason::AgentRestart)),
         proxy: Mutex::new(crate::proxy_service::ProxyService::new(&vault_dir.clone())?),
+        favicon_backfill: Mutex::new(()),
         shutdown: AtomicBool::new(false),
     });
     run_server_with_state(state, listener, launch_desktop_tray)
@@ -1059,12 +1062,6 @@ fn build_tool_config_proxy_plan(
             "cannot configure a disabled proxy route",
         ));
     }
-    if aipass_proxy::fingerprint_token(&route.token) != route.token_fingerprint {
-        return Err(ServiceError::new(
-            AgentErrorCode::ValidationFailed,
-            "proxy route token fingerprint is invalid",
-        ));
-    }
     let supported = match request.tool {
         ToolId::Codex => route.inbound_protocol == ProxyProtocol::OpenAiResponses,
         ToolId::ClaudeCode => route.inbound_protocol == ProxyProtocol::AnthropicMessages,
@@ -1129,23 +1126,28 @@ fn tool_config_preview_files(plan: &ConfigPlan, content: &str) -> Vec<ToolConfig
     let mut files = Vec::with_capacity(plan.extra_writes.len() + 1);
     files.push(ToolConfigPreviewFile {
         path: plan.target_path.display().to_string(),
-        content: redact_tool_config_content(content),
-        diff: redact_tool_config_diff(&aipass_config_writers::diff_preview_for_path(
-            &plan.target_path,
-            content,
-        )),
+        content: content.to_string(),
+        diff: aipass_config_writers::diff_preview_for_path(&plan.target_path, content),
     });
     for write in &plan.extra_writes {
         files.push(ToolConfigPreviewFile {
             path: write.target_path.display().to_string(),
-            content: redact_tool_config_content(&write.content),
-            diff: redact_tool_config_diff(&aipass_config_writers::diff_preview_for_path(
-                &write.target_path,
-                &write.content,
-            )),
+            content: write.content.clone(),
+            diff: aipass_config_writers::diff_preview_for_path(&write.target_path, &write.content),
         });
     }
     files
+}
+
+fn combined_tool_config_preview(files: &[ToolConfigPreviewFile]) -> String {
+    if files.len() == 1 {
+        return files[0].diff.clone();
+    }
+    files
+        .iter()
+        .map(|file| format!("--- {}\n{}", file.path, file.diff))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn advertised_bind_addr(bind_addr: &str) -> String {
@@ -1159,59 +1161,6 @@ fn advertised_bind_addr(bind_addr: &str) -> String {
             })
         })
         .unwrap_or_else(|| bind_addr.to_string())
-}
-
-fn redact_tool_config_content(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| {
-            if contains_sensitive_config_key(line) {
-                match line.split_once('=') {
-                    Some((key, _)) => format!("{key}=\"[redacted]\""),
-                    None => "[redacted]".to_string(),
-                }
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn redact_tool_config_diff(diff: &str) -> String {
-    redacted_diff_preview(diff, &[])
-        .lines()
-        .map(|line| {
-            if contains_sensitive_config_key(line) {
-                let prefix = line
-                    .get(..2)
-                    .filter(|prefix| matches!(*prefix, "+ " | "- " | "  "))
-                    .unwrap_or_default();
-                format!("{prefix}[redacted]")
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn contains_sensitive_config_key(line: &str) -> bool {
-    let normalized = line.to_ascii_lowercase();
-    [
-        "api_key",
-        "apikey",
-        "api-key",
-        "api-token",
-        "access_token",
-        "auth_token",
-        "bearer_token",
-        "authorization",
-        "aipass_proxy_token",
-        "secret",
-    ]
-    .iter()
-    .any(|key| normalized.contains(key))
 }
 
 fn tool_config_tool_for(tool: &ToolId) -> ToolConfigTool {
@@ -1336,6 +1285,9 @@ fn backfill_provider_favicons(
     state: &Arc<AgentState>,
     request: FaviconBackfillRequest,
 ) -> ServiceResult<FaviconBackfillResponse> {
+    let _backfill_guard = state.favicon_backfill.lock().map_err(|_| {
+        ServiceError::new(AgentErrorCode::Internal, "favicon backfill lock poisoned")
+    })?;
     let limit = request
         .limit
         .unwrap_or(FAVICON_BACKFILL_DEFAULT_LIMIT)
@@ -1361,13 +1313,13 @@ fn backfill_provider_favicons(
             continue;
         }
         response.checked += 1;
-        let Some(favicon_url) = resolve_favicon_url(&client, &entry) else {
+        let Some(favicon_url) = resolve_favicon_data_url(&client, &entry) else {
             response.skipped += 1;
             continue;
         };
         match with_vault(state, false, |vault| {
             vault
-                .set_provider_favicon_url(entry.id, favicon_url)
+                .replace_provider_favicon_url(entry.id, favicon_url)
                 .map_err(map_vault_error)
         }) {
             Ok(Some(updated)) => {
@@ -1421,18 +1373,22 @@ fn favicon_backfill_entry_is_skippable(entry: &EntrySummary) -> bool {
             .favicon_url
             .as_deref()
             .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+            .is_some_and(|value| value.starts_with("data:image/"))
 }
 
-fn resolve_favicon_url(client: &HttpClient, entry: &EntrySummary) -> Option<String> {
+fn resolve_favicon_data_url(client: &HttpClient, entry: &EntrySummary) -> Option<String> {
     favicon_url_candidates(entry)
         .into_iter()
-        .find(|candidate| favicon_candidate_is_valid(client, candidate))
+        .find_map(|candidate| download_favicon_data_url(client, &candidate))
 }
 
 fn favicon_url_candidates(entry: &EntrySummary) -> Vec<String> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
+
+    if let Some(favicon_url) = entry.favicon_url.as_deref() {
+        push_direct_favicon_candidate(&mut candidates, &mut seen, favicon_url);
+    }
 
     if let Some(provider_id) = entry.provider_id.as_deref() {
         for provider in default_provider_definitions()
@@ -1468,6 +1424,28 @@ fn favicon_url_candidates(entry: &EntrySummary) -> Vec<String> {
     }
 
     candidates
+}
+
+fn push_direct_favicon_candidate(
+    candidates: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    value: &str,
+) {
+    let Ok(mut url) = Url::parse(value.trim()) else {
+        return;
+    };
+    if !matches!(url.scheme(), "https" | "http")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || favicon_host_is_blocked(&url)
+    {
+        return;
+    }
+    url.set_fragment(None);
+    let candidate = url.to_string();
+    if seen.insert(candidate.clone()) {
+        candidates.push(candidate);
+    }
 }
 
 fn push_favicon_candidate(candidates: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
@@ -1534,47 +1512,115 @@ fn ip_addr_is_blocked_for_favicon(ip: IpAddr) -> bool {
     }
 }
 
-fn favicon_candidate_is_valid(client: &HttpClient, candidate: &str) -> bool {
+fn download_favicon_data_url(client: &HttpClient, candidate: &str) -> Option<String> {
+    if !favicon_candidate_resolves_publicly(candidate) {
+        return None;
+    }
     let response = client
         .get(candidate)
         .header(
             ACCEPT,
-            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "image/avif,image/webp,image/apng,image/png,image/jpeg,image/gif,image/x-icon,image/vnd.microsoft.icon,image/*;q=0.8",
         )
-        .header(RANGE, "bytes=0-0")
-        .send();
-    let Ok(response) = response else {
-        return false;
-    };
+        .send()
+        .ok()?;
     if !response.status().is_success() {
-        return false;
+        return None;
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length == 0 || length > MAX_FAVICON_BYTES as u64)
+    {
+        return None;
     }
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok());
-    favicon_response_looks_like_image(candidate, content_type)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+    if content_type.as_deref().is_some_and(|value| {
+        !favicon_content_type_is_image(value) && value != "application/octet-stream"
+    }) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    response
+        .take((MAX_FAVICON_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.is_empty() || bytes.len() > MAX_FAVICON_BYTES {
+        return None;
+    }
+    let mime = favicon_image_mime(&bytes)?;
+    Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
-fn favicon_response_looks_like_image(url: &str, content_type: Option<&str>) -> bool {
-    if content_type.is_some_and(favicon_content_type_is_image) {
-        return true;
+fn favicon_candidate_resolves_publicly(candidate: &str) -> bool {
+    let Ok(url) = Url::parse(candidate) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return !ip_addr_is_blocked_for_favicon(ip);
     }
-    favicon_url_has_image_extension(url)
+    let Some(port) = url.port_or_known_default() else {
+        return false;
+    };
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    favicon_resolved_addresses_are_public(addresses.map(|address| address.ip()))
+}
+
+fn favicon_resolved_addresses_are_public(addresses: impl IntoIterator<Item = IpAddr>) -> bool {
+    let mut found = false;
+    for address in addresses {
+        found = true;
+        if ip_addr_is_blocked_for_favicon(address) {
+            return false;
+        }
+    }
+    found
+}
+
+fn favicon_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(&[0, 0, 1, 0]) {
+        return Some("image/x-icon");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    if bytes.len() >= 16
+        && &bytes[4..8] == b"ftyp"
+        && bytes[8..]
+            .chunks(4)
+            .take(5)
+            .any(|brand| brand == b"avif" || brand == b"avis")
+    {
+        return Some("image/avif");
+    }
+    None
 }
 
 fn favicon_content_type_is_image(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
     value.starts_with("image/") || value.contains("svg") || value.contains("icon")
-}
-
-fn favicon_url_has_image_extension(url: &str) -> bool {
-    let path = Url::parse(url)
-        .map(|url| url.path().to_ascii_lowercase())
-        .unwrap_or_else(|_| url.to_ascii_lowercase());
-    [".ico", ".png", ".svg", ".jpg", ".jpeg", ".webp"]
-        .iter()
-        .any(|extension| path.ends_with(extension))
 }
 
 fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> ProbeResult {
@@ -1911,9 +1957,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_config_file_preview_redacts_plaintext_credentials() {
+    fn auth_json_preview_includes_plaintext_credentials() {
         let dir = tempdir().expect("tempdir");
-        let target = dir.path().join("config.json");
+        let target = dir.path().join("auth.json");
         fs::write(
             &target,
             r#"{"OPENAI_API_KEY":"sk-old-secret","other":true}"#,
@@ -1933,10 +1979,10 @@ mod tests {
 
         let files = tool_config_preview_files(&plan, content);
         assert_eq!(files.len(), 1);
-        assert!(!files[0].content.contains("sk-new-secret"));
-        assert!(!files[0].diff.contains("sk-old-secret"));
-        assert!(!files[0].diff.contains("sk-new-secret"));
-        assert!(!redact_tool_config_diff(&plan.preview).contains("sk-old-secret"));
+        assert!(files[0].content.contains("sk-new-secret"));
+        assert!(files[0].diff.contains("sk-old-secret"));
+        assert!(files[0].diff.contains("sk-new-secret"));
+        assert_eq!(combined_tool_config_preview(&files), files[0].diff);
     }
 
     #[test]
@@ -2045,26 +2091,55 @@ mod tests {
     }
 
     #[test]
-    fn favicon_response_accepts_image_content_or_obvious_extension() {
-        assert!(favicon_response_looks_like_image(
-            "https://example.com/icon",
-            Some("image/svg+xml; charset=utf-8")
-        ));
-        assert!(favicon_response_looks_like_image(
-            "https://example.com/favicon.ico",
-            Some("text/plain")
-        ));
-        assert!(!favicon_response_looks_like_image(
-            "https://example.com/icon",
-            Some("text/html")
-        ));
+    fn favicon_dns_results_reject_any_private_address() {
+        assert!(favicon_resolved_addresses_are_public([
+            "1.1.1.1".parse().unwrap(),
+            "2606:4700:4700::1111".parse().unwrap(),
+        ]));
+        assert!(!favicon_resolved_addresses_are_public([
+            "1.1.1.1".parse().unwrap(),
+            "127.0.0.1".parse().unwrap(),
+        ]));
+        assert!(!favicon_resolved_addresses_are_public(["10.0.0.4"
+            .parse()
+            .unwrap(),]));
+        assert!(!favicon_resolved_addresses_are_public([]));
     }
 
     #[test]
-    fn favicon_backfill_skips_entries_that_already_have_favicons() {
+    fn favicon_magic_detection_accepts_bounded_bitmap_formats() {
+        assert_eq!(
+            favicon_image_mime(b"\x89PNG\r\n\x1a\nrest"),
+            Some("image/png")
+        );
+        assert_eq!(
+            favicon_image_mime(&[0xff, 0xd8, 0xff, 0xe0]),
+            Some("image/jpeg")
+        );
+        assert_eq!(favicon_image_mime(b"GIF89arest"), Some("image/gif"));
+        assert_eq!(
+            favicon_image_mime(b"RIFF\x04\x00\x00\x00WEBPrest"),
+            Some("image/webp")
+        );
+        assert_eq!(
+            favicon_image_mime(&[0, 0, 1, 0, 1, 0]),
+            Some("image/x-icon")
+        );
+        assert_eq!(favicon_image_mime(b"<svg></svg>"), None);
+        assert_eq!(favicon_image_mime(b"not an image"), None);
+    }
+
+    #[test]
+    fn favicon_backfill_migrates_remote_urls_and_skips_cached_data() {
         let mut entry = favicon_test_entry();
         entry.favicon_url = Some("https://example.com/favicon.ico".to_string());
+        assert!(!favicon_backfill_entry_is_skippable(&entry));
+        assert_eq!(
+            favicon_url_candidates(&entry).first().map(String::as_str),
+            Some("https://example.com/favicon.ico")
+        );
 
+        entry.favicon_url = Some("data:image/png;base64,iVBORw0KGgo=".to_string());
         assert!(favicon_backfill_entry_is_skippable(&entry));
     }
 }

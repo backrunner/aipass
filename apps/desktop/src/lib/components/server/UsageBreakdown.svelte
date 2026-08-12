@@ -5,12 +5,10 @@
   import { t } from "../../stores/i18n";
   import type { ServerUsageSummary } from "../../types";
   import { formatCompact, formatCostMicros } from "../../utils/format";
-  import SegmentedControl from "../shared/SegmentedControl.svelte";
 
   export let usage: ServerUsageSummary;
   export let entries: ProviderEntry[] = [];
 
-  type Mode = "provider" | "model";
   type Row = {
     key: string;
     label: string;
@@ -20,10 +18,10 @@
     outputTokens: number;
     cacheTokens: number;
     estimatedCostMicros: number;
+    completedAttempts: number;
+    successRateBps: number;
+    averageFirstTokenMs?: number;
   };
-
-  let mode: Mode = "provider";
-  let providerFilter = "";
 
   function entryFor(providerEntryId: string): ProviderEntry | undefined {
     return entries.find((entry) => entry.id === providerEntryId);
@@ -32,21 +30,6 @@
   function providerName(providerEntryId: string): string {
     const entry = entryFor(providerEntryId);
     return entry?.title || providerEntryId.slice(0, 8);
-  }
-
-  $: modeOptions = [
-    { value: "provider" as Mode, label: $t("server.byProvider") },
-    { value: "model" as Mode, label: $t("server.byModel") }
-  ];
-
-  // Providers that actually have usage, for the model view's filter.
-  $: providerOptions = [...new Set(usage.models.map((row) => row.providerEntryId))].map((id) => ({
-    id,
-    label: providerName(id)
-  }));
-
-  $: if (providerFilter && !providerOptions.some((option) => option.id === providerFilter)) {
-    providerFilter = "";
   }
 
   $: providerRows = usage.providers.map((row): Row => {
@@ -61,64 +44,35 @@
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
       cacheTokens: row.cacheReadTokens + row.cacheCreationTokens,
-      estimatedCostMicros: row.estimatedCostMicros
+      estimatedCostMicros: row.estimatedCostMicros,
+      completedAttempts: row.completedAttempts ?? 0,
+      successRateBps: row.successRateBps ?? 0,
+      averageFirstTokenMs: row.averageFirstTokenMs
     };
   });
 
-  $: modelRows = Object.values(
-    usage.models
-      .filter((row) => !providerFilter || row.providerEntryId === providerFilter)
-      .reduce<Record<string, Row>>((acc, row) => {
-        const name = row.model ?? "";
-        const existing = acc[name];
-        if (existing) {
-          existing.requestCount += row.requestCount;
-          existing.inputTokens += row.inputTokens;
-          existing.outputTokens += row.outputTokens;
-          existing.cacheTokens += row.cacheReadTokens + row.cacheCreationTokens;
-          existing.estimatedCostMicros += row.estimatedCostMicros;
-        } else {
-          acc[name] = {
-            key: name,
-            label: row.model || $t("server.unknownModel"),
-            sublabel: "",
-            requestCount: row.requestCount,
-            inputTokens: row.inputTokens,
-            outputTokens: row.outputTokens,
-            cacheTokens: row.cacheReadTokens + row.cacheCreationTokens,
-            estimatedCostMicros: row.estimatedCostMicros
-          };
-        }
-        return acc;
-      }, {})
-  ).sort((a, b) => b.inputTokens + b.outputTokens + b.cacheTokens - (a.inputTokens + a.outputTokens + a.cacheTokens));
+  function formatSuccessRate(value: number, completedAttempts: number): string {
+    if (completedAttempts === 0) return "-";
+    const percent = value / 100;
+    return `${percent.toFixed(Number.isInteger(percent) ? 0 : 1)}%`;
+  }
 
-  $: rows = mode === "provider" ? providerRows : modelRows;
-  $: hasData = usage.requestCount > 0;
+  $: rows = providerRows;
+  $: hasData = rows.length > 0;
 </script>
 
 <div class="usage-breakdown">
-  <div class="breakdown-toolbar">
-    <SegmentedControl options={modeOptions} bind:value={mode} ariaLabel={$t("server.usageBreakdown")} />
-    {#if mode === "model" && providerOptions.length > 1}
-      <select class="provider-filter" bind:value={providerFilter} aria-label={$t("server.allProviders")}>
-        <option value="">{$t("server.allProviders")}</option>
-        {#each providerOptions as option (option.id)}
-          <option value={option.id}>{option.label}</option>
-        {/each}
-      </select>
-    {/if}
-  </div>
-
   {#if hasData}
     <table class="breakdown-table">
       <thead>
         <tr>
-          <th class="col-name">{mode === "provider" ? $t("server.colProvider") : $t("server.colModel")}</th>
+          <th class="col-name">{$t("server.colProvider")}</th>
           <th>{$t("server.requests")}</th>
           <th>{$t("server.colInput")}</th>
           <th>{$t("server.colOutput")}</th>
           <th>{$t("server.colCache")}</th>
+          <th>{$t("server.successRate")}</th>
+          <th>{$t("server.firstToken")}</th>
           <th>{$t("server.estimatedCost")}</th>
         </tr>
       </thead>
@@ -133,6 +87,8 @@
             <td>{formatCompact(row.inputTokens)}</td>
             <td>{formatCompact(row.outputTokens)}</td>
             <td>{formatCompact(row.cacheTokens)}</td>
+            <td>{formatSuccessRate(row.successRateBps, row.completedAttempts)}</td>
+            <td>{row.averageFirstTokenMs == null ? "-" : `${formatCompact(row.averageFirstTokenMs)} ms`}</td>
             <td>{formatCostMicros(row.estimatedCostMicros)}</td>
           </tr>
         {/each}
@@ -153,23 +109,7 @@
     flex-direction: column;
     gap: 10px;
     padding: 12px 16px 14px;
-  }
-
-  .breakdown-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .provider-filter {
-    min-height: 26px;
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface-2);
-    color: var(--text-secondary);
-    font-size: 12px;
+    overflow-x: auto;
   }
 
   .breakdown-table {
@@ -212,7 +152,7 @@
   }
 
   .row-sublabel {
-    margin-left: 6px;
+    margin-inline-start: 6px;
     color: var(--text-tertiary);
     font-size: 11px;
   }

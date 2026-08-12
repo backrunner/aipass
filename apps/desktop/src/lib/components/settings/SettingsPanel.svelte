@@ -67,7 +67,7 @@
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
   export let onLoadBrowserExtensionStatus: () => MaybePromise = () => {};
   export let onInstallBrowserExtension: () => MaybePromise = () => {};
-  export let onSaveServerConfig: (config: ProxyConfig) => MaybePromise = () => {};
+  export let onSaveServerConfig: (config: ProxyConfig) => MaybePromise<boolean | void> = () => {};
 
   let activeTab = initialTab || "general";
   let previousInitialTab = initialTab;

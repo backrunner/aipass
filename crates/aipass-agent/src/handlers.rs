@@ -293,7 +293,9 @@ fn dispatch_request(
         })
         .map(AgentResponse::success),
         AgentRequest::ProviderUpdate { id, input } => with_vault(state, false, |vault| {
-            vault.update_provider(id, input).map_err(map_vault_error)
+            vault.update_provider(id, input).map_err(map_vault_error)?;
+            refresh_proxy_provider_credentials(state, vault, id)?;
+            Ok(())
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderArchive { id } => with_vault(state, false, |vault| {
@@ -338,6 +340,7 @@ fn dispatch_request(
                 vault
                     .delete_provider_permanently(summary.id)
                     .map_err(map_vault_error)?;
+                cleanup_proxy_provider_references(state, vault, summary.id, None);
             }
             Ok(trashed.len())
         })
@@ -353,24 +356,50 @@ fn dispatch_request(
             })
         }),
         AgentRequest::SecretAdd { id, label, secret } => with_vault(state, false, |vault| {
-            vault
+            let secret_id = vault
                 .add_secret(id, label, secret.into_inner())
-                .map_err(map_vault_error)
+                .map_err(map_vault_error)?;
+            refresh_proxy_provider_credentials(state, vault, id)?;
+            Ok(secret_id)
         })
         .map(AgentResponse::success),
+        AgentRequest::SecretUpdate {
+            id,
+            secret_id,
+            label,
+            secret,
+        } => with_vault(state, false, |vault| {
+            let updated = vault
+                .update_secret(
+                    id,
+                    &secret_id,
+                    &label,
+                    secret.map(SensitiveString::into_inner),
+                )
+                .map_err(map_vault_error)?;
+            if updated {
+                refresh_proxy_provider_credentials(state, vault, id)?;
+            }
+            Ok(updated)
+        })
+        .map(|updated| AgentResponse::success(json!({ "updated": updated }))),
         AgentRequest::SecretMetadataSet {
             id,
             secret_id,
             metadata,
         } => with_vault(state, false, |vault| {
-            vault
+            let updated = vault
                 .set_secret_metadata(id, &secret_id, &metadata)
-                .map_err(map_vault_error)
+                .map_err(map_vault_error)?;
+            if updated {
+                refresh_proxy_provider_credentials(state, vault, id)?;
+            }
+            Ok(updated)
         })
         .map(|updated| AgentResponse::success(json!({ "updated": updated }))),
         AgentRequest::SecretRemove { id, label } => with_vault(state, false, |vault| {
-            vault.remove_secret(id, &label).map_err(map_vault_error)?;
-            cleanup_proxy_provider_references(state, vault, id, Some(&label));
+            let secret_id = vault.remove_secret(id, &label).map_err(map_vault_error)?;
+            cleanup_proxy_provider_references(state, vault, id, Some(&secret_id));
             Ok(())
         })
         .map(|_| AgentResponse::empty()),
@@ -440,6 +469,7 @@ fn dispatch_request(
         AgentRequest::ToolConfigPreview { request } => with_vault(state, true, |vault| {
             let (entry, plan, content) = build_tool_config_plan(vault, &request)?;
             let files = tool_config_preview_files(&plan, &content);
+            let preview = combined_tool_config_preview(&files);
             Ok(ToolConfigPreviewResponse {
                 tool: request.tool,
                 mode: request.mode,
@@ -447,7 +477,7 @@ fn dispatch_request(
                 entry_title: entry.title,
                 target_path: plan.target_path.display().to_string(),
                 summary: plan.summary,
-                preview: redact_tool_config_diff(&plan.preview),
+                preview,
                 files,
             })
         })
@@ -469,6 +499,7 @@ fn dispatch_request(
         AgentRequest::ToolConfigProxyPreview { request } => with_vault(state, true, |vault| {
             let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request)?;
             let files = tool_config_preview_files(&plan, &content);
+            let preview = combined_tool_config_preview(&files);
             Ok(ToolConfigPreviewResponse {
                 tool: tool_config_tool_for(&request.tool),
                 mode: ToolConfigMode::Plaintext,
@@ -476,7 +507,7 @@ fn dispatch_request(
                 entry_title: entry.title,
                 target_path: plan.target_path.display().to_string(),
                 summary: plan.summary,
-                preview: redact_tool_config_diff(&plan.preview),
+                preview,
                 files,
             })
         })
@@ -679,11 +710,18 @@ fn cleanup_proxy_provider_references(
     entry_id: Uuid,
     secret_id: Option<&str>,
 ) {
-    let result = state
-        .proxy
-        .lock()
-        .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))
-        .and_then(|mut proxy| proxy.remove_provider_references(vault, entry_id, secret_id));
+    let mut proxy = match state.proxy.lock() {
+        Ok(proxy) => proxy,
+        Err(poisoned) => {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                "recovering poisoned proxy lock while removing provider references",
+            );
+            poisoned.into_inner()
+        }
+    };
+    let result = proxy.remove_provider_references(vault, entry_id, secret_id);
     match result {
         Ok(true) => write_component_log(
             AGENT_LOG,
@@ -691,15 +729,41 @@ fn cleanup_proxy_provider_references(
             &format!("removed proxy route references for provider {entry_id}"),
         ),
         Ok(false) => {}
-        Err(err) => write_component_log(
-            AGENT_LOG,
-            "WARN",
-            &format!(
-                "failed to remove proxy route references for provider {entry_id}: {}",
-                err.message
-            ),
-        ),
+        Err(err) => {
+            // A deleted vault credential must not remain usable from the old
+            // runtime snapshot even when config cleanup cannot be persisted.
+            let _ = proxy.stop();
+            let _ = proxy.save_config(vault);
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                &format!(
+                    "failed to remove proxy route references for provider {entry_id}; stopped proxy: {}",
+                    err.message
+                ),
+            );
+        }
     }
+}
+
+fn refresh_proxy_provider_credentials(
+    state: &Arc<AgentState>,
+    vault: &Vault,
+    entry_id: Uuid,
+) -> ServiceResult<()> {
+    let mut proxy = match state.proxy.lock() {
+        Ok(proxy) => proxy,
+        Err(poisoned) => {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                "recovering poisoned proxy lock while refreshing provider credentials",
+            );
+            poisoned.into_inner()
+        }
+    };
+    proxy.refresh_provider_credentials(vault, entry_id)?;
+    Ok(())
 }
 
 /// One grant per stored key, so a relay entry holding a key per gateway group

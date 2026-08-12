@@ -14,6 +14,31 @@ export default defineConfig({
     exclude: ["@aipass/ui"]
   },
   build: {
-    target: "es2022"
+    target: "es2022",
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const moduleId = id.replaceAll("\\", "/");
+          if (!moduleId.includes("/node_modules/")) return;
+
+          if (moduleId.includes("/lucide-svelte/")) return "icons";
+          if (
+            moduleId.includes("/bits-ui/") ||
+            moduleId.includes("/@floating-ui/") ||
+            moduleId.includes("/@internationalized/") ||
+            moduleId.includes("/tabbable/")
+          ) {
+            return "ui-primitives";
+          }
+          if (
+            moduleId.includes("/@tauri-apps/") ||
+            moduleId.includes("/@vinlemon/")
+          ) {
+            return "desktop-runtime";
+          }
+          return "shared-vendor";
+        }
+      }
+    }
   }
 });

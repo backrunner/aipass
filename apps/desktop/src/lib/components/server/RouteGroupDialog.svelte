@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
-  import { Button, SelectField } from "@aipass/ui";
+  import { Button, IconButton, SelectField } from "@aipass/ui";
   import { Dialog } from "bits-ui";
-  import { ChevronDown, ChevronUp, Trash2, X } from "lucide-svelte";
+  import { ChevronDown, ChevronUp, KeyRound, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyTargetConfig } from "../../types";
@@ -10,13 +10,14 @@
 
   export let route: ProxyRouteConfig | undefined = undefined;
   export let entries: ProviderEntry[] = [];
-  export let onSave: (route: ProxyRouteConfig) => MaybePromise = () => {};
+  export let onSave: (route: ProxyRouteConfig) => MaybePromise<boolean | void> = () => {};
   export let onClose: () => MaybePromise = () => {};
 
   type Member = { entry: ProviderEntry; secret: SecretRef; weight: number };
 
   let dialogOpen = true;
   let closing = false;
+  let saving = false;
   let name = route?.name ?? "";
   let strategy: ProxyRouteStrategy = route?.strategy ?? "fallback";
   let protocol: ProxyProtocol = route?.inboundProtocol ?? "open_ai_responses";
@@ -29,10 +30,15 @@
 
   $: credentialOptions = entries
     .filter((entry) => Boolean(apiBaseUrl(entry)))
-    .filter(proxySupportedEntry)
-    .filter((entry) => members.length === 0 || routeProtocolFor(entry) === routeProtocolFor(members[0].entry))
     .flatMap((entry) =>
-      entry.secretRefs.map((secret) => ({
+      entry.secretRefs
+        .filter((secret) => proxySupportedEntry(entry, secret))
+        .filter(
+          (secret) =>
+            members.length === 0 ||
+            routeProtocolFor(entry, secret) === routeProtocolFor(members[0].entry, members[0].secret)
+        )
+        .map((secret) => ({
         value: `${entry.id}::${secret.id}`,
         label: `${entry.title} · ${secret.label}`,
         disabled: members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)
@@ -67,10 +73,11 @@
     const entry = entries.find((item) => item.id === entryId);
     const secret = entry?.secretRefs.find((item) => item.id === secretId);
     if (!entry || !secret) return;
+    if (!proxySupportedEntry(entry, secret)) return;
     if (members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)) return;
     members = [...members, { entry, secret, weight: 1 }];
     name ||= entry.title;
-    if (members.length === 1) protocol = routeProtocolFor(entry);
+    if (members.length === 1) protocol = routeProtocolFor(entry, secret);
   }
 
   function removeMember(index: number) {
@@ -85,31 +92,32 @@
     members = next;
   }
 
-  function save() {
-    if (!name.trim() || members.length === 0) return;
+  async function save() {
+    if (saving || !name.trim() || members.length === 0) return;
     const targets: ProxyTargetConfig[] = members.map((member, index) => {
       const existing = route?.targets.find(
         (target) => target.providerEntryId === member.entry.id && target.secretId === member.secret.id
       );
-      const base = existing ?? buildRouteTarget(member.entry, member.secret, index);
+      const base = buildRouteTarget(member.entry, member.secret, index);
       if (!base) return undefined;
       return {
         ...base,
+        id: existing?.id ?? base.id,
         priority: index,
         weight: Math.max(1, Math.round(member.weight) || 1),
         enabled: existing?.enabled ?? true
       };
     }).filter((target): target is ProxyTargetConfig => Boolean(target));
     if (targets.length === 0) return;
-    if (members[0].entry.interfaceType === "anthropic_messages") protocol = "anthropic_messages";
-    if (route) {
-      onSave({ ...route, name: name.trim(), strategy, inboundProtocol: protocol, upstreamProtocol: protocol, targets });
-    } else {
-      onSave({
+    if (routeProtocolFor(members[0].entry, members[0].secret) === "anthropic_messages") {
+      protocol = "anthropic_messages";
+    }
+    const nextRoute: ProxyRouteConfig = route
+      ? { ...route, name: name.trim(), strategy, inboundProtocol: protocol, upstreamProtocol: protocol, targets }
+      : {
         id: crypto.randomUUID(),
         name: name.trim(),
         token: "",
-        tokenFingerprint: "",
         strategy,
         inboundProtocol: protocol,
         upstreamProtocol: protocol,
@@ -117,9 +125,16 @@
         targets,
         retry: defaultRetryPolicy(),
         enabled: true
-      });
+      };
+    saving = true;
+    try {
+      const saved = await onSave(nextRoute);
+      if (saved !== false) handleClose();
+    } catch {
+      // The owning view presents persistence errors and the dialog stays open.
+    } finally {
+      saving = false;
     }
-    handleClose();
   }
 </script>
 
@@ -134,7 +149,7 @@
           </Dialog.Title>
           <Dialog.Close>
             {#snippet child({ props })}
-              <button {...props} type="button" class="close-btn" aria-label={$t("common.close")}>
+              <button {...props} type="button" class="close-btn" aria-label={$t("common.close")} disabled={saving}>
                 <X size={16} />
               </button>
             {/snippet}
@@ -142,60 +157,70 @@
         </header>
 
         <div class="modal-body">
-          <div class="form-grid">
+          <div class="form-block">
             <label class="field">
               <span>{$t("server.groupName")}</span>
               <input bind:value={name} placeholder={$t("server.groupName")} />
             </label>
-            <SelectField
-              label={$t("server.strategy")}
-              bind:value={strategy}
-              options={strategyOptions}
-            />
-            {#if members.length > 0 && members[0].entry.interfaceType !== "anthropic_messages"}
+            <div class="form-grid">
               <SelectField
-                label={$t("server.protocol")}
-                bind:value={protocol}
-                options={protocolOptions}
+                label={$t("server.strategy")}
+                bind:value={strategy}
+                options={strategyOptions}
               />
-            {/if}
+              {#if members.length > 0 && routeProtocolFor(members[0].entry, members[0].secret) !== "anthropic_messages"}
+                <SelectField
+                  label={$t("server.protocol")}
+                  bind:value={protocol}
+                  options={protocolOptions}
+                />
+              {/if}
+            </div>
           </div>
 
           <div class="members-block">
-            <div class="members-title"><span>{$t("server.members")}</span></div>
-            <SelectField
-              bind:value={memberPickerValue}
-              placeholder={$t("server.addMember")}
-              options={credentialOptions}
-              onValueChange={(value) => {
-                if (!value) return;
-                addMember(value);
-                memberPickerValue = "";
-              }}
-            />
+            <div class="members-title">
+              <span>{$t("server.members")}</span>
+              <span class="members-count">{$t("server.memberCount", { count: members.length })}</span>
+            </div>
+            <div class="member-picker">
+              <SelectField
+                bind:value={memberPickerValue}
+                placeholder={$t("server.addMember")}
+                options={credentialOptions}
+                onValueChange={(value) => {
+                  if (!value) return;
+                  addMember(value);
+                  memberPickerValue = "";
+                }}
+              />
+            </div>
 
             {#each members as member, index (`${member.entry.id}::${member.secret.id}`)}
               <div class="member-row">
+                <span class="member-icon" aria-hidden="true"><KeyRound size={15} /></span>
                 <div class="member-main">
                   <strong>{member.entry.title}</strong>
                   <span>{member.secret.label}</span>
                 </div>
-                {#if strategy === "round_robin"}
-                  <label class="member-weight">
-                    <span>{$t("server.weight")}</span>
-                    <input type="number" min="1" step="1" bind:value={member.weight} />
-                  </label>
-                {/if}
-                <div class="member-actions">
-                  <button type="button" title={$t("server.moveUp")} aria-label={$t("server.moveUp")} disabled={index === 0} on:click={() => moveMember(index, -1)}>
-                    <ChevronUp size={14} />
-                  </button>
-                  <button type="button" title={$t("server.moveDown")} aria-label={$t("server.moveDown")} disabled={index === members.length - 1} on:click={() => moveMember(index, 1)}>
-                    <ChevronDown size={14} />
-                  </button>
-                  <button type="button" class="danger" title={$t("providerDetail.removeKey")} aria-label={$t("providerDetail.removeKey")} on:click={() => removeMember(index)}>
-                    <Trash2 size={14} />
-                  </button>
+                <div class="member-controls">
+                  {#if strategy === "round_robin"}
+                    <label class="member-weight">
+                      <span>{$t("server.weight")}</span>
+                      <input type="number" min="1" step="1" bind:value={member.weight} />
+                    </label>
+                  {/if}
+                  <div class="member-actions">
+                    <IconButton size="sm" label={$t("server.moveUp")} disabled={index === 0} on:click={() => moveMember(index, -1)}>
+                      <ChevronUp size={14} />
+                    </IconButton>
+                    <IconButton size="sm" label={$t("server.moveDown")} disabled={index === members.length - 1} on:click={() => moveMember(index, 1)}>
+                      <ChevronDown size={14} />
+                    </IconButton>
+                    <IconButton size="sm" tone="danger" label={$t("providerDetail.removeKey")} on:click={() => removeMember(index)}>
+                      <Trash2 size={14} />
+                    </IconButton>
+                  </div>
                 </div>
               </div>
             {/each}
@@ -203,8 +228,8 @@
         </div>
 
         <footer class="modal-footer">
-          <Button variant="ghost" on:click={handleClose}>{$t("common.cancel")}</Button>
-          <Button variant="primary" type="submit" disabled={!name.trim() || members.length === 0}>
+          <Button variant="ghost" on:click={handleClose} disabled={saving}>{$t("common.cancel")}</Button>
+          <Button variant="primary" type="submit" disabled={saving || !name.trim() || members.length === 0}>
             {$t("common.save")}
           </Button>
         </footer>
@@ -233,7 +258,7 @@
     left: 50%;
     z-index: 41;
     transform: translate(-50%, -50%);
-    width: min(540px, calc(100vw - 32px));
+    width: min(600px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);
     background: var(--surface);
     border: 1px solid var(--border);
@@ -313,14 +338,20 @@
   .modal-body {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding: 18px 20px;
+    gap: 20px;
+    padding: 20px;
     overflow: auto;
+  }
+
+  .form-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
 
   .form-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px;
   }
 
@@ -351,24 +382,52 @@
   .members-block {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
   }
 
-  .members-title span {
+  .members-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .members-title > span:first-child {
     color: var(--text-tertiary);
     font-size: 11px;
     font-weight: 600;
   }
 
+  .members-count {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .member-picker {
+    width: 100%;
+  }
+
   .member-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    background: var(--surface-2);
+    gap: 12px;
+    min-height: 56px;
+    padding: 10px 12px;
+    background: var(--surface-raised);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+  }
+
+  .member-icon {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text-secondary);
   }
 
   .member-main {
@@ -405,41 +464,25 @@
     }
 
     input {
-      width: 64px;
+      width: 56px;
       min-height: 28px;
       padding: 4px 6px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
     }
+  }
+
+  .member-controls {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
   }
 
   .member-actions {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
-
-    button {
-      display: grid;
-      place-items: center;
-      width: 26px;
-      height: 26px;
-      border-radius: var(--radius-sm);
-      color: var(--text-tertiary);
-      transition: background-color 80ms ease, color 120ms ease;
-
-      &:hover:not(:disabled) {
-        background: var(--surface);
-        color: var(--text);
-      }
-
-      &.danger:hover:not(:disabled) {
-        color: var(--danger);
-        background: var(--danger-soft);
-      }
-
-      &:disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
-      }
-    }
+    gap: 4px;
   }
 
   .modal-footer {
@@ -448,5 +491,16 @@
     gap: 8px;
     padding: 14px 20px;
     border-top: 1px solid var(--divider);
+  }
+
+  @media (max-width: 520px) {
+    .member-row {
+      grid-template-columns: 32px minmax(0, 1fr);
+    }
+
+    .member-controls {
+      grid-column: 2;
+      justify-content: space-between;
+    }
   }
 </style>

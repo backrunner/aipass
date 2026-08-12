@@ -23,6 +23,7 @@ aipass-storage = { path = "../aipass-storage" }
 aipass-sync = { path = "../aipass-sync" }
 aipass-vault = { path = "../aipass-vault" }
 anyhow.workspace = true
+base64.workspace = true
 clap.workspace = true
 directories.workspace = true
 interprocess.workspace = true

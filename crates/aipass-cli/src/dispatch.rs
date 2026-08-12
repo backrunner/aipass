@@ -411,6 +411,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     .unwrap_or(existing.interface_type),
                 auth_scheme: auth.map(AuthScheme::from).unwrap_or(existing.auth_scheme),
                 api_key,
+                secret_label: None,
                 default_model: default_model.or(existing.default_model),
                 model_aliases: if model_alias.is_empty() {
                     existing.model_aliases

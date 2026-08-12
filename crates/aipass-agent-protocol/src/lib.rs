@@ -241,7 +241,7 @@ pub struct ToolConfigProxyRequest {
 pub struct ToolConfigPreviewFile {
     pub path: String,
     pub content: String,
-    /// Redacted line diff between the current file and the planned content.
+    /// Line diff between the current file and the planned content.
     #[serde(default)]
     pub diff: String,
 }
@@ -580,6 +580,13 @@ pub enum AgentRequest {
         label: String,
         secret: SensitiveString,
     },
+    #[serde(rename = "secret.update")]
+    SecretUpdate {
+        id: Uuid,
+        secret_id: String,
+        label: String,
+        secret: Option<SensitiveString>,
+    },
     #[serde(rename = "secret.remove")]
     SecretRemove { id: Uuid, label: String },
     /// Set a key's gateway group, wire format and billing rule. Unset fields
@@ -870,7 +877,6 @@ pub struct SecretValue {
 pub struct ServerTokenResponse {
     pub route_id: Uuid,
     pub token: SensitiveString,
-    pub fingerprint: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -882,6 +888,16 @@ pub struct ServerUsageSummary {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub estimated_cost_micros: u64,
+    #[serde(default)]
+    pub attempt_count: u64,
+    #[serde(default)]
+    pub completed_attempts: u64,
+    #[serde(default)]
+    pub successful_attempts: u64,
+    #[serde(default)]
+    pub success_rate_bps: u16,
+    #[serde(default)]
+    pub average_first_token_ms: Option<u64>,
     pub providers: Vec<ProviderUsageAggregate>,
     #[serde(default)]
     pub models: Vec<ModelUsageAggregate>,

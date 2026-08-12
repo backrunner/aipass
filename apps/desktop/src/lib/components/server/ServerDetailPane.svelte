@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Badge, Banner, Button } from "@aipass/ui";
+  import { Badge, Banner, Button, IconButton } from "@aipass/ui";
   import { Copy, Play, RotateCw, Server, Square } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
 
@@ -7,6 +7,7 @@
   import type { MaybePromise, ProxyConfig, ProxyStatus, ServerUsageSummary, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
   import { formatCompact } from "../../utils/format";
   import { integrationToolDefinitions } from "../../utils/integrations";
+  import { advertisedProxyAddress } from "../../utils/server";
   import Card from "../shared/Card.svelte";
   import IntegrationCard from "../integration/IntegrationCard.svelte";
   import UsageBreakdown from "./UsageBreakdown.svelte";
@@ -19,11 +20,10 @@
   export let entries: ProviderEntry[] = [];
   export let selectedRouteId = "";
   export let busy = "";
-  export let revealedToken = "";
   export let toolDetections: ToolDetection[] = [];
   export let onStart: () => MaybePromise = () => {};
   export let onStop: () => MaybePromise = () => {};
-  export let onSaveConfig: (config: ProxyConfig) => MaybePromise = () => {};
+  export let onSaveConfig: (config: ProxyConfig) => MaybePromise<boolean | void> = () => {};
   export let onRotateToken: (routeId: string) => MaybePromise = () => {};
   export let onCopyToken: (token: string) => MaybePromise = () => {};
   export let onPreviewIntegration: (tool: ToolConfigTarget, routeId: string) => Promise<ToolConfigPreview> = async () => {
@@ -44,7 +44,7 @@
   $: integrateRoute =
     enabledRoutes.find((route) => route.id === selectedRouteId) ?? enabledRoutes[0];
   $: integrateEndpoint = integrateRoute
-    ? `http://${config.bindAddr}${integrateRoute.inboundProtocol === "anthropic_messages" ? "" : "/v1"}`
+    ? `http://${advertisedProxyAddress(config.bindAddr)}${integrateRoute.inboundProtocol === "anthropic_messages" ? "" : "/v1"}`
     : "";
   $: proxyIntegrationTools = integrateRoute
     ? integrationToolDefinitions.filter((tool) =>
@@ -61,6 +61,12 @@
     const bindAddr = bindAddrDraft.trim();
     if (!bindAddr || bindAddr === config.bindAddr) return;
     void onSaveConfig({ ...config, bindAddr });
+  }
+
+  function formatSuccessRate(value: number, completedAttempts: number): string {
+    if (completedAttempts === 0) return "-";
+    const percent = value / 100;
+    return `${percent.toFixed(Number.isInteger(percent) ? 0 : 1)}%`;
   }
 </script>
 
@@ -102,7 +108,7 @@
 
   <div class="detail-body">
     {#if status.lastError}<div class="error-line">{status.lastError}</div>{/if}
-    {#if !status.running && config.routes.some((route) => Boolean(route.tokenFingerprint))}
+    {#if !status.running && config.routes.some((route) => Boolean(route.token))}
       <Banner tone="warning">{$t("server.integrationsInactive")}</Banner>
     {/if}
 
@@ -123,6 +129,14 @@
         <div class="status-cell">
           <span class="cell-label">{$t("server.tpm")}</span>
           <strong class="cell-number">{formatCompact(status.recentTokens)}</strong>
+        </div>
+        <div class="status-cell">
+          <span class="cell-label">{$t("server.successRate")}</span>
+          <strong class="cell-number">{formatSuccessRate(usage.successRateBps ?? 0, usage.completedAttempts ?? 0)}</strong>
+        </div>
+        <div class="status-cell">
+          <span class="cell-label">{$t("server.firstToken")}</span>
+          <strong class="cell-number">{usage.averageFirstTokenMs == null ? "-" : `${formatCompact(usage.averageFirstTokenMs)} ms`}</strong>
         </div>
         <div class="status-cell groups">
           <span class="cell-label">{$t("server.activeGroups")}</span>
@@ -151,7 +165,7 @@
       tools={proxyIntegrationTools}
       detections={toolDetections}
       resetKey={integrateRoute?.id ?? ""}
-      disabled={Boolean(busy) || !integrateRoute?.tokenFingerprint}
+      disabled={Boolean(busy) || !integrateRoute?.token}
       onPreview={(tool) => integrateRoute ? onPreviewIntegration(tool.id, integrateRoute.id) : Promise.reject(new Error("no active route"))}
       onApply={(tool) => integrateRoute ? onApplyIntegration(tool.id, integrateRoute.id) : Promise.reject(new Error("no active route"))}
     >
@@ -163,19 +177,22 @@
         </div>
         <div class="kv-line">
           <span class="kv-label">{$t("server.token")}</span>
-          {#if integrateRoute.tokenFingerprint}
-            <code class="kv-value mono">sha256:{integrateRoute.tokenFingerprint.slice(0, 12)}…</code>
+          {#if integrateRoute.token}
+            <code class="kv-value mono" title={integrateRoute.token}>{integrateRoute.token}</code>
             <div class="kv-actions">
-              <Button variant="ghost" size="sm" on:click={() => onRotateToken(integrateRoute.id)} disabled={Boolean(busy)}>
-                <RotateCw size={13} /> {$t("server.rotateToken")}
-              </Button>
+              <IconButton size="sm" label={$t("server.copy")} on:click={() => onCopyToken(integrateRoute.token)}>
+                <Copy size={13} />
+              </IconButton>
+              <IconButton size="sm" label={$t("server.rotateToken")} disabled={Boolean(busy)} on:click={() => onRotateToken(integrateRoute.id)}>
+                <RotateCw size={13} />
+              </IconButton>
             </div>
           {:else}
             <span class="cell-muted">{$t("server.noToken")}</span>
             <div class="kv-actions">
-              <Button variant="ghost" size="sm" on:click={() => onRotateToken(integrateRoute.id)} disabled={Boolean(busy)}>
-                <RotateCw size={13} /> {$t("server.rotateToken")}
-              </Button>
+              <IconButton size="sm" label={$t("server.rotateToken")} disabled={Boolean(busy)} on:click={() => onRotateToken(integrateRoute.id)}>
+                <RotateCw size={13} />
+              </IconButton>
             </div>
           {/if}
         </div>
@@ -184,17 +201,6 @@
       {/if}
     </IntegrationCard>
 
-    {#if revealedToken}
-      <div class="token-reveal">
-        <div>
-          <span>{$t("server.newToken")}</span>
-          <code class="mono">{revealedToken}</code>
-        </div>
-        <Button variant="secondary" size="sm" on:click={() => onCopyToken(revealedToken)}>
-          <Copy size={13} /> {$t("server.copy")}
-        </Button>
-      </div>
-    {/if}
   </div>
 </section>
 
@@ -206,6 +212,7 @@
     min-height: 0;
     height: 100%;
     overflow: hidden;
+    container-type: inline-size;
     background: color-mix(in oklab, var(--surface) 88%, transparent);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
@@ -266,7 +273,7 @@
 
   .status-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(64px, auto)) minmax(0, 1fr);
+    grid-template-columns: repeat(6, minmax(64px, auto)) minmax(140px, 1fr);
     gap: 12px;
     align-items: center;
     padding: 12px 16px;
@@ -310,7 +317,7 @@
     align-items: center;
     gap: 6px;
     min-width: 0;
-    margin-left: auto;
+    margin-inline-start: auto;
     padding: 4px 10px;
     background: var(--surface-2);
     border: 1px solid var(--divider);
@@ -364,9 +371,9 @@
 
   .kv-line {
     display: grid;
-    grid-template-columns: 76px minmax(0, 1fr) auto;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
   }
 
   .kv-label {
@@ -381,6 +388,10 @@
     white-space: nowrap;
     font-size: 12px;
     color: var(--text);
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    user-select: all;
   }
 
   .kv-actions {
@@ -397,35 +408,19 @@
     border-radius: 6px;
   }
 
-  .token-reveal {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    position: sticky;
-    bottom: 0;
-    padding: 12px 14px;
-    background: var(--surface);
-    border: 1px solid var(--accent);
-    border-radius: 8px;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
-
-    div {
-      min-width: 0;
+  @container (max-width: 760px) {
+    .status-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
-    span {
-      display: block;
-      margin-bottom: 4px;
-      color: var(--text-tertiary);
-      font-size: 11px;
+    .status-cell.groups {
+      grid-column: 1 / -1;
     }
+  }
 
-    code {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+  @container (max-width: 480px) {
+    .status-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 

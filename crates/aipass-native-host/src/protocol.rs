@@ -147,6 +147,8 @@ pub enum NativeRequest {
         interface_type: InterfaceType,
         auth_scheme: AuthScheme,
         api_key: SensitiveString,
+        #[serde(default)]
+        secret_label: Option<String>,
         default_model: Option<String>,
         #[serde(default)]
         model_aliases: Vec<(String, String)>,
@@ -182,6 +184,8 @@ pub enum NativeRequest {
         interface_type: InterfaceType,
         auth_scheme: AuthScheme,
         api_key: Option<SensitiveString>,
+        #[serde(default)]
+        secret_label: Option<String>,
         default_model: Option<String>,
         #[serde(default)]
         model_aliases: Vec<(String, String)>,

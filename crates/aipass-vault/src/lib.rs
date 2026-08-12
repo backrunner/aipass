@@ -49,6 +49,10 @@ pub enum VaultError {
     DeviceNotFound,
     #[error("secret label already exists")]
     DuplicateSecretLabel,
+    #[error("secret label is invalid")]
+    InvalidSecretLabel,
+    #[error("secret value is invalid")]
+    InvalidSecretValue,
     #[error("cannot remove the last secret from a provider")]
     LastSecret,
     #[error("invalid encrypted vault export")]
@@ -248,6 +252,8 @@ pub struct ProviderEntryUpdateInput {
     pub interface_type: InterfaceType,
     pub auth_scheme: AuthScheme,
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub secret_label: Option<String>,
     pub default_model: Option<String>,
     #[serde(default)]
     pub model_aliases: Vec<(String, String)>,
@@ -341,6 +347,12 @@ fn clean_secret_label(value: Option<&str>) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+fn normalize_user_secret_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control))
+        .then(|| value.to_string())
 }
 
 pub struct VaultCreation {
@@ -777,8 +789,12 @@ impl Vault {
         secret: impl Into<String>,
         metadata: &SecretMetadataInput,
     ) -> Result<String, VaultError> {
-        let label = label.into();
+        let label =
+            normalize_user_secret_label(&label.into()).ok_or(VaultError::InvalidSecretLabel)?;
         let secret = secret.into();
+        if secret.is_empty() {
+            return Err(VaultError::InvalidSecretValue);
+        }
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
         if plaintext
@@ -803,6 +819,55 @@ impl Vault {
         self.write_provider_record(id, &plaintext)?;
         self.audit("secret.add", Some(id), None)?;
         Ok(secret_id)
+    }
+
+    /// Update a stored credential without changing its stable id. Keeping the
+    /// id preserves proxy routes, pricing assignments, and historical usage.
+    pub fn update_secret(
+        &self,
+        id: Uuid,
+        secret_id: &str,
+        label: &str,
+        secret: Option<String>,
+    ) -> Result<bool, VaultError> {
+        let label = normalize_user_secret_label(label).ok_or(VaultError::InvalidSecretLabel)?;
+        if secret.as_ref().is_some_and(String::is_empty) {
+            return Err(VaultError::InvalidSecretValue);
+        }
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        if plaintext
+            .entry
+            .secret_refs
+            .iter()
+            .any(|existing| existing.id != secret_id && existing.label == label)
+        {
+            return Err(VaultError::DuplicateSecretLabel);
+        }
+        let secret_ref = plaintext
+            .entry
+            .secret_refs
+            .iter_mut()
+            .find(|existing| existing.id == secret_id)
+            .ok_or(VaultError::RecordNotFound)?;
+        let mut changed = false;
+        if secret_ref.label != label {
+            secret_ref.label = label;
+            changed = true;
+        }
+        if let Some(secret) = secret {
+            secret_ref.masked = mask_secret(&secret);
+            secret_ref.fingerprint = hmac_fingerprint(&self.index_key, &secret);
+            plaintext.secrets.insert(secret_id.to_string(), secret);
+            changed = true;
+        }
+        if !changed {
+            return Ok(false);
+        }
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("secret.update", Some(id), None)?;
+        Ok(true)
     }
 
     /// Overlay group / wire format / billing onto an existing key. Fields left
@@ -859,7 +924,7 @@ impl Vault {
             .map(|item| item.id.clone()))
     }
 
-    pub fn remove_secret(&self, id: Uuid, label_or_id: &str) -> Result<(), VaultError> {
+    pub fn remove_secret(&self, id: Uuid, label_or_id: &str) -> Result<String, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
         if plaintext.entry.secret_refs.len() <= 1 {
@@ -884,7 +949,7 @@ impl Vault {
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         self.write_provider_record(id, &plaintext)?;
         self.audit("secret.remove", Some(id), None)?;
-        Ok(())
+        Ok(removed)
     }
 
     pub fn update_provider(
@@ -909,14 +974,32 @@ impl Vault {
             .ok_or(VaultError::RecordNotFound)?;
         let fingerprint = hmac_fingerprint(&self.index_key, &api_key);
         let mut secret_refs = old.entry.secret_refs;
+        let updated_secret_label = match input.secret_label.as_deref() {
+            Some(label) => {
+                Some(normalize_user_secret_label(label).ok_or(VaultError::InvalidSecretLabel)?)
+            }
+            None => None,
+        };
+        if let Some(label) = updated_secret_label.as_deref() {
+            if secret_refs
+                .iter()
+                .skip(1)
+                .any(|existing| existing.label == label)
+            {
+                return Err(VaultError::DuplicateSecretLabel);
+            }
+        }
         if secret_refs.is_empty() {
             secret_refs.push(SecretRef::new(
                 secret_id.clone(),
-                "primary",
+                updated_secret_label.as_deref().unwrap_or("primary"),
                 mask_secret(&api_key),
                 fingerprint,
             ));
         } else if let Some(primary) = secret_refs.first_mut() {
+            if let Some(label) = updated_secret_label {
+                primary.label = label;
+            }
             primary.masked = mask_secret(&api_key);
             primary.fingerprint = fingerprint;
         }
@@ -1182,6 +1265,12 @@ impl Vault {
         self.write_provider_record(id, &plaintext)?;
         self.audit("secret.reveal", Some(id), None)?;
         Ok(secret)
+    }
+
+    pub fn reveal_provider_headers(&self, id: Uuid) -> Result<Vec<(String, String)>, VaultError> {
+        let plaintext = self.decrypt_provider_path(&self.record_path(id))?;
+        self.audit("provider.headers.reveal", Some(id), None)?;
+        Ok(plaintext.entry.headers)
     }
 
     pub fn create_secret_grant(
@@ -2127,6 +2216,7 @@ mod tests {
             interface_type: InterfaceType::AnthropicMessages,
             auth_scheme: AuthScheme::XApiKey,
             api_key: secret.map(ToString::to_string),
+            secret_label: None,
             default_model: Some("claude-opus-4-5".to_string()),
             model_aliases: Vec::new(),
             headers: None,
@@ -2345,6 +2435,44 @@ mod tests {
     }
 
     #[test]
+    fn favicon_backfill_migrates_remote_urls_to_cached_data() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault
+            .add_provider(input("sk-ant-api03-favicon-cache"))
+            .unwrap();
+        vault
+            .set_provider_favicon_url(id, "https://console.anthropic.com/favicon.ico")
+            .unwrap();
+        let cached = "data:image/png;base64,iVBORw0KGgo=";
+
+        let updated = vault
+            .replace_provider_favicon_url(id, cached)
+            .unwrap()
+            .expect("remote favicon should be replaced");
+        assert_eq!(updated.favicon_url.as_deref(), Some(cached));
+        assert_eq!(
+            vault.reveal_secret(id).unwrap(),
+            "sk-ant-api03-favicon-cache"
+        );
+
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        assert_eq!(
+            reopened
+                .get_provider_summary(id)
+                .unwrap()
+                .favicon_url
+                .as_deref(),
+            Some(cached)
+        );
+        assert_eq!(
+            reopened.reveal_secret(id).unwrap(),
+            "sk-ant-api03-favicon-cache"
+        );
+    }
+
+    #[test]
     fn multi_secret_records_can_add_reveal_and_remove_secondary_keys() {
         let dir = tempdir().unwrap();
         let password = SecretString::new("correct horse battery staple");
@@ -2374,13 +2502,53 @@ mod tests {
             Err(VaultError::DuplicateSecretLabel)
         ));
 
-        vault.remove_secret(id, "fallback").unwrap();
+        let removed = vault.remove_secret(id, "fallback").unwrap();
+        assert_eq!(removed, fallback_id);
         let summary = vault.get_provider_summary(id).unwrap();
         assert_eq!(summary.secret_refs.len(), 1);
         assert!(matches!(
             vault.remove_secret(id, "primary"),
             Err(VaultError::LastSecret)
         ));
+    }
+
+    #[test]
+    fn secret_updates_preserve_the_stable_id() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-old")).unwrap();
+        let secret_id = vault.get_provider_summary(id).unwrap().secret_refs[0]
+            .id
+            .clone();
+
+        assert!(vault
+            .update_secret(
+                id,
+                &secret_id,
+                "production",
+                Some("sk-ant-api03-new".to_string()),
+            )
+            .unwrap());
+
+        let summary = vault.get_provider_summary(id).unwrap();
+        assert_eq!(summary.secret_refs.len(), 1);
+        assert_eq!(summary.secret_refs[0].id, secret_id);
+        assert_eq!(summary.secret_refs[0].label, "production");
+        assert!(summary.secret_refs[0].masked.ends_with("-new"));
+        assert_eq!(
+            vault.reveal_secret_field(id, &secret_id).unwrap(),
+            "sk-ant-api03-new"
+        );
+
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        let reopened_summary = reopened.get_provider_summary(id).unwrap();
+        assert_eq!(reopened_summary.secret_refs[0].id, secret_id);
+        assert_eq!(reopened_summary.secret_refs[0].label, "production");
+        assert_eq!(
+            reopened.reveal_secret_field(id, &secret_id).unwrap(),
+            "sk-ant-api03-new"
+        );
     }
 
     #[test]

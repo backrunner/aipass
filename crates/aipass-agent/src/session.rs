@@ -76,6 +76,7 @@ pub struct AgentState {
     pub session_changed: Condvar,
     pub last_lock_reason: Mutex<Option<LockReason>>,
     pub proxy: Mutex<crate::proxy_service::ProxyService>,
+    pub favicon_backfill: Mutex<()>,
     pub shutdown: AtomicBool,
 }
 
@@ -737,7 +738,10 @@ pub fn map_vault_error(err: VaultError) -> ServiceError {
         VaultError::DuplicateSecretLabel | VaultError::LastSecret | VaultError::AlreadyExists => {
             ServiceError::new(AgentErrorCode::Conflict, err.to_string())
         }
-        VaultError::UnsupportedVersion | VaultError::InvalidExport => {
+        VaultError::UnsupportedVersion
+        | VaultError::InvalidExport
+        | VaultError::InvalidSecretLabel
+        | VaultError::InvalidSecretValue => {
             ServiceError::new(AgentErrorCode::ValidationFailed, err.to_string())
         }
         VaultError::Io(err) => ServiceError::internal(err),
@@ -768,6 +772,7 @@ mod tests {
             proxy: Mutex::new(
                 crate::proxy_service::ProxyService::new(&vault_dir).expect("proxy service"),
             ),
+            favicon_backfill: Mutex::new(()),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -915,6 +920,7 @@ mod tests {
             proxy: Mutex::new(
                 crate::proxy_service::ProxyService::new(&vault_dir).expect("proxy service"),
             ),
+            favicon_backfill: Mutex::new(()),
             shutdown: AtomicBool::new(false),
         });
 
