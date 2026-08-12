@@ -2,7 +2,7 @@
   "productName": "AIPass Dev",
   "identifier": "com.alkinum.aipass.dev",
   "build": {
-    "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension build && pnpm dev:agent && pnpm build"
+    "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension... build && pnpm dev:agent && pnpm build"
   },
   "plugins": {
     "deep-link": {

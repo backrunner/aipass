@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev:agent && pnpm dev:web",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension build && pnpm build:agent && pnpm build",
+    "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension... build && pnpm build:agent && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
