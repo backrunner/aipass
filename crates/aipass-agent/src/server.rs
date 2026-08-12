@@ -203,14 +203,14 @@ fn run_server_with_state(
     Ok(())
 }
 
-fn ensure_desktop_tray_companion_async(vault_dir: PathBuf) {
+fn ensure_desktop_tray_companion_async(_vault_dir: PathBuf) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         if crate::desktop::tray_launch_suppressed() {
             return;
         }
         thread::spawn(move || {
-            if let Err(err) = open_desktop_window(crate::desktop::TRAY_WINDOW_TARGET, &vault_dir) {
+            if let Err(err) = open_desktop_window(crate::desktop::TRAY_WINDOW_TARGET, &_vault_dir) {
                 write_component_log(
                     AGENT_LOG,
                     "ERROR",
