@@ -105,44 +105,44 @@ impl TrayFeedback {
     /// there; the next `apply` call always republishes the authoritative state.
     fn agent_transient(&self, #[allow(unused_variables)] text: &str) {
         #[cfg(not(target_os = "macos"))]
-        if let Self::Menu(items) = self {
-            let _ = items.status.set_text(text);
-        }
+        let Self::Menu(items) = self;
+        #[cfg(not(target_os = "macos"))]
+        let _ = items.status.set_text(text);
     }
 
     fn set_agent_start_enabled(&self, #[allow(unused_variables)] enabled: bool) {
         #[cfg(not(target_os = "macos"))]
-        if let Self::Menu(items) = self {
-            let _ = items.start_agent.set_enabled(enabled);
-        }
+        let Self::Menu(items) = self;
+        #[cfg(not(target_os = "macos"))]
+        let _ = items.start_agent.set_enabled(enabled);
     }
 
     fn proxy_transient(&self, #[allow(unused_variables)] text: &str) {
         #[cfg(not(target_os = "macos"))]
-        if let Self::Menu(items) = self {
-            let _ = items.proxy_status.set_text(text);
-        }
+        let Self::Menu(items) = self;
+        #[cfg(not(target_os = "macos"))]
+        let _ = items.proxy_status.set_text(text);
     }
 
     fn set_proxy_start_enabled(&self, #[allow(unused_variables)] enabled: bool) {
         #[cfg(not(target_os = "macos"))]
-        if let Self::Menu(items) = self {
-            let _ = items.proxy_start.set_enabled(enabled);
-        }
+        let Self::Menu(items) = self;
+        #[cfg(not(target_os = "macos"))]
+        let _ = items.proxy_start.set_enabled(enabled);
     }
 
     fn set_proxy_stop_enabled(&self, #[allow(unused_variables)] enabled: bool) {
         #[cfg(not(target_os = "macos"))]
-        if let Self::Menu(items) = self {
-            let _ = items.proxy_stop.set_enabled(enabled);
-        }
+        let Self::Menu(items) = self;
+        #[cfg(not(target_os = "macos"))]
+        let _ = items.proxy_stop.set_enabled(enabled);
     }
 
     fn reset_repair_text(&self) {
         #[cfg(not(target_os = "macos"))]
-        if let Self::Menu(items) = self {
-            let _ = items.install_login_agent.set_text("Repair Auto-Start");
-        }
+        let Self::Menu(items) = self;
+        #[cfg(not(target_os = "macos"))]
+        let _ = items.install_login_agent.set_text("Repair Auto-Start");
     }
 }
 

@@ -312,6 +312,7 @@ pub(crate) fn should_install_tray_autostart() -> bool {
     should_install_tray_autostart_for(current_desktop_instance())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_install_tray_autostart_for(instance: DesktopInstanceKind) -> bool {
     matches!(instance, DesktopInstanceKind::PackagedDevelopment)
 }
