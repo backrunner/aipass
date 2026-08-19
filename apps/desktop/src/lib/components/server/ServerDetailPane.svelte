@@ -6,7 +6,7 @@
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProxyConfig, ProxyStatus, ServerUsageSummary, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
   import { formatCompact } from "../../utils/format";
-  import { integrationToolDefinitions } from "../../utils/integrations";
+  import { integrationToolDefinitions, localProxyAvailability } from "../../utils/integrations";
   import { advertisedProxyAddress } from "../../utils/server";
   import Card from "../shared/Card.svelte";
   import IntegrationCard from "../integration/IntegrationCard.svelte";
@@ -46,15 +46,32 @@
   $: integrateEndpoint = integrateRoute
     ? `http://${advertisedProxyAddress(config.bindAddr)}${integrateRoute.inboundProtocol === "anthropic_messages" ? "" : "/v1"}`
     : "";
+  $: hasRouteDefaultModel = Boolean(
+    integrateRoute?.targets.some(
+      (target) =>
+        target.enabled &&
+        Boolean(entries.find((entry) => entry.id === target.providerEntryId)?.defaultModel)
+    )
+  );
   $: proxyIntegrationTools = integrateRoute
-    ? integrationToolDefinitions.filter((tool) =>
-        tool.id !== "gemini-cli" &&
-        (tool.id === "opencode"
-          ? integrateRoute.inboundProtocol === "open_ai_chat_completions" || integrateRoute.inboundProtocol === "anthropic_messages"
-          : tool.id === "codex"
-            ? integrateRoute.inboundProtocol === "open_ai_responses"
-            : integrateRoute.inboundProtocol === "anthropic_messages")
-      )
+    ? integrationToolDefinitions.map((tool) => {
+        const availability = localProxyAvailability(
+          tool,
+          integrateRoute.inboundProtocol,
+          hasRouteDefaultModel
+        );
+        const disabledReason =
+          availability === "protocol"
+            ? $t("integration.protocolMismatch")
+            : availability === "default-model"
+              ? $t("integration.defaultModelRequired")
+              : availability === "unsupported" && tool.localProxyUnsupportedReason === "custom-endpoint"
+                ? $t("integration.cursorProxyUnsupported")
+                : availability === "unsupported" && tool.localProxyUnsupportedReason === "native-api"
+                  ? $t("integration.geminiProxyUnsupported")
+                  : undefined;
+        return { ...tool, disabledReason };
+      })
     : [];
 
   function saveBindAddr() {

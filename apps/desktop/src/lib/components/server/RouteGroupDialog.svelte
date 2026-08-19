@@ -242,7 +242,7 @@
   :global(.dialog-overlay) {
     position: fixed;
     inset: 0;
-    z-index: 40;
+    z-index: 200;
     background: rgba(15, 17, 16, 0.45);
     backdrop-filter: blur(4px);
     animation: dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -256,7 +256,7 @@
     position: fixed;
     top: 50%;
     left: 50%;
-    z-index: 41;
+    z-index: 201;
     transform: translate(-50%, -50%);
     width: min(600px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);

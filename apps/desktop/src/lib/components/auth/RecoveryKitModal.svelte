@@ -85,7 +85,7 @@
   :global(.recovery-overlay) {
     position: fixed;
     inset: 0;
-    z-index: 60;
+    z-index: 200;
     background: rgba(8, 12, 24, 0.55);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
@@ -100,7 +100,7 @@
     position: fixed;
     top: 50%;
     left: 50%;
-    z-index: 61;
+    z-index: 201;
     transform: translate(-50%, -50%);
     width: min(440px, calc(100vw - 32px));
     padding: 28px 28px 24px;

@@ -1,4 +1,11 @@
-import type { PasswordStrength, PasswordStrengthLevel } from "../types";
+import type { MessageValue, PasswordStrength, PasswordStrengthLevel, VaultAuthTaskStatus } from "../types";
+
+export function unlockErrorMessage(status: Pick<VaultAuthTaskStatus, "error" | "errorCode">): MessageValue {
+  if (status.errorCode === "invalid_password") {
+    return { key: "error.incorrectMasterPassword" };
+  }
+  return status.error ?? { key: "error.unlockFailed" };
+}
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 

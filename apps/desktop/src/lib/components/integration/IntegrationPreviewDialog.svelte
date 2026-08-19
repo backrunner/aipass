@@ -139,7 +139,7 @@
   :global(.preview-overlay) {
     position: fixed;
     inset: 0;
-    z-index: 80;
+    z-index: 200;
     background: rgba(15, 17, 16, 0.45);
     backdrop-filter: blur(4px);
     animation: preview-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -153,7 +153,7 @@
     position: fixed;
     top: 50%;
     left: 50%;
-    z-index: 90;
+    z-index: 201;
     display: flex;
     flex-direction: column;
     gap: 12px;

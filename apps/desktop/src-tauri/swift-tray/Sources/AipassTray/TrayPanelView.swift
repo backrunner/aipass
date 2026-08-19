@@ -280,14 +280,16 @@ public struct TrayPanelView: View {
     // MARK: - Footer
 
     private var footer: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 1) {
             Button {
                 onAction("refresh")
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11, weight: .medium))
+                    .frame(width: 16, alignment: .center)
                     .foregroundStyle(TrayColors.textSecondary)
-                    .padding(5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                     .contentShape(RoundedRectangle(cornerRadius: TrayMetrics.rowRadius, style: .continuous))
             }
             .buttonStyle(TrayRowButtonStyle())

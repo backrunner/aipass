@@ -136,7 +136,7 @@
   let editingSecretValue = "";
   let usageDialogOpen = false;
   type CodexIntegrationMode = CodexApiKeyMode;
-  let codexIntegrationMode: CodexIntegrationMode = "experimental_bearer_token";
+  let codexIntegrationMode: CodexIntegrationMode = "auth_json";
   let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
   let pricingDialogOpen = false;
   let pricingDialogGroupId: string | undefined;
@@ -244,19 +244,20 @@
         id: selected.id,
         title: selected.title,
         interfaceType: selected.interfaceType,
-        authScheme: selected.authScheme
+        authScheme: selected.authScheme,
+        defaultModel: selected.defaultModel
       })
     : [];
   $: codexIntegrationModeOptions = [
+    { value: "auth_json", label: "auth.json" },
     {
       value: "experimental_bearer_token",
       label: $t("providerDetail.codexModeExperimental")
-    },
-    { value: "auth_json", label: "auth.json" }
+    }
   ];
 
   $: if (selected?.id) {
-    codexIntegrationMode = "experimental_bearer_token";
+    codexIntegrationMode = "auth_json";
   }
 
   $: if (selected?.id) {

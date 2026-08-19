@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Banner, Button, Badge } from "@aipass/ui";
-  import { Eye, Terminal, X } from "lucide-svelte";
+  import { Eye, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type {
@@ -13,6 +13,7 @@
   import Card from "../shared/Card.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
   import IntegrationPreviewDialog from "./IntegrationPreviewDialog.svelte";
+  import IntegrationToolIcon from "./IntegrationToolIcon.svelte";
 
   export let tools: IntegrationToolDefinition[] = [];
   export let detections: ToolDetection[] = [];
@@ -133,8 +134,16 @@
         <div class="tool-block" class:missing={detections.length > 0 && !installed}>
           <div class="tool-row">
             <span class="tool-identity">
-              <span class="tool-icon" aria-hidden="true"><Terminal size={15} /></span>
-              <span class="tool-name">{tool.name}</span>
+              <span class="tool-icon"><IntegrationToolIcon tool={tool.id} /></span>
+              <span class="tool-copy">
+                <span class="tool-name">{tool.name}</span>
+                {#if tool.disabledReason}
+                  <span class="tool-reason">{tool.disabledReason}</span>
+                {/if}
+                {#if tool.localProxyRequirement === "cursor-local-runtime"}
+                  <span class="tool-reason">{$t("integration.cursorLocalRuntimeRequired")}</span>
+                {/if}
+              </span>
             </span>
             <span class="tool-side">
               {#if detections.length > 0}
@@ -142,10 +151,10 @@
                   {installed ? $t("server.installed") : $t("server.notInstalled")}
                 </Badge>
               {/if}
-              <Button variant="ghost" size="sm" on:click={() => showPreview(tool, true)} disabled={state.busy || disabled}>
+              <Button variant="ghost" size="sm" on:click={() => showPreview(tool, true)} disabled={state.busy || disabled || Boolean(tool.disabledReason)}>
                 <Eye size={13} /> {$t("providerDetail.preview")}
               </Button>
-              <Button variant="secondary" size="sm" on:click={() => showPreview(tool, false)} disabled={state.busy || disabled}>
+              <Button variant="secondary" size="sm" on:click={() => showPreview(tool, false)} disabled={state.busy || disabled || Boolean(tool.disabledReason)}>
                 {$t("server.writeConfig")}
               </Button>
             </span>
@@ -264,6 +273,21 @@
     white-space: nowrap;
     font-size: 13px;
     font-weight: 600;
+  }
+
+  .tool-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .tool-reason {
+    max-width: 300px;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: normal;
   }
 
   .tool-side {

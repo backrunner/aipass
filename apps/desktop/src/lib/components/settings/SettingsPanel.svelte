@@ -684,7 +684,7 @@
   :global(.settings-overlay) {
     position: fixed;
     inset: 0;
-    z-index: 40;
+    z-index: 200;
     background: rgba(8, 12, 24, 0.36);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
@@ -697,11 +697,11 @@
 
   :global(.settings-drawer) {
     position: fixed;
-    top: 46px;
-    right: 12px;
-    bottom: 12px;
-    z-index: 41;
-    width: min(560px, calc(100vw - 24px));
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    z-index: 201;
+    width: min(560px, calc(100vw - 16px));
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 16px;
@@ -1125,6 +1125,7 @@
   .settings-stack {
     display: grid;
     gap: 12px;
+    padding: 16px;
   }
 
   .server-route-settings {

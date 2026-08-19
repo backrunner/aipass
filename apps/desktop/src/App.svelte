@@ -62,7 +62,7 @@
     VaultAuthTaskStatus,
     VaultStatus
   } from "./lib/types";
-  import { passwordStrength } from "./lib/utils/auth";
+  import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { buildRouteTarget, buildSingleEntryRoute, enforceSingleEnabledRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
   import { checkForUpdates, installUpdate } from "./lib/services/updates";
@@ -587,7 +587,7 @@
       });
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        error = response.error ?? localizedMessage("error.unlockFailed");
+        error = unlockErrorMessage(response);
         return;
       }
       status = {
@@ -1397,7 +1397,7 @@
     showTrash = false;
     showFavorites = false;
     showSettings = false;
-    await loadServer();
+    await Promise.all([loadServer(), loadToolDetections()]);
   }
 
   async function openPendingServerView() {
@@ -1505,15 +1505,6 @@
         enabled ? routeId : undefined
       )
     });
-  }
-
-  async function moveRouteGroup(routeId: string, direction: -1 | 1) {
-    const routes = [...serverConfig.routes];
-    const index = routes.findIndex((route) => route.id === routeId);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= routes.length) return;
-    [routes[index], routes[target]] = [routes[target], routes[index]];
-    await saveServerConfig({ ...serverConfig, routes });
   }
 
   async function addEntryAsRoute(entry: ProviderEntry, groupId?: string) {
@@ -2229,7 +2220,6 @@
           onSave={saveRouteGroup}
           onDelete={deleteRouteGroup}
           onToggle={toggleRouteGroup}
-          onMove={moveRouteGroup}
         />
 
         <ServerDetailPane

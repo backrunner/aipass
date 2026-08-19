@@ -818,11 +818,7 @@ fn normalize_enabled_routes(config: &mut ProxyConfig) -> bool {
 }
 
 fn generate_local_token() -> String {
-    format!(
-        "aipass_{}_{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("sk-{}", Uuid::new_v4().simple())
 }
 
 fn ensure_enabled_route_tokens(config: &mut ProxyConfig) -> bool {
@@ -1003,7 +999,7 @@ mod tests {
             .set_config(&creation.vault, config_with_token(""))
             .expect("save config");
 
-        assert!(saved.routes[0].token.starts_with("aipass_"));
+        assert!(saved.routes[0].token.starts_with("sk-"));
         assert!(!saved.routes[0].token.trim().is_empty());
     }
 
@@ -1025,7 +1021,7 @@ mod tests {
         let migrated = reloaded
             .load_config(&creation.vault)
             .expect("migrate legacy config");
-        assert!(migrated.routes[0].token.starts_with("aipass_"));
+        assert!(migrated.routes[0].token.starts_with("sk-"));
 
         let generated = migrated.routes[0].token.clone();
         let mut persisted = ProxyService::new(temp.path()).expect("persisted proxy service");

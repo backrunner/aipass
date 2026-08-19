@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
   import { ContextMenu, Switch } from "bits-ui";
-  import { ChevronDown, ChevronUp, Pencil, Plus, Server, Trash2 } from "lucide-svelte";
+  import { Pencil, Plus, Server, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProxyRouteConfig } from "../../types";
@@ -15,7 +15,6 @@
   export let onSave: (route: ProxyRouteConfig) => MaybePromise<boolean | void> = () => {};
   export let onDelete: (routeId: string) => MaybePromise = () => {};
   export let onToggle: (routeId: string, enabled: boolean) => MaybePromise = () => {};
-  export let onMove: (routeId: string, direction: -1 | 1) => MaybePromise = () => {};
 
   let dialogOpen = false;
   let editingRoute: ProxyRouteConfig | undefined;
@@ -66,7 +65,7 @@
         <span class="empty-meta">{$t("server.noGroupsDesc")}</span>
       </div>
     {/if}
-    {#each routes as route, index (route.id)}
+    {#each routes as route (route.id)}
       <ContextMenu.Root>
         <ContextMenu.Trigger>
           {#snippet child({ props })}
@@ -91,54 +90,24 @@
             >
               <span class="entry-icon" aria-hidden="true"><Server size={16} /></span>
               <div class="entry-content">
-                <div class="entry-line entry-line-primary">
-                  <span class="title">{route.name}</span>
-                  <span class="entry-toggle" data-route-control>
-                    <Switch.Root
-                      class="route-switch"
-                      checked={route.enabled}
-                      disabled={Boolean(busy)}
-                      aria-label={`${route.name}: ${$t("server.enabled")}`}
-                      onCheckedChange={(enabled) => onToggle(route.id, enabled)}
-                    >
-                      <Switch.Thumb class="route-switch-thumb" />
-                    </Switch.Root>
-                  </span>
-                </div>
-                <div class="entry-line entry-line-secondary">
-                  <span class="subtitle">
-                    {route.strategy === "round_robin" ? $t("server.strategyRoundRobin") : $t("server.strategyFallback")}
-                    <span aria-hidden="true"> · </span>
-                    {$t("server.memberCount", { count: route.targets.length })}
-                  </span>
-                  <span class="entry-actions" data-route-control>
-                    <button
-                      type="button"
-                      class="entry-action"
-                      title={$t("server.moveUp")}
-                      aria-label={$t("server.moveUp")}
-                      disabled={Boolean(busy) || index === 0}
-                      on:click={() => onMove(route.id, -1)}
-                    ><ChevronUp size={13} /></button>
-                    <button
-                      type="button"
-                      class="entry-action"
-                      title={$t("server.moveDown")}
-                      aria-label={$t("server.moveDown")}
-                      disabled={Boolean(busy) || index === routes.length - 1}
-                      on:click={() => onMove(route.id, 1)}
-                    ><ChevronDown size={13} /></button>
-                    <button
-                      type="button"
-                      class="entry-action danger"
-                      title={$t("server.deleteGroup")}
-                      aria-label={$t("server.deleteGroup")}
-                      disabled={Boolean(busy)}
-                      on:click={() => onDelete(route.id)}
-                    ><Trash2 size={13} /></button>
-                  </span>
-                </div>
+                <span class="title">{route.name}</span>
+                <span class="subtitle">
+                  {route.strategy === "round_robin" ? $t("server.strategyRoundRobin") : $t("server.strategyFallback")}
+                  <span aria-hidden="true"> · </span>
+                  {$t("server.memberCount", { count: route.targets.length })}
+                </span>
               </div>
+              <span class="entry-toggle" data-route-control>
+                <Switch.Root
+                  class="route-switch"
+                  checked={route.enabled}
+                  disabled={Boolean(busy)}
+                  aria-label={`${route.name}: ${$t("server.enabled")}`}
+                  onCheckedChange={(enabled) => onToggle(route.id, enabled)}
+                >
+                  <Switch.Thumb class="route-switch-thumb" />
+                </Switch.Root>
+              </span>
             </div>
           {/snippet}
         </ContextMenu.Trigger>
@@ -147,15 +116,6 @@
             <ContextMenu.Item class="route-menu-item" disabled={Boolean(busy)} onSelect={() => openEdit(route)}>
               <Pencil size={14} />
               <span>{$t("server.editGroup")}</span>
-            </ContextMenu.Item>
-            <ContextMenu.Separator class="route-menu-separator" />
-            <ContextMenu.Item class="route-menu-item" disabled={Boolean(busy) || index === 0} onSelect={() => onMove(route.id, -1)}>
-              <ChevronUp size={14} />
-              <span>{$t("server.moveUp")}</span>
-            </ContextMenu.Item>
-            <ContextMenu.Item class="route-menu-item" disabled={Boolean(busy) || index === routes.length - 1} onSelect={() => onMove(route.id, 1)}>
-              <ChevronDown size={14} />
-              <span>{$t("server.moveDown")}</span>
             </ContextMenu.Item>
             <ContextMenu.Separator class="route-menu-separator" />
             <ContextMenu.Item class="route-menu-item danger" disabled={Boolean(busy)} onSelect={() => onDelete(route.id)}>
@@ -254,7 +214,7 @@
 
   .entry {
     display: grid;
-    grid-template-columns: 32px minmax(0, 1fr);
+    grid-template-columns: 32px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
     width: 100%;
@@ -301,28 +261,13 @@
     gap: 4px;
   }
 
-  .entry-line {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-width: 0;
-    gap: 10px;
-  }
-
-  .entry-line-primary {
-    min-height: 22px;
-  }
-
-  .entry-line-secondary {
-    min-height: 24px;
-  }
-
   .title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
     font-weight: 600;
+    line-height: 1.3;
     color: var(--text);
     transition: color 120ms ease;
   }
@@ -332,55 +277,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 12px;
+    line-height: 1.3;
     color: var(--text-tertiary);
-  }
-
-  .entry-actions {
-    display: inline-flex;
-    align-items: center;
-    flex: 0 0 auto;
-    gap: 2px;
-  }
-
-  .entry-action {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-sm);
-    color: var(--text-tertiary);
-    transition: background-color 80ms ease, color 120ms ease, transform 120ms ease;
-
-    &:hover:not(:disabled) {
-      background: var(--surface);
-      color: var(--text);
-    }
-
-    &:active:not(:disabled) {
-      transform: scale(0.96);
-    }
-
-    &:focus-visible {
-      outline: 2px solid var(--accent-ring);
-      outline-offset: 1px;
-    }
-
-    &:disabled {
-      opacity: 0.32;
-      cursor: not-allowed;
-    }
-
-    &.danger:hover:not(:disabled) {
-      background: var(--danger-soft);
-      color: var(--danger);
-    }
   }
 
   .entry-toggle {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    padding-inline-start: 4px;
   }
 
   :global(.route-switch) {

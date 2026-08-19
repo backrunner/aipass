@@ -298,6 +298,9 @@ pub(crate) enum ToolConfigTool {
     ClaudeCode,
     GeminiCli,
     OpenCode,
+    Grok,
+    Pi,
+    Cursor,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -425,6 +428,9 @@ pub(crate) fn into_tool_id(tool: ToolConfigTool) -> aipass_agent_protocol::ToolI
         ToolConfigTool::ClaudeCode => aipass_agent_protocol::ToolId::ClaudeCode,
         ToolConfigTool::GeminiCli => aipass_agent_protocol::ToolId::GeminiCli,
         ToolConfigTool::OpenCode => aipass_agent_protocol::ToolId::OpenCode,
+        ToolConfigTool::Grok => aipass_agent_protocol::ToolId::Grok,
+        ToolConfigTool::Pi => aipass_agent_protocol::ToolId::Pi,
+        ToolConfigTool::Cursor => aipass_agent_protocol::ToolId::Cursor,
     }
 }
 
@@ -434,6 +440,9 @@ pub(crate) fn from_tool_id(tool: aipass_agent_protocol::ToolId) -> ToolConfigToo
         aipass_agent_protocol::ToolId::ClaudeCode => ToolConfigTool::ClaudeCode,
         aipass_agent_protocol::ToolId::GeminiCli => ToolConfigTool::GeminiCli,
         aipass_agent_protocol::ToolId::OpenCode => ToolConfigTool::OpenCode,
+        aipass_agent_protocol::ToolId::Grok => ToolConfigTool::Grok,
+        aipass_agent_protocol::ToolId::Pi => ToolConfigTool::Pi,
+        aipass_agent_protocol::ToolId::Cursor => ToolConfigTool::Cursor,
     }
 }
 
@@ -452,6 +461,9 @@ pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> Agen
             ToolConfigTool::ClaudeCode => AgentToolConfigTool::ClaudeCode,
             ToolConfigTool::GeminiCli => AgentToolConfigTool::GeminiCli,
             ToolConfigTool::OpenCode => AgentToolConfigTool::OpenCode,
+            ToolConfigTool::Grok => AgentToolConfigTool::Grok,
+            ToolConfigTool::Pi => AgentToolConfigTool::Pi,
+            ToolConfigTool::Cursor => AgentToolConfigTool::Cursor,
         },
         id: request.id,
         mode: match request.mode {
@@ -575,6 +587,9 @@ fn from_agent_tool(tool: AgentToolConfigTool) -> ToolConfigTool {
         AgentToolConfigTool::ClaudeCode => ToolConfigTool::ClaudeCode,
         AgentToolConfigTool::GeminiCli => ToolConfigTool::GeminiCli,
         AgentToolConfigTool::OpenCode => ToolConfigTool::OpenCode,
+        AgentToolConfigTool::Grok => ToolConfigTool::Grok,
+        AgentToolConfigTool::Pi => ToolConfigTool::Pi,
+        AgentToolConfigTool::Cursor => ToolConfigTool::Cursor,
     }
 }
 

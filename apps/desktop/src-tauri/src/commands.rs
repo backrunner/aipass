@@ -34,9 +34,10 @@ use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::{
-    agent_request, agent_request_no_unlock, agent_status, browser_extension_status_snapshot,
-    install_browser_extension, load_preferences, native_host_status_snapshot, provider_add_input,
-    provider_update_input, repair_native_host_manifest, run_blocking, save_preferences, AppState,
+    agent_request, agent_request_no_unlock, agent_request_no_unlock_detailed, agent_status,
+    browser_extension_status_snapshot, install_browser_extension, load_preferences,
+    native_host_status_snapshot, provider_add_input, provider_update_input,
+    repair_native_host_manifest, run_blocking, run_blocking_agent, save_preferences, AppState,
 };
 
 async fn agent_request_async<T: DeserializeOwned + Send + 'static>(
@@ -328,8 +329,8 @@ pub(crate) async fn vault_unlock(
         },
     )?;
     tauri::async_runtime::spawn(async move {
-        let result = run_blocking(move || {
-            agent_request_no_unlock(
+        let result = run_blocking_agent(move || {
+            agent_request_no_unlock_detailed(
                 &request_app,
                 AgentRequest::SessionUnlock {
                     mode: SessionUnlockMode::Password { password },
@@ -396,9 +397,10 @@ pub(crate) async fn vault_reset(
         },
     )?;
     tauri::async_runtime::spawn(async move {
-        let result =
-            run_blocking(move || agent_request_no_unlock(&request_app, AgentRequest::VaultReset))
-                .await;
+        let result = run_blocking_agent(move || {
+            agent_request_no_unlock_detailed(&request_app, AgentRequest::VaultReset)
+        })
+        .await;
         finish_vault_unlock_task(app_handle, auth_tasks, task_id, result);
     });
     Ok(VaultAuthTaskStartResponse { task_id })

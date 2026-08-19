@@ -11,7 +11,9 @@
 
   const CHART_WIDTH = 560;
   const CHART_HEIGHT = 120;
+  const CHART_TOP = 8;
   const LABEL_HEIGHT = 18;
+  const Y_AXIS_WIDTH = 40;
 
   function dateKey(date: Date): string {
     return date.toISOString().slice(0, 10);
@@ -53,8 +55,14 @@
   $: totalRequests = days.reduce((sum, point) => sum + point.requestCount, 0);
   $: totalCostMicros = days.reduce((sum, point) => sum + point.estimatedCostMicros, 0);
   $: hasData = totalRequests > 0 || totalTokens > 0;
-  $: barSlot = CHART_WIDTH / Math.max(1, days.length);
+  $: barSlot = (CHART_WIDTH - Y_AXIS_WIDTH) / Math.max(1, days.length);
   $: barWidth = Math.max(2, barSlot * 0.62);
+  // Label every day in the 7-day view, every 5 days (plus the last day) in the 30-day view.
+  $: labelEvery = range === 7 ? 1 : 5;
+  $: yTicks = [
+    { value: maxTokens, y: CHART_TOP },
+    { value: maxTokens / 2, y: CHART_TOP + (CHART_HEIGHT - CHART_TOP) / 2 }
+  ];
 </script>
 
 <div class="usage-chart">
@@ -73,14 +81,23 @@
         role="img"
         aria-label={$t("server.usageChart")}
       >
-        <line class="baseline" x1="0" y1={CHART_HEIGHT} x2={CHART_WIDTH} y2={CHART_HEIGHT} />
+        {#each yTicks as tick (tick.y)}
+          <line class="gridline" x1={Y_AXIS_WIDTH} y1={tick.y} x2={CHART_WIDTH} y2={tick.y} />
+          <text class="axis-label" x={Y_AXIS_WIDTH - 6} y={tick.y + 3} text-anchor="end">
+            {formatCompact(tick.value)}
+          </text>
+        {/each}
+        <line class="baseline" x1={Y_AXIS_WIDTH} y1={CHART_HEIGHT} x2={CHART_WIDTH} y2={CHART_HEIGHT} />
         {#each days as point, index (point.date)}
           {@const tokens = tokensOf(point)}
-          {@const height = Math.max(tokens > 0 ? 2 : 0, (tokens / maxTokens) * (CHART_HEIGHT - 8))}
+          {@const height = Math.max(
+            tokens > 0 || point.requestCount > 0 ? 2 : 0,
+            (tokens / maxTokens) * (CHART_HEIGHT - CHART_TOP)
+          )}
           <rect
             class="bar"
             class:empty={tokens === 0}
-            x={index * barSlot + (barSlot - barWidth) / 2}
+            x={Y_AXIS_WIDTH + index * barSlot + (barSlot - barWidth) / 2}
             y={CHART_HEIGHT - height}
             width={barWidth}
             {height}
@@ -88,10 +105,10 @@
           >
             <title>{point.date} · {formatCompact(tokens)} tokens · {formatCompact(point.requestCount)} req</title>
           </rect>
-          {#if index % 5 === 0 || index === days.length - 1}
+          {#if index % labelEvery === 0 || index === days.length - 1}
             <text
               class="axis-label"
-              x={index * barSlot + barSlot / 2}
+              x={Y_AXIS_WIDTH + index * barSlot + barSlot / 2}
               y={CHART_HEIGHT + LABEL_HEIGHT - 4}
               text-anchor="middle"
             >{point.date.slice(5)}</text>
@@ -207,6 +224,13 @@
   .baseline {
     stroke: var(--divider);
     stroke-width: 1;
+  }
+
+  .gridline {
+    stroke: var(--divider);
+    stroke-width: 1;
+    stroke-dasharray: 3 4;
+    opacity: 0.7;
   }
 
   .bar {

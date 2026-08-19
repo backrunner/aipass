@@ -15,8 +15,11 @@ pub use models::{
 };
 pub use plan::{
     plan_claude_code, plan_claude_code_plaintext, plan_codex, plan_codex_plaintext,
-    plan_codex_plaintext_with_mode, plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode,
-    plan_opencode_plaintext,
+    plan_codex_plaintext_with_mode, plan_cursor_local, plan_cursor_local_plaintext,
+    plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok, plan_grok_plaintext,
+    plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
+    plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext, plan_pi_plaintext_with_api,
+    GrokApiBackend, OpenCodeApi, PiApi,
 };
 pub use utils::{config_backup_path, diff_preview_for_path, endpoint_url, redacted_diff_preview};
 
@@ -525,6 +528,34 @@ mod tests {
     }
 
     #[test]
+    fn opencode_writer_selects_the_sdk_for_each_proxy_protocol() {
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.provider_id = None;
+        entry.endpoint = Some("http://127.0.0.1:8787/v1".to_string());
+        entry.default_model = Some("gpt-5.4".to_string());
+        entry.api_key = Some("local-proxy-token".to_string());
+
+        for (api, package) in [
+            (OpenCodeApi::OpenAiResponses, "@ai-sdk/openai"),
+            (
+                OpenCodeApi::OpenAiChatCompletions,
+                "@ai-sdk/openai-compatible",
+            ),
+            (OpenCodeApi::AnthropicMessages, "@ai-sdk/anthropic"),
+        ] {
+            let (_plan, content) =
+                plan_opencode_plaintext_with_api(dir.path(), &entry, api).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+            assert_eq!(json["provider"]["aipass_anthropic_prod"]["npm"], package);
+            assert_eq!(
+                json["provider"]["aipass_anthropic_prod"]["options"]["baseURL"],
+                "http://127.0.0.1:8787/v1"
+            );
+        }
+    }
+
+    #[test]
     fn opencode_writer_uses_existing_jsonc_file() {
         let dir = tempdir().unwrap();
         let target = dir
@@ -546,6 +577,66 @@ mod tests {
                 .join("opencode")
                 .join("opencode.jsonc")
         );
+    }
+
+    #[test]
+    fn grok_writer_sets_protocol_and_preserves_existing_config() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join(".grok").join("config.toml");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "[ui]\nyolo = false\n").unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.title = "Local route".to_string();
+        entry.endpoint = Some("http://127.0.0.1:8787/v1".to_string());
+        entry.default_model = Some("gpt-5.4".to_string());
+        entry.api_key = Some("local-proxy-secret".to_string());
+
+        let (plan, content) =
+            plan_grok_plaintext_with_backend(dir.path(), &entry, GrokApiBackend::Responses)
+                .unwrap();
+
+        assert_eq!(plan.tool, ToolId::Grok);
+        assert!(content.contains("[ui]"));
+        assert!(content.contains("yolo = false"));
+        assert!(content.contains("api_backend = \"responses\""));
+        assert!(content.contains("model = \"gpt-5.4\""));
+        assert!(content.contains("api_key = \"local-proxy-secret\""));
+        assert!(!plan.preview.contains("local-proxy-secret"));
+    }
+
+    #[test]
+    fn pi_writer_updates_provider_and_default_model_without_losing_settings() {
+        let dir = tempdir().unwrap();
+        let agent_dir = dir.path().join(".pi").join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("models.json"),
+            r#"{"providers":{"keep":{"baseUrl":"http://keep","api":"openai-completions","models":[{"id":"keep-model"}]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(agent_dir.join("settings.json"), r#"{"theme":"dark"}"#).unwrap();
+        let mut entry = entry(InterfaceType::AnthropicMessages, AuthScheme::XApiKey);
+        entry.title = "Local Claude".to_string();
+        entry.endpoint = Some("http://127.0.0.1:8787".to_string());
+        entry.default_model = Some("claude-sonnet-4-6".to_string());
+        entry.api_key = Some("pi-local-secret".to_string());
+
+        let (plan, content) =
+            plan_pi_plaintext_with_api(dir.path(), &entry, PiApi::AnthropicMessages).unwrap();
+        let root: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let provider = &root["providers"]["aipass_local_claude"];
+
+        assert_eq!(plan.tool, ToolId::Pi);
+        assert_eq!(provider["api"], "anthropic-messages");
+        assert_eq!(provider["apiKey"], "pi-local-secret");
+        assert_eq!(provider["models"][0]["id"], "claude-sonnet-4-6");
+        assert!(root["providers"]["keep"].is_object());
+        assert_eq!(plan.extra_writes.len(), 1);
+        assert!(plan.extra_writes[0].content.contains("\"theme\": \"dark\""));
+        assert!(plan.extra_writes[0]
+            .content
+            .contains("\"defaultProvider\": \"aipass_local_claude\""));
+        assert!(!plan.preview.contains("pi-local-secret"));
     }
 
     #[test]
@@ -582,6 +673,43 @@ mod tests {
         let (_plan, content) = plan_claude_code_plaintext(dir.path(), &entry).unwrap();
         assert!(content.contains("ANTHROPIC_AUTH_TOKEN"));
         assert!(!content.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn cursor_local_writer_targets_the_official_local_runtime() {
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::AnthropicMessages, AuthScheme::XApiKey);
+        entry.endpoint = Some("http://127.0.0.1:8787/v1".to_string());
+        let (_plan, content) = plan_cursor_local(dir.path(), &entry).unwrap();
+        assert!(
+            content.contains("CURSOR_LOCAL_AGENT_BASE_URL=\"http://127.0.0.1:8787/v1/messages\"")
+        );
+        assert!(content.contains("CURSOR_LOCAL_AGENT_API_KEY=\"$(aipass get "));
+        assert!(content.contains("CURSOR_ENABLE_AUTHLESS=1"));
+    }
+
+    #[test]
+    fn cursor_local_plaintext_redacts_api_key_and_accepts_chat_completions() {
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("http://127.0.0.1:8787/v1".to_string());
+        entry.api_key = Some("cursor-local-secret".to_string());
+        let (plan, content) = plan_cursor_local_plaintext(dir.path(), &entry).unwrap();
+        assert!(content.contains("CURSOR_LOCAL_AGENT_BASE_URL=\"http://127.0.0.1:8787/v1\""));
+        assert!(content.contains("CURSOR_LOCAL_AGENT_API_KEY=\"cursor-local-secret\""));
+        assert!(!plan.preview.contains("cursor-local-secret"));
+    }
+
+    #[test]
+    fn cursor_local_writer_rejects_responses_and_native_interfaces() {
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("http://127.0.0.1:8787/v1".to_string());
+        entry.api_key = Some("secret".to_string());
+        assert!(plan_cursor_local_plaintext(dir.path(), &entry).is_ok());
+        let mut gemini = entry.clone();
+        gemini.interface_type = InterfaceType::Gemini;
+        assert!(plan_cursor_local_plaintext(dir.path(), &gemini).is_err());
     }
 
     #[test]

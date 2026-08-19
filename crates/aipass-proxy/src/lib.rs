@@ -1174,6 +1174,209 @@ where
     }
 }
 
+fn select_route(
+    state: &RuntimeState,
+    bearer_token: Option<&str>,
+    api_key_token: Option<&str>,
+    inbound: Option<ProxyProtocol>,
+) -> Option<(ResolvedRoute, Vec<ModelPricing>)> {
+    state.config.read().ok().and_then(|config| {
+        config.enabled.then(|| {
+            config
+                .routes
+                .iter()
+                .find(|route| {
+                    route.config.enabled
+                        && inbound.is_none_or(|protocol| route.config.inbound_protocol == protocol)
+                        && (bearer_token
+                            .is_some_and(|token| tokens_match(&route.local_token, token))
+                            || api_key_token
+                                .is_some_and(|token| tokens_match(&route.local_token, token)))
+                })
+                .cloned()
+                .map(|route| (route, config.pricing.clone()))
+        })?
+    })
+}
+
+async fn handle_models_request(
+    request: Request<Incoming>,
+    state: RuntimeState,
+) -> Response<BoxBody> {
+    if request.method() != http::Method::GET {
+        return error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "model discovery requires GET",
+        );
+    }
+    let incoming_headers = request.headers().clone();
+    let request_query = request.uri().query().map(str::to_owned);
+    let (bearer_token, api_key_token) = local_proxy_tokens(&incoming_headers);
+    if bearer_token.is_none() && api_key_token.is_none() {
+        return error_response(StatusCode::UNAUTHORIZED, "missing local proxy token");
+    }
+    let Some((mut route, _)) = select_route(&state, bearer_token, api_key_token, None) else {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalid local proxy token or route",
+        );
+    };
+    route.local_token.zeroize();
+
+    let mut targets = std::mem::take(&mut route.targets);
+    targets.retain(|target| target.config.enabled);
+    targets.sort_by_key(|target| target.config.priority);
+    if route.config.strategy == RouteStrategy::RoundRobin {
+        let start = round_robin_start(
+            &state,
+            route.config.id,
+            &targets
+                .iter()
+                .map(|target| target.config.weight)
+                .collect::<Vec<_>>(),
+        );
+        targets.rotate_left(start);
+    }
+    targets.retain(|target| !circuit_open(&state, target.config.id));
+    targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
+
+    let mut last_error = None;
+    for target in targets {
+        let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
+            Ok(client) => client,
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+        let upstream_path = if target.config.auth_scheme == "azure_api_key" {
+            "/models"
+        } else {
+            "/v1/models"
+        };
+        let url = match upstream_url_with_query(
+            &target.config.base_url,
+            upstream_path,
+            request_query.as_deref(),
+        ) {
+            Ok(url) => url,
+            Err(err) => {
+                last_error = Some(err.to_string());
+                mark_failure(&state, target.config.id, &route.config.retry);
+                continue;
+            }
+        };
+        let headers = match build_upstream_headers(
+            &incoming_headers,
+            &target,
+            route.config.upstream_protocol,
+        ) {
+            Ok(headers) => headers,
+            Err(err) => {
+                last_error = Some(err);
+                mark_failure(&state, target.config.id, &route.config.retry);
+                continue;
+            }
+        };
+        let timeout = Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1));
+        let response =
+            match tokio::time::timeout(timeout, client.get(url).headers(headers).send()).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(err)) => {
+                    last_error = Some(err.to_string());
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    continue;
+                }
+                Err(_) => {
+                    last_error = Some("upstream model discovery timeout".into());
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    continue;
+                }
+            };
+        let status = response.status();
+        if !status.is_success() {
+            last_error = Some(format!("upstream returned {status}"));
+            if status_affects_circuit(status) {
+                mark_failure(&state, target.config.id, &route.config.retry);
+            }
+            continue;
+        }
+        let response_headers = response.headers().clone();
+        let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
+        let idle_timeout = Duration::from_millis(route.config.retry.stream_idle_timeout_ms.max(1));
+        let payload = match collect_upstream_body(None, &mut source, idle_timeout).await {
+            Ok(payload) => enrich_models_payload(payload, route.config.inbound_protocol),
+            Err(err) => {
+                last_error = Some(err);
+                mark_failure(&state, target.config.id, &route.config.retry);
+                continue;
+            }
+        };
+        mark_success(&state, target.config.id);
+        let body = BodyExt::boxed_unsync(
+            Full::new(payload).map_err(|never| -> BoxError { match never {} }),
+        );
+        let mut builder = Response::builder().status(status);
+        let response_hop_headers = connection_header_names(&response_headers);
+        for (name, value) in response_headers.iter() {
+            if !is_hop_header(name)
+                && !response_hop_headers.contains(name)
+                && name != header::CONTENT_LENGTH
+                && name != header::CONTENT_ENCODING
+            {
+                builder = builder.header(name, value);
+            }
+        }
+        return builder.body(body).unwrap_or_else(|_| {
+            error_response(
+                StatusCode::BAD_GATEWAY,
+                "failed to build model list response",
+            )
+        });
+    }
+
+    set_error(
+        &state,
+        last_error.unwrap_or_else(|| "all model discovery targets failed".into()),
+    );
+    error_response(
+        StatusCode::BAD_GATEWAY,
+        "all model discovery targets failed",
+    )
+}
+
+fn enrich_models_payload(payload: Bytes, protocol: ProxyProtocol) -> Bytes {
+    let Ok(mut root) = serde_json::from_slice::<serde_json::Value>(&payload) else {
+        return payload;
+    };
+    let Some(models) = root
+        .get_mut("data")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return payload;
+    };
+    let api_type = match protocol {
+        ProxyProtocol::OpenAiResponses => "responses",
+        ProxyProtocol::OpenAiChatCompletions => "chat_completions",
+        ProxyProtocol::AnthropicMessages => "anthropic_messages",
+    };
+    for model in models {
+        let Some(model) = model.as_object_mut() else {
+            continue;
+        };
+        model
+            .entry("api_types")
+            .or_insert_with(|| serde_json::json!([api_type]));
+        model.entry("capabilities").or_insert_with(|| {
+            serde_json::json!({
+                "output_modalities": ["text"],
+                "supports_tool_use": true
+            })
+        });
+    }
+    serde_json::to_vec(&root).map_or(payload, Bytes::from)
+}
+
 async fn handle_request(
     request: Request<Incoming>,
     state: RuntimeState,
@@ -1183,6 +1386,9 @@ async fn handle_request(
     let path = request.uri().path().to_string();
     let method = request.method().clone();
     let request_query = request.uri().query().map(str::to_owned);
+    if path.trim_end_matches('/') == "/v1/models" {
+        return Ok(handle_models_request(request, state).await);
+    }
     let Some(inbound) = ProxyProtocol::from_path(&path) else {
         return Ok(error_response(
             StatusCode::NOT_FOUND,
@@ -1197,23 +1403,7 @@ async fn handle_request(
             "missing local proxy token",
         ));
     }
-    let selected = state.config.read().ok().and_then(|config| {
-        config.enabled.then(|| {
-            config
-                .routes
-                .iter()
-                .find(|route| {
-                    route.config.enabled
-                        && route.config.inbound_protocol == inbound
-                        && (bearer_token
-                            .is_some_and(|token| tokens_match(&route.local_token, token))
-                            || api_key_token
-                                .is_some_and(|token| tokens_match(&route.local_token, token)))
-                })
-                .cloned()
-                .map(|route| (route, config.pricing.clone()))
-        })?
-    });
+    let selected = select_route(&state, bearer_token, api_key_token, Some(inbound));
     let Some((mut route, pricing)) = selected else {
         return Ok(error_response(
             StatusCode::UNAUTHORIZED,
@@ -3136,6 +3326,61 @@ mod tests {
             .unwrap(),
             "https://example.openai.azure.com/openai/deployments/gpt/chat/completions?api-version=2024-10-21&trace=enabled"
         );
+    }
+
+    #[test]
+    fn model_discovery_uses_route_token_and_adds_cursor_protocol_metadata() {
+        let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let upstream_thread = std::thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().unwrap();
+            let (headers, body) = read_http_request(&mut stream);
+            assert!(headers.starts_with("GET /v1/models HTTP/1.1\r\n"));
+            assert!(headers
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("authorization: Bearer upstream-secret")));
+            assert!(body.is_empty());
+            let response = r#"{"object":"list","data":[{"id":"local-model","object":"model"}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            )
+            .unwrap();
+        });
+
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let token = "aipass_cursor_models_test";
+        let mut route = single_target_route(
+            token,
+            format!("http://{upstream_addr}/v1"),
+            RetryPolicy::default(),
+        );
+        route.config.inbound_protocol = ProxyProtocol::OpenAiChatCompletions;
+        route.config.upstream_protocol = ProxyProtocol::OpenAiChatCompletions;
+        let _proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        let response = reqwest::blocking::Client::new()
+            .get(format!("http://{bind_addr}/v1/models"))
+            .bearer_auth(token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().unwrap();
+        assert_eq!(payload["data"][0]["id"], "local-model");
+        assert_eq!(payload["data"][0]["api_types"][0], "chat_completions");
+        assert_eq!(
+            payload["data"][0]["capabilities"]["supports_tool_use"],
+            true
+        );
+        upstream_thread.join().unwrap();
     }
 
     #[test]

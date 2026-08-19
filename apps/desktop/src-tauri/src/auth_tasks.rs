@@ -1,4 +1,7 @@
-use aipass_agent_protocol::{SessionStatus, VaultCreateResponse as AgentVaultCreateResponse};
+use aipass_agent::AgentCommandError;
+use aipass_agent_protocol::{
+    AgentErrorCode, SessionStatus, VaultCreateResponse as AgentVaultCreateResponse,
+};
 use aipass_vault::RecoveryKit;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -43,6 +46,7 @@ pub(crate) enum VaultAuthTaskState {
     },
     Failed {
         message: String,
+        error_code: Option<AgentErrorCode>,
         error: String,
     },
 }
@@ -62,6 +66,7 @@ pub(crate) struct VaultAuthTaskStatusResponse {
     pub(crate) exists: Option<bool>,
     pub(crate) locked: Option<bool>,
     pub(crate) recovery_kit: Option<RecoveryKit>,
+    pub(crate) error_code: Option<AgentErrorCode>,
     pub(crate) error: Option<String>,
 }
 
@@ -109,6 +114,7 @@ pub(crate) fn auth_task_status_response(
             exists: None,
             locked: None,
             recovery_kit: None,
+            error_code: None,
             error: None,
         },
         VaultAuthTaskState::Succeeded {
@@ -123,15 +129,21 @@ pub(crate) fn auth_task_status_response(
             exists: Some(exists),
             locked: Some(locked),
             recovery_kit,
+            error_code: None,
             error: None,
         },
-        VaultAuthTaskState::Failed { message, error } => VaultAuthTaskStatusResponse {
+        VaultAuthTaskState::Failed {
+            message,
+            error_code,
+            error,
+        } => VaultAuthTaskStatusResponse {
             task_id,
             phase: VaultAuthTaskPhase::Failed,
             message,
             exists: None,
             locked: None,
             recovery_kit: None,
+            error_code,
             error: Some(error),
         },
     }
@@ -158,6 +170,7 @@ pub(crate) fn finish_vault_create_task(
         },
         Err(error) => VaultAuthTaskState::Failed {
             message: "Vault operation failed".to_string(),
+            error_code: None,
             error,
         },
     };
@@ -174,7 +187,7 @@ pub(crate) fn finish_vault_unlock_task(
     app: AppHandle,
     auth_tasks: AuthTasks,
     task_id: Uuid,
-    result: Result<SessionStatus, String>,
+    result: Result<SessionStatus, AgentCommandError>,
 ) {
     let next_state = match result {
         Ok(status) => VaultAuthTaskState::Succeeded {
@@ -185,7 +198,8 @@ pub(crate) fn finish_vault_unlock_task(
         },
         Err(error) => VaultAuthTaskState::Failed {
             message: "Vault operation failed".to_string(),
-            error,
+            error_code: error.code,
+            error: error.message,
         },
     };
     let _ = set_auth_task_state(&auth_tasks, task_id, next_state);
@@ -194,5 +208,24 @@ pub(crate) fn finish_vault_unlock_task(
         if let Some(snapshot) = tasks.get(&task_id).map(|task| task.state.clone()) {
             emit_auth_task_event(&app, &auth_task_status_response(task_id, snapshot));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_task_response_preserves_agent_error_code() {
+        let response = auth_task_status_response(
+            Uuid::new_v4(),
+            VaultAuthTaskState::Failed {
+                message: "Vault operation failed".to_string(),
+                error_code: Some(AgentErrorCode::InvalidPassword),
+                error: "invalid password or corrupted vault".to_string(),
+            },
+        );
+
+        assert_eq!(response.error_code, Some(AgentErrorCode::InvalidPassword));
     }
 }

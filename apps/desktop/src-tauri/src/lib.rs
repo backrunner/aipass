@@ -153,9 +153,20 @@ fn agent_request_no_unlock<T: DeserializeOwned>(
     app: &AppHandle,
     request: AgentRequest,
 ) -> Result<T, String> {
-    let client = agent_client(app)?;
-    ensure_agent_running_for_desktop(&client)?;
-    client.request(&request).map_err(agent_error_to_string)
+    agent_request_no_unlock_detailed(app, request).map_err(agent_error_to_string)
+}
+
+fn agent_request_no_unlock_detailed<T: DeserializeOwned>(
+    app: &AppHandle,
+    request: AgentRequest,
+) -> Result<T, AgentCommandError> {
+    let map_startup_error = |message| AgentCommandError {
+        code: None,
+        message,
+    };
+    let client = agent_client(app).map_err(map_startup_error)?;
+    ensure_agent_running_for_desktop(&client).map_err(map_startup_error)?;
+    client.request(&request)
 }
 
 fn agent_status(app: &AppHandle) -> Result<SessionStatus, String> {
@@ -425,6 +436,17 @@ async fn run_blocking<T: Send + 'static>(
     tauri::async_runtime::spawn_blocking(task)
         .await
         .map_err(|err| err.to_string())?
+}
+
+async fn run_blocking_agent<T: Send + 'static>(
+    task: impl FnOnce() -> Result<T, AgentCommandError> + Send + 'static,
+) -> Result<T, AgentCommandError> {
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|err| AgentCommandError {
+            code: Some(aipass_agent_protocol::AgentErrorCode::Internal),
+            message: err.to_string(),
+        })?
 }
 
 fn load_preferences(app: &AppHandle) -> Result<AppPreferences, String> {

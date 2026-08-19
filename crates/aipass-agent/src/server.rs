@@ -23,9 +23,12 @@ use aipass_agent_protocol::{
 use aipass_config_writers::{
     apply_plan_encrypted, config_backup_path, diff_preview_for_path, plan_claude_code,
     plan_claude_code_plaintext, plan_codex, plan_codex_plaintext, plan_codex_plaintext_with_mode,
-    plan_gemini_cli, plan_gemini_cli_plaintext, plan_opencode, plan_opencode_plaintext,
-    redacted_diff_preview, rollback_encrypted, ApplyResult,
-    CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan, ToolEntry, ToolId,
+    plan_cursor_local, plan_cursor_local_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext,
+    plan_grok, plan_grok_plaintext, plan_grok_plaintext_with_backend, plan_opencode,
+    plan_opencode_plaintext, plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext,
+    plan_pi_plaintext_with_api, redacted_diff_preview, rollback_encrypted, ApplyResult,
+    CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan, GrokApiBackend, OpenCodeApi, PiApi,
+    ToolEntry, ToolId,
 };
 use aipass_crypto::{mask_secret, SecretString};
 use aipass_provider_registry::{
@@ -1027,6 +1030,30 @@ fn build_tool_config_plan(
         (ToolConfigTool::OpenCode, ToolConfigMode::Plaintext) => {
             plan_opencode_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
         }
+        (ToolConfigTool::Grok, ToolConfigMode::Helper) => {
+            plan_grok(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        (ToolConfigTool::Grok, ToolConfigMode::Env) => {
+            plan_tool_env_helper(&home, ToolConfigTool::Grok, &tool_entry)?
+        }
+        (ToolConfigTool::Grok, ToolConfigMode::Plaintext) => {
+            plan_grok_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        (ToolConfigTool::Pi, ToolConfigMode::Helper) => {
+            plan_pi(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        (ToolConfigTool::Pi, ToolConfigMode::Env) => {
+            plan_tool_env_helper(&home, ToolConfigTool::Pi, &tool_entry)?
+        }
+        (ToolConfigTool::Pi, ToolConfigMode::Plaintext) => {
+            plan_pi_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        (ToolConfigTool::Cursor, ToolConfigMode::Plaintext) => {
+            plan_cursor_local_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        (ToolConfigTool::Cursor, ToolConfigMode::Helper | ToolConfigMode::Env) => {
+            plan_cursor_local(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
     };
     Ok((entry, plan, content))
 }
@@ -1062,28 +1089,22 @@ fn build_tool_config_proxy_plan(
             "cannot configure a disabled proxy route",
         ));
     }
-    let supported = match request.tool {
-        ToolId::Codex => route.inbound_protocol == ProxyProtocol::OpenAiResponses,
-        ToolId::ClaudeCode => route.inbound_protocol == ProxyProtocol::AnthropicMessages,
-        ToolId::OpenCode => matches!(
-            route.inbound_protocol,
-            ProxyProtocol::OpenAiChatCompletions | ProxyProtocol::AnthropicMessages
-        ),
-        ToolId::GeminiCli => false,
-    };
-    if !supported {
+    ensure_proxy_tool_protocol(&request.tool, route.inbound_protocol)?;
+    let tool_bind_addr = advertised_bind_addr(&bind_addr);
+    let endpoint = proxy_endpoint_for_tool(&request.tool, route.inbound_protocol, &tool_bind_addr);
+    let anthropic = route.inbound_protocol == ProxyProtocol::AnthropicMessages;
+    let default_model = route
+        .targets
+        .iter()
+        .filter(|target| target.enabled)
+        .filter_map(|target| vault.get_provider_summary(target.provider_entry_id).ok())
+        .find_map(|entry| entry.default_model.filter(|model| !model.trim().is_empty()));
+    if matches!(request.tool, ToolId::Grok | ToolId::Pi) && default_model.is_none() {
         return Err(ServiceError::new(
             AgentErrorCode::ValidationFailed,
-            "tool protocol is incompatible with the selected proxy route",
+            "Grok and Pi integration requires a default model on a route credential",
         ));
     }
-    let anthropic = route.inbound_protocol == ProxyProtocol::AnthropicMessages;
-    let tool_bind_addr = advertised_bind_addr(&bind_addr);
-    let endpoint = if anthropic {
-        format!("http://{tool_bind_addr}")
-    } else {
-        format!("http://{tool_bind_addr}/v1")
-    };
     let tool_entry = ToolEntry {
         id: route.id,
         title: route.name.clone(),
@@ -1100,7 +1121,7 @@ fn build_tool_config_proxy_plan(
             AuthScheme::Bearer
         },
         env_key: "AIPASS_PROXY_TOKEN".to_string(),
-        default_model: None,
+        default_model,
         api_key: Some(route.token.clone()),
     };
     let home = home_dir()?;
@@ -1113,13 +1134,76 @@ fn build_tool_config_proxy_plan(
         }
         ToolId::GeminiCli => return Err(ServiceError::new(
             AgentErrorCode::ValidationFailed,
-            "Gemini CLI is not supported by the local proxy; use a Gemini-native provider integration",
+            "Gemini CLI requires a Gemini-native model endpoint; the AIPass local proxy currently exposes OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages",
         )),
         ToolId::OpenCode => {
-            plan_opencode_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+            let api = match route.inbound_protocol {
+                ProxyProtocol::OpenAiResponses => OpenCodeApi::OpenAiResponses,
+                ProxyProtocol::OpenAiChatCompletions => OpenCodeApi::OpenAiChatCompletions,
+                ProxyProtocol::AnthropicMessages => OpenCodeApi::AnthropicMessages,
+            };
+            plan_opencode_plaintext_with_api(&home, &tool_entry, api)
+                .map_err(ServiceError::internal)?
+        }
+        ToolId::Grok => {
+            let backend = match route.inbound_protocol {
+                ProxyProtocol::OpenAiResponses => GrokApiBackend::Responses,
+                ProxyProtocol::OpenAiChatCompletions => GrokApiBackend::ChatCompletions,
+                ProxyProtocol::AnthropicMessages => GrokApiBackend::Messages,
+            };
+            plan_grok_plaintext_with_backend(&home, &tool_entry, backend)
+                .map_err(ServiceError::internal)?
+        }
+        ToolId::Pi => {
+            let api = match route.inbound_protocol {
+                ProxyProtocol::OpenAiResponses => PiApi::OpenAiResponses,
+                ProxyProtocol::OpenAiChatCompletions => PiApi::OpenAiCompletions,
+                ProxyProtocol::AnthropicMessages => PiApi::AnthropicMessages,
+            };
+            plan_pi_plaintext_with_api(&home, &tool_entry, api)
+                .map_err(ServiceError::internal)?
+        }
+        ToolId::Cursor => {
+            plan_cursor_local_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
         }
     };
     Ok((tool_entry, plan, content))
+}
+
+fn ensure_proxy_tool_protocol(tool: &ToolId, protocol: ProxyProtocol) -> ServiceResult<()> {
+    let supported = match tool {
+        ToolId::Codex => protocol == ProxyProtocol::OpenAiResponses,
+        ToolId::ClaudeCode => protocol == ProxyProtocol::AnthropicMessages,
+        ToolId::OpenCode | ToolId::Grok | ToolId::Pi => true,
+        ToolId::GeminiCli => {
+            return Err(ServiceError::new(
+                AgentErrorCode::ValidationFailed,
+                "Gemini CLI requires a Gemini-native model endpoint; the AIPass local proxy currently exposes OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages",
+            ));
+        }
+        ToolId::Cursor => true,
+    };
+    if supported {
+        Ok(())
+    } else {
+        Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "the selected tool cannot speak the route's inbound model API protocol",
+        ))
+    }
+}
+
+/// SDKs disagree about whether an Anthropic base URL includes `/v1`.
+/// Claude Code appends the versioned path itself, while the AI SDK providers
+/// used by OpenCode, Grok, and Pi expect the versioned base URL. Keep that
+/// transport detail here instead of leaking it into each config writer.
+fn proxy_endpoint_for_tool(tool: &ToolId, protocol: ProxyProtocol, bind_addr: &str) -> String {
+    let origin = format!("http://{bind_addr}");
+    match (tool, protocol) {
+        (ToolId::ClaudeCode, ProxyProtocol::AnthropicMessages) => origin,
+        (ToolId::Cursor, ProxyProtocol::AnthropicMessages) => format!("{origin}/v1/messages"),
+        _ => format!("{origin}/v1"),
+    }
 }
 
 fn tool_config_preview_files(plan: &ConfigPlan, content: &str) -> Vec<ToolConfigPreviewFile> {
@@ -1169,6 +1253,9 @@ fn tool_config_tool_for(tool: &ToolId) -> ToolConfigTool {
         ToolId::ClaudeCode => ToolConfigTool::ClaudeCode,
         ToolId::GeminiCli => ToolConfigTool::GeminiCli,
         ToolId::OpenCode => ToolConfigTool::OpenCode,
+        ToolId::Grok => ToolConfigTool::Grok,
+        ToolId::Pi => ToolConfigTool::Pi,
+        ToolId::Cursor => ToolConfigTool::Cursor,
     }
 }
 
@@ -1222,12 +1309,18 @@ fn plan_tool_env_helper(
         ToolConfigTool::ClaudeCode => aipass_config_writers::ToolId::ClaudeCode,
         ToolConfigTool::GeminiCli => aipass_config_writers::ToolId::GeminiCli,
         ToolConfigTool::OpenCode => aipass_config_writers::ToolId::OpenCode,
+        ToolConfigTool::Grok => aipass_config_writers::ToolId::Grok,
+        ToolConfigTool::Pi => aipass_config_writers::ToolId::Pi,
+        ToolConfigTool::Cursor => aipass_config_writers::ToolId::Cursor,
     };
     let tool_name = match tool {
         ToolConfigTool::Codex => "codex",
         ToolConfigTool::ClaudeCode => "claude-code",
         ToolConfigTool::GeminiCli => "gemini-cli",
         ToolConfigTool::OpenCode => "opencode",
+        ToolConfigTool::Grok => "grok",
+        ToolConfigTool::Pi => "pi",
+        ToolConfigTool::Cursor => "cursor",
     };
     let target = home
         .join(".aipass")
@@ -1860,6 +1953,55 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn proxy_endpoint_matches_each_client_sdk_contract() {
+        let bind = "127.0.0.1:8787";
+        assert_eq!(
+            proxy_endpoint_for_tool(&ToolId::ClaudeCode, ProxyProtocol::AnthropicMessages, bind),
+            "http://127.0.0.1:8787"
+        );
+        assert_eq!(
+            proxy_endpoint_for_tool(&ToolId::OpenCode, ProxyProtocol::AnthropicMessages, bind),
+            "http://127.0.0.1:8787/v1"
+        );
+        assert_eq!(
+            proxy_endpoint_for_tool(&ToolId::OpenCode, ProxyProtocol::OpenAiResponses, bind),
+            "http://127.0.0.1:8787/v1"
+        );
+        assert_eq!(
+            proxy_endpoint_for_tool(&ToolId::Cursor, ProxyProtocol::OpenAiChatCompletions, bind),
+            "http://127.0.0.1:8787/v1"
+        );
+        assert_eq!(
+            proxy_endpoint_for_tool(&ToolId::Cursor, ProxyProtocol::AnthropicMessages, bind),
+            "http://127.0.0.1:8787/v1/messages"
+        );
+    }
+
+    #[test]
+    fn proxy_tool_capabilities_distinguish_endpoint_and_protocol_limits() {
+        assert!(
+            ensure_proxy_tool_protocol(&ToolId::OpenCode, ProxyProtocol::OpenAiResponses).is_ok()
+        );
+        assert!(
+            ensure_proxy_tool_protocol(&ToolId::OpenCode, ProxyProtocol::AnthropicMessages).is_ok()
+        );
+        let codex_error =
+            ensure_proxy_tool_protocol(&ToolId::Codex, ProxyProtocol::OpenAiChatCompletions)
+                .expect_err("Codex should require Responses");
+        assert!(codex_error.message.contains("protocol"));
+        assert!(
+            ensure_proxy_tool_protocol(&ToolId::Cursor, ProxyProtocol::OpenAiChatCompletions)
+                .is_ok()
+        );
+        assert!(
+            ensure_proxy_tool_protocol(&ToolId::Cursor, ProxyProtocol::AnthropicMessages).is_ok()
+        );
+        assert!(
+            ensure_proxy_tool_protocol(&ToolId::Cursor, ProxyProtocol::OpenAiResponses).is_ok()
+        );
     }
 
     struct EnvRestore {

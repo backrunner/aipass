@@ -1,11 +1,22 @@
 import type { AuthScheme, InterfaceType } from "@aipass/schemas";
 
-import type { ToolConfigMode, ToolConfigTarget } from "../types";
+import type { ProxyProtocol, ToolConfigMode, ToolConfigTarget } from "../types";
+
+export type LocalProxyAvailability =
+  | "available"
+  | "unsupported"
+  | "protocol"
+  | "default-model";
 
 export type IntegrationToolDefinition = {
   id: ToolConfigTarget;
   name: string;
   defaultMode: ToolConfigMode;
+  localProxyProtocols: ProxyProtocol[];
+  localProxyUnsupportedReason?: "native-api" | "custom-endpoint" | "local-runtime-required";
+  localProxyRequirement?: "cursor-local-runtime";
+  requiresDefaultModel?: boolean;
+  disabledReason?: string;
 };
 
 export type IntegrationEntry = {
@@ -13,28 +24,71 @@ export type IntegrationEntry = {
   title: string;
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
+  defaultModel?: string;
 };
 
 export const integrationToolDefinitions: IntegrationToolDefinition[] = [
   {
     id: "codex",
     name: "Codex",
-    defaultMode: "plaintext"
+    defaultMode: "plaintext",
+    localProxyProtocols: ["open_ai_responses"]
   },
   {
     id: "claude-code",
     name: "Claude Code",
-    defaultMode: "helper"
+    defaultMode: "helper",
+    localProxyProtocols: ["anthropic_messages"]
   },
   {
     id: "gemini-cli",
     name: "Gemini CLI",
-    defaultMode: "helper"
+    defaultMode: "helper",
+    localProxyProtocols: [],
+    localProxyUnsupportedReason: "native-api"
   },
   {
     id: "opencode",
     name: "OpenCode",
-    defaultMode: "helper"
+    defaultMode: "helper",
+    localProxyProtocols: [
+      "open_ai_responses",
+      "open_ai_chat_completions",
+      "anthropic_messages"
+    ]
+  },
+  {
+    id: "grok",
+    name: "Grok",
+    defaultMode: "helper",
+    localProxyProtocols: [
+      "open_ai_responses",
+      "open_ai_chat_completions",
+      "anthropic_messages"
+    ],
+    requiresDefaultModel: true
+  },
+  {
+    id: "pi",
+    name: "Pi",
+    defaultMode: "helper",
+    localProxyProtocols: [
+      "open_ai_responses",
+      "open_ai_chat_completions",
+      "anthropic_messages"
+    ],
+    requiresDefaultModel: true
+  },
+  {
+    id: "cursor",
+    name: "Cursor Agent Local",
+    defaultMode: "helper",
+    localProxyProtocols: [
+      "open_ai_responses",
+      "open_ai_chat_completions",
+      "anthropic_messages"
+    ],
+    localProxyRequirement: "cursor-local-runtime"
   }
 ];
 
@@ -51,7 +105,32 @@ export function supportsIntegration(tool: ToolConfigTarget, entry: IntegrationEn
       return entry.interfaceType === "gemini" && entry.authScheme === "google_api_key";
     case "opencode":
       return true;
+    case "grok":
+    case "pi":
+      return (
+        Boolean(entry.defaultModel) &&
+        ((entry.interfaceType === "openai_compatible" && entry.authScheme === "bearer") ||
+          (entry.interfaceType === "anthropic_messages" &&
+            (entry.authScheme === "x_api_key" || entry.authScheme === "bearer")))
+      );
+    case "cursor":
+      return (
+        (entry.interfaceType === "openai_compatible" && entry.authScheme === "bearer") ||
+        (entry.interfaceType === "anthropic_messages" &&
+          (entry.authScheme === "x_api_key" || entry.authScheme === "bearer"))
+      );
   }
+}
+
+export function localProxyAvailability(
+  tool: IntegrationToolDefinition,
+  protocol: ProxyProtocol,
+  hasDefaultModel: boolean
+): LocalProxyAvailability {
+  if (tool.localProxyUnsupportedReason) return "unsupported";
+  if (!tool.localProxyProtocols.includes(protocol)) return "protocol";
+  if (tool.requiresDefaultModel && !hasDefaultModel) return "default-model";
+  return "available";
 }
 
 export function compatibleToolsFor(entry: IntegrationEntry): IntegrationToolDefinition[] {

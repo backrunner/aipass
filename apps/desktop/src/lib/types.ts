@@ -24,7 +24,10 @@ export type ToolConfigTarget =
   | "codex"
   | "claude-code"
   | "gemini-cli"
-  | "opencode";
+  | "opencode"
+  | "grok"
+  | "pi"
+  | "cursor";
 export type ToolConfigMode = "helper" | "env" | "plaintext";
 export type CodexApiKeyMode = "experimental_bearer_token" | "auth_json";
 
@@ -212,6 +215,17 @@ export type VaultAuthTaskStartResponse = {
   taskId: string;
 };
 
+export type AgentErrorCode =
+  | "locked"
+  | "invalid_password"
+  | "service_unavailable"
+  | "grant_expired"
+  | "permission_denied"
+  | "not_found"
+  | "conflict"
+  | "validation_failed"
+  | "internal";
+
 export type VaultAuthTaskStatus = {
   taskId: string;
   phase: "pending" | "succeeded" | "failed";
@@ -219,6 +233,7 @@ export type VaultAuthTaskStatus = {
   exists?: boolean;
   locked?: boolean;
   recoveryKit?: RecoveryKit;
+  errorCode?: AgentErrorCode;
   error?: string;
 };
 

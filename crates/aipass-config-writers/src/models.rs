@@ -12,6 +12,9 @@ pub enum ToolId {
     ClaudeCode,
     GeminiCli,
     OpenCode,
+    Grok,
+    Pi,
+    Cursor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

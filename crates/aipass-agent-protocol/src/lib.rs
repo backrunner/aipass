@@ -202,6 +202,9 @@ pub enum ToolConfigTool {
     ClaudeCode,
     GeminiCli,
     OpenCode,
+    Grok,
+    Pi,
+    Cursor,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
