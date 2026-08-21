@@ -119,10 +119,14 @@
       return name.endsWith('.dmg');
     });
 
-    if (arch === 'mac-arm') {
-      return candidates.find((candidate) => /(aarch64|arm64)/i.test(candidate.name));
-    }
-    return candidates.find((candidate) => /(x64|x86_64)/i.test(candidate.name));
+    const archPattern = arch === 'mac-arm' ? /(aarch64|arm64)/i : /(x64|x86_64)/i;
+    return (
+      candidates.find((candidate) => archPattern.test(candidate.name)) ??
+      // Universal or platform-agnostic DMGs (e.g. AIPass_<version>_universal.dmg,
+      // AIPass-macOS.dmg) serve both architectures.
+      candidates.find((candidate) => /universal/i.test(candidate.name)) ??
+      candidates[0]
+    );
   }
 
 </script>
