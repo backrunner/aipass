@@ -109,5 +109,7 @@ pub(crate) async fn install_update(app: AppHandle, channel: String) -> Result<()
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|err| err.to_string())?;
-    Ok(())
+    // The updater only swaps the bundle on disk; relaunch so the new
+    // version actually runs ("Install & restart" in the UI promises this).
+    app.restart()
 }
