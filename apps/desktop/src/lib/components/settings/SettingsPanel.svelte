@@ -19,7 +19,7 @@
     SyncReport,
     ThemePreference
   } from "../../types";
-  import { checkForUpdates, installUpdate, type UpdateCheckResult } from "../../services/updates";
+  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate, persistUpdateChannel, type UpdateChannel, type UpdateCheckResult } from "../../services/updates";
   import { buildTimeLabel } from "../../build";
   import { Badge, Banner, Button, Field, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
@@ -114,6 +114,11 @@
     { value: "zh-CN" as LocalePreference, label: $t("locale.zhCN") }
   ];
 
+  $: updateChannelOptions = [
+    { value: "official" as UpdateChannel, label: $t("settings.updateChannelOfficial") },
+    { value: "beta" as UpdateChannel, label: $t("settings.updateChannelBeta") }
+  ];
+
   $: autoLockOptions = [
     { value: 15, label: $t("settings.autoLock15m") },
     { value: 30, label: $t("settings.autoLock30m") },
@@ -181,6 +186,7 @@
   let updateCheck: UpdateCheckResult | undefined;
   let updateChecking = false;
   let updateInstalling = false;
+  let updateChannel: UpdateChannel = "official";
   let updateError: MessageValue = "";
   let updateErrorText = "";
   $: updateErrorText = resolveMessage($t, updateError);
@@ -191,17 +197,25 @@
     void (async () => {
       try {
         appVersion = await getVersion();
+        updateChannel = getStoredUpdateChannel() ?? inferUpdateChannel(appVersion);
       } catch {
         appVersion = "";
       }
     })();
   });
 
+  function onUpdateChannelChange(next: UpdateChannel) {
+    updateChannel = next;
+    persistUpdateChannel(next);
+    updateCheck = undefined;
+    void runUpdateCheck();
+  }
+
   async function runUpdateCheck() {
     updateChecking = true;
     updateError = "";
     try {
-      updateCheck = await checkForUpdates();
+      updateCheck = await checkForUpdates(updateChannel);
       if (updateCheck.error) updateError = updateCheck.error;
     } catch (err) {
       updateError = isLocalizedMessage(err) ? err : String(err);
@@ -633,6 +647,18 @@
                     <span class="row-label">{$t("settings.buildTime")}</span>
                   </div>
                   <span class="row-desc">{buildTime}</span>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <span class="row-label">{$t("settings.updateChannel")}</span>
+                    <span class="row-desc">{$t("settings.updateChannelDesc")}</span>
+                  </div>
+                  <SegmentedControl
+                    ariaLabel={$t("settings.updateChannel")}
+                    value={updateChannel}
+                    options={updateChannelOptions}
+                    onChange={onUpdateChannelChange}
+                  />
                 </div>
                 {#if updateCheck?.available}
                   <div class="update-summary">

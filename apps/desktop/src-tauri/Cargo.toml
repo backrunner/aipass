@@ -41,6 +41,7 @@ tauri = { version = "2.11.2", features = ["image-png", "macos-private-api", "tra
 tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-updater = "2"
 time.workspace = true
+url = "2"
 uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

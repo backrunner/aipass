@@ -1,6 +1,7 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import {
     detectAuthFromProvider,
     detectInterfaceFromProvider,
@@ -65,7 +66,7 @@
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { buildRouteTarget, buildSingleEntryRoute, enforceSingleEnabledRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
-  import { checkForUpdates, installUpdate } from "./lib/services/updates";
+  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
   import type { MessageValue } from "./lib/types";
@@ -367,7 +368,9 @@
   async function runAutoUpdateCheck() {
     try {
       localStorage.setItem(UPDATE_LAST_CHECK_KEY, String(Date.now()));
-      const result = await checkForUpdates();
+      const version = await getVersion();
+      const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+      const result = await checkForUpdates(channel);
       if (result.error || !result.available || !result.latestVersion) return;
       if (localStorage.getItem(UPDATE_DISMISSED_KEY) === result.latestVersion) return;
       updateAvailableVersion = result.latestVersion;
