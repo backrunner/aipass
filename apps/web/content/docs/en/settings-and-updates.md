@@ -1,39 +1,82 @@
 ---
 title: Settings and updates
-description: Release channels, auto-update behavior, and keeping AIPass current.
+description: The desktop settings panel — lock policy, password and key rotation, sync, proxy — and auto-update behavior.
 navTitle: Settings & updates
-order: 4
+order: 9
 ---
 
 # Settings and updates
 
-## Release channels
+The desktop app's **Settings** panel groups everything operational about the vault. This page walks through each section; [Update channels](/docs/update-channels) covers the release feeds in depth.
 
-AIPass ships on two channels, both distributed through GitHub Releases:
+## Appearance
 
-- **Official** — stable releases tagged `vX.Y.Z`, published from the release workflow as signed and notarized macOS builds.
-- **Beta** — prereleases published on the same repository for early testing. Beta builds may contain unfinished features.
+Theme and display preferences. These are local to the app and do not touch the vault.
 
-The [download section](/) on this site always prefers the newest **official** release that has a macOS package. It only falls back to a beta build when no official release with a package exists yet, and labels the channel next to the version number.
+## Lock policy
 
-You can also switch channels inside the app: **Settings → Updates → Update channel** offers **Official** and **Beta**, and switching re-checks for updates immediately on the new channel. The default channel follows the installed build — a beta build starts on the beta channel, a stable build on official. To move channels without waiting for an update, install the desired build over the current app from the download section or [GitHub Releases](https://github.com/backrunner/aipass/releases).
+- **Auto-lock** — lock the vault after 15 minutes, 30 minutes, 1 hour (default), 2, 4, 8, or 24 hours of idle time, or never.
+- **Lock on sleep** (default on) and **Lock on screen lock** (default on).
 
-## Auto-update
+Locking drops decrypted keys from the agent's memory; the desktop app, CLI, and browser extension all need the master password again afterwards.
 
-The desktop app checks for updates automatically — shortly after launch, and at most once every 24 hours — by reading the update manifest published alongside each GitHub Release. When a newer build is available, an in-app prompt lets you:
+## Master password
 
-- **Install** — download and apply the update in place.
-- **Dismiss** — skip that version; AIPass will not prompt again for the same version.
+Change the master password from the app, or with:
 
-Update artifacts are signed, and the app verifies the signature before installing.
+```bash
+aipass vault change-password --new-password "$NEW"
+```
 
-## Vault and sync settings
+Changing the password re-wraps the vault root key under a key derived from the new password — records do not need re-encryption, and the operation is quick. The recovery key stays valid.
 
-From the desktop app you can also:
+## Rotate keys
 
-- Change the master password or rotate the vault epoch (`vault rotate`, `vault change-password` from the CLI).
-- Manage trusted devices and revoke access for a device you no longer use.
-- Export an encrypted vault backup (`vault export`) and import it on another machine.
-- Configure sync over a local or iCloud folder, or a WebDAV endpoint. Only encrypted objects are ever synced.
+Rotates the vault epoch key and re-wraps every record's data key under it. From the CLI:
 
-See the [README](https://github.com/backrunner/aipass) for the full CLI surface.
+```bash
+aipass vault rotate
+```
+
+Old epoch keys cannot decrypt records written after rotation. Rotation also happens automatically when you revoke a device or recover with the recovery key. See [Security architecture](/docs/security).
+
+## Sync
+
+Choose one sync target:
+
+- **Local folder** — any directory, including ones already synced by other tools.
+- **WebDAV** — URL plus username and password.
+
+From the CLI you also get `--icloud` (iCloud Drive, macOS only) and `--onedrive`:
+
+```bash
+aipass sync --dir ~/Sync/AIPass
+aipass sync --icloud
+aipass sync --onedrive
+aipass sync --webdav-url https://cloud.example/dav --webdav-username u --webdav-password p
+```
+
+Only encrypted objects are synced. When the same object changes on two machines, the conflict is quarantined and listed in the sync settings, where you **accept** (keep the incoming version) or **discard** (keep the current one) per conflict.
+
+## Devices, export, and import
+
+Every machine that opens the vault registers an encrypted device record. From the CLI:
+
+```bash
+aipass vault devices                     # list trusted devices
+aipass vault revoke-device <device-id>   # revoke and rotate the epoch
+aipass vault export --output backup.aipexport --export-password "$PW"
+aipass vault import --input backup.aipexport --export-password "$PW"
+```
+
+Export files are encrypted under their own export password; import only works into a directory without an existing vault.
+
+## Server (local proxy)
+
+Settings for the built-in proxy: bind address (default `127.0.0.1:8787`), routes with retry policy (max attempts 1–10, failure threshold 1–20, circuit-open seconds, connect / first-byte / stream-idle timeouts), and the model pricing table used for cost estimates. See [Desktop app](/docs/desktop#local-proxy-server).
+
+## Updates
+
+**Settings → Updates** shows the current version, the selected channel (**Official** or **Beta**), and a manual **Check now** button. Switching the channel persists the choice and immediately re-checks on the new feed. When an update is available you can install it in place; the signature is verified before anything is applied.
+
+The app also checks automatically shortly after launch, at most once every 24 hours, and shows a dismissible banner for new versions — dismissing a version suppresses the prompt for that version only. Feed URLs and channel mechanics are documented in [Update channels](/docs/update-channels).
