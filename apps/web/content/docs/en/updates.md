@@ -1,11 +1,11 @@
 ---
-title: Update channels
-description: Official vs beta releases, how the app picks an update feed, and how to switch channels.
-navTitle: Update channels
+title: Updates
+description: Auto-update behavior, official vs beta release channels, and how to switch feeds.
+navTitle: Updates
 order: 8
 ---
 
-# Update channels
+# Updates
 
 AIPass ships on two channels, both distributed through GitHub Releases and consumed with the Tauri updater:
 
@@ -17,6 +17,10 @@ Each feed is an update manifest published alongside its GitHub Release; the arti
 ## Which channel am I on?
 
 The default channel follows the installed build: a version number containing a dash (for example `0.9.0-beta.3`) starts on the **beta** channel, and a plain `X.Y.Z` version starts on **official**. Your choice is stored per machine once you change it, so it survives app updates.
+
+## The Updates panel
+
+**Settings → Updates** shows the current version, the selected channel, and a manual **Check now** button. When an update is available you can install it in place; the signature is verified before anything is applied.
 
 ## Switching channels
 

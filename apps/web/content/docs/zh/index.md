@@ -42,5 +42,5 @@ AIPass 是面向 AI 工作流的本地优先凭据管理器。它将 AI 服务�
 - [桌面应用](/docs/zh/desktop)——解锁、托盘、开机自启、集成与本地代理。
 - [浏览器扩展](/docs/zh/extension)——配对、填充授权流程与密钥识别。
 - [安全架构](/docs/zh/security)——加密、恢复密钥、轮换、设备、导出/导入。
-- [更新渠道](/docs/zh/update-channels)——官方与 Beta 订阅源及切换方式。
-- [设置与更新](/docs/zh/settings-and-updates)——设置面板与自动更新行为。
+- [更新](/docs/zh/updates)——官方与 Beta 订阅源、自动更新行为与切换方式。
+- [设置](/docs/zh/settings)——设置面板：锁定策略、轮换、同步、设备、代理。

@@ -1,13 +1,13 @@
 ---
-title: Settings and updates
-description: The desktop settings panel — lock policy, password and key rotation, sync, proxy — and auto-update behavior.
-navTitle: Settings & updates
+title: Settings
+description: The desktop settings panel — lock policy, password and key rotation, sync, devices, and the local proxy.
+navTitle: Settings
 order: 9
 ---
 
-# Settings and updates
+# Settings
 
-The desktop app's **Settings** panel groups everything operational about the vault. This page walks through each section; [Update channels](/docs/update-channels) covers the release feeds in depth.
+The desktop app's **Settings** panel groups everything operational about the vault. This page walks through each section; auto-update behavior and release channels live in [Updates](/docs/updates).
 
 ## Appearance
 
@@ -74,9 +74,3 @@ Export files are encrypted under their own export password; import only works in
 ## Server (local proxy)
 
 Settings for the built-in proxy: bind address (default `127.0.0.1:8787`), routes with retry policy (max attempts 1–10, failure threshold 1–20, circuit-open seconds, connect / first-byte / stream-idle timeouts), and the model pricing table used for cost estimates. See [Desktop app](/docs/desktop#local-proxy-server).
-
-## Updates
-
-**Settings → Updates** shows the current version, the selected channel (**Official** or **Beta**), and a manual **Check now** button. Switching the channel persists the choice and immediately re-checks on the new feed. When an update is available you can install it in place; the signature is verified before anything is applied.
-
-The app also checks automatically shortly after launch, at most once every 24 hours, and shows a dismissible banner for new versions — dismissing a version suppresses the prompt for that version only. Feed URLs and channel mechanics are documented in [Update channels](/docs/update-channels).

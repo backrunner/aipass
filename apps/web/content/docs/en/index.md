@@ -42,5 +42,5 @@ Sync (local folder, iCloud Drive, OneDrive, or WebDAV) replicates encrypted obje
 - [Desktop app](/docs/desktop) — unlock, tray, autostart, integrations, and the local proxy.
 - [Browser extension](/docs/extension) — pairing, the fill grant flow, and key detection.
 - [Security architecture](/docs/security) — encryption, recovery key, rotation, devices, export/import.
-- [Update channels](/docs/update-channels) — official vs beta feeds and switching channels.
-- [Settings & updates](/docs/settings-and-updates) — the settings panel and auto-update behavior.
+- [Updates](/docs/updates) — official vs beta feeds, auto-update behavior, and switching channels.
+- [Settings](/docs/settings) — the settings panel: lock policy, rotation, sync, devices, proxy.

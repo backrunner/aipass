@@ -71,4 +71,4 @@ Two independent autostart entries exist, both registered as macOS LaunchAgents:
 
 ## Updates
 
-The app checks for updates in the background and shows a banner when one is available; **Settings → Updates** switches between the official and beta channels. Details are in [Update channels](/docs/update-channels) and [Settings & updates](/docs/settings-and-updates).
+The app checks for updates in the background and shows a banner when one is available; **Settings → Updates** switches between the official and beta channels. Details are in [Updates](/docs/updates).

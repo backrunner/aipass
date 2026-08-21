@@ -71,4 +71,4 @@ AIPass 常驻 macOS 菜单栏。托盘菜单显示代理和代理服务器状态
 
 ## 更新
 
-应用会在后台检查更新，发现新版本时显示横幅；**设置 → 更新**可在官方和 Beta 渠道之间切换。详见[更新渠道](/docs/zh/update-channels)和[设置与更新](/docs/zh/settings-and-updates)。
+应用会在后台检查更新，发现新版本时显示横幅；**设置 → 更新**可在官方和 Beta 渠道之间切换。详见[更新](/docs/zh/updates)。
