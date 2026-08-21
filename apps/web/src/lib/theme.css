@@ -1,0 +1,167 @@
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", monospace;
+  --sd-font-display: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sd-bg: #ffffff;
+  --sd-panel: #ffffff;
+  --sd-ink: #0f172a;
+  --sd-muted: #55648a;
+  --sd-line: #e2e8f2;
+  --sd-accent: #2f66f6;
+  --sd-accent-2: #7c5cf6;
+  --sd-radius: 8px;
+  --ap-bg: #ffffff;
+  --ap-band: #f5f7fd;
+  --ap-surface: #ffffff;
+  --ap-code: #f5f7fd;
+  --ap-ink: #0f172a;
+  --ap-muted: #55648a;
+  --ap-faint: #94a1c0;
+  --ap-line: #e2e8f2;
+  --ap-primary: #2f66f6;
+  --ap-primary-foreground: #ffffff;
+  --ap-accent-2: #7c5cf6;
+  --ap-link: #2f66f6;
+  --ap-success: #0d9488;
+  --ap-info: #2f66f6;
+  --ap-warning: #d97706;
+  --ap-destructive: #dc2626;
+  --ap-editor-comment: #6a737d;
+  --ap-editor-action: #2f66f6;
+  --ap-shadow: #0f172a;
+  --ap-glass: rgba(255, 255, 255, .68);
+  --ap-nav-glass: rgba(255, 255, 255, .72);
+  --ap-glass-hover: rgba(47, 102, 246, .06);
+  --ap-glass-line: rgba(255, 255, 255, .9);
+}
+
+:root[data-theme="dark"] {
+  --sd-bg: #0b1020;
+  --sd-panel: #0b1020;
+  --sd-ink: #e8edf9;
+  --sd-muted: #93a1c4;
+  --sd-line: #223052;
+  --sd-accent: #6b93ff;
+  --sd-accent-2: #a78bfa;
+  --ap-bg: #0b1020;
+  --ap-band: #0e1528;
+  --ap-surface: #141d38;
+  --ap-code: #141d38;
+  --ap-ink: #e8edf9;
+  --ap-muted: #93a1c4;
+  --ap-faint: #5d6f96;
+  --ap-line: #223052;
+  --ap-primary: #6b93ff;
+  --ap-primary-foreground: #0b1020;
+  --ap-accent-2: #a78bfa;
+  --ap-link: #7ea2ff;
+  --ap-editor-comment: #7f8bb3;
+  --ap-editor-action: #6b93ff;
+  --ap-shadow: #000000;
+  --ap-glass: rgba(11, 16, 32, .7);
+  --ap-nav-glass: rgba(11, 16, 32, .72);
+  --ap-glass-hover: rgba(107, 147, 255, .08);
+  --ap-glass-line: rgba(255, 255, 255, .1);
+}
+
+:root[data-theme="dark"] .sd-root {
+  --sd-accent: #6b93ff !important;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+
+html {
+  background: var(--ap-bg);
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--ap-bg);
+  font-family: var(--font-sans);
+}
+
+button, a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sd-topbar {
+  background: color-mix(in srgb, var(--sd-bg) 78%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--sd-line) 65%, transparent);
+  backdrop-filter: blur(20px);
+}
+
+.sd-brand img {
+  border-radius: 8px;
+}
+
+.sd-sidebar {
+  background: color-mix(in srgb, var(--sd-bg) 92%, var(--sd-panel));
+}
+
+.sd-sidebar-link.sd-active,
+.sd-sidebar-summary.sd-active {
+  color: var(--sd-ink);
+  background: color-mix(in srgb, var(--sd-accent) 10%, transparent);
+}
+
+.sd-article {
+  max-width: 52rem;
+}
+
+.sd-prose h1,
+.sd-prose h2,
+.sd-prose h3,
+.sd-prose h4 {
+  letter-spacing: 0;
+}
+
+.sd-prose h1 {
+  font-size: 2.5rem;
+  line-height: 1.08;
+}
+
+.sd-prose p,
+.sd-prose li {
+  line-height: 1.72;
+}
+
+.sd-prose a:not(.sd-heading-anchor) {
+  color: var(--ap-link);
+  text-decoration-color: color-mix(in srgb, var(--ap-link) 45%, transparent);
+  text-underline-offset: .16em;
+}
+
+.sd-prose a:not(.sd-heading-anchor):hover {
+  text-decoration-color: currentColor;
+}
+
+.sd-prose pre,
+.sd-code,
+.sd-search-dialog,
+.sd-mobile-menu {
+  border-radius: 8px;
+}
+
+.sd-floating-toolbar,
+.sd-search-dialog,
+.sd-mobile-menu {
+  background: color-mix(in srgb, var(--sd-panel) 78%, transparent);
+  backdrop-filter: blur(20px);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .sd-topbar,
+  .sd-floating-toolbar,
+  .sd-search-dialog,
+  .sd-mobile-menu {
+    background: var(--sd-panel);
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "aipass-web",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "aipass.alkinum.io",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "./build",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/releases"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  }
+}

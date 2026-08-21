@@ -1,0 +1,4 @@
+.svelte-kit/
+.wrangler/
+build/
+static/og/
