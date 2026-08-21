@@ -228,7 +228,7 @@
     updateInstalling = true;
     updateError = "";
     try {
-      await installUpdate();
+      await installUpdate(updateChannel);
     } catch (err) {
       updateError = isLocalizedMessage(err) ? err : String(err);
     } finally {

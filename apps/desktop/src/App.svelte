@@ -392,7 +392,9 @@
     updateInstalling = true;
     updateInstallError = "";
     try {
-      await installUpdate();
+      const version = await getVersion();
+      const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+      await installUpdate(channel);
     } catch (err) {
       updateInstallError = isLocalizedMessage(err) ? err : String(err);
     } finally {

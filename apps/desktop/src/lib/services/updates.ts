@@ -52,7 +52,7 @@ export async function checkForUpdates(channel: UpdateChannel): Promise<UpdateChe
   return invoke<UpdateCheckResult>("check_for_updates", { channel });
 }
 
-export async function installUpdate(): Promise<void> {
+export async function installUpdate(channel: UpdateChannel): Promise<void> {
   if (!hasTauri()) throw localizedMessage("error.updatesUnavailable");
-  await invoke("install_update");
+  await invoke("install_update", { channel });
 }

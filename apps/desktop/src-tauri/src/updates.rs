@@ -88,8 +88,18 @@ pub(crate) async fn check_for_updates(
 }
 
 #[tauri::command]
-pub(crate) async fn install_update(app: AppHandle) -> Result<(), String> {
-    let updater = app.updater().map_err(|err| err.to_string())?;
+pub(crate) async fn install_update(app: AppHandle, channel: String) -> Result<(), String> {
+    let endpoint = match channel.as_str() {
+        "official" => OFFICIAL_ENDPOINT,
+        "beta" => BETA_ENDPOINT,
+        other => return Err(format!("Unknown update channel: {other}")),
+    };
+    let endpoint = Url::parse(endpoint).map_err(|err| err.to_string())?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .and_then(|builder| builder.build())
+        .map_err(|err| err.to_string())?;
     let update = updater
         .check()
         .await
