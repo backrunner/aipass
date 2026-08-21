@@ -205,7 +205,7 @@ mod imp {
         };
         let _ = service.set_description("AIPass background agent");
         if !matches!(service.query_status()?.current_state, ServiceState::Running) {
-            let _ = service.start(&[]);
+            let _ = service.start(&[] as &[&str]);
         }
         query(vault_dir)
     }
@@ -218,7 +218,7 @@ mod imp {
             ServiceAccess::START | ServiceAccess::QUERY_STATUS,
         )?;
         if !matches!(service.query_status()?.current_state, ServiceState::Running) {
-            service.start(&[])?;
+            service.start(&[] as &[&str])?;
         }
         Ok(())
     }
