@@ -258,8 +258,8 @@ jobs:
             exit 1
           fi
 
-          lipo -verify_arch arm64 x86_64 target/release/aipass-agent
-          lipo -verify_arch arm64 x86_64 target/release/aipass-native-host
+          lipo target/release/aipass-agent -verify_arch arm64 x86_64
+          lipo target/release/aipass-native-host -verify_arch arm64 x86_64
           codesign --verify --deep --strict --verbose=2 "${app_path}"
           spctl --assess --type execute --verbose=4 "${app_path}"
           xcrun stapler validate "${app_path}"
