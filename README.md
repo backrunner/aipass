@@ -70,14 +70,14 @@ Desktop bundle:
 pnpm --filter @aipass/desktop bundle
 ```
 
-Release artifacts are produced by the `Release` GitHub Actions workflow on `vX.Y.Z` (official) or `vX.Y.Z-beta.N` (beta) tag pushes, or by manual dispatch with an existing tag. The desktop release path fully supports macOS first: it stamps the tag version into the workspace manifests, builds a universal Tauri app, signs and notarizes the `.app`/DMG, creates Tauri updater artifacts, and publishes everything to GitHub Releases. The in-app updater reads `latest.json` from two GitHub Releases feeds:
+Release artifacts are produced by the `Release` GitHub Actions workflow on `vX.Y.Z` (official) or `vX.Y.Z-beta.N` (beta) tag pushes, or by manual dispatch with an existing tag. The desktop release path fully supports macOS first: it stamps the tag version into the workspace manifests, builds a universal Tauri app, signs and notarizes the `.app`/DMG, creates Tauri updater artifacts, and publishes everything to GitHub Releases. The in-app updater reads `latest.json` from two feeds:
 
 ```text
 Official: https://github.com/backrunner/aipass/releases/latest/download/latest.json
-Beta:     https://github.com/backrunner/aipass/releases/download/beta/latest.json
+Beta:     https://aipass.alkinum.io/api/updates/beta/latest.json
 ```
 
-Official releases become GitHub's latest release. Beta releases are marked as prereleases, and the workflow keeps a rolling `beta` tag release whose `latest.json` is replaced whenever a newer version (beta or official) is published. Users pick the channel in Settings → Updates; builds whose version contains `-` default to Beta.
+Official releases become GitHub's latest release. Beta releases are marked as prereleases and carry their own normalized `latest.json` asset; the beta feed is resolved by the website Worker, which returns the manifest of the newest published prerelease — no rolling `beta` tag or separate update server is involved. Users pick the channel in Settings → Updates; builds whose version contains `-` default to Beta.
 
 Required macOS release secrets:
 
