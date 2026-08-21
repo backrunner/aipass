@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-agent"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-agent-protocol",
  "aipass-config-writers",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-agent-protocol"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-config-writers",
  "aipass-provider-registry",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-cli"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-config-writers"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-crypto",
  "aipass-provider-registry",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-crypto"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-desktop"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-native-host"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-provider-registry"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "time",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-proxy"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-proxy-conversion",
  "bytes",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-proxy-conversion"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -245,14 +245,14 @@ dependencies = [
 
 [[package]]
 name = "aipass-storage"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "aipass-sync"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-storage",
  "anyhow",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-vault"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = [
  "aipass-crypto",
  "aipass-provider-registry",

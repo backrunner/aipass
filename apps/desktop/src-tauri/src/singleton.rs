@@ -314,7 +314,12 @@ pub(crate) fn should_install_tray_autostart() -> bool {
 
 #[cfg(any(target_os = "macos", test))]
 fn should_install_tray_autostart_for(instance: DesktopInstanceKind) -> bool {
-    matches!(instance, DesktopInstanceKind::PackagedDevelopment)
+    // Packaged builds (release and packaged development) register the tray for
+    // auto-start on launch; only the live dev server stays unregistered.
+    matches!(
+        instance,
+        DesktopInstanceKind::Release | DesktopInstanceKind::PackagedDevelopment
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -407,8 +412,8 @@ mod tests {
     }
 
     #[test]
-    fn only_packaged_development_registers_tray_autostart() {
-        assert!(!should_install_tray_autostart_for(
+    fn packaged_instances_register_tray_autostart() {
+        assert!(should_install_tray_autostart_for(
             DesktopInstanceKind::Release
         ));
         assert!(should_install_tray_autostart_for(
