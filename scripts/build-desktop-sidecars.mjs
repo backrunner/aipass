@@ -15,6 +15,26 @@ if (isTruthy(process.env.AIPASS_MACOS_UNIVERSAL)) {
   run("cargo", ["build", "--release", ...packages]);
 }
 removeSidecarBuildMetadata();
+signMacosSidecars();
+
+function signMacosSidecars() {
+  // Release builds ship the sidecars inside the signed and notarized .app;
+  // each bundled binary must carry its own Developer ID signature with the
+  // hardened runtime and a secure timestamp, or notarization rejects the app.
+  const identity = process.env.APPLE_SIGNING_IDENTITY;
+  if (process.platform !== "darwin" || !identity) return;
+  for (const binary of binaries) {
+    run("codesign", [
+      "--force",
+      "--options",
+      "runtime",
+      "--timestamp",
+      "--sign",
+      identity,
+      join(repoRoot, "target", "release", binary),
+    ]);
+  }
+}
 
 function buildUniversalMacosSidecars() {
   if (process.platform !== "darwin") {
