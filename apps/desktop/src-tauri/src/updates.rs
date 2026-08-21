@@ -5,7 +5,7 @@ use url::Url;
 
 const OFFICIAL_ENDPOINT: &str =
     "https://github.com/backrunner/aipass/releases/latest/download/latest.json";
-const BETA_ENDPOINT: &str = "https://github.com/backrunner/aipass/releases/download/beta/latest.json";
+const BETA_ENDPOINT: &str = "https://aipass.alkinum.io/api/updates/beta/latest.json";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
