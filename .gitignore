@@ -10,6 +10,7 @@ playwright-report/
 test-results/
 artifacts/
 release-artifacts/
+output/
 target/
 **/target/
 apps/**/dist/
