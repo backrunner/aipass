@@ -367,11 +367,14 @@
 
   async function runAutoUpdateCheck() {
     try {
-      localStorage.setItem(UPDATE_LAST_CHECK_KEY, String(Date.now()));
       const version = await getVersion();
       const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
       const result = await checkForUpdates(channel);
-      if (result.error || !result.available || !result.latestVersion) return;
+      // Stamp the 24h cadence only after a check actually reached the feed,
+      // so a transient failure (offline, rate limit) retries on next launch.
+      if (result.error) return;
+      localStorage.setItem(UPDATE_LAST_CHECK_KEY, String(Date.now()));
+      if (!result.available || !result.latestVersion) return;
       if (localStorage.getItem(UPDATE_DISMISSED_KEY) === result.latestVersion) return;
       updateAvailableVersion = result.latestVersion;
     } catch {
