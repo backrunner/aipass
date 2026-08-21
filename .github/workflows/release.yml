@@ -4,8 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing v-prefixed release tag, for example v1.2.3"
+        description: "Existing v-prefixed release tag, for example v1.2.3 or v1.2.3-beta.1"
         required: true
+      channel:
+        description: "Release channel (auto derives it from the tag version)"
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - official
+          - beta
   push:
     tags:
       - "v*.*.*"
@@ -24,8 +33,8 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      channel: ${{ steps.release.outputs.channel }}
       build_number: ${{ steps.release.outputs.build_number }}
-      update_endpoint: ${{ steps.release.outputs.update_endpoint }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,34 +48,55 @@ jobs:
 
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           version="${tag#v}"
+          channel="${{ github.event.inputs.channel || 'auto' }}"
 
-          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release tags must use stable semver, for example v1.2.3."
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tags must use semantic versions, for example v1.2.3 or v1.2.3-beta.1."
             exit 1
           fi
 
+          if [[ "${channel}" == "auto" ]]; then
+            if [[ "${version}" == *-* ]]; then
+              channel="beta"
+            else
+              channel="official"
+            fi
+          fi
+
+          if [[ "${channel}" == "official" && "${version}" == *-* ]]; then
+            echo "::error::Official releases cannot use a prerelease version: ${version}."
+            exit 1
+          fi
+
+          if [[ "${channel}" == "beta" && ! "${version}" =~ -beta([.]|$) ]]; then
+            echo "::error::Beta releases must use a -beta prerelease version: ${version}."
+            exit 1
+          fi
+
+          # Versions are stamped from the tag during the macOS build via
+          # scripts/set-release-version.mjs, so the repository files only need
+          # to agree with each other here.
           root_version="$(node -p "require('./package.json').version")"
           desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
           tauri_version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
           cargo_version="$(node -e "const fs = require('fs'); const text = fs.readFileSync('Cargo.toml', 'utf8'); const match = /\\[workspace\\.package\\][\\s\\S]*?^version\\s*=\\s*\"([^\"]+)\"/m.exec(text); console.log(match?.[1] ?? '')")"
 
           for pair in \
-            "package.json:${root_version}" \
             "apps/desktop/package.json:${desktop_version}" \
             "apps/desktop/src-tauri/tauri.conf.json:${tauri_version}" \
             "Cargo.toml workspace.package:${cargo_version}"; do
             name="${pair%%:*}"
             found="${pair#*:}"
-            if [[ "${found}" != "${version}" ]]; then
-              echo "::error::${name} version ${found} does not match tag ${tag}."
+            if [[ "${found}" != "${root_version}" ]]; then
+              echo "::error::${name} version ${found} does not match package.json version ${root_version}."
               exit 1
             fi
           done
 
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
           echo "build_number=${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
-          echo "update_endpoint=https://assets.aipass.alkinum.io/latest.json" >> "${GITHUB_OUTPUT}"
 
   macos-desktop:
     name: macOS desktop
@@ -91,90 +121,110 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set release version
+        run: node scripts/set-release-version.mjs "${{ needs.resolve-release.outputs.version }}"
+
       - name: Validate signing and updater secrets
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
         run: |
           set -euo pipefail
 
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PUBLIC_KEY; do
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing ${name}. Configure the matching GitHub secret before publishing a macOS desktop release."
               exit 1
             fi
           done
 
-      - name: Prepare Apple notarization API key
-        id: apple-notarization
+          api_key_count=0
+          password_count=0
+          for name in APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY_BASE64; do
+            [[ -z "${!name}" ]] || ((api_key_count += 1))
+          done
+          for name in APPLE_ID APPLE_PASSWORD; do
+            [[ -z "${!name}" ]] || ((password_count += 1))
+          done
+
+          if (( api_key_count == 3 )); then
+            echo "Using App Store Connect API key notarization"
+          elif (( password_count == 2 )); then
+            echo "Using Apple ID notarization"
+          else
+            (( api_key_count == 0 )) || echo "::error::APPLE_API_KEY_ID, APPLE_API_ISSUER, and APPLE_API_KEY_BASE64 must be configured together."
+            (( password_count == 0 )) || echo "::error::APPLE_ID and APPLE_PASSWORD must be configured together."
+            echo "::error::Configure either App Store Connect API key credentials or Apple ID credentials for notarization."
+            exit 1
+          fi
+
+      - name: Import Apple signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
+
+      - name: Verify signing identity
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          if ! security find-identity -v -p codesigning | grep -qF "${APPLE_SIGNING_IDENTITY}"; then
+            echo "::error::Signing identity \"${APPLE_SIGNING_IDENTITY}\" not found after certificate import."
+            security find-identity -v -p codesigning
+            exit 1
+          fi
+
+      # tauri-bundler picks notarization credentials by env var presence and
+      # tries the Apple ID trio first, so the credentials for the active mode
+      # are exported via GITHUB_ENV and never set as empty variables.
+      - name: Prepare notarization credentials
         shell: bash
         env:
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
 
-          api_key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}.p8"
-          printf '%s' "${APPLE_API_KEY_BASE64}" | base64 -D > "${api_key_path}"
-          chmod 600 "${api_key_path}"
-
-          if [[ ! -s "${api_key_path}" ]]; then
-            echo "::error::Decoded Apple notarization API key is empty."
-            exit 1
+          if [[ -n "${APPLE_API_KEY_ID}" ]]; then
+            api_key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "${APPLE_API_KEY_BASE64}" | base64 -D > "${api_key_path}"
+            chmod 600 "${api_key_path}"
+            if ! grep -q 'BEGIN PRIVATE KEY' "${api_key_path}"; then
+              echo "::error::APPLE_API_KEY_BASE64 is not a valid base64-encoded .p8 key."
+              exit 1
+            fi
+            {
+              echo "APPLE_API_KEY=${APPLE_API_KEY_ID}"
+              echo "APPLE_API_ISSUER=${APPLE_API_ISSUER}"
+              echo "APPLE_API_KEY_PATH=${api_key_path}"
+            } >> "${GITHUB_ENV}"
+          else
+            {
+              echo "APPLE_ID=${APPLE_ID}"
+              echo "APPLE_PASSWORD=${APPLE_PASSWORD}"
+              echo "APPLE_TEAM_ID=${APPLE_TEAM_ID}"
+            } >> "${GITHUB_ENV}"
           fi
-
-          echo "api_key_path=${api_key_path}" >> "${GITHUB_OUTPUT}"
-
-      - name: Import Apple Developer ID certificate
-        id: apple-certificate
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          keychain_path="${RUNNER_TEMP}/aipass-signing.keychain-db"
-          keychain_password="$(openssl rand -base64 32)"
-          certificate_path="${RUNNER_TEMP}/apple-certificate.p12"
-          previous_keychain="$(security default-keychain -d user | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')"
-
-          echo "keychain_path=${keychain_path}" >> "${GITHUB_OUTPUT}"
-          echo "certificate_path=${certificate_path}" >> "${GITHUB_OUTPUT}"
-          echo "previous_keychain=${previous_keychain}" >> "${GITHUB_OUTPUT}"
-
-          printf '%s' "${APPLE_CERTIFICATE}" | base64 -D > "${certificate_path}"
-          if [[ ! -s "${certificate_path}" ]]; then
-            echo "::error::Decoded Apple signing certificate is empty."
-            exit 1
-          fi
-
-          security create-keychain -p "${keychain_password}" "${keychain_path}"
-          security default-keychain -s "${keychain_path}"
-          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
-          security set-keychain-settings -lut 21600 "${keychain_path}"
-          security import "${certificate_path}" -k "${keychain_path}" -P "${APPLE_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain_path}"
-
-          identity="$(security find-identity -v -p codesigning "${keychain_path}" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n 1)"
-          if [[ -z "${identity}" ]]; then
-            echo "::error::No Developer ID Application identity found in imported certificate."
-            security find-identity -v -p codesigning "${keychain_path}"
-            exit 1
-          fi
-
-          echo "identity=${identity}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare Tauri release config
         env:
           AIPASS_DESKTOP_BUILD_NUMBER: ${{ needs.resolve-release.outputs.build_number }}
-          AIPASS_DESKTOP_UPDATE_ENDPOINT: ${{ needs.resolve-release.outputs.update_endpoint }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
         run: node scripts/prepare-tauri-macos-release-config.mjs
 
@@ -182,25 +232,29 @@ jobs:
         env:
           CI: true
           AIPASS_MACOS_UNIVERSAL: true
-          APPLE_SIGNING_IDENTITY: ${{ steps.apple-certificate.outputs.identity }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_KEY_PATH: ${{ steps.apple-notarization.outputs.api_key_path }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm --dir apps/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.generated.json
 
-      - name: Verify macOS signing and notarization
+      - name: Verify macOS app signing and notarization
         shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
 
           app_path="$(find target apps/desktop/src-tauri/target -path "*/universal-apple-darwin/release/bundle/*" -type d -name "AIPass.app" -print -quit 2>/dev/null || true)"
-          dmg_path="$(find target apps/desktop/src-tauri/target -path "*/universal-apple-darwin/release/bundle/*" -type f -name "*.dmg" -print -quit 2>/dev/null || true)"
 
-          if [[ -z "${app_path}" || -z "${dmg_path}" ]]; then
-            echo "::error::Missing universal AIPass.app or DMG bundle."
+          if [[ -z "${app_path}" ]]; then
+            echo "::error::Missing universal AIPass.app bundle."
             find target apps/desktop/src-tauri/target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
+            exit 1
+          fi
+
+          signed_team="$(codesign -dv --verbose=4 "${app_path}" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+          if [[ "${signed_team}" != "${APPLE_TEAM_ID}" ]]; then
+            echo "::error::AIPass.app signature TeamIdentifier ${signed_team} does not match APPLE_TEAM_ID."
             exit 1
           fi
 
@@ -209,6 +263,38 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${app_path}"
           spctl --assess --type execute --verbose=4 "${app_path}"
           xcrun stapler validate "${app_path}"
+
+      - name: Notarize and validate DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dmg_path="$(find target apps/desktop/src-tauri/target -path "*/universal-apple-darwin/release/bundle/*" -type f -name "*.dmg" -print -quit 2>/dev/null || true)"
+
+          if [[ -z "${dmg_path}" ]]; then
+            echo "::error::Missing universal DMG bundle."
+            find target apps/desktop/src-tauri/target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
+            exit 1
+          fi
+
+          if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
+            notary_credentials=(
+              --key "${APPLE_API_KEY_PATH}"
+              --key-id "${APPLE_API_KEY}"
+              --issuer "${APPLE_API_ISSUER}"
+            )
+          else
+            notary_credentials=(
+              --apple-id "${APPLE_ID}"
+              --password "${APPLE_PASSWORD}"
+              --team-id "${APPLE_TEAM_ID}"
+            )
+          fi
+
+          xcrun notarytool submit "${dmg_path}" "${notary_credentials[@]}" --wait --timeout 30m
+          xcrun stapler staple "${dmg_path}"
+
+          codesign --verify --verbose=4 "${dmg_path}"
           spctl --assess --type open --context context:primary-signature --verbose=4 "${dmg_path}"
           xcrun stapler validate "${dmg_path}"
 
@@ -254,26 +340,8 @@ jobs:
       - name: Clean up signing material
         if: always()
         shell: bash
-        env:
-          PREVIOUS_KEYCHAIN: ${{ steps.apple-certificate.outputs.previous_keychain }}
-          SIGNING_KEYCHAIN: ${{ steps.apple-certificate.outputs.keychain_path }}
-          CERTIFICATE_PATH: ${{ steps.apple-certificate.outputs.certificate_path }}
-          API_KEY_PATH: ${{ steps.apple-notarization.outputs.api_key_path }}
         run: |
-          signing_keychain="${SIGNING_KEYCHAIN:-${RUNNER_TEMP}/aipass-signing.keychain-db}"
-          certificate_path="${CERTIFICATE_PATH:-${RUNNER_TEMP}/apple-certificate.p12}"
-          if [[ -n "${PREVIOUS_KEYCHAIN}" && -e "${PREVIOUS_KEYCHAIN}" ]]; then
-            security default-keychain -d user -s "${PREVIOUS_KEYCHAIN}" || true
-          fi
-          if [[ -e "${signing_keychain}" ]]; then
-            security delete-keychain "${signing_keychain}" || true
-          fi
-          rm -f "${certificate_path}"
-          if [[ -n "${API_KEY_PATH}" ]]; then
-            rm -f "${API_KEY_PATH}"
-          else
-            find "${RUNNER_TEMP}" -maxdepth 1 -type f -name 'AuthKey_*.p8' -delete
-          fi
+          find "${RUNNER_TEMP}" -maxdepth 1 -type f -name 'AuthKey_*.p8' -delete
 
   cli:
     name: CLI ${{ matrix.name }}
@@ -360,8 +428,8 @@ jobs:
           path: artifacts/aipass-chrome-extension.zip
           if-no-files-found: error
 
-  github-release:
-    name: Publish draft release
+  publish-release:
+    name: Publish release
     needs:
       - resolve-release
       - macos-desktop
@@ -395,72 +463,233 @@ jobs:
             exit 1
           fi
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            if [[ "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" != "true" ]]; then
+              echo "::error::${RELEASE_TAG} is already published; refusing to overwrite it."
+              exit 1
+            fi
             gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
           else
             gh release create "${RELEASE_TAG}" "${files[@]}" \
               --draft \
               --verify-tag \
               --title "AIPass ${RELEASE_TAG}" \
-              --notes "Signed and notarized macOS desktop artifacts, updater manifest, CLI archives, and extension package. The cdn-upload job publishes the same artifacts and latest.json to https://assets.aipass.alkinum.io for the in-app updater; publish this draft when the GitHub release should go public."
+              --notes "Signed and notarized macOS desktop artifacts, updater manifest, CLI archives, and extension package. The publish step rewrites latest.json to point at this release and publishes it on the ${{ needs.resolve-release.outputs.channel }} channel."
           fi
 
-  cdn-upload:
-    name: Upload assets to R2
-    needs:
-      - resolve-release
-      - github-release
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve-release.outputs.tag }}
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-          merge-multiple: true
-
-      - name: Generate checksums and SBOM
-        run: node scripts/release-metadata.mjs release-artifacts
-
-      - name: Validate Cloudflare secrets
-        shell: bash
+      - name: Validate updater manifest and publish
+        uses: actions/github-script@v7
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing ${name}. Configure the matching GitHub secret (API token needs R2 read/write on the aipass-assets bucket)."
-              exit 1
-            fi
-          done
-
-      - name: Upload release assets to assets.aipass.alkinum.io
-        shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mapfile -t files < <(find release-artifacts -maxdepth 1 -type f | sort)
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "::error::No release artifacts found to upload."
-            exit 1
-          fi
-          # Upload versioned artifacts first; publish the updater manifest last so
-          # clients never see a latest.json pointing at not-yet-uploaded binaries.
-          for file in "${files[@]}"; do
-            name="$(basename "${file}")"
-            npx --yes wrangler@4 r2 object put "aipass-assets/releases/${RELEASE_TAG}/${name}" \
-              --file "${file}" \
-              --remote \
-              --cache-control "public, max-age=31536000, immutable"
-          done
-          npx --yes wrangler@4 r2 object put "aipass-assets/latest.json" \
-            --file release-artifacts/latest.json \
-            --remote \
-            --content-type application/json \
-            --cache-control "no-cache"
+          VERSION: ${{ needs.resolve-release.outputs.version }}
+          CHANNEL: ${{ needs.resolve-release.outputs.channel }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const release = (
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              })
+            ).data;
+            if (!release.draft) {
+              core.setFailed(`${tag} is already published`);
+              return;
+            }
+
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+            const assetsByName = new Map(assets.map((asset) => [asset.name, asset]));
+
+            const updaterAsset = assetsByName.get('latest.json');
+            if (!updaterAsset) {
+              core.setFailed('latest.json was not uploaded');
+              return;
+            }
+
+            const response = await github.request(
+              'GET /repos/{owner}/{repo}/releases/assets/{asset_id}',
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: updaterAsset.id,
+                headers: { accept: 'application/octet-stream' },
+              },
+            );
+            const manifest = JSON.parse(Buffer.from(response.data).toString('utf8'));
+            const downloadBase = [
+              'https://github.com',
+              context.repo.owner,
+              context.repo.repo,
+              'releases/download',
+              tag,
+            ].join('/');
+
+            for (const [platform, entry] of Object.entries(manifest.platforms ?? {})) {
+              const fileName = entry.url ? decodeURIComponent(entry.url.split('/').pop()) : '';
+              const asset = assetsByName.get(fileName);
+              if (!asset) {
+                core.setFailed(`Updater platform ${platform} references missing asset ${fileName}`);
+                return;
+              }
+              entry.url = `${downloadBase}/${encodeURIComponent(asset.name)}`;
+            }
+
+            const requiredPlatforms = [
+              'darwin-aarch64',
+              'darwin-x86_64',
+            ];
+            const missing = requiredPlatforms.filter((platform) => {
+              const entry = manifest.platforms?.[platform];
+              return !entry?.url?.startsWith(`${downloadBase}/`) || !entry?.signature;
+            });
+
+            if (manifest.version !== process.env.VERSION || missing.length > 0) {
+              core.setFailed(
+                `Invalid latest.json: version=${manifest.version}, missing=${missing.join(', ') || 'none'}`,
+              );
+              return;
+            }
+
+            const manifestData = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
+            await github.rest.repos.deleteReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              asset_id: updaterAsset.id,
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: 'latest.json',
+              data: manifestData,
+              headers: {
+                'content-type': 'application/json',
+                'content-length': manifestData.length,
+              },
+            });
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              draft: false,
+              prerelease: process.env.CHANNEL === 'beta',
+              make_latest: process.env.CHANNEL === 'beta' ? 'false' : 'true',
+            });
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            let betaFeed = releases.find((entry) => entry.tag_name === 'beta');
+            if (!betaFeed) {
+              betaFeed = (await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: 'beta',
+                target_commitish: context.sha,
+                name: 'AIPass Beta Channel',
+                body: 'Rolling update manifest for AIPass Beta clients.',
+                draft: false,
+                prerelease: true,
+                make_latest: 'false',
+              })).data;
+            } else {
+              betaFeed = (await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: betaFeed.id,
+                name: 'AIPass Beta Channel',
+                body: 'Rolling update manifest for AIPass Beta clients.',
+                draft: false,
+                prerelease: true,
+                make_latest: 'false',
+              })).data;
+            }
+
+            const betaAssets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: betaFeed.id,
+              per_page: 100,
+            });
+            const currentManifestAsset = betaAssets.find((asset) => asset.name === 'latest.json');
+
+            const parseSemver = (value) => {
+              const [withoutBuild] = value.split('+');
+              const separator = withoutBuild.indexOf('-');
+              const core = (separator === -1 ? withoutBuild : withoutBuild.slice(0, separator))
+                .split('.')
+                .map(Number);
+              const prerelease = separator === -1
+                ? null
+                : withoutBuild.slice(separator + 1).split('.');
+              return { core, prerelease };
+            };
+            const compareSemver = (left, right) => {
+              const a = parseSemver(left);
+              const b = parseSemver(right);
+              for (let index = 0; index < 3; index += 1) {
+                if (a.core[index] !== b.core[index]) return a.core[index] - b.core[index];
+              }
+              if (a.prerelease === null) return b.prerelease === null ? 0 : 1;
+              if (b.prerelease === null) return -1;
+              const length = Math.max(a.prerelease.length, b.prerelease.length);
+              for (let index = 0; index < length; index += 1) {
+                const aPart = a.prerelease[index];
+                const bPart = b.prerelease[index];
+                if (aPart === undefined) return -1;
+                if (bPart === undefined) return 1;
+                if (aPart === bPart) continue;
+                const aNumeric = /^[0-9]+$/.test(aPart);
+                const bNumeric = /^[0-9]+$/.test(bPart);
+                if (aNumeric && bNumeric) return Number(aPart) - Number(bPart);
+                if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
+                return aPart.localeCompare(bPart);
+              }
+              return 0;
+            };
+
+            if (currentManifestAsset) {
+              const currentResponse = await github.request(
+                'GET /repos/{owner}/{repo}/releases/assets/{asset_id}',
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: currentManifestAsset.id,
+                  headers: { accept: 'application/octet-stream' },
+                },
+              );
+              const currentManifest = JSON.parse(
+                Buffer.from(currentResponse.data).toString('utf8'),
+              );
+              if (compareSemver(manifest.version, currentManifest.version) < 0) {
+                core.info(
+                  `Keeping newer beta feed ${currentManifest.version}; published ${manifest.version}`,
+                );
+                return;
+              }
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: currentManifestAsset.id,
+              });
+            }
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: betaFeed.id,
+              name: 'latest.json',
+              data: manifestData,
+              headers: {
+                'content-type': 'application/json',
+                'content-length': manifestData.length,
+              },
+            });

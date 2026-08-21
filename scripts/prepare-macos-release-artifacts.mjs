@@ -19,9 +19,7 @@ const releaseTag =
 const version =
   process.env.AIPASS_RELEASE_VERSION ?? releaseTag?.replace(/^v/, "");
 const repository = requiredEnv("GITHUB_REPOSITORY");
-const assetsBaseUrl = (
-  process.env.AIPASS_ASSETS_BASE_URL ?? "https://assets.aipass.alkinum.io"
-).replace(/\/+$/, "");
+const downloadBaseUrl = `https://github.com/${repository}/releases/download`;
 const requireUniversal = isTruthy(process.env.AIPASS_REQUIRE_UNIVERSAL);
 
 if (!releaseTag?.startsWith("v")) {
@@ -85,7 +83,7 @@ await copyFile(dmgFiles.at(-1), dmgAlias);
 
 const archiveName = basename(updaterArchive);
 const signature = (await readFile(signatureFile, "utf8")).trim();
-const archiveUrl = assetsReleaseUrl(assetsBaseUrl, releaseTag, archiveName);
+const archiveUrl = `${downloadBaseUrl}/${encodeURIComponent(releaseTag)}/${encodeURIComponent(archiveName)}`;
 const platform = { url: archiveUrl, signature };
 const updateManifest = {
   version,
@@ -140,10 +138,6 @@ async function listFiles(dir) {
     }
   }
   return files;
-}
-
-function assetsReleaseUrl(baseUrl, tag, name) {
-  return `${baseUrl}/releases/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
 }
 
 async function selectBundleFile(files) {

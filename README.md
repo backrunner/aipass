@@ -70,13 +70,32 @@ Desktop bundle:
 pnpm --filter @aipass/desktop bundle
 ```
 
-Release artifacts are produced by the `Release` GitHub Actions workflow on stable `vX.Y.Z` tags or manual dispatch with an existing tag. The desktop release path fully supports macOS first: it builds a universal Tauri app, signs and notarizes the `.app`/DMG, creates Tauri updater artifacts, and uploads `latest.json` plus the versioned bundles to GitHub Releases. Publishing the draft GitHub Release makes `https://github.com/<owner>/<repo>/releases/latest/download/latest.json` available to the in-app updater.
+Release artifacts are produced by the `Release` GitHub Actions workflow on `vX.Y.Z` (official) or `vX.Y.Z-beta.N` (beta) tag pushes, or by manual dispatch with an existing tag. The desktop release path fully supports macOS first: it stamps the tag version into the workspace manifests, builds a universal Tauri app, signs and notarizes the `.app`/DMG, creates Tauri updater artifacts, and publishes everything to GitHub Releases. The in-app updater reads `latest.json` from two GitHub Releases feeds:
+
+```text
+Official: https://github.com/backrunner/aipass/releases/latest/download/latest.json
+Beta:     https://github.com/backrunner/aipass/releases/download/beta/latest.json
+```
+
+Official releases become GitHub's latest release. Beta releases are marked as prereleases, and the workflow keeps a rolling `beta` tag release whose `latest.json` is replaced whenever a newer version (beta or official) is published. Users pick the channel in Settings → Updates; builds whose version contains `-` default to Beta.
 
 Required macOS release secrets:
 
-- `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` for the Developer ID Application certificate. `CSC_LINK` and `CSC_KEY_PASSWORD` are accepted as fallbacks for compatibility with the Iconwiz release setup.
-- `APPLE_API_KEY_BASE64`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER` for Apple notarization.
-- `TAURI_SIGNING_PRIVATE_KEY`, optional `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and `TAURI_SIGNING_PUBLIC_KEY` for updater artifact signatures.
+- `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` for the Developer ID Application certificate. `CSC_LINK` and `CSC_KEY_PASSWORD` are accepted as fallbacks.
+- `APPLE_SIGNING_IDENTITY` for the Developer ID Application identity used to sign the app.
+- `APPLE_TEAM_ID` for the Apple Developer team ID; the signed app's TeamIdentifier is verified against it.
+- Notarization accepts either an App Store Connect API key (preferred): `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_BASE64` (base64-encoded `AuthKey_<KEY_ID>.p8`) — all three together. Or Apple ID credentials: `APPLE_ID` and `APPLE_PASSWORD` (app-specific password) — both together. The Tauri bundler notarizes the `.app` with the same credentials; the DMG is notarized and stapled explicitly by the workflow.
+- `TAURI_SIGNING_PRIVATE_KEY` and optional `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for updater artifact signatures. The matching public key is committed in `apps/desktop/src-tauri/tauri.conf.json`; the optional `TAURI_SIGNING_PUBLIC_KEY` secret only overrides it for a build.
+
+Release procedure:
+
+1. Ensure CI is green on `main` and the workspace versions (`package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, `Cargo.toml`) agree with each other.
+2. Create and push a `vX.Y.Z` tag for an official release or a `vX.Y.Z-beta.N` tag for a beta release, or run the `Release` workflow manually with an existing tag and channel.
+3. The workflow validates the tag, builds and notarizes the macOS desktop app, packages the CLI and extension, and assembles a draft GitHub Release.
+4. The publish step rewrites `latest.json` to point at the release assets, verifies both `darwin-aarch64` and `darwin-x86_64` updater entries and signatures, then publishes: official releases become the latest release, beta releases are marked prerelease.
+5. After publication, the rolling `beta` feed is refreshed when the new version is semver-newer than the current Beta feed.
+
+The workflow refuses to overwrite an already published tag; rerun only while the release is still a draft.
 
 CLI example:
 
