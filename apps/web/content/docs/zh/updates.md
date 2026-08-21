@@ -10,7 +10,7 @@ order: 8
 AIPass 通过两个渠道发布，均经由 GitHub Releases 分发，并使用 Tauri updater 消费：
 
 - **官方（Official）** —— 标记为 `vX.Y.Z` 的稳定版本。更新订阅源：`https://github.com/backrunner/aipass/releases/latest/download/latest.json`，始终指向最新的稳定版本。
-- **Beta** —— 供早期测试的滚动预发布版本，以 `beta` 预发布形式发布在同一仓库。更新订阅源：`https://github.com/backrunner/aipass/releases/download/beta/latest.json`。Beta 构建可能包含未完成的功能。
+- **Beta** —— 供早期测试的滚动预发布版本，以预发布形式发布在同一仓库。更新订阅源：`https://aipass.alkinum.io/api/updates/beta/latest.json`，由站点 Worker 解析为最新预发布版本的更新清单。Beta 构建可能包含未完成的功能。
 
 每个订阅源都是随对应 GitHub Release 一起发布的更新清单；构建产物经过签名，应用在安装前会验证签名。
 
@@ -40,4 +40,4 @@ AIPass 通过两个渠道发布，均经由 GitHub Releases 分发，并使用 T
 
 ## 面向发布维护者
 
-两个订阅源都只是名为 `latest.json` 的 GitHub Releases 资产——官方订阅源借助 GitHub 的 `latest` 别名，Beta 订阅源挂在 `beta` 标签上。发布新版本（或更新 `beta` 预发布）就会为该渠道的所有已安装应用更新订阅源；无需运行独立的更新服务器。
+两个渠道都由随 GitHub Release 发布的 `latest.json` 更新清单驱动——官方订阅源借助 GitHub 的 `latest` 别名，Beta 订阅源由本站 Worker 读取最新预发布版本并返回其清单。发布新版本即会为该渠道的所有已安装应用更新订阅源；无需运行独立的更新服务器，也无需维护无版本号的 `beta` 标签。

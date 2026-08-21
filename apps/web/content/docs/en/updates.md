@@ -10,7 +10,7 @@ order: 8
 AIPass ships on two channels, both distributed through GitHub Releases and consumed with the Tauri updater:
 
 - **Official** — stable releases tagged `vX.Y.Z`. Update feed: `https://github.com/backrunner/aipass/releases/latest/download/latest.json`, which always points at the newest stable release.
-- **Beta** — rolling prereleases for early testing, published as a `beta` pre-release on the same repository. Update feed: `https://github.com/backrunner/aipass/releases/download/beta/latest.json`. Beta builds may contain unfinished features.
+- **Beta** — rolling prereleases for early testing, published as prereleases on the same repository. Update feed: `https://aipass.alkinum.io/api/updates/beta/latest.json`, which resolves to the update manifest of the newest published prerelease. Beta builds may contain unfinished features.
 
 Each feed is an update manifest published alongside its GitHub Release; the artifacts are signed, and the app verifies the signature before installing anything.
 
@@ -40,4 +40,4 @@ The [download section](/) on this site always prefers the newest **official** re
 
 ## For release maintainers
 
-Both feeds are just GitHub Releases assets named `latest.json` — the official feed rides GitHub's `latest` alias, the beta feed lives on the `beta` tag. Publishing a new release (or updating the `beta` pre-release) updates the corresponding feed for every installed app on that channel; there is no separate update server to run.
+Both channels are driven by update manifests named `latest.json` published as GitHub Releases assets — the official feed rides GitHub's `latest` alias, while the beta feed is served by this site's Worker, which reads the newest published prerelease and returns its manifest. Publishing a release updates the corresponding feed for every installed app on that channel; there is no separate update server to run and no versionless `beta` tag to maintain.

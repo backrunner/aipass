@@ -31,6 +31,7 @@ Verify these URLs after the certificate becomes active:
 - `https://aipass.alkinum.io/sitemap.xml`
 - `https://aipass.alkinum.io/robots.txt`
 - `https://aipass.alkinum.io/api/releases`
+- `https://aipass.alkinum.io/api/updates/beta/latest.json`
 
 ## Later deployments
 
@@ -42,9 +43,9 @@ Run `pnpm --filter @aipass/web run deploy:check` to validate a deployment locall
 
 The landing page reads `/api/releases` from the same origin, then selects a release with channel priority: the newest **official** (non-prerelease) release with a macOS `.dmg` wins; only when none exists does it fall back to the newest **beta** prerelease with a matching package. The download buttons link directly to the asset's `browser_download_url`, and the channel is labeled next to the version number.
 
-The Worker fetches GitHub's public Releases API, keeps a five-minute edge cache, and retains a 24-hour fallback cache for temporary GitHub failures.
+The Worker fetches GitHub's public Releases API, keeps a five-minute edge cache, and retains a 24-hour fallback cache for temporary GitHub failures. A second endpoint, `/api/updates/beta/latest.json`, resolves the newest published prerelease and returns its `latest.json` asset — this is the beta channel's update feed, so no rolling `beta` tag exists on the repository.
 
-Static assets bypass the Worker. Only `/api/releases` uses Worker-first routing, keeping the site inexpensive and cache-friendly.
+Static assets bypass the Worker. Only `/api/releases` and `/api/updates/*` use Worker-first routing, keeping the site inexpensive and cache-friendly.
 
 Do not add a GitHub token to the frontend or to a public Worker variable. The repository and downloadable release assets must remain publicly readable for anonymous website downloads. If both GitHub and the fallback cache are unavailable, the landing page links to GitHub Releases instead of reporting that no package exists.
 

@@ -15,7 +15,7 @@
   "assets": {
     "directory": "./build",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/releases"]
+    "run_worker_first": ["/api/releases", "/api/updates/*"]
   },
   "observability": {
     "enabled": true,
