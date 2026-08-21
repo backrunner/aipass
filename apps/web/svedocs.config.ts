@@ -26,7 +26,7 @@ export default defineConfig({
       mono: 'ui-monospace, "SFMono-Regular", "Cascadia Code", monospace',
       display: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     },
-    radius: '8px',
+    radius: '10px',
     codeTheme: {
       light: 'github-light',
       dark: 'github-dark'

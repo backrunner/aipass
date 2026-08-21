@@ -1,9 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FontAwesomeIcon } from '@fortawesome/svelte-fontawesome';
-  import { faApple } from '@fortawesome/free-brands-svg-icons/faApple';
-  import { faWindows } from '@fortawesome/free-brands-svg-icons/faWindows';
-  import { Download, ExternalLink, LoaderCircle, MonitorDown } from 'lucide-svelte';
+  import { ArrowUpRight, Download, MonitorDown } from 'lucide-svelte';
 
   interface ReleaseAsset {
     name: string;
@@ -19,9 +16,6 @@
     assets: ReleaseAsset[];
   }
 
-  type MacArch = 'mac-arm' | 'mac-intel';
-  type Platform = 'macos' | 'windows';
-
   const releasesApiUrl = '/api/releases';
   const releasesUrl = 'https://github.com/backrunner/aipass/releases';
 
@@ -29,46 +23,26 @@
 
   const messages = {
     en: {
-      official: 'Official',
-      beta: 'Beta',
-      latest: 'Latest release',
-      checkingAria: 'Checking latest release',
-      ready: 'Direct downloads from the latest GitHub release.',
-      readyBeta: 'No official release is published yet. These are the newest beta builds.',
       empty: 'No compatible macOS release package is available yet.',
       error: 'We could not check release packages right now.',
-      loading: 'Checking GitHub for the newest release packages.',
-      notes: 'Changelog',
       mobileEyebrow: 'Desktop only',
       mobileTitle: 'Continue on your computer',
       mobileDescription: 'AIPass does not have a mobile app. Open aipass.alkinum.io on your Mac to download and use the desktop app. Windows support is coming soon.',
-      platformAria: 'Choose a download platform',
-      downloadSilicon: 'Download for Apple silicon',
-      downloadIntel: 'Download for Intel',
+      downloadMac: 'Download for macOS',
+      macOnlyNote: 'macOS only for now — Windows coming soon.',
       unavailable: 'No package in this release',
-      viewReleases: 'View GitHub Releases',
-      windowsPreview: 'Windows builds are in preparation.'
+      otherReleases: 'Other releases'
     },
     zh: {
-      official: '正式版',
-      beta: '测试版',
-      latest: '最新版本',
-      checkingAria: '正在检查最新版本',
-      ready: '以下安装包来自最新的 GitHub Release，可直接下载。',
-      readyBeta: '正式版尚未发布，以下为最新的测试版安装包。',
       empty: '暂时没有可用的 macOS Release 安装包。',
       error: '暂时无法检查 Release 安装包。',
-      loading: '正在检查最新的 Release 安装包。',
-      notes: '更新记录',
       mobileEyebrow: '仅支持桌面端',
       mobileTitle: '请在电脑上继续',
       mobileDescription: 'AIPass 暂无移动端应用。请在 Mac 上访问 aipass.alkinum.io，下载并使用桌面版；Windows 版本正在准备中。',
-      platformAria: '选择下载平台',
-      downloadSilicon: '下载 Apple 芯片版',
-      downloadIntel: '下载 Intel 版',
+      downloadMac: '下载 macOS 版',
+      macOnlyNote: '目前仅支持 macOS —— Windows 版本即将推出。',
       unavailable: '该版本没有此安装包',
-      viewReleases: '查看 GitHub Releases',
-      windowsPreview: 'Windows 版本正在准备中。'
+      otherReleases: '其他版本'
     }
   } as const;
 
@@ -76,17 +50,20 @@
 
   let state: 'loading' | 'ready' | 'empty' | 'error' = 'loading';
   let release: GithubRelease | null = null;
-  let selectedPlatform: Platform = 'macos';
+  // Default to macOS styling for SSR; refined on mount from the visitor's OS.
+  let isMac = true;
 
-  $: isBeta = release?.prerelease === true;
-  $: channelLabel = isBeta ? copy.beta : copy.official;
-  $: siliconAsset = release ? selectAsset(release.assets, 'mac-arm') : undefined;
-  $: intelAsset = release ? selectAsset(release.assets, 'mac-intel') : undefined;
+  $: macAsset = release ? selectAsset(release.assets) : undefined;
 
   onMount(() => {
-    if (navigator.platform.toLowerCase().includes('win')) selectedPlatform = 'windows';
+    isMac = detectMac();
     void loadAvailableRelease();
   });
+
+  function detectMac(): boolean {
+    const platform = navigator.platform?.toLowerCase() ?? '';
+    return platform.startsWith('mac') || navigator.userAgent.includes('Macintosh');
+  }
 
   async function loadAvailableRelease() {
     state = 'loading';
@@ -106,24 +83,17 @@
   // package wins; only when none exists do we fall back to the newest beta
   // prerelease with a matching package.
   function pickRelease(releases: GithubRelease[]): GithubRelease | null {
-    const withAsset = (candidate: GithubRelease) =>
-      Boolean(selectAsset(candidate.assets, 'mac-arm') || selectAsset(candidate.assets, 'mac-intel'));
+    const withAsset = (candidate: GithubRelease) => Boolean(selectAsset(candidate.assets));
     return releases.find((candidate) => !candidate.prerelease && withAsset(candidate))
       ?? releases.find((candidate) => candidate.prerelease && withAsset(candidate))
       ?? null;
   }
 
-  function selectAsset(assets: ReleaseAsset[], arch: MacArch): ReleaseAsset | undefined {
-    const candidates = assets.filter((candidate) => {
-      const name = candidate.name.toLowerCase();
-      return name.endsWith('.dmg');
-    });
-
-    const archPattern = arch === 'mac-arm' ? /(aarch64|arm64)/i : /(x64|x86_64)/i;
+  // We ship a single universal macOS DMG. Prefer an explicitly universal
+  // asset, otherwise fall back to any DMG attached to the release.
+  function selectAsset(assets: ReleaseAsset[]): ReleaseAsset | undefined {
+    const candidates = assets.filter((candidate) => candidate.name.toLowerCase().endsWith('.dmg'));
     return (
-      candidates.find((candidate) => archPattern.test(candidate.name)) ??
-      // Universal or platform-agnostic DMGs (e.g. AIPass_<version>_universal.dmg,
-      // AIPass-macOS.dmg) serve both architectures.
       candidates.find((candidate) => /universal/i.test(candidate.name)) ??
       candidates[0]
     );
@@ -143,111 +113,52 @@
     </div>
   </div>
 
-  <div class="release-meta">
-    <p class="eyebrow channel-badge" data-channel={isBeta ? 'beta' : 'official'}>{channelLabel}</p>
-    <div class="version-line">
-      <h2>{release?.tag_name ?? copy.latest}</h2>
-      {#if state === 'loading'}
-        <span class="spin"><LoaderCircle size={16} aria-label={copy.checkingAria} /></span>
-      {/if}
-    </div>
-    <p class="release-copy">
-      {#if state === 'ready'}
-        {isBeta ? copy.readyBeta : copy.ready}
-      {:else if state === 'empty'}
-        {copy.empty}
-      {:else if state === 'error'}
-        {copy.error}
-      {:else}
-        {copy.loading}
-      {/if}
-    </p>
-    {#if release}
-      <a class="changelog-link" href={release.html_url} target="_blank" rel="noreferrer">
-        {copy.notes}
-        <ExternalLink size={12} />
-      </a>
-    {/if}
-  </div>
-
-  <div class="release-body">
-    <div class="platform-switch" role="group" aria-label={copy.platformAria}>
-      <button
-        type="button"
-        class:active={selectedPlatform === 'macos'}
-        aria-pressed={selectedPlatform === 'macos'}
-        on:click={() => selectedPlatform = 'macos'}
-      >
-        <FontAwesomeIcon icon={faApple} fixedWidth style="width: 15px; height: 15px;" />
-        <span>macOS</span>
-      </button>
-      <button
-        type="button"
-        class:active={selectedPlatform === 'windows'}
-        aria-pressed={selectedPlatform === 'windows'}
-        on:click={() => selectedPlatform = 'windows'}
-      >
-        <FontAwesomeIcon icon={faWindows} fixedWidth style="width: 14px; height: 14px;" />
-        <span>Windows</span>
-      </button>
-    </div>
-
-    {#if selectedPlatform === 'windows'}
-      <div class="platform-note">
-        <p>{copy.windowsPreview}</p>
-        <a href={releasesUrl} target="_blank" rel="noreferrer">
-          {copy.viewReleases}
-          <ExternalLink size={12} />
-        </a>
-      </div>
-    {:else if state === 'loading'}
-      <div class="download-group" aria-hidden="true">
-        <div class="download-button skeleton"></div>
-        <div class="download-button skeleton"></div>
-      </div>
+  <div class="release-desktop">
+    {#if state === 'loading'}
+      <div class="download-button skeleton" aria-hidden="true"></div>
     {:else if state === 'error'}
-      <div class="platform-note">
-        <a href={releasesUrl} target="_blank" rel="noreferrer">
-          {copy.viewReleases}
-          <ExternalLink size={12} />
-        </a>
-      </div>
+      <p class="release-note">
+        {copy.error}
+        <a href={releasesUrl} target="_blank" rel="noreferrer">{copy.otherReleases} <ArrowUpRight size={12} /></a>
+      </p>
+    {:else if macAsset}
+      <a
+        class="download-button"
+        class:deemphasized={!isMac}
+        href={macAsset.browser_download_url}
+        download={macAsset.name}
+      >
+        <Download size={16} />
+        <strong>{copy.downloadMac}</strong>
+        <small>{release?.tag_name}</small>
+      </a>
+      {#if !isMac}
+        <p class="mac-only-note">{copy.macOnlyNote}</p>
+      {/if}
+      <a class="other-releases" href={releasesUrl} target="_blank" rel="noreferrer">
+        {copy.otherReleases}
+        <ArrowUpRight size={12} />
+      </a>
     {:else}
-      <div class="download-group">
-        {#if siliconAsset}
-          <a class="download-button primary" href={siliconAsset.browser_download_url} download={siliconAsset.name}>
-            <Download size={16} />
-            <span>
-              <strong>{copy.downloadSilicon}</strong>
-              <small>{release?.tag_name}</small>
-            </span>
-          </a>
-        {:else}
-          <span class="download-button disabled">{copy.unavailable}</span>
-        {/if}
-        {#if intelAsset}
-          <a class="download-button secondary" href={intelAsset.browser_download_url} download={intelAsset.name}>
-            <Download size={16} />
-            <span>
-              <strong>{copy.downloadIntel}</strong>
-              <small>{release?.tag_name}</small>
-            </span>
-          </a>
-        {:else}
-          <span class="download-button disabled">{copy.unavailable}</span>
-        {/if}
-      </div>
+      <p class="release-note">
+        {state === 'empty' ? copy.empty : copy.unavailable}
+        <a href={releasesUrl} target="_blank" rel="noreferrer">{copy.otherReleases} <ArrowUpRight size={12} /></a>
+      </p>
     {/if}
   </div>
 </div>
 
 <style>
   .release-tool {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-    gap: 3rem;
     width: min(1120px, calc(100% - 2rem));
     margin: 0 auto;
+  }
+
+  .release-desktop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .9rem;
   }
 
   .mobile-guidance {
@@ -264,7 +175,7 @@
     width: 2.75rem;
     height: 2.75rem;
     border: 1px solid var(--ap-line);
-    border-radius: 7px;
+    border-radius: 10px;
     background: var(--ap-bg);
     color: var(--ap-ink);
   }
@@ -282,209 +193,116 @@
     color: var(--ap-faint);
     font: 700 .68rem/1 var(--font-mono);
     text-transform: uppercase;
-    letter-spacing: 0;
-  }
-
-  .channel-badge {
-    display: inline-block;
-    width: max-content;
-    padding: .3rem .55rem;
-    border: 1px solid color-mix(in srgb, var(--ap-primary) 35%, transparent);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--ap-primary) 8%, transparent);
-    color: var(--ap-primary);
-  }
-
-  .channel-badge[data-channel='beta'] {
-    border-color: color-mix(in srgb, var(--ap-accent-2) 40%, transparent);
-    background: color-mix(in srgb, var(--ap-accent-2) 10%, transparent);
-    color: var(--ap-accent-2);
-  }
-
-  .version-line {
-    display: flex;
-    align-items: center;
-    gap: .6rem;
+    letter-spacing: .04em;
   }
 
   h2 {
     margin: 0;
-    font: 650 1.5rem/1.2 var(--sd-font-display);
-    letter-spacing: 0;
-  }
-
-  .release-copy {
-    margin: .45rem 0 0;
-    color: var(--ap-muted);
-    font-size: .86rem;
-    line-height: 1.6;
-  }
-
-  .changelog-link {
-    display: inline-flex;
-    align-items: center;
-    gap: .3rem;
-    margin-top: .8rem;
-    color: var(--ap-link);
-    font-size: .78rem;
-    font-weight: 600;
-    text-decoration: none;
-  }
-
-  .changelog-link:hover { text-decoration: underline; text-underline-offset: .18em; }
-
-  .release-body {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .platform-switch {
-    display: inline-flex;
-    align-self: flex-start;
-    padding: .2rem;
-    border: 1px solid var(--ap-line);
-    border-radius: 7px;
-    background: var(--ap-band);
-  }
-
-  .platform-switch button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: .45rem;
-    min-height: 1.9rem;
-    padding: 0 .8rem;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--ap-muted);
-    font: 600 .78rem/1 var(--sd-font-sans);
-    cursor: pointer;
-    transition: background 160ms ease, color 160ms ease;
-  }
-
-  .platform-switch button.active {
-    background: var(--ap-bg);
-    color: var(--ap-ink);
-    box-shadow: 0 1px 2px color-mix(in srgb, var(--ap-shadow) 10%, transparent);
-  }
-
-  .download-group {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .6rem;
+    font: 650 1.4rem/1.25 var(--sd-font-display);
+    letter-spacing: -.01em;
   }
 
   .download-button {
-    display: flex;
-    align-items: center;
-    gap: .6rem;
-    min-height: 3.25rem;
-    padding: .65rem .9rem;
-    border-radius: 6px;
-    font-size: .8rem;
-    text-decoration: none;
-    transition: opacity 160ms ease, background 160ms ease;
-  }
-
-  .download-button.primary {
-    background: var(--ap-primary);
-    color: var(--ap-primary-foreground);
-  }
-
-  .download-button.secondary {
-    border: 1px solid var(--ap-line);
-    background: var(--ap-bg);
-    color: var(--ap-ink);
-  }
-
-  .download-button.primary:hover { opacity: .88; }
-  .download-button.secondary:hover { background: var(--ap-band); }
-
-  .download-button span { min-width: 0; }
-
-  .download-button strong {
-    display: block;
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-  }
-
-  .download-button small {
-    display: block;
-    margin-top: .1rem;
-    font-size: .66rem;
-    font-weight: 400;
-    line-height: 1.35;
-    opacity: .68;
-    overflow-wrap: anywhere;
-  }
-
-  .download-button.disabled {
-    justify-content: center;
-    border: 1px dashed var(--ap-line);
-    color: var(--ap-faint);
-    font-size: .76rem;
-  }
-
-  .download-button.skeleton {
-    border: 1px solid var(--ap-line);
-    background: var(--ap-bg);
-  }
-
-  .platform-note {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    min-height: 3.25rem;
-    padding: 0 .2rem;
-    color: var(--ap-muted);
-    font-size: .8rem;
-  }
-
-  .platform-note p { margin: 0; }
-
-  .platform-note a {
     display: inline-flex;
     align-items: center;
-    gap: .3rem;
+    gap: .55rem;
+    min-height: 2.9rem;
+    padding: 0 1.3rem;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: var(--ap-primary);
+    color: var(--ap-primary-foreground);
+    font-size: .9rem;
+    text-decoration: none;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+    transition: background 160ms ease, transform 120ms ease-out;
+  }
+
+  .download-button:hover { background: color-mix(in srgb, var(--ap-primary) 88%, var(--ap-ink)); }
+  .download-button:active { transform: scale(.98); }
+
+  .download-button.deemphasized {
+    border-color: var(--ap-line);
+    background: var(--ap-surface);
+    color: var(--ap-ink);
+    box-shadow: none;
+  }
+
+  .download-button.deemphasized:hover { background: var(--ap-glass-hover); }
+
+  .download-button strong { font-weight: 600; }
+
+  .download-button small {
+    padding-left: .55rem;
+    border-left: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    font-size: .72rem;
+    font-weight: 400;
+    font-family: var(--font-mono);
+    opacity: .78;
+  }
+
+  .mac-only-note {
+    margin: -.2rem 0 0;
+    color: var(--ap-muted);
+    font-size: .78rem;
+  }
+
+  .other-releases {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    color: var(--ap-muted);
+    font-size: .78rem;
+    text-decoration: none;
+  }
+
+  .other-releases:hover { color: var(--ap-link); }
+
+  .release-note {
+    display: inline-flex;
+    align-items: center;
+    gap: .6rem;
+    margin: 0;
+    color: var(--ap-muted);
+    font-size: .82rem;
+  }
+
+  .release-note a {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
     color: var(--ap-link);
     font-weight: 600;
     text-decoration: none;
     white-space: nowrap;
   }
 
-  .platform-note a:hover { text-decoration: underline; text-underline-offset: .18em; }
+  .release-note a:hover { text-decoration: underline; text-underline-offset: .18em; }
 
-  .spin {
-    display: inline-flex;
-    color: var(--ap-muted);
-    animation: spin 900ms linear infinite;
+  .download-button.skeleton {
+    width: 15rem;
+    border: 1px solid var(--ap-line);
+    background: transparent;
+    box-shadow: none;
+    animation: skeleton-pulse 1.4s ease-in-out infinite;
   }
 
-  @keyframes spin {
-    to { transform: rotate(360deg); }
+  @keyframes skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .45; }
   }
 
   @media (max-width: 820px), (hover: none) and (pointer: coarse) {
-    .release-tool {
-      display: block;
-    }
-
-    .release-meta,
-    .release-body { display: none; }
-
+    .release-desktop { display: none; }
     .mobile-guidance { display: flex; }
   }
 
   @media (max-width: 580px) {
     .release-tool { width: calc(100% - 1rem); }
-    .download-group { grid-template-columns: 1fr; }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .spin { animation: none; }
-    .platform-switch button,
+    .download-button.skeleton { animation: none; opacity: .6; }
     .download-button { transition: none; }
   }
 </style>
