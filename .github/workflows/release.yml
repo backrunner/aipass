@@ -485,13 +485,24 @@ jobs:
         with:
           script: |
             const tag = process.env.RELEASE_TAG;
-            const release = (
-              await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag,
-              })
-            ).data;
+            // The releases/tags read can hit a lagging replica right after the
+            // draft is created, so retry briefly before giving up.
+            let release;
+            for (let attempt = 0; attempt < 5; attempt += 1) {
+              try {
+                release = (
+                  await github.rest.repos.getReleaseByTag({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    tag,
+                  })
+                ).data;
+                break;
+              } catch (error) {
+                if (error.status !== 404 || attempt === 4) throw error;
+                await new Promise((resolve) => setTimeout(resolve, 5000));
+              }
+            }
             if (!release.draft) {
               core.setFailed(`${tag} is already published`);
               return;
