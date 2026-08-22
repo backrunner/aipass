@@ -69,6 +69,10 @@ const KEY_PAGE_TEXT_SCAN_LIMIT = 80;
 const FILL_TARGET_SCAN_LIMIT = 120;
 const MUTATION_SCAN_DEBOUNCE_MS = 800;
 const MUTATION_SCAN_MIN_INTERVAL_MS = 2500;
+const DISCOVERY_SCAN_INITIAL_DELAY_MS = 5_000;
+const DISCOVERY_SCAN_MAX_DELAY_MS = 60_000;
+const DISCOVERY_SCAN_MAX_ATTEMPTS = 8;
+const DISCOVERY_SCAN_MAX_DURATION_MS = 5 * 60_000;
 const FRAMEWORK_SCAN_MIN_INTERVAL_MS = 2500;
 const CLIPBOARD_EVENT_DEDUP_MS = 100;
 const CLIPBOARD_INTERACTION_TTL_MS = 3_000;
@@ -95,6 +99,11 @@ let draftScanInFlight = false;
 let draftScanQueued = false;
 let lastDraftScanStartedAt = 0;
 let lastFrameworkScanRequestedAt = 0;
+let draftMutationObserver: MutationObserver | undefined;
+let draftMutationObservationEnabled = false;
+let discoveryScanTimer: ReturnType<typeof setTimeout> | undefined;
+let discoveryScanAttempts = 0;
+let discoveryScanStartedAt = 0;
 let debugEnabledCache: boolean | undefined;
 let lastClipboardInteraction: { element: Element; at: number } | undefined;
 
@@ -552,7 +561,11 @@ function recognizePage(doc: Document): PageRecognition {
     matchProviderByDomain(location.hostname) ??
     (signature?.id ? providerDefinitions.find((item) => item.id === signature.id) : undefined) ??
     endpointProvider;
-  const endpoint = endpointForProvider(provider, detectedEndpoint, location.origin);
+  // Do not synthesize origin/v1 for an unrecognized page. That fallback is
+  // useful when building a draft for a known token route, but it must not make
+  // every ordinary HTTP page look like an AI gateway to the mutation policy.
+  const endpoint =
+    detectedEndpoint || provider ? endpointForProvider(provider, detectedEndpoint, location.origin) : undefined;
   const siteName = siteNameFromDocumentTitle(doc.title, signature, provider);
   const tokenPage = SELF_HOSTED_TOKEN_PATH_PATTERN.test(currentPageRoute()) || hasSelfHostedKeyPageText(doc);
   const aiGatewayEvidence = Boolean(provider) || Boolean(signature) || hasAiGatewayEvidence(doc, endpoint);
@@ -804,11 +817,20 @@ async function sendDraftIfAllowed() {
   if (typeof document === "undefined" || typeof chrome === "undefined") return;
   const exclusion = currentSecretCaptureExclusion();
   if (exclusion) {
+    stopDiscoveryScan("excluded page");
+    stopDraftMutationObserver("excluded page");
     debugLog("scan: skipped excluded page", { reason: exclusion, ...pageDebugContext() });
     return;
   }
   debugLog("scan: start", pageDebugContext());
   const detection = detectDraftsFromDocument(document);
+  if (shouldObserveDraftMutations(detection.recognition)) {
+    stopDiscoveryScan("target page recognized");
+    installDraftMutationObserver();
+  } else {
+    stopDraftMutationObserver("page not recognized");
+    scheduleDiscoveryScan();
+  }
   announceSecretCapturePolicy(detection.recognition);
   debugLog("scan: result", {
     ...recognitionDebugContext(detection.recognition),
@@ -1808,7 +1830,6 @@ if (initialSecretCaptureExclusion) {
 } else {
   announceDebugModeToPageWorld();
   announceSecretCapturePolicy(recognizePage(document));
-  installDraftMutationObserver();
   installClipboardSecretListener();
   void runDraftScan();
 }
@@ -1889,15 +1910,19 @@ function installDraftMutationObserver() {
     typeof chrome === "undefined" ||
     typeof document === "undefined" ||
     currentSecretCaptureExclusion() ||
-    mutationObserverAlreadyInstalled()
+    mutationObserverAlreadyInstalled() ||
+    draftMutationObservationEnabled
   ) {
     return;
   }
+  if (typeof MutationObserver === "undefined") return;
+  draftMutationObservationEnabled = true;
   markMutationObserverInstalled();
   debugLog("mutation observer installing");
   const observer = new MutationObserver(() => scheduleDraftScan());
+  draftMutationObserver = observer;
   const start = () => {
-    if (!document.body) return;
+    if (!document.body || !draftMutationObservationEnabled) return;
     observer.observe(document.body, {
       childList: true,
       subtree: true,
@@ -1913,7 +1938,7 @@ function installDraftMutationObserver() {
 }
 
 function scheduleDraftScan() {
-  if (currentSecretCaptureExclusion()) return;
+  if (!draftMutationObservationEnabled || currentSecretCaptureExclusion()) return;
   if (draftScanInFlight) {
     draftScanQueued = true;
     debugLog("scan: queued while running");
@@ -1947,6 +1972,69 @@ async function runDraftScan() {
       scheduleDraftScan();
     }
   }
+}
+
+function scheduleDiscoveryScan() {
+  if (
+    draftMutationObservationEnabled ||
+    discoveryScanTimer !== undefined ||
+    currentSecretCaptureExclusion()
+  ) {
+    return;
+  }
+  if (!discoveryScanStartedAt) discoveryScanStartedAt = Date.now();
+  const elapsed = Date.now() - discoveryScanStartedAt;
+  if (discoveryScanAttempts >= DISCOVERY_SCAN_MAX_ATTEMPTS || elapsed >= DISCOVERY_SCAN_MAX_DURATION_MS) {
+    debugLog("discovery scan stopped", {
+      attempts: discoveryScanAttempts,
+      elapsedMs: elapsed
+    });
+    return;
+  }
+  const delay = Math.min(
+    DISCOVERY_SCAN_INITIAL_DELAY_MS * 2 ** discoveryScanAttempts,
+    DISCOVERY_SCAN_MAX_DELAY_MS
+  );
+  debugLog("discovery scan scheduled", {
+    attempt: discoveryScanAttempts + 1,
+    delayMs: delay
+  });
+  discoveryScanTimer = setTimeout(() => {
+    discoveryScanTimer = undefined;
+    discoveryScanAttempts += 1;
+    void runDraftScan();
+  }, delay);
+}
+
+function stopDiscoveryScan(reason: string) {
+  if (discoveryScanTimer === undefined && discoveryScanAttempts === 0 && discoveryScanStartedAt === 0) {
+    return;
+  }
+  clearTimeout(discoveryScanTimer);
+  discoveryScanTimer = undefined;
+  discoveryScanAttempts = 0;
+  discoveryScanStartedAt = 0;
+  debugLog("discovery scan stopped", { reason });
+}
+
+function shouldObserveDraftMutations(recognition: PageRecognition): boolean {
+  return Boolean(
+    recognition.provider ||
+      recognition.knownGateway ||
+      recognition.tokenPage ||
+      recognition.endpoint
+  );
+}
+
+function stopDraftMutationObserver(reason: string) {
+  if (!draftMutationObservationEnabled && !draftMutationObserver) return;
+  draftMutationObservationEnabled = false;
+  draftScanQueued = false;
+  clearTimeout(draftScanTimer);
+  draftScanTimer = undefined;
+  draftMutationObserver?.disconnect();
+  draftMutationObserver = undefined;
+  debugLog("mutation observer stopped", { reason });
 }
 
 function listenerAlreadyInstalled(): boolean {

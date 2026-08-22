@@ -1062,6 +1062,98 @@ describe("content detector", () => {
     assert.equal(sentMessages.some((message) => (message as { type?: string }).type?.startsWith("aipass.detected")), false);
   });
 
+  it("does not install a mutation observer on an unrecognized page", async () => {
+    setLocation("blog.example.test", "/posts/welcome");
+    document.title = "Welcome";
+    document.body.innerHTML = "<main><p>Nothing to detect here.</p></main>";
+    installChromeStub();
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    vi.stubGlobal(
+      "MutationObserver",
+      class TestMutationObserver {
+        observe(...args: unknown[]) {
+          observe(...args);
+        }
+
+        disconnect() {
+          disconnect();
+        }
+      }
+    );
+    delete (window as Window & { __AIPASS_CONTENT_MUTATION_OBSERVER__?: boolean })
+      .__AIPASS_CONTENT_MUTATION_OBSERVER__;
+    vi.resetModules();
+    await import("./detector");
+    await flushTimers();
+
+    assert.equal(observe.mock.calls.length, 0);
+    assert.equal(disconnect.mock.calls.length, 0);
+  });
+
+  it("rechecks an initially empty page with backoff until it becomes recognizable", async () => {
+    vi.useFakeTimers();
+    try {
+      setLocation("relay.example.test", "/home");
+      document.title = "Loading";
+      document.body.innerHTML = "<main></main>";
+      installChromeStub();
+      const observe = vi.fn();
+      vi.stubGlobal(
+        "MutationObserver",
+        class TestMutationObserver {
+          observe(...args: unknown[]) {
+            observe(...args);
+          }
+
+          disconnect() {}
+        }
+      );
+      delete (window as Window & { __AIPASS_CONTENT_MUTATION_OBSERVER__?: boolean })
+        .__AIPASS_CONTENT_MUTATION_OBSERVER__;
+      vi.resetModules();
+      await import("./detector");
+      await Promise.resolve();
+      assert.equal(observe.mock.calls.length, 0);
+
+      setLocation("relay.example.test", "/console/token");
+      document.body.innerHTML = "<main><h1>令牌</h1></main>";
+      vi.advanceTimersByTime(4_999);
+      await Promise.resolve();
+      assert.equal(observe.mock.calls.length, 0);
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+      assert.equal(observe.mock.calls.length, 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps observing recognized token routes for dynamic key rendering", async () => {
+    setLocation("relay.example.test", "/console/token");
+    document.title = "Token management";
+    document.body.innerHTML = "<main><h1>令牌</h1></main>";
+    installChromeStub();
+    const observe = vi.fn();
+    vi.stubGlobal(
+      "MutationObserver",
+      class TestMutationObserver {
+        observe(...args: unknown[]) {
+          observe(...args);
+        }
+
+        disconnect() {}
+      }
+    );
+    delete (window as Window & { __AIPASS_CONTENT_MUTATION_OBSERVER__?: boolean })
+      .__AIPASS_CONTENT_MUTATION_OBSERVER__;
+    vi.resetModules();
+    await import("./detector");
+    await flushTimers();
+
+    assert.equal(observe.mock.calls.length, 1);
+  });
+
   it("does not prompt for detected keys that are already saved", async () => {
     setLocation("openrouter.ai", "/settings/keys");
     document.title = "OpenRouter";
