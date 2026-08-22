@@ -65,6 +65,25 @@ pub(crate) fn desktop_ready(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub(crate) fn desktop_startup_stage(stage: String) -> Result<(), String> {
+    if !matches!(
+        stage.as_str(),
+        "window_revealed"
+            | "listeners_ready"
+            | "preferences_status_finished"
+            | "sync_settings_finished"
+            | "window_target_finished"
+            | "entries_finished"
+            | "server_finished"
+            | "complete"
+            | "error"
+    ) {
+        return Err("invalid desktop startup stage".to_string());
+    }
+    crate::logging::log_event("desktop.startup.stage", &[("stage", &stage)])
+}
+
+#[tauri::command]
 pub(crate) async fn vault_status(app: AppHandle) -> Result<VaultStatus, String> {
     let status = run_blocking(move || agent_status(&app)).await?;
     Ok(VaultStatus {

@@ -311,6 +311,7 @@ pub(crate) fn dispatch_swift_action(app: &AppHandle, action_id: &str) {
 }
 
 fn dispatch_action(app: &AppHandle, action_id: &str, feedback: &TrayFeedback) {
+    let _ = crate::logging::log_event("desktop.tray.action", &[("action", action_id)]);
     match action_id {
         action::OPEN => {
             if let Err(err) = open_main_window(app) {
@@ -361,6 +362,7 @@ fn install_close_to_tray(app: &App) {
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
+            let _ = crate::logging::log_event("desktop.window.close_to_tray", &[]);
             hide_main_window(&app_handle);
         }
     });
@@ -635,6 +637,8 @@ fn install_login_agent_async(app: AppHandle, feedback: TrayFeedback) {
 
 fn quit_aipass_async(app: AppHandle) {
     thread::spawn(move || {
+        let _ = crate::logging::log_event("desktop.quit.requested", &[("source", "tray")]);
+        crate::ALLOW_PROCESS_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
         #[cfg(target_os = "macos")]
         if let Ok(client) = agent_client(&app) {
             if let Err(err) =
@@ -645,6 +649,7 @@ fn quit_aipass_async(app: AppHandle) {
         }
         #[cfg(target_os = "macos")]
         crate::tray_swift::shutdown();
+        let _ = crate::logging::log_event("desktop.quit.exiting", &[]);
         app.exit(0);
     });
 }

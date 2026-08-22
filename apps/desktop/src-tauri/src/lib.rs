@@ -1,5 +1,6 @@
 mod auth_tasks;
 mod commands;
+mod logging;
 mod models;
 mod singleton;
 mod tray;
@@ -32,8 +33,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, Size};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, RunEvent, Size};
 use tauri_plugin_deep_link::DeepLinkExt;
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -57,6 +60,8 @@ struct AppState {
     auth_tasks: AuthTasks,
     window: Mutex<DesktopWindowState>,
 }
+
+pub(crate) static ALLOW_PROCESS_EXIT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct DesktopWindowState {
@@ -1645,6 +1650,8 @@ fn reveal_window_target(app: &AppHandle, target: &str) -> Result<(), String> {
 }
 
 pub(crate) fn activate_window_target(app: &AppHandle, target: &str) {
+    let target = normalize_window_target(target);
+    let _ = logging::log_event("desktop.window.target_requested", &[("target", target)]);
     let state = app.state::<AppState>();
     let mut window_state = state.window_state();
     let frontend_ready = window_state.set_target(target);
@@ -1680,6 +1687,7 @@ pub(crate) fn reveal_existing_window_target(app: &AppHandle, target: &str) -> bo
 }
 
 pub(crate) fn complete_desktop_startup(app: &AppHandle) -> Result<(), String> {
+    let _ = logging::log_event("desktop.frontend.ready", &[]);
     let state = app.state::<AppState>();
     let mut window_state = state.window_state();
     let target = window_state.complete_startup();
@@ -1791,10 +1799,22 @@ fn round_macos_view(view: &objc2_app_kit::NSView, radius: f64) {
 pub fn run() {
     let version = env!("CARGO_PKG_VERSION");
     let launch_target = launch_window_target();
+    logging::init();
+    let _ = logging::log_event(
+        "desktop.startup.begin",
+        &[("version", version), ("target", &launch_target)],
+    );
     let singleton = match singleton::acquire(version, &launch_target) {
-        Ok(singleton::SingletonDecision::Run(singleton)) => singleton,
-        Ok(singleton::SingletonDecision::Exit) => return,
+        Ok(singleton::SingletonDecision::Run(singleton)) => {
+            let _ = logging::log_event("desktop.singleton.acquired", &[]);
+            singleton
+        }
+        Ok(singleton::SingletonDecision::Exit) => {
+            let _ = logging::log_event("desktop.singleton.existing_instance", &[]);
+            return;
+        }
         Err(err) => {
+            let _ = logging::log_event("desktop.singleton.failed", &[]);
             eprintln!("failed to acquire AIPass desktop singleton: {err}");
             return;
         }
@@ -1806,6 +1826,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .manage(AppState::default())
         .setup(move |app| {
+            let _ = logging::log_event("desktop.setup.begin", &[]);
             activate_window_target(app.handle(), &launch_target);
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
@@ -1826,13 +1847,19 @@ pub fn run() {
             if let Some(singleton) = singleton.take() {
                 singleton::spawn_server(app.handle().clone(), singleton, version.to_string());
             }
-            tray::setup(app)?;
+            if let Err(err) = tray::setup(app) {
+                let _ = logging::log_event("desktop.tray.failed", &[]);
+                return Err(err.into());
+            }
+            let _ = logging::log_event("desktop.tray.ready", &[]);
             ensure_agent_resident_async(app.handle().clone());
+            let _ = logging::log_event("desktop.setup.complete", &[]);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             window_target,
             desktop_ready,
+            desktop_startup_stage,
             vault_status,
             session_touch,
             preferences_load,
@@ -1907,7 +1934,22 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, _event| {});
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { api, code, .. } => {
+                let explicitly_allowed = ALLOW_PROCESS_EXIT.swap(false, Ordering::SeqCst);
+                if code.is_some() || explicitly_allowed {
+                    let _ = logging::log_event("desktop.exit.allowed", &[]);
+                } else {
+                    api.prevent_exit();
+                    let _ = logging::log_event("desktop.exit.intercepted", &[]);
+                    activate_window_target(app, "tray");
+                }
+            }
+            RunEvent::Exit => {
+                let _ = logging::log_event("desktop.exit.completed", &[]);
+            }
+            _ => {}
+        });
 }
 
 #[cfg(test)]

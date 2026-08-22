@@ -269,7 +269,8 @@ fn hex_decode(value: &str) -> Result<Vec<u8>, CryptoError> {
         return Err(CryptoError::InvalidRecoverySecret);
     }
     let mut out = vec![0_u8; RECOVERY_SECRET_LEN];
-    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+    let (chunks, _) = value.as_bytes().as_chunks::<2>();
+    for (index, chunk) in chunks.iter().enumerate() {
         let high = match hex_value(chunk[0]) {
             Some(value) => value,
             None => {

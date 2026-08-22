@@ -81,6 +81,12 @@
     return invoke<T>(command, args);
   }
 
+  function logStartupStage(stage: string) {
+    if (hasTauriRuntime()) {
+      void invokeTauri<void>("desktop_startup_stage", { stage }).catch(() => {});
+    }
+  }
+
   function nextFrame() {
     return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
@@ -445,6 +451,17 @@
     void (async () => {
       try {
         if (hasTauriRuntime()) {
+          // The native window starts hidden; reveal it as soon as the first
+          // frontend frame is mounted while data continues loading below.
+          await tick();
+          try {
+            await invokeTauri<void>("desktop_ready");
+            logStartupStage("window_revealed");
+          } catch (err) {
+            console.error("failed to reveal desktop window", err);
+          }
+        }
+        if (hasTauriRuntime()) {
           unlistenVaultAuth = await listen<VaultAuthTaskStatus>("vault-auth-finished", ({ payload }) => {
             settleVaultAuthTask(payload);
           });
@@ -460,9 +477,12 @@
               void loadServer();
             }
           });
+          logStartupStage("listeners_ready");
         }
         await Promise.all([loadPreferences(), refreshStatus()]);
+        logStartupStage("preferences_status_finished");
         await loadSyncSettings();
+        logStartupStage("sync_settings_finished");
         if (hasTauriRuntime()) {
           windowTarget =
             (await invokeTauri<"main" | "unlock" | "quick-access" | "server" | "tray" | null>(
@@ -475,13 +495,17 @@
           if (windowTarget === "main") {
             scheduleAutoUpdateCheck();
           }
+          logStartupStage("window_target_finished");
         }
         if (!status.locked && status.exists) {
           await loadEntries();
+          logStartupStage("entries_finished");
           await loadServer();
+          logStartupStage("server_finished");
           void loadPricing();
           await openPendingServerView();
         }
+        logStartupStage("complete");
       } catch (err) {
         if (!statusReady) {
           status = { exists: true, locked: true };
@@ -489,13 +513,15 @@
           setAuthMode("unlock");
         }
         error = String(err);
+        logStartupStage("error");
       } finally {
+        // Retry after the async startup work in case the initial IPC call raced
+        // native window creation. The operation is idempotent.
         if (hasTauriRuntime()) {
-          await tick();
           try {
             await invokeTauri<void>("desktop_ready");
           } catch (err) {
-            console.error("failed to reveal initialized desktop window", err);
+            console.error("failed to finalize desktop window reveal", err);
           }
         }
       }

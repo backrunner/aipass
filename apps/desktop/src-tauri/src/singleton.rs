@@ -113,8 +113,10 @@ pub(crate) fn spawn_server(app: AppHandle, singleton: DesktopSingleton, current_
 fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) -> Result<()> {
     let request: SingletonRequest =
         read_frame(&mut stream).context("failed to read desktop singleton request")?;
+    let _ = crate::logging::log_event("desktop.singleton.request", &[("target", &request.target)]);
 
     if request.command == Some(SingletonCommand::Quit) {
+        let _ = crate::logging::log_event("desktop.singleton.quit_request", &[]);
         write_frame(
             &mut stream,
             &SingletonResponse {
@@ -126,6 +128,7 @@ fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) 
 
         thread::spawn(move || {
             thread::sleep(REPLACEMENT_EXIT_DELAY);
+            crate::ALLOW_PROCESS_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
             app.exit(0);
         });
         return Ok(());
@@ -151,6 +154,7 @@ fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) 
         SingletonAction::ReplaceExisting => {
             thread::spawn(move || {
                 thread::sleep(REPLACEMENT_EXIT_DELAY);
+                crate::ALLOW_PROCESS_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
                 app.exit(0);
             });
         }
