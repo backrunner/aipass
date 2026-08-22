@@ -306,7 +306,13 @@ fn home_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    fn config_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn binary_detection_scans_path_entries() {
@@ -431,6 +437,7 @@ mod tests {
 
     #[test]
     fn config_dir_reports_existing_tool_directories() {
+        let _guard = config_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();
         assert_eq!(config_dir(dir.path(), &ToolId::ClaudeCode), None);
 
@@ -454,6 +461,7 @@ mod tests {
 
     #[test]
     fn config_dir_falls_back_to_install_marks() {
+        let _guard = config_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();
         let home = dir.path();
 
@@ -482,6 +490,7 @@ mod tests {
 
     #[test]
     fn detect_tools_covers_every_supported_tool() {
+        let _guard = config_env_lock().lock().unwrap();
         let detections = detect_tools();
         assert_eq!(detections.len(), TOOLS.len());
         for tool in TOOLS {
