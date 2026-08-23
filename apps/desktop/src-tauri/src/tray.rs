@@ -44,6 +44,7 @@ const MENU_PROXY_START: &str = "tray-proxy-start";
 const MENU_PROXY_STOP: &str = "tray-proxy-stop";
 #[cfg(not(target_os = "macos"))]
 const MENU_PROXY_REFRESH: &str = "tray-proxy-refresh";
+#[cfg(not(target_os = "macos"))]
 const MENU_PROXY_GROUP_PREFIX: &str = "tray-proxy-group-";
 const PROXY_GROUP_ACTION_PREFIX: &str = "proxy-group-";
 #[cfg(not(target_os = "macos"))]
@@ -350,7 +351,6 @@ fn dispatch_action(app: &AppHandle, action_id: &str, feedback: &TrayFeedback) {
         }
         action::PROXY_START => start_proxy_async(app.clone(), feedback.clone()),
         action::PROXY_STOP => stop_proxy_async(app.clone(), feedback.clone()),
-        #[cfg(not(target_os = "macos"))]
         id if id.starts_with(PROXY_GROUP_ACTION_PREFIX)
             || id.starts_with(MENU_PROXY_GROUP_PREFIX) =>
         {
