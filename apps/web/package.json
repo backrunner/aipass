@@ -8,7 +8,7 @@
     "build": "svedocs og && svedocs build --mode static --no-og",
     "preview": "svedocs preview",
     "check": "svedocs check && svelte-check --tsconfig ./tsconfig.json",
-    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "lint": "svedocs check",
     "cloudflare:whoami": "wrangler whoami",
     "worker:types": "wrangler types src/worker-configuration.d.ts",
