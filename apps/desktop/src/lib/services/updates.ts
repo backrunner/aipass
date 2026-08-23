@@ -5,6 +5,14 @@ import type { MessageValue } from "../types";
 
 export type UpdateChannel = "official" | "beta";
 
+export type UpdateProgress = {
+  phase: "downloading" | "installing";
+  downloadedBytes: number;
+  totalBytes?: number | null;
+};
+
+export const UPDATE_PROGRESS_EVENT = "update-progress";
+
 export type UpdateCheckResult = {
   currentVersion: string;
   available: boolean;

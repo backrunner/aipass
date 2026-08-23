@@ -366,6 +366,9 @@ const en: Record<string, string> = {
 
   "updates.bannerTitle": "New version v{version} is available",
   "updates.installRestart": "Install and restart",
+  "updates.downloading": "Downloading update...",
+  "updates.downloadProgress": "Downloaded {percent}%",
+  "updates.installing": "Installing update...",
   "updates.later": "Later",
 
   "notice.passwordsDoNotMatch": "Passwords do not match",
@@ -1012,6 +1015,9 @@ const zhCN: Record<string, string> = {
 
   "updates.bannerTitle": "新版本 v{version} 可用",
   "updates.installRestart": "安装并重启",
+  "updates.downloading": "正在下载更新...",
+  "updates.downloadProgress": "已下载 {percent}%",
+  "updates.installing": "正在安装更新...",
   "updates.later": "稍后",
 
   "notice.passwordsDoNotMatch": "两次输入的密码不一致",

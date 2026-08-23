@@ -1,11 +1,12 @@
 import { svelte, vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vite";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [svelte({ preprocess: vitePreprocess() })],
   define: {
     // Stamped at every build so the About tab can identify which build is running.
-    __AIPASS_BUILD_TIME__: JSON.stringify(new Date().toISOString())
+    __AIPASS_BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    __AIPASS_RELEASE_BUILD__: JSON.stringify(mode === "production")
   },
   resolve: {
     dedupe: ["svelte", "bits-ui"]
@@ -41,4 +42,4 @@ export default defineConfig({
       }
     }
   }
-});
+}));

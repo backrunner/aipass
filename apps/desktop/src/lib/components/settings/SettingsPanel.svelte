@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { listen } from "@tauri-apps/api/event";
   import { getVersion } from "@tauri-apps/api/app";
   import { Dialog, Tabs } from "bits-ui";
   import { Check, Download, Plus, Puzzle, RefreshCw, RotateCw, Server, Trash2, Upload, Wifi, X } from "lucide-svelte";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
   import { themeStore, setTheme } from "../../stores/appearance";
   import { isLocalizedMessage, localeStore, resolveMessage, setLocale, t } from "../../stores/i18n";
@@ -19,9 +20,9 @@
     SyncReport,
     ThemePreference
   } from "../../types";
-  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate, persistUpdateChannel, type UpdateChannel, type UpdateCheckResult } from "../../services/updates";
+  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate, persistUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
   import { buildTimeLabel } from "../../build";
-  import { Badge, Banner, Button, Field, SwitchField } from "@aipass/ui";
+  import { Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
 
@@ -186,14 +187,32 @@
   let updateCheck: UpdateCheckResult | undefined;
   let updateChecking = false;
   let updateInstalling = false;
+  let updateProgress: UpdateProgress | undefined;
   let updateChannel: UpdateChannel = "official";
   let updateError: MessageValue = "";
   let updateErrorText = "";
   $: updateErrorText = resolveMessage($t, updateError);
+  $: updateProgressPercent = updateProgress?.totalBytes && updateProgress.totalBytes > 0
+    ? Math.min(100, Math.round((updateProgress.downloadedBytes / updateProgress.totalBytes) * 100))
+    : undefined;
+
+  let unlistenUpdateProgress: (() => void) | undefined;
+  let updateProgressListenerDisposed = false;
 
   let appVersion = "";
   const buildTime = buildTimeLabel();
   onMount(() => {
+    if (typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)) {
+      void listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, ({ payload }) => {
+        updateProgress = payload;
+      }).then((unlisten) => {
+        if (updateProgressListenerDisposed) {
+          unlisten();
+        } else {
+          unlistenUpdateProgress = unlisten;
+        }
+      });
+    }
     void (async () => {
       try {
         appVersion = await getVersion();
@@ -202,6 +221,11 @@
         appVersion = "";
       }
     })();
+  });
+
+  onDestroy(() => {
+    updateProgressListenerDisposed = true;
+    unlistenUpdateProgress?.();
   });
 
   function onUpdateChannelChange(next: UpdateChannel) {
@@ -226,11 +250,13 @@
 
   async function runUpdateInstall() {
     updateInstalling = true;
+    updateProgress = { phase: "downloading", downloadedBytes: 0, totalBytes: null };
     updateError = "";
     try {
       await installUpdate(updateChannel);
     } catch (err) {
       updateError = isLocalizedMessage(err) ? err : String(err);
+      updateProgress = undefined;
     } finally {
       updateInstalling = false;
     }
@@ -666,9 +692,25 @@
                       <strong>{$t("settings.updateAvailable")}</strong>
                       <span class="text-tertiary">{$t("settings.updateVersion", { version: updateCheck.latestVersion })}</span>
                     </div>
-                    <Button variant="primary" on:click={() => runUpdateInstall()} disabled={updateInstalling}>
-                      {updateInstalling ? $t("settings.installing") : $t("settings.install")}
-                    </Button>
+                    <ProgressButton
+                      variant="primary"
+                      on:click={() => runUpdateInstall()}
+                      disabled={updateInstalling}
+                      progress={updateProgressPercent}
+                      indeterminate={updateInstalling && (updateProgress?.phase === "installing" || updateProgressPercent === undefined)}
+                    >
+                      {#if updateInstalling}
+                        {#if updateProgress?.phase === "installing"}
+                          {$t("updates.installing")}
+                        {:else if updateProgressPercent !== undefined}
+                          {$t("updates.downloadProgress", { percent: updateProgressPercent })}
+                        {:else}
+                          {$t("updates.downloading")}
+                        {/if}
+                      {:else}
+                        {$t("settings.install")}
+                      {/if}
+                    </ProgressButton>
                   </div>
                   {#if updateCheck.notes}
                     <p class="update-notes">{updateCheck.notes}</p>

@@ -164,6 +164,20 @@ pub struct UsageTimeseriesPoint {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub estimated_cost_micros: u64,
+    #[serde(default)]
+    pub models: Vec<UsageTimeseriesModel>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageTimeseriesModel {
+    pub model: Option<String>,
+    pub request_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub estimated_cost_micros: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -609,6 +623,7 @@ impl UsageStore {
                     cache_read_tokens: 0,
                     cache_creation_tokens: 0,
                     estimated_cost_micros: 0,
+                    models: Vec::new(),
                 });
             point.request_count = point.request_count.saturating_add(1);
             point.input_tokens = point.input_tokens.saturating_add(row.input_tokens);
@@ -619,8 +634,52 @@ impl UsageStore {
             point.cache_creation_tokens = point
                 .cache_creation_tokens
                 .saturating_add(row.cache_creation_tokens);
-            point.estimated_cost_micros = point.estimated_cost_micros.saturating_add(cost(&row));
+            let row_cost = cost(&row);
+            point.estimated_cost_micros = point.estimated_cost_micros.saturating_add(row_cost);
+            if let Some(model) = point
+                .models
+                .iter_mut()
+                .find(|model| model.model == row.model)
+            {
+                model.request_count = model.request_count.saturating_add(1);
+                model.input_tokens = model.input_tokens.saturating_add(row.input_tokens);
+                model.output_tokens = model.output_tokens.saturating_add(row.output_tokens);
+                model.cache_read_tokens = model
+                    .cache_read_tokens
+                    .saturating_add(row.cache_read_tokens);
+                model.cache_creation_tokens = model
+                    .cache_creation_tokens
+                    .saturating_add(row.cache_creation_tokens);
+                model.estimated_cost_micros = model.estimated_cost_micros.saturating_add(row_cost);
+            } else {
+                point.models.push(UsageTimeseriesModel {
+                    model: row.model,
+                    request_count: 1,
+                    input_tokens: row.input_tokens,
+                    output_tokens: row.output_tokens,
+                    cache_read_tokens: row.cache_read_tokens,
+                    cache_creation_tokens: row.cache_creation_tokens,
+                    estimated_cost_micros: row_cost,
+                });
+            }
         })?;
+        for point in buckets.values_mut() {
+            point.models.sort_by(|left, right| {
+                right
+                    .input_tokens
+                    .saturating_add(right.output_tokens)
+                    .saturating_add(right.cache_read_tokens)
+                    .saturating_add(right.cache_creation_tokens)
+                    .cmp(
+                        &left
+                            .input_tokens
+                            .saturating_add(left.output_tokens)
+                            .saturating_add(left.cache_read_tokens)
+                            .saturating_add(left.cache_creation_tokens),
+                    )
+                    .then_with(|| left.model.cmp(&right.model))
+            });
+        }
         Ok(buckets.into_values().collect())
     }
 
@@ -4893,14 +4952,14 @@ mod tests {
     fn usage_timeseries_groups_records_by_day() {
         let temp = tempfile::tempdir().unwrap();
         let store = UsageStore::open(temp.path().join("usage.sqlite")).unwrap();
-        let record = |started_at, input_tokens| UsageRecord {
+        let record = |started_at, input_tokens, model: Option<&str>| UsageRecord {
             id: Uuid::new_v4(),
             started_at,
             duration_ms: 1,
             route_id: Uuid::new_v4(),
             provider_entry_id: Uuid::new_v4(),
             secret_id: "key".into(),
-            model: None,
+            model: model.map(str::to_string),
             inbound_protocol: ProxyProtocol::OpenAiResponses,
             upstream_protocol: ProxyProtocol::OpenAiResponses,
             status: 200,
@@ -4912,11 +4971,17 @@ mod tests {
             estimated_cost_micros: 3,
         };
         let today_start = now_unix() / 86_400 * 86_400;
-        store.record(&record(today_start + 60, 10)).unwrap();
-        store.record(&record(today_start + 120, 5)).unwrap();
-        store.record(&record(today_start - 86_400, 7)).unwrap();
         store
-            .record(&record(today_start - 10 * 86_400, 99))
+            .record(&record(today_start + 60, 10, Some("gpt-4o")))
+            .unwrap();
+        store
+            .record(&record(today_start + 120, 5, Some("claude-3-7-sonnet")))
+            .unwrap();
+        store
+            .record(&record(today_start - 86_400, 7, None))
+            .unwrap();
+        store
+            .record(&record(today_start - 10 * 86_400, 99, None))
             .unwrap();
 
         let points = store.timeseries(7, |_| 3).unwrap();
@@ -4927,6 +4992,18 @@ mod tests {
         assert_eq!(points[1].input_tokens, 15);
         assert_eq!(points[1].output_tokens, 4);
         assert_eq!(points[1].estimated_cost_micros, 6);
+        assert_eq!(points[0].models.len(), 1);
+        assert_eq!(points[0].models[0].model, None);
+        assert_eq!(points[0].models[0].request_count, 1);
+        assert_eq!(points[0].models[0].input_tokens, 7);
+        assert_eq!(points[1].models.len(), 2);
+        assert_eq!(points[1].models[0].model.as_deref(), Some("gpt-4o"));
+        assert_eq!(points[1].models[0].input_tokens, 10);
+        assert_eq!(
+            points[1].models[1].model.as_deref(),
+            Some("claude-3-7-sonnet")
+        );
+        assert_eq!(points[1].models[1].input_tokens, 5);
         assert!(points.iter().all(|point| point.input_tokens != 99));
     }
 

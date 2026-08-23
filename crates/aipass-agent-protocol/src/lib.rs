@@ -5,7 +5,7 @@ use aipass_provider_registry::{
 pub use aipass_proxy::{
     ModelPricing, ModelUsageAggregate, Protocol as ProxyProtocol, ProviderUsageAggregate,
     ProxyConfig, ProxyRouteConfig, ProxyStatus, ProxyTargetConfig, RetryPolicy, RouteStrategy,
-    UsageAggregate, UsageTimeseriesPoint,
+    UsageAggregate, UsageTimeseriesModel, UsageTimeseriesPoint,
 };
 use aipass_sync::SyncObject;
 use aipass_vault::{

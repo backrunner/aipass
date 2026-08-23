@@ -90,3 +90,49 @@ test("bars stay inside the chart area right of the y axis", () => {
     expect(Number(bar.getAttribute("y")) + height).toBeLessThanOrEqual(120);
   }
 });
+
+test("stacks model segments and shows a detailed hover tooltip", () => {
+  const date = todayUTC();
+  mountChart([{
+    ...point(date, 300, 3),
+    inputTokens: 100,
+    outputTokens: 50,
+    models: [
+      {
+        model: "gpt-4o",
+        requestCount: 2,
+        inputTokens: 80,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        estimatedCostMicros: 1200
+      },
+      {
+        model: "claude-3-7-sonnet",
+        requestCount: 1,
+        inputTokens: 20,
+        outputTokens: 30,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        estimatedCostMicros: 800
+      }
+    ],
+    estimatedCostMicros: 2000
+  }]);
+
+  const segments = document.querySelectorAll("rect.bar-segment");
+  expect(segments.length).toBe(2);
+  expect(segments[0].getAttribute("style")).not.toBe(segments[1].getAttribute("style"));
+
+  const group = Array.from(document.querySelectorAll<SVGGElement>("g.bar-group")).find(
+    (node) => node.getAttribute("aria-label")?.startsWith(date)
+  );
+  expect(group).toBeDefined();
+  group?.dispatchEvent(new MouseEvent("mouseenter"));
+  flushSync();
+
+  const tooltip = document.querySelector(".chart-tooltip");
+  expect(tooltip?.textContent).toContain("gpt-4o");
+  expect(tooltip?.textContent).toContain("claude-3-7-sonnet");
+  expect(tooltip?.textContent).toContain("150");
+});

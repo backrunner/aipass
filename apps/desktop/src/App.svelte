@@ -11,7 +11,7 @@
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
-  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Button, groupFromDraft, parseHttpEndpoint } from "@aipass/ui";
+  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Button, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
@@ -66,7 +66,7 @@
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { buildRouteTarget, buildSingleEntryRoute, enforceSingleEnabledRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
-  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate } from "./lib/services/updates";
+  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
   import type { MessageValue } from "./lib/types";
@@ -107,6 +107,7 @@
   let unlistenVaultStatus: (() => void) | undefined;
   let unlistenOpenServer: (() => void) | undefined;
   let unlistenProxyStatus: (() => void) | undefined;
+  let unlistenUpdateProgress: (() => void) | undefined;
   let sessionPollTimer: ReturnType<typeof setInterval> | undefined;
   let sessionRefreshInFlight = false;
   const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
@@ -205,6 +206,7 @@
   let noticeText = "";
   let updateAvailableVersion = "";
   let updateInstalling = false;
+  let updateProgress: UpdateProgress | undefined;
   let updateInstallError: MessageValue = "";
   let updateInstallErrorText = "";
   let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
@@ -276,11 +278,14 @@
   let toolDetections: ToolDetection[] = [];
   let toolDetectionsLoaded = false;
   let serverPollTimer: ReturnType<typeof setInterval> | undefined;
+  let serverRefreshPromise: Promise<void> | undefined;
+  let serverMutationVersion = 0;
+  let serverMutationInFlight = false;
   $: {
     clearInterval(serverPollTimer);
     serverPollTimer = undefined;
     if (showServer && status.exists && !status.locked) {
-      serverPollTimer = setInterval(() => void pollServerStatus(), 2000);
+      serverPollTimer = setInterval(() => void loadServer(), 2000);
     }
   }
   $: if (showServer && !serverConfig.routes.some((route) => route.id === selectedRouteId)) {
@@ -350,6 +355,9 @@
   $: errorText = resolveMessage($t, error);
   $: noticeText = resolveMessage($t, notice);
   $: updateInstallErrorText = resolveMessage($t, updateInstallError);
+  $: updateProgressPercent = updateProgress?.totalBytes && updateProgress.totalBytes > 0
+    ? Math.min(100, Math.round((updateProgress.downloadedBytes / updateProgress.totalBytes) * 100))
+    : undefined;
 
   const UPDATE_CHECK_DELAY_MS = 3000;
   const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -399,6 +407,7 @@
 
   async function installAvailableUpdate() {
     updateInstalling = true;
+    updateProgress = { phase: "downloading", downloadedBytes: 0, totalBytes: null };
     updateInstallError = "";
     try {
       const version = await getVersion();
@@ -406,6 +415,7 @@
       await installUpdate(channel);
     } catch (err) {
       updateInstallError = isLocalizedMessage(err) ? err : String(err);
+      updateProgress = undefined;
     } finally {
       updateInstalling = false;
     }
@@ -477,6 +487,9 @@
               void loadServer();
             }
           });
+          unlistenUpdateProgress = await listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, ({ payload }) => {
+            updateProgress = payload;
+          });
           logStartupStage("listeners_ready");
         }
         await Promise.all([loadPreferences(), refreshStatus()]);
@@ -538,6 +551,7 @@
     unlistenVaultStatus?.();
     unlistenOpenServer?.();
     unlistenProxyStatus?.();
+    unlistenUpdateProgress?.();
     pendingVaultAuthTasks.clear();
     finishedVaultAuthTasks.clear();
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
@@ -1306,41 +1320,63 @@
     await loadEntries(false, false, value);
   }
 
-  async function loadServer() {
-    try {
-      const [nextStatus, nextConfig, usage] = await Promise.all([
-        invokeTauri<ProxyStatus>("server_status"),
-        invokeTauri<ProxyConfig>("server_config_get"),
-        invokeTauri<ServerUsageSummary>("server_usage_summary")
-      ]);
-      serverStatus = nextStatus;
-      serverConfig = nextConfig;
-      // Older agents may omit the newer breakdown arrays; default them so the
-      // UI never has to deal with undefined.
-      serverUsage = {
-        ...usage,
-        attemptCount: usage.attemptCount ?? 0,
-        completedAttempts: usage.completedAttempts ?? 0,
-        successfulAttempts: usage.successfulAttempts ?? 0,
-        successRateBps: usage.successRateBps ?? 0,
-        providers: usage.providers ?? [],
-        models: usage.models ?? []
-      };
-    } catch (err) {
-      console.warn("server state load failed", err);
-    }
-    try {
-      serverUsageSeries = await invokeTauri<UsageTimeseriesPoint[]>("server_usage_timeseries", { days: 30 });
-    } catch (err) {
-      console.warn("server usage timeseries load failed", err);
-    }
+  function loadServer(): Promise<void> {
+    // The status event and the periodic refresh can arrive together. Share the
+    // in-flight request so a slower refresh cannot be overwritten by an older
+    // concurrent response, while every refresh still covers the whole page.
+    if (serverRefreshPromise) return serverRefreshPromise;
+    const refreshVersion = serverMutationVersion;
+    serverRefreshPromise = (async () => {
+      try {
+        const [nextStatus, nextConfig, usage] = await Promise.all([
+          invokeTauri<ProxyStatus>("server_status"),
+          invokeTauri<ProxyConfig>("server_config_get"),
+          invokeTauri<ServerUsageSummary>("server_usage_summary")
+        ]);
+        if (serverMutationInFlight || refreshVersion !== serverMutationVersion) return;
+        serverStatus = nextStatus;
+        serverConfig = nextConfig;
+        // Older agents may omit the newer breakdown arrays; default them so the
+        // UI never has to deal with undefined.
+        serverUsage = {
+          ...usage,
+          attemptCount: usage.attemptCount ?? 0,
+          completedAttempts: usage.completedAttempts ?? 0,
+          successfulAttempts: usage.successfulAttempts ?? 0,
+          successRateBps: usage.successRateBps ?? 0,
+          providers: usage.providers ?? [],
+          models: usage.models ?? []
+        };
+      } catch (err) {
+        console.warn("server state load failed", err);
+      }
+      try {
+        const nextSeries = await invokeTauri<UsageTimeseriesPoint[]>("server_usage_timeseries", { days: 30 });
+        if (!serverMutationInFlight && refreshVersion === serverMutationVersion) {
+          serverUsageSeries = nextSeries;
+        }
+      } catch (err) {
+        console.warn("server usage timeseries load failed", err);
+      }
+    })().finally(() => {
+      serverRefreshPromise = undefined;
+    });
+    return serverRefreshPromise;
   }
 
-  async function pollServerStatus() {
-    try {
-      serverStatus = await invokeTauri<ProxyStatus>("server_status");
-    } catch {
-      // Best-effort status polling while the server view is open.
+  function beginServerMutation() {
+    serverMutationInFlight = true;
+    serverMutationVersion += 1;
+  }
+
+  function endServerMutation() {
+    serverMutationInFlight = false;
+    serverMutationVersion += 1;
+    const refresh = serverRefreshPromise;
+    if (refresh) {
+      void refresh.finally(() => void loadServer());
+    } else {
+      void loadServer();
     }
   }
 
@@ -1443,6 +1479,7 @@
   async function saveServerConfig(config: ProxyConfig): Promise<boolean> {
     if (serverBusy) return false;
     serverBusy = "save";
+    beginServerMutation();
     error = "";
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config });
@@ -1452,6 +1489,7 @@
       error = String(err);
       return false;
     } finally {
+      endServerMutation();
       serverBusy = "";
     }
   }
@@ -1459,6 +1497,7 @@
   async function startServer() {
     if (serverBusy) return;
     serverBusy = "start";
+    beginServerMutation();
     error = "";
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
@@ -1467,6 +1506,7 @@
     } catch (err) {
       error = String(err);
     } finally {
+      endServerMutation();
       serverBusy = "";
     }
   }
@@ -1474,6 +1514,7 @@
   async function stopServer() {
     if (serverBusy) return;
     serverBusy = "stop";
+    beginServerMutation();
     error = "";
     try {
       serverStatus = await invokeTauri<ProxyStatus>("server_stop");
@@ -1481,6 +1522,7 @@
     } catch (err) {
       error = String(err);
     } finally {
+      endServerMutation();
       serverBusy = "";
     }
   }
@@ -1488,6 +1530,7 @@
   async function rotateServerToken(routeId: string) {
     if (serverBusy) return;
     serverBusy = `token:${routeId}`;
+    beginServerMutation();
     error = "";
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
@@ -1503,6 +1546,7 @@
     } catch (err) {
       error = String(err);
     } finally {
+      endServerMutation();
       serverBusy = "";
     }
   }
@@ -1966,16 +2010,22 @@
 
   function headerPairs(value: string): Array<[string, string]> {
     return splitCsv(value)
-      .map((item) => item.split("="))
-      .filter(([name, headerValue]) => name && headerValue !== undefined)
-      .map(([name, headerValue]) => [name.trim(), headerValue.trim()] as [string, string]);
+      .map(parseAssignment)
+      .filter((pair): pair is [string, string] => pair !== undefined);
   }
 
   function modelAliasPairs(value: string): Array<[string, string]> {
     return splitCsv(value)
-      .map((item) => item.split("="))
-      .filter(([alias, model]) => alias && model !== undefined)
-      .map(([alias, model]) => [alias.trim(), model.trim()] as [string, string]);
+      .map(parseAssignment)
+      .filter((pair): pair is [string, string] => pair !== undefined);
+  }
+
+  function parseAssignment(value: string): [string, string] | undefined {
+    const separator = value.indexOf("=");
+    if (separator <= 0) return undefined;
+    const name = value.slice(0, separator).trim();
+    if (!name) return undefined;
+    return [name, value.slice(separator + 1).trim()];
   }
 
   function quotaFromDraft(): QuotaInfo | undefined {
@@ -2349,9 +2399,26 @@
     <div class="update-banner">
       <Banner tone="info">
         <span class="update-banner-text">{$t("updates.bannerTitle", { version: updateAvailableVersion })}</span>
-        <Button variant="primary" size="sm" on:click={() => installAvailableUpdate()} disabled={updateInstalling}>
-          {updateInstalling ? $t("settings.installing") : $t("updates.installRestart")}
-        </Button>
+        <ProgressButton
+          variant="primary"
+          size="sm"
+          on:click={() => installAvailableUpdate()}
+          disabled={updateInstalling}
+          progress={updateProgressPercent}
+          indeterminate={updateInstalling && (updateProgress?.phase === "installing" || updateProgressPercent === undefined)}
+        >
+          {#if updateInstalling}
+            {#if updateProgress?.phase === "installing"}
+              {$t("updates.installing")}
+            {:else if updateProgressPercent !== undefined}
+              {$t("updates.downloadProgress", { percent: updateProgressPercent })}
+            {:else}
+              {$t("updates.downloading")}
+            {/if}
+          {:else}
+            {$t("updates.installRestart")}
+          {/if}
+        </ProgressButton>
         <Button variant="ghost" size="sm" on:click={dismissUpdatePrompt} disabled={updateInstalling}>
           {$t("updates.later")}
         </Button>

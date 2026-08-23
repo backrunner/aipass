@@ -1,12 +1,37 @@
 use aipass_agent_protocol::{AgentRequest, ProxyStatus, SessionStatus};
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
 
 const OFFICIAL_ENDPOINT: &str =
     "https://github.com/backrunner/aipass/releases/latest/download/latest.json";
 const BETA_ENDPOINT: &str = "https://aipass.alkinum.io/api/updates/beta/latest.json";
+pub(crate) const UPDATE_PROGRESS_EVENT: &str = "update-progress";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateProgress {
+    pub phase: &'static str,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+}
+
+fn emit_update_progress(
+    app: &AppHandle,
+    phase: &'static str,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+) {
+    let _ = app.emit(
+        UPDATE_PROGRESS_EVENT,
+        UpdateProgress {
+            phase,
+            downloaded_bytes,
+            total_bytes,
+        },
+    );
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,14 +131,32 @@ pub(crate) async fn install_update(app: AppHandle, channel: String) -> Result<()
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "No update available".to_string())?;
+    emit_update_progress(&app, "downloading", 0, None);
     // Download and verify while the app is still fully operational. Once the
     // bytes are verified, stop every AIPass-owned runtime before replacing any
     // executable so no old agent/proxy process can keep stale code or files
     // open during the upgrade.
+    let progress_app = app.clone();
     let package = update
-        .download(|_, _| {}, || {})
+        .download(
+            {
+                let mut downloaded_bytes = 0_u64;
+                move |chunk_length, content_length| {
+                    downloaded_bytes = downloaded_bytes.saturating_add(chunk_length as u64);
+                    emit_update_progress(
+                        &progress_app,
+                        "downloading",
+                        downloaded_bytes,
+                        content_length,
+                    );
+                }
+            },
+            || {},
+        )
         .await
         .map_err(|err| err.to_string())?;
+    let downloaded_bytes = package.len() as u64;
+    emit_update_progress(&app, "installing", downloaded_bytes, None);
     stop_runtime_processes(&app)?;
     update.install(package).map_err(|err| err.to_string())?;
     // The updater only swaps the bundle on disk; relaunch so the new

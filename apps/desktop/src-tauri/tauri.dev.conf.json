@@ -1,6 +1,23 @@
 {
   "productName": "AIPass Dev",
   "identifier": "com.alkinum.aipass.dev",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AIPass",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "devtools": true
+      }
+    ]
+  },
   "build": {
     "beforeBuildCommand": "pnpm --dir ../.. --filter @aipass/extension... build && pnpm dev:agent && pnpm build"
   },

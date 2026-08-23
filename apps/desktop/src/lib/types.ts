@@ -109,6 +109,16 @@ export type UsageTimeseriesPoint = {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   estimatedCostMicros: number;
+  models?: UsageTimeseriesModel[];
+};
+export type UsageTimeseriesModel = {
+  model: string | null;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  estimatedCostMicros: number;
 };
 export type ToolConfigProxyRequest = { tool: ToolConfigTarget; routeId: string };
 

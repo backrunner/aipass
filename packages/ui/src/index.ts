@@ -14,6 +14,7 @@ export { default as Badge } from "./components/Badge.svelte";
 export { default as Banner } from "./components/Banner.svelte";
 export { default as Brand } from "./components/Brand.svelte";
 export { default as Button } from "./components/Button.svelte";
+export { default as ProgressButton } from "./components/ProgressButton.svelte";
 export { default as Field } from "./components/Field.svelte";
 export { default as IconButton } from "./components/IconButton.svelte";
 export { default as Logo } from "./components/Logo.svelte";
