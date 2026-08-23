@@ -74,3 +74,5 @@ Export files are encrypted under their own export password; import only works in
 ## Server (local proxy)
 
 Settings for the built-in proxy: bind address (default `127.0.0.1:8787`), routes with retry policy (max attempts 1–10, failure threshold 1–20, circuit-open seconds, connect / first-byte / stream-idle timeouts), and the model pricing table used for cost estimates. See [Desktop app](/docs/desktop#local-proxy-server).
+
+Use `GET /health` (for example, `http://127.0.0.1:8787/health`) for local liveness checks. The proxy generates this response locally and never forwards it upstream.

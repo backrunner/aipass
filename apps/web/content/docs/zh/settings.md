@@ -74,3 +74,5 @@ aipass vault import --input backup.aipexport --export-password "$PW"
 ## Server（本地代理）
 
 内置代理的设置：绑定地址（默认 `127.0.0.1:8787`）、带重试策略的路由（最大尝试 1–10 次、失败阈值 1–20、熔断秒数、连接 / 首字节 / 流空闲超时），以及用于成本估算的模型定价表。见[桌面应用](/docs/zh/desktop)。
+
+本地存活检测使用 `GET /health`（例如 `http://127.0.0.1:8787/health`）。该接口由本地代理直接返回，不会转发到任何上游。

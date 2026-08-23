@@ -1241,11 +1241,14 @@ async fn handle_models_request(
     targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
 
     let mut last_error = None;
+    let mut saw_not_found = false;
+    let mut saw_other_failure = false;
     for target in targets {
         let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
             Ok(client) => client,
             Err(err) => {
                 last_error = Some(err);
+                saw_other_failure = true;
                 continue;
             }
         };
@@ -1262,6 +1265,7 @@ async fn handle_models_request(
             Ok(url) => url,
             Err(err) => {
                 last_error = Some(err.to_string());
+                saw_other_failure = true;
                 mark_failure(&state, target.config.id, &route.config.retry);
                 continue;
             }
@@ -1274,6 +1278,7 @@ async fn handle_models_request(
             Ok(headers) => headers,
             Err(err) => {
                 last_error = Some(err);
+                saw_other_failure = true;
                 mark_failure(&state, target.config.id, &route.config.retry);
                 continue;
             }
@@ -1284,11 +1289,13 @@ async fn handle_models_request(
                 Ok(Ok(response)) => response,
                 Ok(Err(err)) => {
                     last_error = Some(err.to_string());
+                    saw_other_failure = true;
                     mark_failure(&state, target.config.id, &route.config.retry);
                     continue;
                 }
                 Err(_) => {
                     last_error = Some("upstream model discovery timeout".into());
+                    saw_other_failure = true;
                     mark_failure(&state, target.config.id, &route.config.retry);
                     continue;
                 }
@@ -1296,6 +1303,11 @@ async fn handle_models_request(
         let status = response.status();
         if !status.is_success() {
             last_error = Some(format!("upstream returned {status}"));
+            if status == StatusCode::NOT_FOUND {
+                saw_not_found = true;
+            } else {
+                saw_other_failure = true;
+            }
             if status_affects_circuit(status) {
                 mark_failure(&state, target.config.id, &route.config.retry);
             }
@@ -1308,6 +1320,7 @@ async fn handle_models_request(
             Ok(payload) => enrich_models_payload(payload, route.config.inbound_protocol),
             Err(err) => {
                 last_error = Some(err);
+                saw_other_failure = true;
                 mark_failure(&state, target.config.id, &route.config.retry);
                 continue;
             }
@@ -1333,6 +1346,16 @@ async fn handle_models_request(
                 "failed to build model list response",
             )
         });
+    }
+
+    // Model discovery is optional and several upstreams (notably Anthropic)
+    // legitimately do not expose a /v1/models endpoint. Keep that client
+    // response visible without treating it as a proxy health failure.
+    if saw_not_found && !saw_other_failure {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "upstream model discovery endpoint not found",
+        );
     }
 
     set_error(
@@ -1377,6 +1400,56 @@ fn enrich_models_payload(payload: Bytes, protocol: ProxyProtocol) -> Bytes {
     serde_json::to_vec(&root).map_or(payload, Bytes::from)
 }
 
+async fn handle_local_health_request(
+    request: Request<Incoming>,
+    state: &RuntimeState,
+) -> Response<BoxBody> {
+    if !matches!(request.method(), &http::Method::GET | &http::Method::HEAD) {
+        return error_response(StatusCode::METHOD_NOT_ALLOWED, "health check requires GET");
+    }
+    let (enabled, active_routes) = state
+        .config
+        .read()
+        .map(|config| {
+            (
+                config.enabled,
+                config
+                    .routes
+                    .iter()
+                    .filter(|route| route.config.enabled)
+                    .count(),
+            )
+        })
+        .unwrap_or((false, 0));
+    let (requests, failures) = state
+        .stats
+        .lock()
+        .map(|stats| (stats.requests, stats.failures))
+        .unwrap_or((0, 0));
+    let body = serde_json::json!({
+        "status": "ok",
+        "service": "aipass-proxy",
+        "enabled": enabled,
+        "activeRoutes": active_routes,
+        "requests": requests,
+        "failures": failures,
+    });
+    let body = if request.method() == http::Method::HEAD {
+        Bytes::new()
+    } else {
+        Bytes::from(body.to_string())
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(BodyExt::boxed_unsync(
+            Full::new(body).map_err(|never| -> BoxError { match never {} }),
+        ))
+        .unwrap_or_else(|_| {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "health response failed")
+        })
+}
+
 async fn handle_request(
     request: Request<Incoming>,
     state: RuntimeState,
@@ -1386,6 +1459,9 @@ async fn handle_request(
     let path = request.uri().path().to_string();
     let method = request.method().clone();
     let request_query = request.uri().query().map(str::to_owned);
+    if path.trim_end_matches('/') == "/health" {
+        return Ok(handle_local_health_request(request, &state).await);
+    }
     if path.trim_end_matches('/') == "/v1/models" {
         return Ok(handle_models_request(request, state).await);
     }
@@ -3381,6 +3457,78 @@ mod tests {
             true
         );
         upstream_thread.join().unwrap();
+    }
+
+    #[test]
+    fn model_discovery_not_found_does_not_pollute_proxy_health() {
+        let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let upstream_thread = std::thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().unwrap();
+            let (headers, body) = read_http_request(&mut stream);
+            assert!(headers.starts_with("GET /v1/models HTTP/1.1\r\n"));
+            assert!(body.is_empty());
+            write!(
+                stream,
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let token = "aipass_models_not_found_health_test";
+        let route = single_target_route(
+            token,
+            format!("http://{upstream_addr}/v1"),
+            RetryPolicy::default(),
+        );
+        let proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        let response = reqwest::blocking::Client::new()
+            .get(format!("http://{bind_addr}/v1/models"))
+            .bearer_auth(token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(proxy.status().failures, 0);
+        assert_eq!(proxy.status().last_error, None);
+        upstream_thread.join().unwrap();
+    }
+
+    #[test]
+    fn local_health_endpoint_does_not_forward_to_upstream() {
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let route = single_target_route(
+            "aipass_health_endpoint_test",
+            "http://127.0.0.1:1/v1".into(),
+            RetryPolicy::default(),
+        );
+        let proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        let response = reqwest::blocking::Client::new()
+            .get(format!("http://{bind_addr}/health"))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.json::<serde_json::Value>().unwrap();
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["service"], "aipass-proxy");
+        assert_eq!(body["activeRoutes"], 1);
+        assert_eq!(proxy.status().requests, 0);
+        assert_eq!(proxy.status().failures, 0);
+        assert_eq!(proxy.status().last_error, None);
     }
 
     #[test]
