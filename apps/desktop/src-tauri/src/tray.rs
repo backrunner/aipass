@@ -362,6 +362,12 @@ fn dispatch_action(app: &AppHandle, action_id: &str, feedback: &TrayFeedback) {
                 select_proxy_route_async(app.clone(), route_id, feedback.clone());
             }
         }
+        #[cfg(target_os = "macos")]
+        id if id.starts_with(PROXY_GROUP_ACTION_PREFIX) => {
+            if let Ok(route_id) = id.trim_start_matches(PROXY_GROUP_ACTION_PREFIX).parse() {
+                select_proxy_route_async(app.clone(), route_id, feedback.clone());
+            }
+        }
         action::QUIT => quit_aipass_async(app.clone()),
         _ => {}
     }
@@ -624,7 +630,6 @@ fn stop_proxy_async(app: AppHandle, feedback: TrayFeedback) {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
 fn select_proxy_route_async(app: AppHandle, route_id: uuid::Uuid, feedback: TrayFeedback) {
     thread::spawn(move || {
         feedback.proxy_transient("Status: switching group...");
@@ -741,7 +746,6 @@ enum TrayStatus {
 struct TraySnapshot {
     agent: TrayStatus,
     proxy: ProxyTrayStatus,
-    #[cfg(not(target_os = "macos"))]
     routes: Vec<TrayRoute>,
 }
 
@@ -776,11 +780,21 @@ pub(crate) struct TrayStatusDto {
     proxy_state: &'static str,
     proxy_state_text: String,
     proxy_detail: Option<String>,
+    proxy_groups: Vec<TrayGroupDto>,
     proxy_running: bool,
     can_open_proxy: bool,
     can_start_proxy: bool,
     can_stop_proxy: bool,
     tooltip: String,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrayGroupDto {
+    id: uuid::Uuid,
+    name: String,
+    active: bool,
 }
 
 impl TrayStatus {
@@ -891,6 +905,15 @@ impl TraySnapshot {
             proxy_state,
             proxy_state_text,
             proxy_detail,
+            proxy_groups: self
+                .routes
+                .iter()
+                .map(|route| TrayGroupDto {
+                    id: route.id,
+                    name: route.name.clone(),
+                    active: route.active,
+                })
+                .collect(),
             proxy_running: matches!(
                 &self.proxy,
                 ProxyTrayStatus::Available(ProxyStatus { running: true, .. })

@@ -203,6 +203,27 @@ public struct TrayPanelView: View {
             RoundedRectangle(cornerRadius: TrayMetrics.cardRadius, style: .continuous)
                 .stroke(TrayColors.border, lineWidth: 1)
         )
+        .contextMenu {
+            if model.status.proxyGroups.isEmpty {
+                Text("No groups")
+            } else {
+                Text("Switch Group")
+                    .font(.system(size: 11, weight: .semibold))
+                ForEach(model.status.proxyGroups) { group in
+                    Button {
+                        onAction("proxy-group-\(group.id.uuidString)")
+                    } label: {
+                        HStack {
+                            Text(group.name)
+                            if group.active {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Full detail (e.g. "Status: Running | 127.0.0.1:8787 | 3 routes") on hover.
         .help(model.status.proxyText)
     }

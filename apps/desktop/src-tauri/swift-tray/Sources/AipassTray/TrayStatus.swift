@@ -17,6 +17,7 @@ public struct TrayStatus: Codable {
     var proxyStateText: String
     /// e.g. "127.0.0.1:8787 · 3 routes" when running.
     var proxyDetail: String?
+    var proxyGroups: [TrayGroup]
     var proxyRunning: Bool
     var canOpenProxy: Bool
     var canStartProxy: Bool
@@ -32,10 +33,17 @@ public struct TrayStatus: Codable {
         proxyState: "checking",
         proxyStateText: "Checking…",
         proxyDetail: nil,
+        proxyGroups: [],
         proxyRunning: false,
         canOpenProxy: true,
         canStartProxy: false,
         canStopProxy: false,
         tooltip: "AIPass Agent"
     )
+}
+
+public struct TrayGroup: Codable, Identifiable {
+    public var id: UUID
+    public var name: String
+    public var active: Bool
 }
