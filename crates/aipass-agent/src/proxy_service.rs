@@ -224,13 +224,24 @@ impl ProxyService {
                 "selected proxy route needs a local token",
             ));
         }
+        let previous = self.config.clone();
         for route in &mut self.config.routes {
             route.enabled = route.id == route_id;
         }
         self.config.enabled = true;
-        self.save_config(vault)?;
-        if self.handle.is_some() {
-            self.restart(vault)?;
+        if let Err(err) = self.save_config(vault).and_then(|()| {
+            self.handle
+                .is_some()
+                .then(|| self.restart(vault))
+                .transpose()
+                .map(|_| ())
+        }) {
+            self.config = previous;
+            let _ = self.save_config(vault);
+            if self.handle.is_some() {
+                let _ = self.restart(vault);
+            }
+            return Err(err);
         }
         Ok(self.config.clone())
     }
