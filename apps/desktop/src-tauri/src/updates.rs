@@ -1,3 +1,4 @@
+use aipass_agent_protocol::{AgentRequest, ProxyStatus, SessionStatus};
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
@@ -105,11 +106,55 @@ pub(crate) async fn install_update(app: AppHandle, channel: String) -> Result<()
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "No update available".to_string())?;
-    update
-        .download_and_install(|_, _| {}, || {})
+    // Download and verify while the app is still fully operational. Once the
+    // bytes are verified, stop every AIPass-owned runtime before replacing any
+    // executable so no old agent/proxy process can keep stale code or files
+    // open during the upgrade.
+    let package = update
+        .download(|_, _| {}, || {})
         .await
         .map_err(|err| err.to_string())?;
+    stop_runtime_processes(&app)?;
+    update.install(package).map_err(|err| err.to_string())?;
     // The updater only swaps the bundle on disk; relaunch so the new
     // version actually runs ("Install & restart" in the UI promises this).
+    crate::ALLOW_PROCESS_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
     app.restart()
+}
+
+fn stop_runtime_processes(app: &AppHandle) -> Result<(), String> {
+    let client = crate::agent_client(app)?;
+    if client
+        .request::<SessionStatus>(&AgentRequest::SessionStatus)
+        .is_err()
+    {
+        #[cfg(target_os = "macos")]
+        crate::tray_swift::shutdown();
+        return Ok(());
+    }
+    let _ = client.request::<ProxyStatus>(&AgentRequest::ServerStop);
+    client
+        .shutdown()
+        .map_err(|err| format!("failed to stop AIPass agent before update: {err}"))?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if client
+            .request::<SessionStatus>(&AgentRequest::SessionStatus)
+            .is_err()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if client
+        .request::<SessionStatus>(&AgentRequest::SessionStatus)
+        .is_ok()
+    {
+        return Err("AIPass agent did not exit before update".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    crate::tray_swift::shutdown();
+    Ok(())
 }

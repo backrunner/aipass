@@ -83,6 +83,14 @@ fn dispatch_request(
             }?;
             Ok(AgentResponse::success(status))
         }
+        AgentRequest::ServerRouteSelect { route_id } => with_vault(state, false, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.select_route(vault, route_id)
+        })
+        .map(AgentResponse::success),
         AgentRequest::ServerConfigGet => with_vault(state, true, |vault| {
             let mut proxy = state
                 .proxy

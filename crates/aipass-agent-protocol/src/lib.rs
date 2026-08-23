@@ -491,6 +491,8 @@ pub enum AgentRequest {
     ServerStart,
     #[serde(rename = "server.stop")]
     ServerStop,
+    #[serde(rename = "server.route.select")]
+    ServerRouteSelect { route_id: Uuid },
     #[serde(rename = "server.config.get")]
     ServerConfigGet,
     #[serde(rename = "server.config.set")]

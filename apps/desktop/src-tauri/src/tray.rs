@@ -2,6 +2,7 @@ use crate::{
     agent_client, agent_error_to_string, agent_request_no_unlock, ensure_agent_running_for_desktop,
     install_tray_autostart_for_current_desktop,
 };
+use aipass_agent_protocol::ProxyConfig;
 use aipass_agent_protocol::{AgentRequest, LockReason, ProxyStatus, SessionStatus};
 #[cfg(target_os = "macos")]
 use aipass_agent_protocol::{SensitiveString, SessionUnlockMode};
@@ -10,6 +11,8 @@ use std::thread;
 use std::time::Duration;
 use tauri::{App, AppHandle, Emitter, Listener, Manager, WindowEvent};
 
+#[cfg(not(target_os = "macos"))]
+use tauri::menu::CheckMenuItem;
 #[cfg(not(target_os = "macos"))]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(not(target_os = "macos"))]
@@ -41,6 +44,8 @@ const MENU_PROXY_START: &str = "tray-proxy-start";
 const MENU_PROXY_STOP: &str = "tray-proxy-stop";
 #[cfg(not(target_os = "macos"))]
 const MENU_PROXY_REFRESH: &str = "tray-proxy-refresh";
+const MENU_PROXY_GROUP_PREFIX: &str = "tray-proxy-group-";
+const PROXY_GROUP_ACTION_PREFIX: &str = "proxy-group-";
 #[cfg(not(target_os = "macos"))]
 const MENU_QUIT: &str = "tray-quit";
 const PROXY_STATUS_CHANGED_EVENT: &str = "proxy-status-changed";
@@ -92,6 +97,7 @@ impl TrayFeedback {
                 let _ = items.proxy_start.set_enabled(snapshot.can_start_proxy());
                 let _ = items.proxy_stop.set_enabled(snapshot.can_stop_proxy());
                 let _ = items.proxy_refresh.set_enabled(true);
+                sync_group_menu(&items.group_menu, &snapshot.routes);
 
                 if let Some(tray) = app.tray_by_id(TRAY_ID) {
                     let _ = tray.set_tooltip(Some(snapshot.tooltip()));
@@ -158,6 +164,7 @@ struct TrayMenuItems {
     proxy_start: MenuItem<tauri::Wry>,
     proxy_stop: MenuItem<tauri::Wry>,
     proxy_refresh: MenuItem<tauri::Wry>,
+    group_menu: Submenu<tauri::Wry>,
 }
 
 pub(crate) fn setup(app: &App) -> tauri::Result<()> {
@@ -199,6 +206,7 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    let group_menu = Submenu::with_items(app, "Switch Group", true, &[])?;
     let proxy_menu = Submenu::with_items(
         app,
         "Proxy Server",
@@ -210,6 +218,8 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
             &proxy_start,
             &proxy_stop,
             &proxy_refresh,
+            &PredefinedMenuItem::separator(app)?,
+            &group_menu,
         ],
     )?;
 
@@ -250,6 +260,7 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
         proxy_start,
         proxy_stop,
         proxy_refresh,
+        group_menu,
     };
 
     let menu_feedback = TrayFeedback::Menu(items.clone());
@@ -259,7 +270,10 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
         .tooltip("AIPass Agent")
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| {
-            if let Some(action) = menu_action_for(event.id().as_ref()) {
+            let id = event.id().as_ref();
+            if id.starts_with(MENU_PROXY_GROUP_PREFIX) {
+                dispatch_action(app, id, &menu_feedback);
+            } else if let Some(action) = menu_action_for(id) {
                 dispatch_action(app, action, &menu_feedback);
             }
         })
@@ -336,6 +350,18 @@ fn dispatch_action(app: &AppHandle, action_id: &str, feedback: &TrayFeedback) {
         }
         action::PROXY_START => start_proxy_async(app.clone(), feedback.clone()),
         action::PROXY_STOP => stop_proxy_async(app.clone(), feedback.clone()),
+        #[cfg(not(target_os = "macos"))]
+        id if id.starts_with(PROXY_GROUP_ACTION_PREFIX)
+            || id.starts_with(MENU_PROXY_GROUP_PREFIX) =>
+        {
+            let raw_id = id
+                .strip_prefix(PROXY_GROUP_ACTION_PREFIX)
+                .or_else(|| id.strip_prefix(MENU_PROXY_GROUP_PREFIX))
+                .unwrap_or_default();
+            if let Ok(route_id) = raw_id.parse() {
+                select_proxy_route_async(app.clone(), route_id, feedback.clone());
+            }
+        }
         action::QUIT => quit_aipass_async(app.clone()),
         _ => {}
     }
@@ -478,6 +504,20 @@ fn current_tray_snapshot(app: &AppHandle) -> TraySnapshot {
         Ok(status) => status,
         Err(err) => return TraySnapshot::unavailable(err),
     };
+    let routes = client
+        .request::<ProxyConfig>(&AgentRequest::ServerConfigGet)
+        .map(|config| {
+            config
+                .routes
+                .into_iter()
+                .map(|route| TrayRoute {
+                    id: route.id,
+                    name: route.name,
+                    active: route.enabled,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let proxy = client
         .request::<ProxyStatus>(&AgentRequest::ServerStatus)
         .map(ProxyTrayStatus::Available)
@@ -486,7 +526,28 @@ fn current_tray_snapshot(app: &AppHandle) -> TraySnapshot {
     TraySnapshot {
         agent: TrayStatus::Running(session),
         proxy,
+        routes,
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_group_menu(menu: &Submenu<tauri::Wry>, routes: &[TrayRoute]) {
+    while menu.remove_at(0).ok().flatten().is_some() {}
+    for route in routes {
+        let id = format!("{MENU_PROXY_GROUP_PREFIX}{}", route.id);
+        let Ok(item) = CheckMenuItem::with_id(
+            menu.app_handle(),
+            id,
+            &route.name,
+            true,
+            route.active,
+            None::<&str>,
+        ) else {
+            continue;
+        };
+        let _ = menu.append(&item);
+    }
+    let _ = menu.set_enabled(!routes.is_empty());
 }
 
 fn recover_agent_and_refresh_status(app: &AppHandle, feedback: &TrayFeedback) {
@@ -558,6 +619,24 @@ fn stop_proxy_async(app: AppHandle, feedback: TrayFeedback) {
                 eprintln!("failed to stop proxy server from tray: {err}");
                 feedback.proxy_transient("Status: stop failed");
             }
+        }
+        refresh_status(&app, &feedback);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn select_proxy_route_async(app: AppHandle, route_id: uuid::Uuid, feedback: TrayFeedback) {
+    thread::spawn(move || {
+        feedback.proxy_transient("Status: switching group...");
+        let result = agent_request_no_unlock::<ProxyConfig>(
+            &app,
+            AgentRequest::ServerRouteSelect { route_id },
+        );
+        if let Err(err) = result {
+            eprintln!("failed to switch proxy group from tray: {err}");
+            feedback.proxy_transient("Status: group switch failed");
+        } else {
+            let _ = app.emit(PROXY_STATUS_CHANGED_EVENT, ());
         }
         refresh_status(&app, &feedback);
     });
@@ -662,6 +741,15 @@ enum TrayStatus {
 struct TraySnapshot {
     agent: TrayStatus,
     proxy: ProxyTrayStatus,
+    #[cfg(not(target_os = "macos"))]
+    routes: Vec<TrayRoute>,
+}
+
+#[derive(Clone)]
+struct TrayRoute {
+    id: uuid::Uuid,
+    name: String,
+    active: bool,
 }
 
 enum ProxyTrayStatus {
@@ -744,6 +832,7 @@ impl TraySnapshot {
         Self {
             agent: TrayStatus::Unavailable(err.clone()),
             proxy: ProxyTrayStatus::Unavailable(err),
+            routes: Vec::new(),
         }
     }
 
@@ -1010,6 +1099,7 @@ mod tests {
                 vault_namespace: Some("test".to_string()),
             }),
             proxy,
+            routes: Vec::new(),
         }
     }
 

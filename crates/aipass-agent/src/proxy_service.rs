@@ -203,6 +203,38 @@ impl ProxyService {
         Ok(self.status())
     }
 
+    /// Select exactly one route as the active local-proxy group.
+    pub fn select_route(&mut self, vault: &Vault, route_id: Uuid) -> ServiceResult<ProxyConfig> {
+        self.load_config(vault)?;
+        if !self.config.routes.iter().any(|route| route.id == route_id) {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::NotFound,
+                "proxy route not found",
+            ));
+        }
+        if self
+            .config
+            .routes
+            .iter()
+            .find(|route| route.id == route_id)
+            .is_some_and(|route| route.token.is_empty())
+        {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                "selected proxy route needs a local token",
+            ));
+        }
+        for route in &mut self.config.routes {
+            route.enabled = route.id == route_id;
+        }
+        self.config.enabled = true;
+        self.save_config(vault)?;
+        if self.handle.is_some() {
+            self.restart(vault)?;
+        }
+        Ok(self.config.clone())
+    }
+
     /// Stop the runtime while the vault is locked. The encrypted enabled flag
     /// is reconciled on the next unlocked config load.
     pub fn stop_while_locked(&mut self) -> ServiceResult<ProxyStatus> {
