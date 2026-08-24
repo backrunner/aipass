@@ -41,6 +41,14 @@ pub fn ensure_autostart(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAu
     imp::ensure(agent_binary, vault_dir)
 }
 
+/// Suspend the macOS supervisor without sending another IPC request to the
+/// agent. Update recovery uses this after the agent has already been found
+/// unavailable, so a wedged process cannot add another request timeout.
+#[cfg(target_os = "macos")]
+pub fn suspend_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {
+    imp::suspend(vault_dir)
+}
+
 pub fn uninstall_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {
     imp::uninstall(vault_dir)
 }
@@ -220,10 +228,15 @@ mod imp {
     }
 
     pub(super) fn stop(vault_dir: &Path) -> Result<AgentAutostartStatus> {
+        let status = suspend(vault_dir)?;
+        shutdown_agent(vault_dir);
+        Ok(status)
+    }
+
+    pub(super) fn suspend(vault_dir: &Path) -> Result<AgentAutostartStatus> {
         let service_name = agent_service_name(vault_dir)?;
         let paths = macos_paths(&service_name)?;
         let _ = unload_launch_agent(&service_name, &paths.plist_path);
-        shutdown_agent(vault_dir);
         Ok(AgentAutostartStatus {
             service_name,
             registered: paths.plist_path.exists(),

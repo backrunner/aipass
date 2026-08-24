@@ -356,6 +356,15 @@ fn stop_runtime_processes(app: &AppHandle) -> Result<(), String> {
         .is_err()
     {
         #[cfg(target_os = "macos")]
+        {
+            // An unavailable agent may still be inside its LaunchAgent
+            // supervisor's restart window. Stop the supervisor as part of the
+            // update transaction so it cannot relaunch the old binary while
+            // the bundle is being replaced.
+            let _ = aipass_agent::suspend_agent_autostart(&client.config.vault_dir);
+            let _ = crate::stop_tray_autostart_for_current_desktop(&client.config.vault_dir);
+        }
+        #[cfg(target_os = "macos")]
         crate::tray_swift::shutdown();
         return Ok(());
     }
@@ -363,6 +372,14 @@ fn stop_runtime_processes(app: &AppHandle) -> Result<(), String> {
     client
         .shutdown()
         .map_err(|err| format!("failed to stop AIPass agent before update: {err}"))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        // AgentShutdown stops the child, but the resident LaunchAgent would
+        // otherwise bring it back before the updater replaces the bundle.
+        let _ = aipass_agent::suspend_agent_autostart(&client.config.vault_dir);
+        let _ = crate::stop_tray_autostart_for_current_desktop(&client.config.vault_dir);
+    }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline {

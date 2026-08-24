@@ -11,6 +11,7 @@ use anyhow::Result;
 use serde::de::DeserializeOwned;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,11 @@ const AGENT_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const AUTOSTART_RECOVERY_GRACE: Duration = Duration::from_secs(3);
 /// A send should never take as long as the work behind a response.
 const REQUEST_SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+// Desktop setup warms the resident agent while the first frontend request may
+// also call ensure_running. Serialize those paths so they cannot both trigger
+// LaunchAgent repair and restart the supervisor underneath each other.
+static AGENT_START_LOCK: Mutex<()> = Mutex::new(());
 
 fn apply_request_timeouts(
     stream: &interprocess::local_socket::Stream,
@@ -154,6 +160,9 @@ impl AgentClient {
     }
 
     fn ensure_running_with_mode(&self, mode: AgentStartupMode) -> Result<()> {
+        let _startup_guard = AGENT_START_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let initial_connection_error =
             match self.request::<SessionStatus>(&AgentRequest::SessionStatus) {
                 Ok(_) => return Ok(()),
