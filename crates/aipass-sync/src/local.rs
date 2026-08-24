@@ -72,24 +72,36 @@ pub struct SyncCheckpoint {
     pub objects: BTreeMap<String, String>,
 }
 
+pub type SyncObjectValidator<'a> = dyn Fn(&[u8]) -> Result<()> + 'a;
+
 pub fn sync_local_folder(vault_root: &Path, sync_root: &Path) -> Result<SyncReport> {
+    sync_local_folder_with_validator(vault_root, sync_root, &validate_sync_object_bytes)
+}
+
+pub fn sync_local_folder_with_validator(
+    vault_root: &Path,
+    sync_root: &Path,
+    validator: &SyncObjectValidator<'_>,
+) -> Result<SyncReport> {
     let mut uploaded = 0;
     let mut downloaded = 0;
     let mut conflicts = 0;
     let mut quarantined = 0;
     let mut conflicted_paths = BTreeSet::new();
     fs::create_dir_all(sync_root)?;
+    ensure_directory_not_symlink_path(sync_root)?;
 
     for (dir, _ext) in SYNC_DIRS {
         fs::create_dir_all(vault_root.join(dir))?;
         fs::create_dir_all(sync_root.join(dir))?;
+        ensure_directory_not_symlink(sync_root, dir)?;
     }
     fs::create_dir_all(vault_root.join("conflicts"))?;
     fs::create_dir_all(sync_root.join("conflicts"))?;
 
     for local in list_sync_files(vault_root)? {
         let remote = sync_root.join(&local.relative_path);
-        match compare_and_copy(&vault_root.join(&local.relative_path), &remote)? {
+        match compare_and_copy(&vault_root.join(&local.relative_path), &remote, validator)? {
             CopyOutcome::Copied => uploaded += 1,
             CopyOutcome::Conflict => {
                 conflicts += 1;
@@ -98,6 +110,16 @@ pub fn sync_local_folder(vault_root: &Path, sync_root: &Path) -> Result<SyncRepo
                 quarantine_source_conflict(
                     sync_root,
                     "local",
+                    &local.relative_path,
+                    &vault_root.join(&local.relative_path),
+                )?;
+            }
+            CopyOutcome::Invalid => {
+                conflicts += 1;
+                quarantined += 1;
+                quarantine_source_conflict(
+                    sync_root,
+                    "local-invalid",
                     &local.relative_path,
                     &vault_root.join(&local.relative_path),
                 )?;
@@ -111,7 +133,7 @@ pub fn sync_local_folder(vault_root: &Path, sync_root: &Path) -> Result<SyncRepo
             continue;
         }
         let local = vault_root.join(&remote.relative_path);
-        match compare_and_copy(&sync_root.join(&remote.relative_path), &local)? {
+        match compare_and_copy(&sync_root.join(&remote.relative_path), &local, validator)? {
             CopyOutcome::Copied => downloaded += 1,
             CopyOutcome::Conflict => {
                 conflicts += 1;
@@ -119,6 +141,16 @@ pub fn sync_local_folder(vault_root: &Path, sync_root: &Path) -> Result<SyncRepo
                 quarantine_source_conflict(
                     vault_root,
                     "remote",
+                    &remote.relative_path,
+                    &sync_root.join(&remote.relative_path),
+                )?;
+            }
+            CopyOutcome::Invalid => {
+                conflicts += 1;
+                quarantined += 1;
+                quarantine_source_conflict(
+                    vault_root,
+                    "remote-invalid",
                     &remote.relative_path,
                     &sync_root.join(&remote.relative_path),
                 )?;
@@ -145,6 +177,14 @@ pub fn sync_local_folder(vault_root: &Path, sync_root: &Path) -> Result<SyncRepo
 }
 
 pub fn sync_webdav(vault_root: &Path, client: &impl WebDavClient) -> Result<SyncReport> {
+    sync_webdav_with_validator(vault_root, client, &validate_sync_object_bytes)
+}
+
+pub fn sync_webdav_with_validator(
+    vault_root: &Path,
+    client: &impl WebDavClient,
+    validator: &SyncObjectValidator<'_>,
+) -> Result<SyncReport> {
     let mut uploaded = 0;
     let mut downloaded = 0;
     let mut conflicts = 0;
@@ -170,11 +210,18 @@ pub fn sync_webdav(vault_root: &Path, client: &impl WebDavClient) -> Result<Sync
         match (local_objects.get(&path), remote_objects.get(&path)) {
             (Some(local), None) => {
                 let bytes = fs::read(vault_root.join(&local.relative_path))?;
-                client.put(&path, &bytes, None)?;
+                validator(&bytes).context("local sync object failed validation")?;
+                client.put_if_absent(&path, &bytes)?;
                 uploaded += 1;
             }
             (None, Some(remote)) => {
                 let bytes = client.get(&path)?;
+                if validator(&bytes).is_err() {
+                    quarantine_remote_conflict(vault_root, &path, &bytes)?;
+                    conflicts += 1;
+                    quarantined += 1;
+                    continue;
+                }
                 let local_path = vault_root.join(&remote.relative_path);
                 atomic_write_bytes(&local_path, &bytes)?;
                 downloaded += 1;
@@ -184,17 +231,30 @@ pub fn sync_webdav(vault_root: &Path, client: &impl WebDavClient) -> Result<Sync
                 if local.object_id == remote.object_id && local.lamport == remote.lamport =>
             {
                 let bytes = client.get(&path)?;
+                if validator(&bytes).is_err() {
+                    quarantine_remote_conflict(vault_root, &path, &bytes)?;
+                    conflicts += 1;
+                    quarantined += 1;
+                    continue;
+                }
                 quarantine_remote_conflict(vault_root, &path, &bytes)?;
                 conflicts += 1;
                 quarantined += 1;
             }
             (Some(local), Some(remote)) if local.lamport > remote.lamport => {
                 let bytes = fs::read(vault_root.join(&local.relative_path))?;
+                validator(&bytes).context("local sync object failed validation")?;
                 client.put(&path, &bytes, remote.etag.as_deref())?;
                 uploaded += 1;
             }
             (Some(local), Some(_remote)) => {
                 let bytes = client.get(&path)?;
+                if validator(&bytes).is_err() {
+                    quarantine_remote_conflict(vault_root, &path, &bytes)?;
+                    conflicts += 1;
+                    quarantined += 1;
+                    continue;
+                }
                 atomic_write_bytes(vault_root.join(&local.relative_path), &bytes)?;
                 downloaded += 1;
             }
@@ -223,7 +283,7 @@ pub fn list_conflicts(root: &Path) -> Result<Vec<ConflictRecord>> {
     for path in conflict_record_paths(root)? {
         let record: ConflictRecord = read_json(&path)?;
         checked_relative_path(&record.conflict_path)?;
-        checked_relative_path(&record.target_path)?;
+        validate_sync_target_path(&record.target_path)?;
         records.push(record);
     }
     records.sort_by(|left, right| {
@@ -237,6 +297,14 @@ pub fn list_conflicts(root: &Path) -> Result<Vec<ConflictRecord>> {
 }
 
 pub fn accept_conflict(root: &Path, conflict_path: &Path) -> Result<()> {
+    accept_conflict_with_validator(root, conflict_path, &validate_sync_object_bytes)
+}
+
+pub fn accept_conflict_with_validator(
+    root: &Path,
+    conflict_path: &Path,
+    validator: &SyncObjectValidator<'_>,
+) -> Result<()> {
     let record_path = conflict_record_path(root, conflict_path)?;
     let record = get_conflict(root, conflict_path)?;
     let payload_path = root.join(checked_relative_path(&record.conflict_path)?);
@@ -247,7 +315,9 @@ pub fn accept_conflict(root: &Path, conflict_path: &Path) -> Result<()> {
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(&payload_path, &target_path)?;
+    let payload = fs::read(&payload_path)?;
+    validator(&payload).context("conflict payload failed sync validation")?;
+    atomic_write_bytes(&target_path, &payload)?;
     remove_conflict_record(&record_path)?;
     Ok(())
 }
@@ -262,7 +332,7 @@ pub fn get_conflict(root: &Path, conflict_path: &Path) -> Result<ConflictRecord>
     let record_path = conflict_record_path(root, conflict_path)?;
     let record: ConflictRecord = read_json(&record_path)?;
     checked_relative_path(&record.conflict_path)?;
-    checked_relative_path(&record.target_path)?;
+    validate_sync_target_path(&record.target_path)?;
     Ok(record)
 }
 
@@ -293,13 +363,20 @@ pub fn list_webdav_sync_files(client: &impl WebDavClient) -> Result<BTreeMap<Str
     let mut objects = BTreeMap::new();
     for (dir, ext) in SYNC_DIRS {
         for entry in client.list(dir)? {
-            if !entry.path.ends_with(&format!(".{ext}")) {
+            let relative_entry = entry.path.trim_matches('/');
+            let path = if relative_entry.starts_with(&format!("{dir}/")) {
+                relative_entry.to_string()
+            } else {
+                format!("{dir}/{relative_entry}")
+            };
+            if !path.ends_with(&format!(".{ext}")) {
                 continue;
             }
+            validate_remote_sync_path(&path, dir, ext)?;
             let bytes = client.get(&entry.path)?;
-            let mut object = sync_object_from_bytes(PathBuf::from(&entry.path), &bytes)?;
+            let mut object = sync_object_from_bytes(PathBuf::from(&path), &bytes)?;
             object.etag = entry.etag;
-            objects.insert(entry.path, object);
+            objects.insert(path, object);
         }
     }
     Ok(objects)
@@ -357,21 +434,31 @@ fn sync_object_from_bytes(relative_path: PathBuf, bytes: &[u8]) -> Result<SyncOb
 enum CopyOutcome {
     Copied,
     Conflict,
+    Invalid,
     Skipped,
 }
 
-fn compare_and_copy(source: &Path, target: &Path) -> Result<CopyOutcome> {
+fn compare_and_copy(
+    source: &Path,
+    target: &Path,
+    validator: &SyncObjectValidator<'_>,
+) -> Result<CopyOutcome> {
+    let source_bytes = fs::read(source)?;
+    if validator(&source_bytes).is_err() {
+        return Ok(CopyOutcome::Invalid);
+    }
     if !target.exists() {
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(source, target)?;
+        atomic_write_bytes(target, &source_bytes)?;
         return Ok(CopyOutcome::Copied);
     }
-    let source_hash = hash_file(source)?;
+    let source_hash = hash_bytes(&source_bytes);
     let target_hash = hash_file(target)?;
     if source_hash == target_hash {
         return Ok(CopyOutcome::Skipped);
+    }
+    if validator(&fs::read(target)?).is_err() {
+        atomic_write_bytes(target, &source_bytes)?;
+        return Ok(CopyOutcome::Copied);
     }
     let source_meta = read_object_meta(source)?;
     let target_meta = read_object_meta(target)?;
@@ -380,11 +467,77 @@ fn compare_and_copy(source: &Path, target: &Path) -> Result<CopyOutcome> {
         return Ok(CopyOutcome::Conflict);
     }
     if source_meta.lamport >= target_meta.lamport {
-        fs::copy(source, target)?;
+        atomic_write_bytes(target, &source_bytes)?;
         Ok(CopyOutcome::Copied)
     } else {
         Ok(CopyOutcome::Skipped)
     }
+}
+
+pub fn validate_sync_object_bytes(bytes: &[u8]) -> Result<()> {
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).context("sync object is not valid JSON")?;
+    let object = value
+        .as_object()
+        .context("sync object must be a JSON object")?;
+    if object.get("format").and_then(serde_json::Value::as_str) != Some("aipass-object")
+        || object.get("version").and_then(serde_json::Value::as_u64) != Some(1)
+    {
+        bail!("unsupported sync object format");
+    }
+    for field in ["vaultId", "objectId", "deviceId"] {
+        let value = object
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .context(format!("sync object missing {field}"))?;
+        Uuid::parse_str(value).with_context(|| format!("invalid sync object {field}"))?;
+    }
+    for field in ["objectType", "updatedAt"] {
+        if object
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+        {
+            bail!("sync object missing {field}");
+        }
+    }
+    if object
+        .get("lamport")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+    {
+        bail!("sync object missing lamport");
+    }
+    OffsetDateTime::parse(
+        object["updatedAt"].as_str().unwrap_or_default(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .context("invalid sync object updatedAt")?;
+    let tombstone = object
+        .get("tombstone")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !tombstone {
+        for field in ["wrappedDek", "payload"] {
+            if object.get(field).is_none_or(serde_json::Value::is_null) {
+                bail!("sync object missing {field}");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_sync_object_bytes_for_vault(bytes: &[u8], vault_id: Uuid) -> Result<()> {
+    validate_sync_object_bytes(bytes)?;
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let remote_vault_id = value
+        .get("vaultId")
+        .and_then(serde_json::Value::as_str)
+        .context("sync object missing vaultId")?;
+    if Uuid::parse_str(remote_vault_id)? != vault_id {
+        bail!("sync object belongs to a different vault");
+    }
+    Ok(())
 }
 
 fn read_object_meta(path: &Path) -> Result<SyncObject> {
@@ -528,6 +681,56 @@ fn checked_relative_path(path: &Path) -> Result<PathBuf> {
         bail!("sync path must be relative: {}", path.display());
     }
     Ok(path.to_path_buf())
+}
+
+fn validate_remote_sync_path(path: &str, expected_dir: &str, expected_ext: &str) -> Result<()> {
+    let path = Path::new(path);
+    checked_relative_path(path)?;
+    let mut components = path.components();
+    if components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        != Some(expected_dir)
+        || path.extension().and_then(|value| value.to_str()) != Some(expected_ext)
+        || components.next().is_none()
+    {
+        bail!("invalid WebDAV sync path: {}", path.display());
+    }
+    Ok(())
+}
+
+fn validate_sync_target_path(path: &Path) -> Result<()> {
+    let path = checked_relative_path(path)?;
+    let directory = path
+        .components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .context("sync target is missing a directory")?;
+    if path.components().count() != 2 {
+        bail!("invalid sync target path: {}", path.display());
+    }
+    let extension = path.extension().and_then(|value| value.to_str());
+    if SYNC_DIRS.iter().all(|(expected_dir, expected_ext)| {
+        directory != *expected_dir || extension != Some(*expected_ext)
+    }) {
+        bail!("invalid sync target path: {}", path.display());
+    }
+    Ok(())
+}
+
+fn ensure_directory_not_symlink(root: &Path, directory: &str) -> Result<()> {
+    ensure_directory_not_symlink_path(&root.join(directory))
+}
+
+fn ensure_directory_not_symlink_path(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "sync directory is not a regular directory: {}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 fn normalize_remote_path(path: &Path) -> String {

@@ -265,6 +265,7 @@ dependencies = [
  "tempfile",
  "time",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

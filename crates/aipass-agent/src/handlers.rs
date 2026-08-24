@@ -536,9 +536,7 @@ fn dispatch_request(
             })
         })
         .map(AgentResponse::success),
-        AgentRequest::SyncLocal { dir } => sync_local_folder(&state.vault_dir, &dir)
-            .map(AgentResponse::success)
-            .map_err(ServiceError::internal),
+        AgentRequest::SyncLocal { dir } => run_sync_local(state, &dir).map(AgentResponse::success),
         AgentRequest::SyncSettingsGet => load_sync_settings(&state.vault_dir)
             .map(|settings| AgentResponse::success(sync_settings_view(&settings)))
             .map_err(ServiceError::internal),
@@ -562,23 +560,17 @@ fn dispatch_request(
                             "local sync target is not configured",
                         )
                     })?;
-                    sync_local_folder(&state.vault_dir, &dir)
-                        .map(AgentResponse::success)
-                        .map_err(ServiceError::internal)
+                    run_sync_local(state, &dir).map(AgentResponse::success)
                 }
                 SyncMode::ICloud => {
                     let dir = cloud_sync_dir(CloudSyncProvider::ICloud)
                         .map_err(ServiceError::internal)?;
-                    sync_local_folder(&state.vault_dir, &dir)
-                        .map(AgentResponse::success)
-                        .map_err(ServiceError::internal)
+                    run_sync_local(state, &dir).map(AgentResponse::success)
                 }
                 SyncMode::OneDrive => {
                     let dir = cloud_sync_dir(CloudSyncProvider::OneDrive)
                         .map_err(ServiceError::internal)?;
-                    sync_local_folder(&state.vault_dir, &dir)
-                        .map(AgentResponse::success)
-                        .map_err(ServiceError::internal)
+                    run_sync_local(state, &dir).map(AgentResponse::success)
                 }
                 SyncMode::WebDav => {
                     let url = settings.webdav_url.clone().ok_or_else(|| {
@@ -587,26 +579,22 @@ fn dispatch_request(
                             "webdav sync target url is not configured",
                         )
                     })?;
-                    with_vault(state, false, |vault| {
-                        let password = sync_settings_password(&settings, vault)
-                            .map_err(ServiceError::internal)?;
-                        let client = HttpWebDavClient::new(
-                            &url,
-                            settings.webdav_username.clone(),
-                            password.map(|value| value.into_inner()),
-                        )
-                        .map_err(ServiceError::internal)?;
-                        Ok(sync_webdav_report(&state.vault_dir, &client))
-                    })
-                    .map(AgentResponse::success)
+                    let password = with_vault(state, false, |vault| {
+                        sync_settings_password(&settings, vault).map_err(ServiceError::internal)
+                    })?;
+                    let client = HttpWebDavClient::new(
+                        &url,
+                        settings.webdav_username.clone(),
+                        password.map(|value| value.into_inner()),
+                    )
+                    .map_err(ServiceError::internal)?;
+                    Ok(AgentResponse::success(run_sync_webdav(state, &client)))
                 }
             }
         }
         AgentRequest::SyncCloud { provider } => {
             let dir = cloud_sync_dir(provider).map_err(ServiceError::internal)?;
-            sync_local_folder(&state.vault_dir, &dir)
-                .map(AgentResponse::success)
-                .map_err(ServiceError::internal)
+            run_sync_local(state, &dir).map(AgentResponse::success)
         }
         AgentRequest::SyncWebDav {
             url,
@@ -616,10 +604,7 @@ fn dispatch_request(
             let client =
                 HttpWebDavClient::new(&url, username, password.map(|value| value.into_inner()))
                     .map_err(ServiceError::internal)?;
-            Ok(AgentResponse::success(sync_webdav_report(
-                &state.vault_dir,
-                &client,
-            )))
+            Ok(AgentResponse::success(run_sync_webdav(state, &client)))
         }
         AgentRequest::SyncConflicts { dir, provider } => with_vault(state, true, |vault| {
             let mut conflicts = conflict_responses(ConflictScope::Vault, &state.vault_dir, vault)?;
@@ -633,11 +618,14 @@ fn dispatch_request(
             Ok(conflicts)
         })
         .map(AgentResponse::success),
-        AgentRequest::SyncAcceptConflict { request } => {
+        AgentRequest::SyncAcceptConflict { request } => with_vault(state, true, |vault| {
             let root = conflict_root(&state.vault_dir, &request)?;
-            accept_conflict(&root, &request.conflict_path).map_err(ServiceError::internal)?;
+            accept_conflict_with_validator(&root, &request.conflict_path, &|bytes| {
+                vault.validate_sync_object_bytes(bytes).map_err(Into::into)
+            })
+            .map_err(ServiceError::internal)?;
             Ok(AgentResponse::empty())
-        }
+        }),
         AgentRequest::SyncDiscardConflict { request } => {
             let root = conflict_root(&state.vault_dir, &request)?;
             discard_conflict(&root, &request.conflict_path).map_err(ServiceError::internal)?;

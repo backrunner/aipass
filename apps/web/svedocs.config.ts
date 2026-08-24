@@ -1,11 +1,12 @@
 import { defineConfig } from 'svedocs/config';
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from './src/lib/seo';
 
 export default defineConfig({
   site: {
-    name: 'AIPass',
+    name: SITE_NAME,
     title: 'AIPass Documentation',
-    description: 'A local-first, end-to-end encrypted vault for AI provider credentials, with a desktop app, CLI, and browser extension.',
-    url: 'https://aipass.alkinum.io'
+    description: SITE_DESCRIPTION,
+    url: SITE_URL
   },
   content: {
     root: 'content',
@@ -133,7 +134,7 @@ export default defineConfig({
     defaultAuthor: 'AIPass contributors',
     ogImage: {
       template: 'default',
-      format: 'svg',
+      format: 'png',
       outDir: 'static/og',
       renderer: 'svg'
     }

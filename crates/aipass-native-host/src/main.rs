@@ -46,15 +46,17 @@ fn main() -> Result<()> {
                 return Err(err).context("failed to read native message");
             }
         };
-        write_component_log(
-            NATIVE_HOST_LOG,
-            "INFO",
-            &format!(
-                "received request id={} type={}",
-                native_request_id(&request),
-                native_request_type(&request)
-            ),
-        );
+        if !matches!(request, NativeRequest::Ping { .. }) {
+            write_component_log(
+                NATIVE_HOST_LOG,
+                "INFO",
+                &format!(
+                    "received request id={} type={}",
+                    native_request_id(&request),
+                    native_request_type(&request)
+                ),
+            );
+        }
         let response = handle_request(request);
         log_native_response(&response);
         if let Err(err) = write_message(&mut writer, &response) {
@@ -78,16 +80,26 @@ fn main() -> Result<()> {
 }
 
 fn log_native_response(response: &NativeResponse) {
-    let status = if response.ok { "ok" } else { "error" };
-    let error = response.error.as_deref().unwrap_or("");
-    write_component_log(
-        NATIVE_HOST_LOG,
-        if response.ok { "INFO" } else { "ERROR" },
-        &format!(
-            "responding id={} status={status} error={error}",
-            response.id
-        ),
-    );
+    if response.ok {
+        return;
+    }
+    let error = response.error.as_deref().unwrap_or("unknown error");
+    if matches!(
+        error,
+        "extension id is not allowed" | "extension id missing"
+    ) {
+        write_component_log(
+            NATIVE_HOST_LOG,
+            "ERROR",
+            &format!("native request rejected: {error}"),
+        );
+    } else {
+        write_component_log(
+            NATIVE_HOST_LOG,
+            "ERROR",
+            &format!("responding id={} status=error error={error}", response.id),
+        );
+    }
 }
 
 fn native_request_id(request: &NativeRequest) -> uuid::Uuid {

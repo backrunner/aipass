@@ -16,6 +16,9 @@ pub const KEY_LEN: usize = 32;
 pub const NONCE_LEN: usize = 24;
 pub const SALT_LEN: usize = 16;
 pub const RECOVERY_SECRET_LEN: usize = 32;
+const INTERACTIVE_MEMORY_KIB: u32 = 64 * 1024;
+const INTERACTIVE_ITERATIONS: u32 = 2;
+const INTERACTIVE_PARALLELISM: u32 = 1;
 
 #[derive(Debug, Error)]
 pub enum CryptoError {
@@ -46,7 +49,25 @@ pub struct KdfParams {
 
 impl KdfParams {
     pub fn interactive() -> Self {
-        Self::with_random_salt(64 * 1024, 2, 1)
+        Self::with_random_salt(
+            INTERACTIVE_MEMORY_KIB,
+            INTERACTIVE_ITERATIONS,
+            INTERACTIVE_PARALLELISM,
+        )
+    }
+
+    pub fn uses_interactive_policy(&self) -> bool {
+        self.algorithm == "argon2id"
+            && self.memory_kib == INTERACTIVE_MEMORY_KIB
+            && self.iterations == INTERACTIVE_ITERATIONS
+            && self.parallelism == INTERACTIVE_PARALLELISM
+    }
+
+    pub fn uses_legacy_interactive_policy(&self) -> bool {
+        self.algorithm == "argon2id"
+            && self.parallelism == 1
+            && ((self.memory_kib == 256 * 1024 && self.iterations == 4)
+                || (self.memory_kib == 64 * 1024 && self.iterations == 3))
     }
 
     pub fn with_random_salt(memory_kib: u32, iterations: u32, parallelism: u32) -> Self {
@@ -501,5 +522,24 @@ mod tests {
                 .unwrap();
         assert_eq!(key.as_bytes(), same.as_bytes());
         assert!(derive_recovery_key(&SecretString::new("not-a-valid-key")).is_err());
+    }
+
+    #[test]
+    fn interactive_policy_recognizes_current_and_known_legacy_presets() {
+        let current = KdfParams::with_random_salt(64 * 1024, 2, 1);
+        assert!(current.uses_interactive_policy());
+        assert!(!current.uses_legacy_interactive_policy());
+
+        for legacy in [
+            KdfParams::with_random_salt(256 * 1024, 4, 1),
+            KdfParams::with_random_salt(64 * 1024, 3, 1),
+        ] {
+            assert!(!legacy.uses_interactive_policy());
+            assert!(legacy.uses_legacy_interactive_policy());
+        }
+
+        let custom = KdfParams::with_random_salt(128 * 1024, 3, 1);
+        assert!(!custom.uses_interactive_policy());
+        assert!(!custom.uses_legacy_interactive_policy());
     }
 }

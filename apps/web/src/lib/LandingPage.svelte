@@ -5,6 +5,15 @@
   import { ThemeToggle } from 'svedocs/theme';
   import LandingBackground from '$lib/LandingBackground.svelte';
   import ReleaseDownload from '$lib/ReleaseDownload.svelte';
+  import {
+    absoluteSiteUrl,
+    HOME_SOCIAL_IMAGE,
+    SITE_DESCRIPTION,
+    SITE_NAME,
+    SITE_URL,
+    SOCIAL_IMAGE_HEIGHT,
+    SOCIAL_IMAGE_WIDTH
+  } from '$lib/seo';
 
   export let locale: 'en' | 'zh' = 'en';
 
@@ -42,7 +51,8 @@
       madeBy: 'Made by',
       madeBySuffix: '.',
       licensed: 'Apache-2.0 licensed.',
-      documentation: 'Documentation'
+      documentation: 'Documentation',
+      ogImageAlt: 'AIPass local-first encrypted AI credential vault'
     },
     zh: {
       title: 'AIPass - 本地优先的 AI 凭据保险库',
@@ -77,7 +87,8 @@
       madeBy: '由',
       madeBySuffix: ' 打造。',
       licensed: 'Apache-2.0 许可。',
-      documentation: '文档'
+      documentation: '文档',
+      ogImageAlt: 'AIPass 本地优先的加密 AI 凭据保险库'
     }
   } as const;
 
@@ -89,24 +100,78 @@
   }));
   $: docsHref = locale === 'zh' ? '/docs/zh' : '/docs';
   $: quickStartHref = locale === 'zh' ? '/docs/zh/quick-start' : '/docs/quick-start';
-  $: canonicalUrl = locale === 'zh' ? 'https://aipass.alkinum.io/zh' : 'https://aipass.alkinum.io/';
-  $: ogImageUrl = locale === 'zh'
-    ? 'https://aipass.alkinum.io/og/zh.svg'
-    : 'https://aipass.alkinum.io/og/index.svg';
+  $: canonicalUrl = absoluteSiteUrl(locale === 'zh' ? '/zh/' : '/');
+  $: ogImageUrl = absoluteSiteUrl(HOME_SOCIAL_IMAGE[locale]);
+  $: languageTag = locale === 'zh' ? 'zh-CN' : 'en';
+  $: ogLocale = locale === 'zh' ? 'zh_CN' : 'en_US';
+  $: alternateOgLocale = locale === 'zh' ? 'en_US' : 'zh_CN';
+  $: structuredDataJson = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'WebSite',
+        '@id': `${SITE_URL}/#website`,
+        url: `${SITE_URL}/`,
+        name: SITE_NAME,
+        description: SITE_DESCRIPTION,
+        inLanguage: ['en', 'zh-CN']
+      },
+      {
+        '@type': 'WebPage',
+        '@id': `${canonicalUrl}#webpage`,
+        url: canonicalUrl,
+        name: copy.title,
+        description: copy.description,
+        inLanguage: languageTag,
+        image: ogImageUrl,
+        isPartOf: { '@id': `${SITE_URL}/#website` }
+      },
+      {
+        '@type': 'SoftwareApplication',
+        '@id': `${SITE_URL}/#software`,
+        name: SITE_NAME,
+        url: `${SITE_URL}/`,
+        description: copy.description,
+        applicationCategory: 'DeveloperApplication',
+        operatingSystem: 'macOS',
+        image: ogImageUrl,
+        license: 'https://www.apache.org/licenses/LICENSE-2.0',
+        sameAs: ['https://github.com/backrunner/aipass']
+      }
+    ]
+  }).replaceAll('<', '\\u003c');
 </script>
 
 <svelte:head>
   <title>{copy.title}</title>
   <meta name="description" content={copy.description} />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="application-name" content={SITE_NAME} />
+  <meta name="author" content="AIPass contributors" />
+  <meta name="robots" content="index, follow, max-image-preview:large" />
   <link rel="canonical" href={canonicalUrl} />
   <link rel="alternate" hreflang="en" href="https://aipass.alkinum.io/" />
-  <link rel="alternate" hreflang="zh-CN" href="https://aipass.alkinum.io/zh" />
+  <link rel="alternate" hreflang="zh-CN" href="https://aipass.alkinum.io/zh/" />
   <link rel="alternate" hreflang="x-default" href="https://aipass.alkinum.io/" />
   <meta property="og:type" content="website" />
+  <meta property="og:site_name" content={SITE_NAME} />
+  <meta property="og:locale" content={ogLocale} />
+  <meta property="og:locale:alternate" content={alternateOgLocale} />
   <meta property="og:title" content={copy.title} />
   <meta property="og:description" content={copy.description} />
   <meta property="og:url" content={canonicalUrl} />
   <meta property="og:image" content={ogImageUrl} />
+  <meta property="og:image:secure_url" content={ogImageUrl} />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content={String(SOCIAL_IMAGE_WIDTH)} />
+  <meta property="og:image:height" content={String(SOCIAL_IMAGE_HEIGHT)} />
+  <meta property="og:image:alt" content={copy.ogImageAlt} />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={copy.title} />
+  <meta name="twitter:description" content={copy.description} />
+  <meta name="twitter:image" content={ogImageUrl} />
+  <meta name="twitter:image:alt" content={copy.ogImageAlt} />
+  {@html `<script type="application/ld+json">${structuredDataJson}</script>`}
 </svelte:head>
 
 <div class="landing">

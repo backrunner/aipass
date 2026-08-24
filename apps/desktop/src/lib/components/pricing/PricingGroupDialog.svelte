@@ -216,11 +216,11 @@
 
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
-    <Dialog.Overlay class="dialog-overlay" />
-    <Dialog.Content class="dialog-content pricing-dialog">
+    <Dialog.Overlay class="pricing-dialog-overlay" />
+    <Dialog.Content class="pricing-dialog-content">
       <div class="modal">
         <header class="modal-header">
-          <Dialog.Title class="modal-title">
+          <Dialog.Title class="pricing-dialog-title">
             {group ? $t("pricing.editGroup") : $t("pricing.newGroup")}
           </Dialog.Title>
           <Dialog.Close>
@@ -385,7 +385,7 @@
 </Dialog.Root>
 
 <style lang="scss">
-  :global(.dialog-overlay) {
+  :global(.pricing-dialog-overlay) {
     position: fixed;
     inset: 0;
     z-index: 200;
@@ -394,17 +394,17 @@
     animation: dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  :global(.dialog-overlay[data-state="closed"]) {
+  :global(.pricing-dialog-overlay[data-state="closed"]) {
     animation: dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  :global(.dialog-content) {
+  :global(.pricing-dialog-content) {
     position: fixed;
     top: 50%;
     left: 50%;
     z-index: 201;
     transform: translate(-50%, -50%);
-    width: min(540px, calc(100vw - 32px));
+    width: min(780px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);
     background: var(--surface);
     border: 1px solid var(--border);
@@ -414,12 +414,8 @@
     animation: dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  :global(.dialog-content[data-state="closed"]) {
+  :global(.pricing-dialog-content[data-state="closed"]) {
     animation: dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4);
-  }
-
-  :global(.dialog-content.pricing-dialog) {
-    width: min(780px, calc(100vw - 32px));
   }
 
   @keyframes dialog-overlay-in {
@@ -455,10 +451,10 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    :global(.dialog-overlay),
-    :global(.dialog-content),
-    :global(.dialog-overlay[data-state="closed"]),
-    :global(.dialog-content[data-state="closed"]) {
+    :global(.pricing-dialog-overlay),
+    :global(.pricing-dialog-content),
+    :global(.pricing-dialog-overlay[data-state="closed"]),
+    :global(.pricing-dialog-content[data-state="closed"]) {
       animation: none !important;
     }
   }
@@ -478,7 +474,7 @@
     border-bottom: 1px solid var(--divider);
   }
 
-  :global(.modal-title) {
+  :global(.pricing-dialog-title) {
     font-size: 15px;
     font-weight: 600;
   }

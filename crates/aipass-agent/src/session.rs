@@ -77,6 +77,7 @@ pub struct AgentState {
     pub last_lock_reason: Mutex<Option<LockReason>>,
     pub proxy: Mutex<crate::proxy_service::ProxyService>,
     pub favicon_backfill: Mutex<()>,
+    pub sync_lock: Mutex<()>,
     pub shutdown: AtomicBool,
 }
 
@@ -151,17 +152,47 @@ pub fn unlock_with_password(
             "vault not initialized",
         ));
     }
-    let vault =
-        Vault::open(&state.vault_dir, &SecretString::new(&password)).map_err(map_vault_error);
-    let vault = match vault {
+    // Vault mutations hold the session mutex, so unlock must cover the disk read
+    // and any header migration with the same lock. Otherwise a concurrent
+    // mutation could persist a newer header that this unlock then overwrites.
+    let mut session = match state.session.lock() {
+        Ok(session) => session,
+        Err(_) => {
+            password.zeroize();
+            return Err(ServiceError::new(
+                AgentErrorCode::Internal,
+                "session lock poisoned",
+            ));
+        }
+    };
+    let password_secret = SecretString::new(password.as_str());
+    let vault = Vault::open(&state.vault_dir, &password_secret).map_err(map_vault_error);
+    let mut vault = match vault {
         Ok(vault) => vault,
         Err(err) => {
             password.zeroize();
             return Err(err);
         }
     };
+    match vault.migrate_legacy_password_kdf(&password_secret) {
+        Ok(true) => crate::logging::write_component_log(
+            crate::logging::AGENT_LOG,
+            "INFO",
+            "migrated legacy password KDF parameters",
+        ),
+        Ok(false) => {}
+        Err(err) => crate::logging::write_component_log(
+            crate::logging::AGENT_LOG,
+            "WARN",
+            &format!("legacy password KDF migration will be retried: {err}"),
+        ),
+    }
+    drop(password_secret);
     password.zeroize();
-    set_session_vault(state, vault);
+    replace_session_vault(&mut session, vault);
+    drop(session);
+    clear_last_lock_reason(state);
+    state.session_changed.notify_all();
     session_status(state)
 }
 
@@ -251,18 +282,26 @@ pub fn reset_vault(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
 }
 
 pub fn set_session_vault(state: &Arc<AgentState>, vault: Vault) {
-    let now = OffsetDateTime::now_utc();
     if let Ok(mut session) = state.session.lock() {
-        *session = SessionState::Unlocked(Box::new(SessionInfo {
-            vault,
-            unlocked_at: now,
-            last_activity_at: now,
-        }));
+        replace_session_vault(&mut session, vault);
     }
+    clear_last_lock_reason(state);
+    state.session_changed.notify_all();
+}
+
+fn replace_session_vault(session: &mut SessionState, vault: Vault) {
+    let now = OffsetDateTime::now_utc();
+    *session = SessionState::Unlocked(Box::new(SessionInfo {
+        vault,
+        unlocked_at: now,
+        last_activity_at: now,
+    }));
+}
+
+fn clear_last_lock_reason(state: &Arc<AgentState>) {
     if let Ok(mut reason) = state.last_lock_reason.lock() {
         *reason = None;
     }
-    state.session_changed.notify_all();
 }
 
 pub fn touch_session(state: &Arc<AgentState>) {
@@ -773,6 +812,7 @@ mod tests {
                 crate::proxy_service::ProxyService::new(&vault_dir).expect("proxy service"),
             ),
             favicon_backfill: Mutex::new(()),
+            sync_lock: Mutex::new(()),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -921,6 +961,7 @@ mod tests {
                 crate::proxy_service::ProxyService::new(&vault_dir).expect("proxy service"),
             ),
             favicon_backfill: Mutex::new(()),
+            sync_lock: Mutex::new(()),
             shutdown: AtomicBool::new(false),
         });
 

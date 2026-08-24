@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560">
+  <rect width="1400" height="560" fill="#0b1220"/>
+  <rect x="32" y="32" width="1336" height="496" rx="18" fill="#2563eb"/>
+  <rect x="1060" y="92" width="220" height="360" rx="16" fill="#fff" opacity=".98"/>
+  <rect x="1088" y="122" width="164" height="12" rx="6" fill="#cbd5e1"/>
+  <rect x="1088" y="160" width="164" height="52" rx="8" fill="#eff6ff"/>
+  <circle cx="1112" cy="186" r="12" fill="#2563eb"/>
+  <rect x="1134" y="176" width="94" height="9" rx="4" fill="#64748b"/>
+  <rect x="1088" y="230" width="164" height="52" rx="8" fill="#eff6ff"/>
+  <circle cx="1112" cy="256" r="12" fill="#16a34a"/>
+  <rect x="1134" y="246" width="76" height="9" rx="4" fill="#64748b"/>
+  <rect x="1088" y="310" width="164" height="42" rx="8" fill="#2563eb"/>
+  <text x="1170" y="337" text-anchor="middle" fill="#fff" font-family="Arial, sans-serif" font-size="16" font-weight="700">Fill</text>
+  <text x="112" y="190" fill="#fff" font-family="Arial, sans-serif" font-size="72" font-weight="700">AIPass</text>
+  <text x="112" y="264" fill="#dbeafe" font-family="Arial, sans-serif" font-size="34">Local-first credential fills for AI workflows</text>
+  <text x="112" y="344" fill="#fff" font-family="Arial, sans-serif" font-size="24">Pair with the encrypted desktop vault.</text>
+  <text x="112" y="388" fill="#dbeafe" font-family="Arial, sans-serif" font-size="22">No cloud credential storage. No remote code.</text>
+</svg>

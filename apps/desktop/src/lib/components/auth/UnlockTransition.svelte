@@ -7,8 +7,8 @@
 
   let coveredFired = false;
 
-  // 45% of 1500ms = 675ms — when the slab reaches translateY(0).
-  const COVERED_AT_MS = 675;
+  // 45% of 1200ms = 540ms - when the slab reaches translateY(0).
+  const COVERED_AT_MS = 540;
 
   function onCovered() {
     if (coveredFired) return;
@@ -77,7 +77,7 @@
     width: 104%;
     height: 100vh;
     transform: translateY(110%);
-    animation: rise 1500ms forwards;
+    animation: rise 1200ms forwards;
     will-change: transform;
   }
 

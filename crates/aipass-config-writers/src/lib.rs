@@ -74,7 +74,9 @@ mod tests {
         apply_plan(&plan, &content).unwrap();
         let (_plan2, content2) = plan_codex(dir.path(), &entry).unwrap();
         assert!(content2.contains("model_providers"));
-        assert!(content2.contains("[model_providers.aipass_anthropic_prod]"));
+        assert!(content2.contains("model_provider = \"aipass\""));
+        assert!(content2.contains("[model_providers.aipass]"));
+        assert!(!content2.contains("[model_providers.aipass_anthropic_prod]"));
         assert!(content2.contains("env_key = \"ANTHROPIC_API_KEY\""));
         assert!(content2.contains("requires_openai_auth = false"));
         assert!(content2.contains("base_url = \"https://api.anthropic.com/v1\""));
@@ -100,8 +102,8 @@ mod tests {
         entry.default_model = Some("openai/gpt-5".to_string());
 
         let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
-        assert!(content.contains("[model_providers.openai]"));
-        assert!(!content.contains("[model_providers.aipass_gateway_production]"));
+        assert!(content.contains("[model_providers.aipass]"));
+        assert!(!content.contains("[model_providers.openai]"));
         assert!(content.contains("name = \"My OpenAI\""));
         assert!(content.contains("custom_reasoning = true"));
         assert!(content.contains("env_key = \"OPENROUTER_API_KEY\""));
@@ -255,7 +257,8 @@ mod tests {
         entry.provider_id = None;
         let (_plan, content) = plan_codex(dir.path(), &entry).unwrap();
         assert!(!content.contains("old-provider"));
-        assert!(content.contains("model_provider = \"aipass_new_provider\""));
+        assert!(content.contains("model_provider = \"aipass\""));
+        assert!(content.contains("[model_providers.aipass]"));
     }
 
     #[test]
@@ -283,15 +286,13 @@ mod tests {
         entry.endpoint = Some("https://gateway.example/v1".to_string());
         entry.env_key = "GATEWAY_API_KEY".to_string();
         let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
-        assert!(content.contains("model_provider = \"aipass_new_gateway\""));
+        assert!(content.contains("model_provider = \"aipass\""));
         assert_eq!(plan.extra_writes.len(), 1);
-        assert!(plan
-            .preview
-            .contains("missing-provider -> aipass_new_gateway"));
+        assert!(plan.preview.contains("missing-provider -> aipass"));
 
         apply_plan(&plan, &content).unwrap();
         let migrated = std::fs::read_to_string(&session).unwrap();
-        assert!(migrated.contains("aipass_new_gateway"));
+        assert!(migrated.contains("aipass"));
         assert!(migrated.contains("keep this content"));
         rollback(&plan).unwrap();
         assert!(std::fs::read_to_string(&session)
@@ -341,7 +342,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(provider, "aipass_sqlite_gateway");
+        assert_eq!(provider, "aipass");
         drop(connection);
         rollback(&plan).unwrap();
 

@@ -5,7 +5,8 @@
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
-    "build": "vite build && node ../../scripts/package-extension.mjs",
+    "build": "vite build && node ../../scripts/validate-edge-submission.mjs dist && node ../../scripts/package-extension.mjs",
+    "edge:validate": "node ../../scripts/validate-edge-submission.mjs dist",
     "dev": "vite build --watch",
     "lint": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json --noEmit",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json --noEmit",

@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "AIPass"
+  },
+  "extensionDescription": {
+    "message": "Save and fill AI provider credentials through the local AIPass vault."
+  }
+}

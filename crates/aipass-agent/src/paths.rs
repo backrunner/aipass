@@ -211,3 +211,79 @@ fn rank_onedrive_candidate(path: &Path) -> u8 {
         None => 3,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+    use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvRestore {
+        name: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvRestore {
+        fn capture(name: &'static str) -> Self {
+            Self {
+                name,
+                previous: std::env::var_os(name),
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+
+    #[test]
+    fn icloud_override_resolves_aipass_subdirectory() {
+        let _guard = env_lock().lock().unwrap();
+        let _restore = EnvRestore::capture("AIPASS_ICLOUD_ROOT");
+        let root = tempdir().unwrap();
+        std::env::set_var("AIPASS_ICLOUD_ROOT", root.path());
+        let vault = tempdir().unwrap();
+        let sync_dir = cloud_sync_dir(CloudSyncProvider::ICloud).unwrap();
+
+        aipass_sync::sync_local_folder(vault.path(), &sync_dir).unwrap();
+
+        assert_eq!(sync_dir, root.path().join(CLOUD_SYNC_SUBDIR));
+        assert!(sync_dir.join("objects").is_dir());
+    }
+
+    #[test]
+    fn icloud_override_requires_an_existing_directory() {
+        let _guard = env_lock().lock().unwrap();
+        let _restore = EnvRestore::capture("AIPASS_ICLOUD_ROOT");
+        let missing = tempdir().unwrap().path().join("missing");
+        std::env::set_var("AIPASS_ICLOUD_ROOT", &missing);
+
+        let error = cloud_sync_dir(CloudSyncProvider::ICloud).expect_err("missing root");
+        assert!(error
+            .to_string()
+            .contains("AIPASS_ICLOUD_ROOT directory not found"));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn icloud_without_override_reports_platform_error() {
+        let _guard = env_lock().lock().unwrap();
+        let _restore = EnvRestore::capture("AIPASS_ICLOUD_ROOT");
+        std::env::remove_var("AIPASS_ICLOUD_ROOT");
+
+        let error = cloud_sync_dir(CloudSyncProvider::ICloud).expect_err("non-macOS iCloud");
+        assert!(error
+            .to_string()
+            .contains("iCloud Drive sync is only available on macOS"));
+    }
+}

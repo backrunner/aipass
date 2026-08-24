@@ -242,6 +242,10 @@
   let hasSavedWebdavPassword = false;
   let draft: Draft = emptyDraft();
   let entries: ProviderEntry[] = [];
+  // Keep sidebar counts based on the complete active vault list, even while
+  // the visible pane is showing favorites, archive, trash, or search results.
+  let countEntries: ProviderEntry[] = [];
+  let entriesLoadRequestId = 0;
   let devices: DeviceRecord[] = [];
   let devicesLoading = false;
   let activeDetailId = "";
@@ -343,7 +347,7 @@
     lastSelectedId = selected?.id ?? "";
     detailEditMode = false;
   }
-  $: counts = buildProviderCounts(entries);
+  $: counts = buildProviderCounts(countEntries);
   $: if ((selected?.id ?? "") !== activeDetailId) {
     activeDetailId = selected?.id ?? "";
     revealedSecrets = {};
@@ -734,6 +738,8 @@
       resetOpen = false;
       resetConfirm = "";
       entries = [];
+      countEntries = [];
+      entriesLoadRequestId++;
       selectedId = "";
       setAuthMode("unlock");
     } catch (err) {
@@ -812,6 +818,8 @@
 
   function clearSensitiveUnlockedState() {
     entries = [];
+    countEntries = [];
+    entriesLoadRequestId++;
     selectedId = "";
     pricingConfig = { groups: [], assignments: [] };
     revealedSecrets = {};
@@ -831,15 +839,23 @@
     trash = showTrash,
     favorite = showFavorites
   ) {
-    let summaries: EntrySummary[];
+    const requestId = ++entriesLoadRequestId;
+    let summariesPromise: Promise<EntrySummary[]>;
     if (trash) {
-      summaries = await invokeTauri<EntrySummary[]>("entries_trash_list");
+      summariesPromise = invokeTauri<EntrySummary[]>("entries_trash_list");
     } else if (favorite) {
-      summaries = await invokeTauri<EntrySummary[]>("entries_favorites_list");
+      summariesPromise = invokeTauri<EntrySummary[]>("entries_favorites_list");
     } else {
-      summaries = await invokeTauri<EntrySummary[]>("entries_list", { archived });
+      summariesPromise = invokeTauri<EntrySummary[]>("entries_list", { archived });
     }
+    const countSummariesPromise = archived || trash || favorite
+      ? invokeTauri<EntrySummary[]>("entries_list", { archived: false })
+      : summariesPromise;
+    const [summaries, countSummaries] = await Promise.all([summariesPromise, countSummariesPromise]);
+    if (requestId !== entriesLoadRequestId) return;
+
     entries = summaries.map(summaryToEntry);
+    countEntries = countSummaries.map(summaryToEntry);
     if (!entries.some((entry) => entry.id === selectedId)) {
       selectedId = entries[0]?.id ?? "";
     }

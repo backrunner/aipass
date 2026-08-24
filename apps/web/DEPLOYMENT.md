@@ -51,4 +51,6 @@ Do not add a GitHub token to the frontend or to a public Worker variable. The re
 
 ## OG images
 
-`svedocs og` regenerates `static/og/` during every build. The directory is gitignored; `static/og/zh.svg` is a manually maintained copy of the generated `zh-<hash>.svg` (the Chinese landing `og:image` target) — keep it in sync if the zh home page metadata changes, and force-add it (`git add -f`) when committing.
+`pnpm build` runs `scripts/generate-og-images.mjs` before the static site build. It creates a 1200×630 PNG for every indexed page in `static/og/`, plus stable `index.png` and `zh.png` aliases for the two landing pages. The directory is generated and gitignored; do not commit its contents.
+
+The generator uses the page title and description from Svedocs, wraps both English and Chinese text, and renders with the bundled build-only Noto Sans CJK subset so CI does not depend on host fonts. If new metadata needs a glyph outside that subset, generation fails with the missing code point instead of publishing a broken image; update the subset and `assets/fonts/og-glyphs.txt` together.

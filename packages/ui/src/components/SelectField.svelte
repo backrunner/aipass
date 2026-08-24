@@ -36,23 +36,31 @@
     </Select.Trigger>
     <Select.Portal>
       <Select.Content class="select-content" sideOffset={6}>
-        <Select.Viewport class="select-viewport">
-          {#each options as option}
-            <Select.Item
-              class="select-item"
-              value={option.value}
-              label={option.label}
-              disabled={option.disabled}
-            >
-              {#snippet children({ selected })}
-                <span class="select-item-text">{option.label}</span>
-                {#if selected}
-                  <Check size={14} />
-                {/if}
-              {/snippet}
-            </Select.Item>
-          {/each}
-        </Select.Viewport>
+        {#snippet child({ props, wrapperProps })}
+          <!-- The positioned wrapper creates the stacking context, so its layer
+               must sit above dialog content (z-index 201). -->
+          <div {...wrapperProps} style:z-index="220">
+            <div {...props}>
+              <Select.Viewport class="select-viewport">
+                {#each options as option}
+                  <Select.Item
+                    class="select-item"
+                    value={option.value}
+                    label={option.label}
+                    disabled={option.disabled}
+                  >
+                    {#snippet children({ selected })}
+                      <span class="select-item-text">{option.label}</span>
+                      {#if selected}
+                        <Check size={14} />
+                      {/if}
+                    {/snippet}
+                  </Select.Item>
+                {/each}
+              </Select.Viewport>
+            </div>
+          </div>
+        {/snippet}
       </Select.Content>
     </Select.Portal>
   </Select.Root>
@@ -122,7 +130,6 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-pop);
-    z-index: 60;
     overflow: hidden;
   }
 

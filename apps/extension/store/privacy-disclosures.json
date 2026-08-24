@@ -1,0 +1,42 @@
+{
+  "singlePurpose": "AIPass helps developers securely look up, review, and fill AI provider credentials from a local encrypted vault while they use provider web consoles.",
+  "remoteCode": {
+    "usesRemoteCode": false,
+    "justification": "All JavaScript, styles, and images are bundled in the submitted Manifest V3 package. The extension does not load or execute remote scripts, eval downloaded code, or use a remote iframe for functionality."
+  },
+  "permissions": {
+    "activeTab": "The popup reads the active tab URL and title after the user opens it so AIPass can match the current provider origin and offer context-specific lookup or fill.",
+    "alarms": "The service worker uses an alarm to retry the local Native Messaging connection after a service-worker restart or disconnect.",
+    "nativeMessaging": "The extension must exchange typed requests with the locally installed AIPass native host. This is the only path to the encrypted vault; no cloud credential service is used.",
+    "scripting": "The service worker injects the bundled fill and clipboard bridge scripts into the user-selected tab when the user requests a fill or scan action.",
+    "storage": "Session storage holds short-lived display metadata, dismissed-origin prompts, and UI cache state. It never stores API keys, master passwords, or decrypted vault records.",
+    "<all_urls>": "The content scripts need to run on provider console origins so they can detect supported key forms and respond to an explicit fill request. The detector is local, does not transmit page content to AIPass servers, and can be disabled for an origin from the popup."
+  },
+  "dataUse": {
+    "dataTypes": [
+      {
+        "type": "Authentication information",
+        "purpose": "The local agent returns a selected API key only for a user-approved, origin-bound fill or save operation.",
+        "isCollected": false,
+        "isSold": false,
+        "isTransferred": false
+      },
+      {
+        "type": "Website content",
+        "purpose": "The bundled detector reads relevant form labels, URLs, and nearby text on the active page to recognize supported provider key fields. Processing is local and transient.",
+        "isCollected": false,
+        "isSold": false,
+        "isTransferred": false
+      },
+      {
+        "type": "Browsing activity",
+        "purpose": "The current page origin and title are used locally to match the entries the user configured for that site.",
+        "isCollected": false,
+        "isSold": false,
+        "isTransferred": false
+      }
+    ],
+    "certification": "I certify that these disclosures accurately describe the extension's data practices. AIPass does not sell user data, use it for advertising, or transmit credentials to a developer-controlled server."
+  },
+  "privacyPolicyUrl": "https://aipass.alkinum.io/docs/security"
+}

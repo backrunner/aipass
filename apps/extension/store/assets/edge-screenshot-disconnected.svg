@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+  <rect width="1280" height="800" fill="#e8edf5"/>
+  <rect x="70" y="60" width="1140" height="680" rx="12" fill="#fff" stroke="#c4cad8" stroke-width="2"/>
+  <rect x="70" y="60" width="1140" height="66" rx="12" fill="#f8f9fc"/>
+  <circle cx="108" cy="93" r="10" fill="#ef4444"/><circle cx="140" cy="93" r="10" fill="#f59e0b"/><circle cx="172" cy="93" r="10" fill="#22c55e"/>
+  <rect x="220" y="82" width="790" height="24" rx="12" fill="#e1e4ed"/>
+  <text x="110" y="184" fill="#08101f" font-family="Arial, sans-serif" font-size="28" font-weight="700">AIPass</text>
+  <rect x="108" y="214" width="1064" height="104" rx="8" fill="#fff7ed" stroke="#fed7aa"/>
+  <circle cx="140" cy="266" r="12" fill="#ea580c"/><text x="170" y="258" fill="#9a3412" font-family="Arial, sans-serif" font-size="20" font-weight="700">Desktop vault not connected</text><text x="170" y="287" fill="#9a3412" font-family="Arial, sans-serif" font-size="16">Start AIPass and install the Edge native host to use fill.</text>
+  <rect x="108" y="360" width="330" height="52" rx="8" fill="#2563eb"/><text x="273" y="393" text-anchor="middle" fill="#fff" font-family="Arial, sans-serif" font-size="18" font-weight="700">Open AIPass desktop</text>
+  <text x="108" y="488" fill="#636b82" font-family="Arial, sans-serif" font-size="18">No credentials are shown while the vault is unavailable.</text>
+  <text x="108" y="535" fill="#636b82" font-family="Arial, sans-serif" font-size="18">AIPass never asks for your master password in the browser.</text>
+</svg>

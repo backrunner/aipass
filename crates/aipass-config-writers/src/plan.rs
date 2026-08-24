@@ -21,7 +21,10 @@ pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)
     let target = codex_dir.join("config.toml");
     let before = fs::read_to_string(&target).unwrap_or_default();
     let mut doc = read_toml(&target)?;
-    let (provider_name, provider_migration) = codex_provider_selection(&doc, entry);
+    let (provider_name, provider_migration) = codex_provider_selection(&doc);
+    if let Some(from_provider) = provider_migration.as_deref() {
+        rename_codex_provider_block(&mut doc, from_provider, &provider_name);
+    }
     update_codex_provider(&mut doc, &provider_name, entry, None, None)?;
     if let Some(from_provider) = provider_migration.as_deref() {
         replace_codex_provider_references(&mut doc, from_provider, &provider_name);
@@ -60,7 +63,10 @@ pub fn plan_codex_plaintext_with_mode(
     let target = codex_dir.join("config.toml");
     let before = fs::read_to_string(&target).unwrap_or_default();
     let mut doc = read_toml(&target)?;
-    let (provider_name, provider_migration) = codex_provider_selection(&doc, entry);
+    let (provider_name, provider_migration) = codex_provider_selection(&doc);
+    if let Some(from_provider) = provider_migration.as_deref() {
+        rename_codex_provider_block(&mut doc, from_provider, &provider_name);
+    }
     let auth_mode = update_codex_provider(
         &mut doc,
         &provider_name,
@@ -761,44 +767,34 @@ fn aipass_config_id(entry: &ToolEntry) -> String {
     }
 }
 
-fn codex_provider_selection(doc: &DocumentMut, entry: &ToolEntry) -> (String, Option<String>) {
-    let providers = doc.get("model_providers").and_then(Item::as_table);
+const CODEX_PROVIDER_NAME: &str = "aipass";
+
+fn codex_provider_selection(doc: &DocumentMut) -> (String, Option<String>) {
     let active = doc
         .get("model_provider")
         .and_then(Item::as_str)
         .map(str::to_string);
 
-    // Codex resolves conversations by this key, so an existing active provider
-    // is always the safest provider to reuse. This also preserves custom fields
-    // and avoids orphaning existing conversation history.
-    if let Some(active_name) = active.as_deref() {
-        if providers.is_some_and(|table| table.contains_key(active_name)) {
-            return (active_name.to_string(), None);
-        }
-    }
+    // Codex uses this key in conversation metadata, so keep it stable across
+    // provider titles, IDs, and route/group names. Existing active providers
+    // are migrated to the stable key by the caller.
+    let migration = active.filter(|old| old != CODEX_PROVIDER_NAME);
+    (CODEX_PROVIDER_NAME.to_string(), migration)
+}
 
-    if let Some(provider_id) = entry.provider_id.as_deref() {
-        if providers.is_some_and(|table| table.contains_key(provider_id)) {
-            let migration = active.filter(|old| old != provider_id);
-            return (provider_id.to_string(), migration);
-        }
+fn rename_codex_provider_block(doc: &mut DocumentMut, from_provider: &str, to_provider: &str) {
+    if from_provider == to_provider {
+        return;
     }
-
-    if let Some(table) = providers {
-        if let Some((name, _)) = table.iter().find(|(_, item)| {
-            item.as_table()
-                .and_then(|provider| provider.get("name"))
-                .and_then(Item::as_str)
-                .is_some_and(|title| title == entry.title)
-        }) {
-            let migration = active.filter(|old| old != name);
-            return (name.to_string(), migration);
-        }
+    let Some(providers) = doc.get_mut("model_providers").and_then(Item::as_table_mut) else {
+        return;
+    };
+    if providers.contains_key(to_provider) {
+        return;
     }
-
-    let generated = format!("aipass_{}", slug(&entry.title));
-    let migration = active.filter(|old| old != &generated);
-    (generated, migration)
+    if let Some(item) = providers.remove(from_provider) {
+        providers.insert(to_provider, item);
+    }
 }
 
 fn update_codex_provider(

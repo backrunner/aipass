@@ -37,8 +37,10 @@ use aipass_provider_registry::{
 };
 use aipass_storage::atomic_write_bytes;
 use aipass_sync::{
-    accept_conflict, classify_webdav_error, discard_conflict, list_conflicts, sync_local_folder,
-    sync_webdav, ConflictRecord, HttpWebDavClient, SyncReport, WebDavClient,
+    accept_conflict_with_validator, classify_webdav_error, discard_conflict, list_conflicts,
+    sync_local_folder_with_validator, sync_webdav_with_validator,
+    validate_sync_object_bytes_for_vault, ConflictRecord, HttpWebDavClient, SyncReport, SyncStatus,
+    WebDavClient,
 };
 use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, SecretMetadataInput, TtlGrantSummary,
@@ -144,6 +146,7 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         last_lock_reason: Mutex::new(Some(LockReason::AgentRestart)),
         proxy: Mutex::new(crate::proxy_service::ProxyService::new(&vault_dir.clone())?),
         favicon_backfill: Mutex::new(()),
+        sync_lock: Mutex::new(()),
         shutdown: AtomicBool::new(false),
     });
     run_server_with_state(state, listener, launch_desktop_tray)
@@ -1926,17 +1929,107 @@ fn home_dir() -> ServiceResult<PathBuf> {
         .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "home directory unavailable"))
 }
 
-fn sync_webdav_report(vault_dir: &Path, client: &impl WebDavClient) -> SyncReport {
-    match sync_webdav(vault_dir, client) {
-        Ok(report) => report,
-        Err(err) => SyncReport {
+pub(crate) fn run_sync_local(state: &Arc<AgentState>, dir: &Path) -> ServiceResult<SyncReport> {
+    let _guard = state
+        .sync_lock
+        .lock()
+        .map_err(|_| ServiceError::internal(anyhow::anyhow!("sync lock poisoned")))?;
+    let session = state
+        .session
+        .lock()
+        .map_err(|_| ServiceError::internal(anyhow::anyhow!("session lock poisoned")))?;
+    match &*session {
+        SessionState::Locked => {
+            let vault_id =
+                Vault::vault_id_from_manifest(&state.vault_dir).map_err(ServiceError::internal)?;
+            sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
+                validate_sync_object_bytes_for_vault(bytes, vault_id)
+            })
+            .map_err(ServiceError::internal)
+        }
+        SessionState::Unlocked(info) => {
+            sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
+                info.vault
+                    .validate_sync_object_bytes(bytes)
+                    .map_err(Into::into)
+            })
+            .map_err(ServiceError::internal)
+        }
+    }
+}
+
+pub(crate) fn run_sync_webdav(state: &Arc<AgentState>, client: &impl WebDavClient) -> SyncReport {
+    let Ok(_guard) = state.sync_lock.lock() else {
+        return SyncReport {
             uploaded: 0,
             downloaded: 0,
             conflicts: 0,
             quarantined: 0,
-            status: classify_webdav_error(&err),
-            message: Some(err.to_string()),
-        },
+            status: SyncStatus::ServerError,
+            message: Some("sync lock poisoned".to_string()),
+        };
+    };
+    let Ok(session) = state.session.lock() else {
+        return SyncReport {
+            uploaded: 0,
+            downloaded: 0,
+            conflicts: 0,
+            quarantined: 0,
+            status: SyncStatus::ServerError,
+            message: Some("session lock poisoned".to_string()),
+        };
+    };
+    match &*session {
+        SessionState::Locked => {
+            let Ok(vault_id) = Vault::vault_id_from_manifest(&state.vault_dir) else {
+                return SyncReport {
+                    uploaded: 0,
+                    downloaded: 0,
+                    conflicts: 0,
+                    quarantined: 0,
+                    status: SyncStatus::ServerError,
+                    message: Some("vault manifest unavailable".to_string()),
+                };
+            };
+            match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
+                validate_sync_object_bytes_for_vault(bytes, vault_id)
+            }) {
+                Ok(report) => report,
+                Err(err) => {
+                    let message = err.to_string();
+                    let status = classify_webdav_error(&err);
+                    SyncReport {
+                        uploaded: 0,
+                        downloaded: 0,
+                        conflicts: 0,
+                        quarantined: 0,
+                        status,
+                        message: Some(message),
+                    }
+                }
+            }
+        }
+        SessionState::Unlocked(info) => {
+            match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
+                info.vault
+                    .validate_sync_object_bytes(bytes)
+                    .map_err(Into::into)
+            }) {
+                Ok(report) => report,
+                Err(err) => {
+                    let message = err.to_string();
+                    let status = classify_webdav_error(&err);
+                    SyncReport {
+                        uploaded: 0,
+                        downloaded: 0,
+                        conflicts: 0,
+                        quarantined: 0,
+                        status,
+                        message: Some(message),
+                    }
+                }
+            }
+        }
     }
 }
 

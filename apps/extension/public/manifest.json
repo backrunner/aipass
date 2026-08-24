@@ -1,8 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "AIPass",
+  "name": "__MSG_extensionName__",
+  "short_name": "AIPass",
+  "default_locale": "en",
   "version": "0.1.0",
-  "description": "Save and fill AI Provider credentials through the local AIPass vault.",
+  "description": "__MSG_extensionDescription__",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -22,25 +24,45 @@
     "service_worker": "serviceWorker.js",
     "type": "module"
   },
-  "permissions": ["activeTab", "alarms", "nativeMessaging", "scripting", "storage"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "nativeMessaging",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["clipboardBridge.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "clipboardBridge.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["aipass-logo.png"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "aipass-logo.png"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

@@ -7,7 +7,7 @@ AIPass is a local-first AI Provider credential manager for desktop, CLI, and bro
 - Monorepo: `pnpm` workspace + Turborepo + Rust workspace.
 - Desktop: Tauri + Svelte vault UI with provider CRUD, multi-secret management, search, official/third-party/self-hosted/custom filters, archive, reveal/copy, provider probe, encrypted export/import, auto-lock, clipboard cleanup, device revoke, local/iCloud folder sync, and WebDAV sync.
 - CLI: `aipass` commands for `init`, `add`, `update`, `list`, `search`, `get`, `copy`, `secret`, `probe`, `env`, `exec`, `configure`, `rollback`, `sync`, `native-host`, `completions`, and `vault rotate/change-password/devices/revoke-device/export/import`.
-- Browser: Chrome MV3 extension with Native Messaging, context lookup, fill grants, detected-key save flow, ignored origins, and self-hosted gateway hints for New API, One API, LiteLLM, and sub2api.
+- Browser: Chromium MV3 extension (Chrome and Microsoft Edge) with Native Messaging, context lookup, fill grants, detected-key save flow, ignored origins, and self-hosted gateway hints for New API, One API, LiteLLM, and sub2api.
 - Providers: OpenAI, Anthropic, Gemini, Azure OpenAI, AWS Bedrock, OpenRouter, DeepSeek, Qwen, Moonshot, Zhipu, Volcengine Ark, Together, Fireworks, Groq, New API, One API, LiteLLM, sub2api, custom OpenAI-compatible, and custom HTTP API.
 - Sync: local/iCloud folder sync and WebDAV sync of encrypted object families only.
 - License: Apache-2.0.
@@ -64,6 +64,8 @@ Extension build:
 pnpm --filter @aipass/extension build
 ```
 
+Microsoft Edge Add-ons submission material is kept in [`apps/extension/store`](apps/extension/store). The build verifies the Manifest V3 package and produces `apps/extension/build/aipass-extension.zip`; the release workflow publishes it as `aipass-edge-extension.zip`.
+
 Desktop bundle:
 
 ```bash
@@ -91,7 +93,7 @@ Release procedure:
 
 1. Ensure CI is green on `main` and the workspace versions (`package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`, `Cargo.toml`) agree with each other.
 2. Create and push a `vX.Y.Z` tag for an official release or a `vX.Y.Z-beta.N` tag for a beta release, or run the `Release` workflow manually with an existing tag and channel.
-3. The workflow validates the tag, builds and notarizes the macOS desktop app, packages the CLI and extension, and assembles a draft GitHub Release.
+3. The workflow validates the tag, builds and notarizes the macOS desktop app, packages the CLI and Microsoft Edge extension, and assembles a draft GitHub Release.
 4. The publish step rewrites `latest.json` to point at the release assets, verifies both `darwin-aarch64` and `darwin-x86_64` updater entries and signatures, then publishes: official releases become the latest release, beta releases are marked prerelease.
 5. After publication, the rolling `beta` feed is refreshed when the new version is semver-newer than the current Beta feed.
 

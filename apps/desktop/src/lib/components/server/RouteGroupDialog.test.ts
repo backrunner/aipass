@@ -75,5 +75,26 @@ test("keeps the editor open when persistence fails", async () => {
   flushSync();
 
   expect(onSave).toHaveBeenCalledOnce();
-  expect(document.body.querySelector(".dialog-content")).not.toBeNull();
+  expect(document.body.querySelector(".route-dialog-content")).not.toBeNull();
+});
+
+test("keeps portaled selects above the dialog", () => {
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  app = mount(RouteGroupDialog, { target, props: { route, entries } }) as never;
+  flushSync();
+
+  document.body.querySelector<HTMLButtonElement>(".select-trigger")?.dispatchEvent(
+    new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })
+  );
+  flushSync();
+
+  const dialog = document.body.querySelector<HTMLElement>(".route-dialog-content");
+  const select = document.body.querySelector<HTMLElement>(".select-content");
+  const selectWrapper = select?.parentElement;
+
+  expect(dialog).not.toBeNull();
+  expect(select).not.toBeNull();
+  expect(selectWrapper).not.toBeNull();
+  expect(Number(selectWrapper!.style.zIndex)).toBeGreaterThan(201);
 });

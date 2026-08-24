@@ -36,11 +36,11 @@
 
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
-    <Dialog.Overlay class="dialog-overlay" />
-    <Dialog.Content class="dialog-content">
+    <Dialog.Overlay class="provider-dialog-overlay" />
+    <Dialog.Content class="provider-dialog-content">
       <form class="modal" on:submit|preventDefault={() => onSave()}>
         <header class="modal-header">
-          <Dialog.Title class="modal-title">
+          <Dialog.Title class="provider-dialog-title">
             {formMode === "add" ? $t("providerList.addProvider") : $t("providerModal.editProvider")}
           </Dialog.Title>
           <Dialog.Close>
@@ -76,7 +76,7 @@
 </Dialog.Root>
 
 <style lang="scss">
-  :global(.dialog-overlay) {
+  :global(.provider-dialog-overlay) {
     position: fixed;
     inset: 0;
     z-index: 200;
@@ -85,11 +85,11 @@
     animation: dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  :global(.dialog-overlay[data-state="closed"]) {
+  :global(.provider-dialog-overlay[data-state="closed"]) {
     animation: dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  :global(.dialog-content) {
+  :global(.provider-dialog-content) {
     position: fixed;
     top: 50%;
     left: 50%;
@@ -105,7 +105,7 @@
     animation: dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  :global(.dialog-content[data-state="closed"]) {
+  :global(.provider-dialog-content[data-state="closed"]) {
     animation: dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4);
   }
 
@@ -142,10 +142,10 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    :global(.dialog-overlay),
-    :global(.dialog-content),
-    :global(.dialog-overlay[data-state="closed"]),
-    :global(.dialog-content[data-state="closed"]) {
+    :global(.provider-dialog-overlay),
+    :global(.provider-dialog-content),
+    :global(.provider-dialog-overlay[data-state="closed"]),
+    :global(.provider-dialog-content[data-state="closed"]) {
       animation: none !important;
     }
   }
@@ -165,7 +165,7 @@
     border-bottom: 1px solid var(--divider);
   }
 
-  :global(.modal-title) {
+  :global(.provider-dialog-title) {
     font-size: 15px;
     font-weight: 600;
   }

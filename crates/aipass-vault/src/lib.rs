@@ -409,6 +409,12 @@ impl Drop for Vault {
 }
 
 impl Vault {
+    pub fn vault_id_from_manifest(root: impl AsRef<Path>) -> Result<Uuid, VaultError> {
+        let header: VaultHeader = read_json(root.as_ref().join("manifest.aipmanifest"))?;
+        validate_header(&header)?;
+        Ok(header.vault_id)
+    }
+
     pub fn encrypt_local_state(
         &self,
         purpose: &str,
@@ -644,6 +650,28 @@ impl Vault {
         self.header.current_epoch.clone()
     }
 
+    pub fn validate_sync_object_bytes(&self, bytes: &[u8]) -> Result<(), VaultError> {
+        let envelope: ObjectEnvelope = serde_json::from_slice(bytes)?;
+        if envelope.format != "aipass-object"
+            || envelope.version != 1
+            || envelope.vault_id != self.header.vault_id
+            || envelope.schema_version == 0
+            || envelope.crypto_version == 0
+        {
+            return Err(VaultError::UnsupportedVersion);
+        }
+        if envelope.tombstone {
+            if envelope.payload.is_some() || envelope.wrapped_dek.is_some() {
+                return Err(VaultError::UnlockFailed);
+            }
+            return Ok(());
+        }
+        if envelope.payload.is_none() || envelope.wrapped_dek.is_none() {
+            return Err(VaultError::UnlockFailed);
+        }
+        self.decrypt_envelope_bytes(&envelope).map(|_| ())
+    }
+
     pub fn config_backup_key(&self) -> [u8; KEY_LEN] {
         let mut hasher = Sha256::new();
         hasher.update(self.index_key);
@@ -664,6 +692,43 @@ impl Vault {
         new_password: &SecretString,
     ) -> Result<(), VaultError> {
         self.change_master_password_with_kdf(new_password, KdfParams::interactive())
+    }
+
+    pub fn migrate_legacy_password_kdf(
+        &mut self,
+        password: &SecretString,
+    ) -> Result<bool, VaultError> {
+        if !self.header.kdf.uses_legacy_interactive_policy() {
+            return Ok(false);
+        }
+
+        let new_kdf = KdfParams::interactive();
+        let new_password_key = derive_master_key(password, &new_kdf)?;
+        let mut new_header = self.header.clone();
+        new_header.kdf = new_kdf;
+        new_header.wrapped_root_key = encrypt_bytes(
+            new_password_key.as_bytes(),
+            root_key_aad(new_header.vault_id).as_bytes(),
+            self.root_key.as_bytes(),
+        )?;
+        new_header.updated_at = OffsetDateTime::now_utc();
+        let manifest_path = self.root.join("manifest.aipmanifest");
+        let new_header_value = serde_json::to_value(&new_header)?;
+        if let Err(write_error) = write_json(&manifest_path, &new_header) {
+            // The atomic rename can succeed before the final directory fsync
+            // reports an error. Reconcile that committed state so a later
+            // in-session header write cannot restore the legacy wrapper.
+            let persisted_header: Result<VaultHeader, VaultError> = read_json(&manifest_path);
+            let committed = persisted_header
+                .ok()
+                .and_then(|header| serde_json::to_value(header).ok())
+                .is_some_and(|header| header == new_header_value);
+            if !committed {
+                return Err(write_error);
+            }
+        }
+        self.header = new_header;
+        Ok(true)
     }
 
     fn change_master_password_with_kdf(
@@ -1488,7 +1553,16 @@ impl Vault {
         if !path.exists() {
             return Err(VaultError::RecordNotFound);
         }
-        fs::remove_file(path)?;
+        let mut envelope: ObjectEnvelope = read_json(&path)?;
+        if envelope.object_id != id || envelope.object_type != "provider_entry" {
+            return Err(VaultError::RecordNotFound);
+        }
+        envelope.wrapped_dek = None;
+        envelope.payload = None;
+        envelope.tombstone = true;
+        envelope.updated_at = OffsetDateTime::now_utc();
+        envelope.lamport = envelope.lamport.saturating_add(1);
+        write_json(path, &envelope)?;
         self.audit("provider.delete", Some(id), None)?;
         Ok(())
     }
@@ -1623,7 +1697,21 @@ impl Vault {
         plaintext: &[u8],
     ) -> Result<(), VaultError> {
         let updated_at = OffsetDateTime::now_utc();
-        let lamport = updated_at.unix_timestamp_nanos() as u64;
+        let previous_lamport = read_json::<ObjectEnvelope>(&path)
+            .ok()
+            .map(|envelope| envelope.lamport)
+            .unwrap_or_default();
+        let known_lamport = encrypted_paths(&self.root.join("objects"), "aipobj")?
+            .into_iter()
+            .filter_map(|object_path| read_json::<ObjectEnvelope>(&object_path).ok())
+            .map(|envelope| envelope.lamport)
+            .max()
+            .unwrap_or_default();
+        let wall_clock_lamport = updated_at.unix_timestamp_nanos().max(0) as u64;
+        let lamport = wall_clock_lamport
+            .max(previous_lamport)
+            .max(known_lamport)
+            .saturating_add(1);
         let mut envelope = ObjectEnvelope {
             format: "aipass-object".to_string(),
             version: 1,
@@ -1657,6 +1745,10 @@ impl Vault {
 
     fn decrypt_provider_path(&self, path: &Path) -> Result<ProviderRecordPlaintext, VaultError> {
         if !path.exists() {
+            return Err(VaultError::RecordNotFound);
+        }
+        let envelope: ObjectEnvelope = read_json(path)?;
+        if envelope.tombstone || envelope.object_type != "provider_entry" {
             return Err(VaultError::RecordNotFound);
         }
         self.decrypt_envelope_path(path)
@@ -1723,7 +1815,14 @@ impl Vault {
     }
 
     fn record_paths(&self) -> Result<Vec<PathBuf>, VaultError> {
-        encrypted_paths(&self.root.join("objects"), "aipobj")
+        Ok(encrypted_paths(&self.root.join("objects"), "aipobj")?
+            .into_iter()
+            .filter(|path| {
+                read_json::<ObjectEnvelope>(path)
+                    .map(|envelope| !envelope.tombstone)
+                    .unwrap_or(true)
+            })
+            .collect())
     }
 
     fn audit(
@@ -2698,6 +2797,69 @@ mod tests {
     }
 
     #[test]
+    fn legacy_password_kdf_migrates_once_and_keeps_password_valid() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let legacy_kdf = KdfParams::with_random_salt(64 * 1024, 3, 1);
+        let legacy_salt = legacy_kdf.salt_b64.clone();
+        let creation =
+            Vault::create_with_device_and_kdf(dir.path(), &password, "local device", legacy_kdf)
+                .unwrap();
+        let mut unchanged_header_fields = serde_json::to_value(&creation.vault.header).unwrap();
+        let unchanged_header_fields = unchanged_header_fields.as_object_mut().unwrap();
+        unchanged_header_fields.remove("kdf");
+        unchanged_header_fields.remove("wrappedRootKey");
+        unchanged_header_fields.remove("updatedAt");
+        let unchanged_header_fields = unchanged_header_fields.clone();
+        let entry_id = creation
+            .vault
+            .add_provider(input("sk-ant-api03-migration-secret"))
+            .unwrap();
+        drop(creation);
+
+        let mut vault = Vault::open(dir.path(), &password).unwrap();
+        assert!(vault.migrate_legacy_password_kdf(&password).unwrap());
+        let migrated_header: VaultHeader =
+            read_json(dir.path().join("manifest.aipmanifest")).unwrap();
+        assert!(migrated_header.kdf.uses_interactive_policy());
+        assert_ne!(migrated_header.kdf.salt_b64, legacy_salt);
+        let mut migrated_unchanged_fields = serde_json::to_value(&migrated_header).unwrap();
+        let migrated_unchanged_fields = migrated_unchanged_fields.as_object_mut().unwrap();
+        migrated_unchanged_fields.remove("kdf");
+        migrated_unchanged_fields.remove("wrappedRootKey");
+        migrated_unchanged_fields.remove("updatedAt");
+        assert_eq!(*migrated_unchanged_fields, unchanged_header_fields);
+        assert!(!vault.migrate_legacy_password_kdf(&password).unwrap());
+        drop(vault);
+
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        assert_eq!(
+            reopened.reveal_secret(entry_id).unwrap(),
+            "sk-ant-api03-migration-secret"
+        );
+    }
+
+    #[test]
+    fn failed_unlock_and_custom_kdf_do_not_rewrite_manifest() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let custom_kdf = KdfParams::with_random_salt(1024, 2, 1);
+        let creation =
+            Vault::create_with_device_and_kdf(dir.path(), &password, "local device", custom_kdf)
+                .unwrap();
+        drop(creation);
+        let manifest_path = dir.path().join("manifest.aipmanifest");
+        let original_manifest = fs::read(&manifest_path).unwrap();
+
+        assert!(Vault::open(dir.path(), &SecretString::new("wrong password")).is_err());
+        assert_eq!(fs::read(&manifest_path).unwrap(), original_manifest);
+
+        let mut vault = Vault::open(dir.path(), &password).unwrap();
+        assert!(!vault.migrate_legacy_password_kdf(&password).unwrap());
+        assert_eq!(fs::read(&manifest_path).unwrap(), original_manifest);
+    }
+
+    #[test]
     fn recovery_key_resets_password_and_is_not_persisted() {
         let dir = tempdir().unwrap();
         let creation = Vault::create_with_device_and_kdf(
@@ -2834,5 +2996,21 @@ mod tests {
         assert!(devices
             .iter()
             .any(|device| device.id == device_id && !device.trusted));
+    }
+
+    #[test]
+    fn permanent_delete_writes_syncable_tombstone() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-delete-me")).unwrap();
+        vault.delete_provider_permanently(id).unwrap();
+
+        let path = dir.path().join("objects").join(format!("{id}.aipobj"));
+        let envelope: ObjectEnvelope = read_json(&path).unwrap();
+        assert!(envelope.tombstone);
+        assert!(envelope.payload.is_none());
+        assert!(envelope.wrapped_dek.is_none());
+        assert!(vault.list_provider_summaries().unwrap().is_empty());
     }
 }

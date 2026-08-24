@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="#11130f"/>
-  <path d="M0 84h1200M0 168h1200M0 252h1200M0 336h1200M0 420h1200M0 504h1200M120 0v630M240 0v630M360 0v630M480 0v630M600 0v630M720 0v630M840 0v630M960 0v630M1080 0v630" stroke="#2f332d" stroke-width="2"/>
-  <rect x="84" y="84" width="96" height="96" fill="#50d6b3"/>
-  <rect x="180" y="180" width="96" height="96" fill="#ff8a66"/>
-  <rect x="84" y="276" width="96" height="96" fill="#f4f1e8"/>
-  <text x="300" y="270" fill="#f4f1e8" font-family="Arial, sans-serif" font-size="78" font-weight="800">AIPass</text>
-  <text x="306" y="352" fill="#aaa698" font-family="Arial, sans-serif" font-size="34">本地优先、端到端加密的 AI 服务商凭据保险库。</text>
-</svg>

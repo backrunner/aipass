@@ -2,9 +2,11 @@ mod local;
 mod webdav;
 
 pub use local::{
-    accept_conflict, discard_conflict, get_conflict, hash_file, list_conflicts, list_sync_files,
-    list_webdav_sync_files, sync_local_folder, sync_server_visibility_scan, sync_webdav,
-    ConflictRecord, SyncCheckpoint, SyncObject, SyncReport, SyncStatus,
+    accept_conflict, accept_conflict_with_validator, discard_conflict, get_conflict, hash_file,
+    list_conflicts, list_sync_files, list_webdav_sync_files, sync_local_folder,
+    sync_local_folder_with_validator, sync_server_visibility_scan, sync_webdav,
+    sync_webdav_with_validator, validate_sync_object_bytes, validate_sync_object_bytes_for_vault,
+    ConflictRecord, SyncCheckpoint, SyncObject, SyncObjectValidator, SyncReport, SyncStatus,
 };
 pub use webdav::{classify_webdav_error, HttpWebDavClient, WebDavClient, WebDavEntry};
 
@@ -82,6 +84,16 @@ mod tests {
             Ok(Some(etag))
         }
 
+        fn put_if_absent(&self, path: &str, bytes: &[u8]) -> anyhow::Result<Option<String>> {
+            let mut files = self.files.lock().unwrap();
+            if files.contains_key(path) {
+                anyhow::bail!("precondition failed for {path}");
+            }
+            let etag = format!("\"{}\"", crate::local::hash_bytes(bytes));
+            files.insert(path.to_string(), (bytes.to_vec(), etag.clone()));
+            Ok(Some(etag))
+        }
+
         fn delete(&self, path: &str, _etag: Option<&str>) -> anyhow::Result<()> {
             self.files.lock().unwrap().remove(path);
             Ok(())
@@ -99,7 +111,9 @@ mod tests {
             "cryptoVersion": 1,
             "deviceId": Uuid::new_v4(),
             "lamport": lamport,
-            "updatedAt": OffsetDateTime::now_utc(),
+            "updatedAt": OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
             "wrappedDek": { "epoch": 1, "key_id": Uuid::new_v4(), "nonce_b64": "n", "ciphertext_b64": payload },
             "payload": { "aead": "xchacha20poly1305", "nonce_b64": "n", "ciphertext_b64": payload }
         })
@@ -130,6 +144,21 @@ mod tests {
         assert!(sync.path().join("grants").join("g.aipgrant").exists());
         let matches = sync_server_visibility_scan(sync.path(), &["secret"]).unwrap();
         assert!(matches.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_sync_root() {
+        use std::os::unix::fs::symlink;
+
+        let vault = tempdir().unwrap();
+        let sync_parent = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let sync_link = sync_parent.path().join("sync");
+        symlink(target.path(), &sync_link).unwrap();
+
+        let error = sync_local_folder(vault.path(), &sync_link).expect_err("symlink root");
+        assert!(error.to_string().contains("not a regular directory"));
     }
 
     #[test]
@@ -274,5 +303,44 @@ mod tests {
         let entries = crate::webdav::parse_propfind_response(xml, "remote/aipass").unwrap();
         assert_eq!(entries[0].path, "objects");
         assert_eq!(entries[0].etag.as_deref(), Some("\"etag-1\""));
+    }
+
+    #[test]
+    fn malformed_remote_object_is_quarantined_before_download() {
+        let vault = tempdir().unwrap();
+        let client = MemoryWebDav::default();
+        client.insert(
+            "objects/evil.aipobj",
+            br#"{"format":"not-aipass"}"#.to_vec(),
+        );
+
+        let report = sync_webdav(vault.path(), &client).unwrap();
+        assert_eq!(report.status, SyncStatus::Conflict);
+        assert_eq!(report.quarantined, 1);
+        assert!(!vault.path().join("objects/evil.aipobj").exists());
+        let conflicts = list_conflicts(vault.path()).unwrap();
+        assert_eq!(conflicts.len(), 1);
+        let error = accept_conflict(vault.path(), &conflicts[0].conflict_path)
+            .expect_err("malformed conflict must not be accepted");
+        assert!(error.to_string().contains("failed sync validation"));
+        assert!(!vault.path().join("objects/evil.aipobj").exists());
+    }
+
+    #[test]
+    fn href_with_webdav_base_path_is_normalized() {
+        let xml = r#"<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response><D:href>https://dav.example/remote/aipass/objects/a.aipobj</D:href>
+    <D:propstat><D:prop><D:getetag>"e"</D:getetag></D:prop></D:propstat>
+  </D:response>
+</D:multistatus>"#;
+        let entries = crate::webdav::parse_propfind_response(xml, "remote/aipass/objects").unwrap();
+        assert_eq!(entries[0].path, "a.aipobj");
+    }
+
+    #[test]
+    fn webdav_rejects_plain_http_except_loopback() {
+        assert!(HttpWebDavClient::new("http://dav.example/aipass", None, None).is_err());
+        assert!(HttpWebDavClient::new("http://127.0.0.1:8080/aipass", None, None).is_ok());
     }
 }

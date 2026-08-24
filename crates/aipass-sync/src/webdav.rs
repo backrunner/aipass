@@ -6,6 +6,7 @@ use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +20,7 @@ pub trait WebDavClient {
     fn list(&self, prefix: &str) -> Result<Vec<WebDavEntry>>;
     fn get(&self, path: &str) -> Result<Vec<u8>>;
     fn put(&self, path: &str, bytes: &[u8], etag: Option<&str>) -> Result<Option<String>>;
+    fn put_if_absent(&self, path: &str, bytes: &[u8]) -> Result<Option<String>>;
     fn delete(&self, path: &str, etag: Option<&str>) -> Result<()>;
 }
 
@@ -58,24 +60,41 @@ impl std::fmt::Display for WebDavError {
 
 impl std::error::Error for WebDavError {}
 
-#[derive(Clone)]
 pub struct HttpWebDavClient {
     base_url: String,
+    base_path: String,
     username: Option<String>,
-    password: Option<String>,
+    password: Option<Zeroizing<String>>,
     client: Client,
 }
 
 impl HttpWebDavClient {
     pub fn new(base_url: &str, username: Option<String>, password: Option<String>) -> Result<Self> {
+        let base_url = base_url.trim().trim_end_matches('/');
+        if base_url.contains(['?', '#']) {
+            anyhow::bail!("webdav URL must not contain a query or fragment")
+        }
+        let is_https = base_url.starts_with("https://");
+        let is_local_http = ["http://localhost", "http://127.0.0.1", "http://[::1]"]
+            .iter()
+            .any(|prefix| {
+                base_url == *prefix
+                    || base_url.starts_with(&format!("{prefix}:"))
+                    || base_url.starts_with(&format!("{prefix}/"))
+            });
+        if !is_https && !is_local_http {
+            anyhow::bail!("webdav URL must use HTTPS")
+        }
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent("AIPass/1.0")
             .build()?;
         Ok(Self {
-            base_url: format!("{}/", base_url.trim_end_matches('/')),
+            base_path: url_path(base_url),
+            base_url: format!("{base_url}/"),
             username,
-            password,
+            password: password.map(Zeroizing::new),
             client,
         })
     }
@@ -83,7 +102,10 @@ impl HttpWebDavClient {
     fn request(&self, method: Method, path: &str) -> reqwest::blocking::RequestBuilder {
         let request = self.client.request(method, self.url_for(path));
         if let Some(username) = &self.username {
-            request.basic_auth(username, self.password.as_deref())
+            request.basic_auth(
+                username,
+                self.password.as_ref().map(|password| password.as_str()),
+            )
         } else {
             request
         }
@@ -153,7 +175,15 @@ impl WebDavClient for HttpWebDavClient {
             return Err(status_error("PROPFIND", prefix, response.status()));
         }
         let text = response.text()?;
-        parse_propfind_response(&text, prefix)
+        let response_prefix = join_remote_path(&self.base_path, prefix);
+        let entries = parse_propfind_response(&text, &response_prefix)?;
+        Ok(entries
+            .into_iter()
+            .map(|mut entry| {
+                entry.path = join_remote_path(prefix, &entry.path);
+                entry
+            })
+            .collect())
     }
 
     fn get(&self, path: &str) -> Result<Vec<u8>> {
@@ -179,6 +209,29 @@ impl WebDavClient for HttpWebDavClient {
             request = request.header(IF_MATCH, etag);
         }
         let response = request
+            .send()
+            .map_err(|err| request_error("PUT", path, err))?;
+        if response.status() == StatusCode::PRECONDITION_FAILED {
+            return Err(status_error("PUT", path, response.status()));
+        }
+        if !response.status().is_success() {
+            return Err(status_error("PUT", path, response.status()));
+        }
+        Ok(response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string))
+    }
+
+    fn put_if_absent(&self, path: &str, bytes: &[u8]) -> Result<Option<String>> {
+        if let Some(parent) = Path::new(path).parent() {
+            self.ensure_collection(&parent.display().to_string())?;
+        }
+        let response = self
+            .request(Method::PUT, path)
+            .header("If-None-Match", "*")
+            .body(bytes.to_vec())
             .send()
             .map_err(|err| request_error("PUT", path, err))?;
         if response.status() == StatusCode::PRECONDITION_FAILED {
@@ -316,14 +369,56 @@ pub(crate) fn parse_propfind_response(xml: &str, prefix: &str) -> Result<Vec<Web
 }
 
 fn propfind_href_to_relative_path(href: &str, prefix: &str) -> Option<String> {
-    let trimmed = href.split(['?', '#']).next()?.trim_matches('/');
+    let href = href.split(['?', '#']).next()?;
+    let path = href
+        .split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|index| &rest[index..]))
+        .unwrap_or(href);
+    let trimmed = percent_decode(path)?.trim_matches('/').to_string();
     let prefix = prefix.trim_matches('/');
     if prefix.is_empty() {
-        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+        return (!trimmed.is_empty()).then_some(trimmed);
     }
     if trimmed == prefix {
         return None;
     }
-    let relative = trimmed.strip_prefix(prefix)?.trim_start_matches('/');
+    let relative = trimmed.strip_prefix(&format!("{prefix}/"))?;
     (!relative.is_empty()).then(|| relative.trim_matches('/').to_string())
+}
+
+fn url_path(url: &str) -> String {
+    url.split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|index| rest[index..].to_string()))
+        .unwrap_or_default()
+        .trim_matches('/')
+        .to_string()
+}
+
+fn join_remote_path(base: &str, path: &str) -> String {
+    [base.trim_matches('/'), path.trim_matches('/')]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return None;
+            }
+            let high = (bytes[index + 1] as char).to_digit(16)? as u8;
+            let low = (bytes[index + 2] as char).to_digit(16)? as u8;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }

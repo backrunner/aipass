@@ -80,7 +80,7 @@ test("single click selects a route without opening the editor", () => {
   flushSync();
 
   expect(onSelect).toHaveBeenCalledWith("route-2");
-  expect(document.body.querySelector(".dialog-content")).toBeNull();
+  expect(document.body.querySelector("[role='dialog']")).toBeNull();
 });
 
 test("right click exposes the edit action", () => {
@@ -102,5 +102,5 @@ test("route switch does not depend on opening the editor", () => {
   flushSync();
 
   expect(onToggle).toHaveBeenCalledWith("route-2", true);
-  expect(document.body.querySelector(".dialog-content")).toBeNull();
+  expect(document.body.querySelector("[role='dialog']")).toBeNull();
 });

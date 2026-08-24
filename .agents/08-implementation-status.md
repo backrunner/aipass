@@ -13,10 +13,10 @@
 | Provider registry | Implemented | 官方、第三方、自托管、自定义分类统一于 Rust/TS registry |
 | Desktop | Implemented | Tauri + Svelte UI, CRUD/search/provider/env/tag/recent/quota filters/multi-secret/copy/reveal/snippets/probe/export/import/settings/sync/device revoke/native-host repair |
 | CLI | Implemented | add/update/list/search/get/copy/secret/probe/env/exec/inject/configure/rollback/sync/native-host/doctor/vault commands |
-| Chrome extension | Implemented | MV3 popup, dynamic content scan, Native Messaging, fill grant, save detected key, ignored origins, least-privilege host permissions |
+| Chromium extension | Implemented | MV3 popup for Chrome and Microsoft Edge, dynamic content scan, Native Messaging, fill grant, save detected key, ignored origins, least-privilege host permissions |
 | Sync | Implemented | local/iCloud folder sync and WebDAV sync for encrypted object families |
 | Security tests | Implemented | stolen vault, tamper, TTL erasure, epoch ratchet, compromise recovery, sync visibility |
-| Release automation | Partially implemented | CI runs build gates; release workflow builds desktop, CLI/native-host, Chrome extension, checksums, and SBOM; signed installer/store validation remains external |
+| Release automation | Partially implemented | CI runs build gates; release workflow builds desktop, CLI/native-host, Chromium extension, checksums, and SBOM; signed installer/store validation remains external |
 | Docs | Partially implemented | README, SECURITY, CONTRIBUTING, LICENSE, NOTICE, `.agents` docs exist; final user guide/install/troubleshooting links still need launch validation |
 
 ## 1.0 Release Gate Mapping
@@ -36,7 +36,7 @@
 | Release checksums/SBOM | Passed | `scripts/release-metadata.mjs`, `Release` workflow `SHA256SUMS` and CycloneDX JSON generation |
 | Apache-2.0 | Passed | `LICENSE`, package metadata |
 | macOS/Windows signed installer install/upgrade/uninstall/repair | Pending external verification | Requires production signing/notarization/certificate secrets and clean-machine smoke |
-| Chrome Web Store final extension id + allowlist | Pending external verification | Requires store publication id and final native-host allowlist update |
+| Edge/Chrome store extension id + allowlist | Pending external verification | Requires store publication id and final native-host allowlist update |
 | Nextcloud real-world WebDAV smoke | Pending external verification | Mock WebDAV tests exist; real Nextcloud validation is a release checklist item |
 | Performance/accessibility/manual UX gate | Pending manual verification | No CI/nightly benchmark or accessibility report is currently committed |
 
@@ -123,14 +123,15 @@ The repository now has CI and release workflow coverage for the automatable rele
 - Required CI runs Rust fmt/clippy/test/build and Node license audit/lint/typecheck/test/build.
 - The `Release` workflow builds desktop bundles on macOS/Linux/Windows.
 - The `Release` workflow packages standalone CLI and native-host binaries on macOS/Linux/Windows.
-- The `Release` workflow produces `aipass-chrome-extension.zip` for Chrome Web Store submission.
+- The `Release` workflow produces `aipass-edge-extension.zip` for Microsoft Edge Add-ons submission (the same MV3 package can be submitted to Chrome Web Store).
+- Edge Add-ons listing copy, privacy disclosures, certification notes, and image assets live under `apps/extension/store/`.
 - The `Release` workflow now generates `SHA256SUMS` and a CycloneDX SBOM from `pnpm-lock.yaml` and `Cargo.lock`.
 
 Credential-bound release tasks still require production account setup outside the repository:
 
 - Provide macOS signing/notarization secrets and verify signed install/upgrade/uninstall.
 - Provide Windows signing certificate secrets and verify signed install/upgrade/uninstall.
-- Publish with the final Chrome Web Store extension id and install/update the native-host extension allowlist.
+- Publish with the final Edge/Chrome store extension id and install/update the native-host extension allowlist.
 - Run final signed installer smoke tests for native-host repair on macOS and Windows.
 - Run clean-machine install/upgrade/uninstall checks for macOS and Windows.
 - Run a real Nextcloud WebDAV sync smoke test.

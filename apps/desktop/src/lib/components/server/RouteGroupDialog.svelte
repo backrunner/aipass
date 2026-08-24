@@ -140,11 +140,11 @@
 
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
-    <Dialog.Overlay class="dialog-overlay" />
-    <Dialog.Content class="dialog-content">
+    <Dialog.Overlay class="route-dialog-overlay" />
+    <Dialog.Content class="route-dialog-content">
       <form class="modal" on:submit|preventDefault={save}>
         <header class="modal-header">
-          <Dialog.Title class="modal-title">
+          <Dialog.Title class="route-dialog-title">
             {route ? $t("server.editGroup") : $t("server.addGroup")}
           </Dialog.Title>
           <Dialog.Close>
@@ -239,7 +239,7 @@
 </Dialog.Root>
 
 <style lang="scss">
-  :global(.dialog-overlay) {
+  :global(.route-dialog-overlay) {
     position: fixed;
     inset: 0;
     z-index: 200;
@@ -248,11 +248,11 @@
     animation: dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  :global(.dialog-overlay[data-state="closed"]) {
+  :global(.route-dialog-overlay[data-state="closed"]) {
     animation: dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  :global(.dialog-content) {
+  :global(.route-dialog-content) {
     position: fixed;
     top: 50%;
     left: 50%;
@@ -268,7 +268,7 @@
     animation: dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  :global(.dialog-content[data-state="closed"]) {
+  :global(.route-dialog-content[data-state="closed"]) {
     animation: dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4);
   }
 
@@ -317,6 +317,11 @@
     gap: 12px;
     padding: 16px 20px;
     border-bottom: 1px solid var(--divider);
+  }
+
+  :global(.route-dialog-title) {
+    font-size: 15px;
+    font-weight: 600;
   }
 
   .close-btn {

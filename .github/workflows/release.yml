@@ -396,7 +396,7 @@ jobs:
           if-no-files-found: error
 
   extension:
-    name: Chrome extension
+    name: Microsoft Edge extension
     needs: resolve-release
     runs-on: ubuntu-22.04
     steps:
@@ -413,19 +413,25 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Set extension release version
+        run: node scripts/set-extension-release-version.mjs "${{ needs.resolve-release.outputs.version }}"
+
       - run: pnpm --filter @aipass/extension... build
 
-      - name: Package Chrome Web Store zip
+      - name: Validate Edge Add-ons package
+        run: pnpm --filter @aipass/extension edge:validate
+
+      - name: Package Microsoft Edge Add-ons zip
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          cd apps/extension/dist
-          zip -r ../../../artifacts/aipass-chrome-extension.zip .
+          test -f apps/extension/build/aipass-extension.zip
+          cp apps/extension/build/aipass-extension.zip artifacts/aipass-edge-extension.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: aipass-chrome-extension
-          path: artifacts/aipass-chrome-extension.zip
+          name: aipass-edge-extension
+          path: artifacts/aipass-edge-extension.zip
           if-no-files-found: error
 
   publish-release:

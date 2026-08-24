@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.11.0",
   "scripts": {
     "build": "turbo build",
+    "extension:edge:validate": "pnpm --filter @aipass/extension edge:validate",
     "dev": "turbo dev",
     "lint": "turbo lint",
     "licenses:audit": "node scripts/license-audit.mjs",

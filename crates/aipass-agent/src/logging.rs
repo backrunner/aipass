@@ -1,17 +1,23 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 use time::{format_description::well_known::Rfc3339, macros::format_description, OffsetDateTime};
 
 const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
 const RETAINED_LOG_FILES: usize = 5;
+const REPEAT_SUPPRESSION_WINDOW: Duration = Duration::from_secs(60);
+const MAX_TRACKED_REPEATED_LOGS: usize = 1024;
 
 static LOG_LOCK: Mutex<()> = Mutex::new(());
+static REPEATED_LOGS: LazyLock<Mutex<HashMap<RepeatLogKey, RepeatLogState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub const AGENT_LOG: &str = "agent";
 pub const NATIVE_HOST_LOG: &str = "native-host";
@@ -43,12 +49,15 @@ pub fn write_component_log(component: &str, level: &str, message: &str) {
     }
     prune_component_logs_locked(component);
 
+    let Some(message) = prepare_log_message(component, level, message) else {
+        return;
+    };
     let line = format!(
         "{} [{level}] {}\n",
         OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "unknown-time".to_string()),
-        sanitize_log_message(message)
+        message
     );
     let line_len = line.len() as u64;
     let current_len = fs::metadata(&path)
@@ -62,6 +71,65 @@ pub fn write_component_log(component: &str, level: &str, message: &str) {
         let _ = file.write_all(line.as_bytes());
         #[cfg(unix)]
         let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct RepeatLogKey {
+    component: String,
+    level: String,
+    message: String,
+}
+
+#[derive(Debug)]
+struct RepeatLogState {
+    last_written: Instant,
+    suppressed: u64,
+}
+
+fn prepare_log_message(component: &str, level: &str, message: &str) -> Option<String> {
+    prepare_log_message_at(component, level, message, Instant::now())
+}
+
+fn prepare_log_message_at(
+    component: &str,
+    level: &str,
+    message: &str,
+    now: Instant,
+) -> Option<String> {
+    let message = sanitize_log_message(message);
+    let key = RepeatLogKey {
+        component: component.to_string(),
+        level: level.to_string(),
+        message: message.clone(),
+    };
+    let Ok(mut repeated_logs) = REPEATED_LOGS.lock() else {
+        return Some(message);
+    };
+    let Some(state) = repeated_logs.get_mut(&key) else {
+        if repeated_logs.len() >= MAX_TRACKED_REPEATED_LOGS {
+            return Some(message);
+        }
+        repeated_logs.insert(
+            key,
+            RepeatLogState {
+                last_written: now,
+                suppressed: 0,
+            },
+        );
+        return Some(message);
+    };
+    if now.duration_since(state.last_written) < REPEAT_SUPPRESSION_WINDOW {
+        state.suppressed = state.suppressed.saturating_add(1);
+        return None;
+    }
+    let suppressed = state.suppressed;
+    state.last_written = now;
+    state.suppressed = 0;
+    if suppressed == 0 {
+        Some(message)
+    } else {
+        Some(format!("{message} (suppressed {suppressed} repeats)"))
     }
 }
 
@@ -136,4 +204,52 @@ fn sanitize_log_message(message: &str) -> String {
             _ => ch,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_messages_are_suppressed_and_reported() {
+        let start = Instant::now();
+        assert_eq!(
+            prepare_log_message_at(
+                "native-host-repeat-test",
+                "ERROR",
+                "extension id is not allowed",
+                start
+            ),
+            Some("extension id is not allowed".to_string())
+        );
+        assert_eq!(
+            prepare_log_message_at(
+                "native-host-repeat-test",
+                "ERROR",
+                "extension id is not allowed",
+                start + Duration::from_secs(15)
+            ),
+            None
+        );
+        assert_eq!(
+            prepare_log_message_at(
+                "native-host-repeat-test",
+                "ERROR",
+                "extension id is not allowed",
+                start + REPEAT_SUPPRESSION_WINDOW
+            ),
+            Some("extension id is not allowed (suppressed 1 repeats)".to_string())
+        );
+    }
+
+    #[test]
+    fn different_messages_are_not_suppressed() {
+        let now = Instant::now();
+        assert!(
+            prepare_log_message_at("native-host-different-test", "ERROR", "first", now).is_some()
+        );
+        assert!(
+            prepare_log_message_at("native-host-different-test", "ERROR", "second", now).is_some()
+        );
+    }
 }
