@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ArrowUpRight, Download, MonitorDown } from 'lucide-svelte';
+  import { ArrowUpRight, Download, LoaderCircle, MonitorDown } from 'lucide-svelte';
 
   interface ReleaseAsset {
     name: string;
@@ -29,6 +29,7 @@
       mobileTitle: 'Continue on your computer',
       mobileDescription: 'AIPass does not have a mobile app. Open aipass.alkinum.io on your Mac to download and use the desktop app. Windows support is coming soon.',
       downloadMac: 'Download for macOS',
+      loading: 'Loading release…',
       macOnlyNote: 'macOS only for now — Windows coming soon.',
       unavailable: 'No package in this release',
       otherReleases: 'Other releases'
@@ -40,6 +41,7 @@
       mobileTitle: '请在电脑上继续',
       mobileDescription: 'AIPass 暂无移动端应用。请在 Mac 上访问 aipass.alkinum.io，下载并使用桌面版；Windows 版本正在准备中。',
       downloadMac: '下载 macOS 版',
+      loading: '正在加载版本…',
       macOnlyNote: '目前仅支持 macOS —— Windows 版本即将推出。',
       unavailable: '该版本没有此安装包',
       otherReleases: '其他版本'
@@ -101,7 +103,7 @@
 
 </script>
 
-<div class="release-tool" data-state={state}>
+<div class="release-tool" data-state={state} aria-busy={state === 'loading'}>
   <div class="mobile-guidance">
     <span class="mobile-guidance-icon" aria-hidden="true">
       <MonitorDown size={22} strokeWidth={1.8} />
@@ -115,7 +117,12 @@
 
   <div class="release-desktop">
     {#if state === 'loading'}
-      <div class="download-button skeleton" aria-hidden="true"></div>
+      <div class="download-button skeleton" role="status" aria-live="polite">
+        <span class="loading-spinner" aria-hidden="true">
+          <LoaderCircle size={16} strokeWidth={1.8} />
+        </span>
+        <strong>{copy.loading}</strong>
+      </div>
     {:else if state === 'error'}
       <p class="release-note">
         {copy.error}
@@ -158,7 +165,10 @@
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
     gap: .9rem;
+    /* Reserve the ready-state rows so async release data cannot move the page. */
+    min-height: 6.75rem;
   }
 
   .mobile-guidance {
@@ -206,13 +216,17 @@
     display: inline-flex;
     align-items: center;
     gap: .55rem;
+    justify-content: center;
+    width: 18rem;
     min-height: 2.9rem;
     padding: 0 1.3rem;
+    box-sizing: border-box;
     border: 1px solid transparent;
     border-radius: 9px;
     background: var(--ap-primary);
     color: var(--ap-primary-foreground);
     font-size: .9rem;
+    line-height: 1.2;
     text-decoration: none;
     box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
     transition: background 160ms ease, transform 120ms ease-out;
@@ -230,21 +244,28 @@
 
   .download-button.deemphasized:hover { background: var(--ap-glass-hover); }
 
-  .download-button strong { font-weight: 600; }
+  .download-button strong {
+    font-size: .84rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
 
   .download-button small {
+    max-width: 8rem;
     padding-left: .55rem;
     border-left: 1px solid color-mix(in srgb, currentColor 22%, transparent);
     font-size: .72rem;
     font-weight: 400;
     font-family: var(--font-mono);
     opacity: .78;
+    white-space: nowrap;
   }
 
   .mac-only-note {
     margin: -.2rem 0 0;
     color: var(--ap-muted);
     font-size: .78rem;
+    line-height: 1.2;
   }
 
   .other-releases {
@@ -253,6 +274,7 @@
     gap: .25rem;
     color: var(--ap-muted);
     font-size: .78rem;
+    line-height: 1.2;
     text-decoration: none;
   }
 
@@ -265,6 +287,7 @@
     margin: 0;
     color: var(--ap-muted);
     font-size: .82rem;
+    line-height: 1.2;
   }
 
   .release-note a {
@@ -280,11 +303,18 @@
   .release-note a:hover { text-decoration: underline; text-underline-offset: .18em; }
 
   .download-button.skeleton {
-    width: 15rem;
     border: 1px solid var(--ap-line);
     background: transparent;
+    color: var(--ap-muted);
     box-shadow: none;
+    cursor: wait;
     animation: skeleton-pulse 1.4s ease-in-out infinite;
+  }
+
+  .loading-spinner { animation: loading-spin 900ms linear infinite; }
+
+  @keyframes loading-spin {
+    to { transform: rotate(360deg); }
   }
 
   @keyframes skeleton-pulse {
@@ -303,6 +333,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .download-button.skeleton { animation: none; opacity: .6; }
+    .loading-spinner { animation: none; }
     .download-button { transition: none; }
   }
 </style>
