@@ -69,6 +69,19 @@ struct DesktopWindowState {
     target: String,
 }
 
+const DESKTOP_WINDOW_SIZE_FILE: &str = "window-size.json";
+const DESKTOP_WINDOW_SIZE_TOLERANCE: f64 = 0.25;
+const MIN_DESKTOP_WINDOW_WIDTH: f64 = 960.0;
+const MIN_DESKTOP_WINDOW_HEIGHT: f64 = 640.0;
+const DEFAULT_DESKTOP_WINDOW_WIDTH: f64 = 1280.0;
+const DEFAULT_DESKTOP_WINDOW_HEIGHT: f64 = 820.0;
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct DesktopWindowSize {
+    width: f64,
+    height: f64,
+}
+
 impl DesktopWindowState {
     fn set_target(&mut self, target: &str) -> bool {
         self.target = normalize_window_target(target).to_string();
@@ -1605,6 +1618,99 @@ fn normalize_window_target(target: &str) -> &str {
     }
 }
 
+fn default_window_size(target: &str) -> DesktopWindowSize {
+    match target {
+        "unlock" => DesktopWindowSize {
+            width: 420.0,
+            height: 560.0,
+        },
+        "quick-access" => DesktopWindowSize {
+            width: 520.0,
+            height: 640.0,
+        },
+        _ => DesktopWindowSize {
+            width: DEFAULT_DESKTOP_WINDOW_WIDTH,
+            height: DEFAULT_DESKTOP_WINDOW_HEIGHT,
+        },
+    }
+}
+
+fn window_size_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
+    Ok(dir.join(DESKTOP_WINDOW_SIZE_FILE))
+}
+
+fn window_size_is_valid(size: &DesktopWindowSize) -> bool {
+    size.width.is_finite() && size.height.is_finite() && size.width > 0.0 && size.height > 0.0
+}
+
+fn window_size_within_tolerance(saved: &DesktopWindowSize, default: &DesktopWindowSize) -> bool {
+    window_size_is_valid(saved)
+        && (saved.width - default.width).abs() / default.width <= DESKTOP_WINDOW_SIZE_TOLERANCE
+        && (saved.height - default.height).abs() / default.height <= DESKTOP_WINDOW_SIZE_TOLERANCE
+}
+
+fn target_uses_persisted_window_size(target: &str) -> bool {
+    matches!(target, "main" | "server")
+}
+
+fn clamp_main_window_size(size: DesktopWindowSize) -> DesktopWindowSize {
+    DesktopWindowSize {
+        width: size.width.max(MIN_DESKTOP_WINDOW_WIDTH),
+        height: size.height.max(MIN_DESKTOP_WINDOW_HEIGHT),
+    }
+}
+
+fn load_saved_window_size(app: &AppHandle) -> Option<DesktopWindowSize> {
+    let path = window_size_path(app).ok()?;
+    let bytes = fs::read(path).ok()?;
+    let size = serde_json::from_slice::<DesktopWindowSize>(&bytes).ok()?;
+    window_size_is_valid(&size).then_some(size)
+}
+
+fn window_size_for_target(app: &AppHandle, target: &str) -> DesktopWindowSize {
+    let default = default_window_size(target);
+    if !target_uses_persisted_window_size(target) {
+        return default;
+    }
+
+    load_saved_window_size(app)
+        .filter(|saved| window_size_within_tolerance(saved, &default))
+        .map(clamp_main_window_size)
+        .unwrap_or(default)
+}
+
+fn persist_window_size_for_target(app: &AppHandle, target: &str) -> Result<(), String> {
+    if !target_uses_persisted_window_size(target) {
+        return Ok(());
+    }
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main desktop window is unavailable".to_string())?;
+    let physical_size = window.inner_size().map_err(|err| err.to_string())?;
+    let scale_factor = window.scale_factor().map_err(|err| err.to_string())?;
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err("desktop window scale factor is invalid".to_string());
+    }
+
+    let size = DesktopWindowSize {
+        width: f64::from(physical_size.width) / scale_factor,
+        height: f64::from(physical_size.height) / scale_factor,
+    };
+    if !window_size_is_valid(&size) {
+        return Err("desktop window size is invalid".to_string());
+    }
+
+    let path = window_size_path(app)?;
+    write_json_atomic(&path, &size)
+}
+
+pub(crate) fn persist_window_size(app: &AppHandle) -> Result<(), String> {
+    let target = app.state::<AppState>().window_target();
+    persist_window_size_for_target(app, &target)
+}
+
 fn prepare_window_target(app: &AppHandle, target: &str) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -1616,13 +1722,17 @@ fn prepare_window_target(app: &AppHandle, target: &str) {
         return;
     }
 
-    let (title, width, height) = match target {
-        "unlock" => ("AIPass Unlock", 420.0, 560.0),
-        "quick-access" => ("AIPass Quick Access", 520.0, 640.0),
-        _ => ("AIPass", 1280.0, 820.0),
+    let title = match target {
+        "unlock" => "AIPass Unlock",
+        "quick-access" => "AIPass Quick Access",
+        _ => "AIPass",
     };
+    let size = window_size_for_target(app, target);
     let _ = window.set_title(title);
-    let _ = window.set_size(Size::Logical(LogicalSize { width, height }));
+    let _ = window.set_size(Size::Logical(LogicalSize {
+        width: size.width,
+        height: size.height,
+    }));
     configure_window_chrome(&window);
     let _ = window.center();
 }
@@ -1654,8 +1764,14 @@ pub(crate) fn activate_window_target(app: &AppHandle, target: &str) {
     let _ = logging::log_event("desktop.window.target_requested", &[("target", target)]);
     let state = app.state::<AppState>();
     let mut window_state = state.window_state();
+    let previous_target = window_state.target.clone();
     let frontend_ready = window_state.set_target(target);
     let target = window_state.target.clone();
+    if target == "tray" && target_uses_persisted_window_size(&previous_target) {
+        if let Err(err) = persist_window_size_for_target(app, &previous_target) {
+            let _ = logging::log_event("desktop.window.size_persist_failed", &[("error", &err)]);
+        }
+    }
     prepare_window_target(app, &target);
     if frontend_ready {
         let _ = reveal_window_target(app, &target);
@@ -1936,6 +2052,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
+                let _ = persist_window_size(app);
                 let explicitly_allowed = ALLOW_PROCESS_EXIT.swap(false, Ordering::SeqCst);
                 if code.is_some() || explicitly_allowed {
                     let _ = logging::log_event("desktop.exit.allowed", &[]);
@@ -1988,6 +2105,74 @@ mod tests {
         assert_eq!(state.complete_startup(), "main");
         assert!(state.set_target("unknown"));
         assert_eq!(state.target, "main");
+    }
+
+    #[test]
+    fn desktop_window_size_restores_at_or_below_twenty_five_percent_deviation() {
+        let default = default_window_size("main");
+        let saved = DesktopWindowSize {
+            width: default.width * 1.25,
+            height: default.height * 0.75,
+        };
+
+        assert!(window_size_within_tolerance(&saved, &default));
+    }
+
+    #[test]
+    fn desktop_window_size_falls_back_when_either_dimension_exceeds_tolerance() {
+        let default = default_window_size("main");
+        let saved = DesktopWindowSize {
+            width: default.width * 1.251,
+            height: default.height,
+        };
+
+        assert!(!window_size_within_tolerance(&saved, &default));
+    }
+
+    #[test]
+    fn desktop_window_size_rejects_non_positive_and_non_finite_values() {
+        let default = default_window_size("main");
+
+        for saved in [
+            DesktopWindowSize {
+                width: 0.0,
+                height: default.height,
+            },
+            DesktopWindowSize {
+                width: f64::NAN,
+                height: default.height,
+            },
+            DesktopWindowSize {
+                width: default.width,
+                height: f64::INFINITY,
+            },
+        ] {
+            assert!(!window_size_within_tolerance(&saved, &default));
+        }
+    }
+
+    #[test]
+    fn desktop_main_window_size_never_drops_below_tauri_minimum() {
+        let clamped = clamp_main_window_size(DesktopWindowSize {
+            width: 960.0,
+            height: 615.0,
+        });
+
+        assert_eq!(clamped.width, MIN_DESKTOP_WINDOW_WIDTH);
+        assert_eq!(clamped.height, MIN_DESKTOP_WINDOW_HEIGHT);
+    }
+
+    #[test]
+    fn desktop_special_window_targets_keep_their_fixed_sizes() {
+        let main = default_window_size("main");
+
+        assert!(target_uses_persisted_window_size("main"));
+        assert!(target_uses_persisted_window_size("server"));
+        assert!(!target_uses_persisted_window_size("unlock"));
+        assert!(!target_uses_persisted_window_size("quick-access"));
+        assert_eq!(default_window_size("unlock").width, 420.0);
+        assert_eq!(default_window_size("quick-access").height, 640.0);
+        assert_eq!(default_window_size("server").width, main.width);
     }
 
     #[test]
