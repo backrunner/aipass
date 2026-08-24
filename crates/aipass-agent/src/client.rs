@@ -5,7 +5,7 @@ use crate::paths::{canonical_vault_dir, default_vault_dir, namespace_for_vault_d
 use crate::windows_service;
 use aipass_agent_protocol::{
     read_frame, write_frame, AgentErrorCode, AgentRequest, AgentResponse,
-    AuthenticatedAgentRequest, AGENT_PROTOCOL_VERSION,
+    AuthenticatedAgentRequest, SessionStatus, AGENT_PROTOCOL_VERSION,
 };
 use anyhow::Result;
 use serde::de::DeserializeOwned;
@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 const AGENT_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const AGENT_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(target_os = "macos")]
+const AUTOSTART_RECOVERY_GRACE: Duration = Duration::from_secs(3);
 /// A send should never take as long as the work behind a response.
 const REQUEST_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -152,10 +154,11 @@ impl AgentClient {
     }
 
     fn ensure_running_with_mode(&self, mode: AgentStartupMode) -> Result<()> {
-        let initial_connection_error = match self.request_raw(&AgentRequest::SessionStatus) {
-            Ok(_) => return Ok(()),
-            Err(err) => err.to_string(),
-        };
+        let initial_connection_error =
+            match self.request::<SessionStatus>(&AgentRequest::SessionStatus) {
+                Ok(_) => return Ok(()),
+                Err(err) => err.to_string(),
+            };
         #[cfg(target_os = "windows")]
         let (launched_binary, binary_candidates) = if mode.install_autostart() {
             let candidates = launcher::agent_binary_candidates();
@@ -182,8 +185,13 @@ impl AgentClient {
             Ok(agent_binary) => {
                 let candidates = launcher::agent_binary_candidates();
                 if mode.install_autostart() {
-                    match crate::autostart::install_autostart(&agent_binary, &self.config.vault_dir)
-                    {
+                    #[cfg(target_os = "macos")]
+                    let install_result =
+                        crate::autostart::ensure_autostart(&agent_binary, &self.config.vault_dir);
+                    #[cfg(not(target_os = "macos"))]
+                    let install_result =
+                        crate::autostart::install_autostart(&agent_binary, &self.config.vault_dir);
+                    match install_result {
                         Ok(_) => (Some(agent_binary), candidates),
                         Err(_) => {
                             let launch = launcher::launch_agent(
@@ -216,11 +224,25 @@ impl AgentClient {
             }
         };
         let deadline = Instant::now() + AGENT_READY_TIMEOUT;
+        #[cfg(target_os = "macos")]
+        let mut force_repair_at = mode
+            .install_autostart()
+            .then(|| Instant::now() + AUTOSTART_RECOVERY_GRACE);
         let last_connection_error = loop {
-            match self.request_raw(&AgentRequest::SessionStatus) {
+            match self.request::<SessionStatus>(&AgentRequest::SessionStatus) {
                 Ok(_) => return Ok(()),
                 Err(err) => {
                     let message = err.to_string();
+                    #[cfg(target_os = "macos")]
+                    if force_repair_at.is_some_and(|repair_at| Instant::now() >= repair_at) {
+                        force_repair_at = None;
+                        if let Some(agent_binary) = launched_binary.as_deref() {
+                            let _ = crate::autostart::install_autostart(
+                                agent_binary,
+                                &self.config.vault_dir,
+                            );
+                        }
+                    }
                     if Instant::now() >= deadline {
                         break message;
                     }
@@ -357,5 +379,17 @@ mod tests {
         assert!(companion.suppress_desktop_tray);
         assert!(!app.suppress_desktop_tray);
         assert!(autostart.suppress_desktop_tray);
+    }
+
+    #[test]
+    fn failed_status_response_is_not_treated_as_ready() {
+        let response = AgentResponse::error(
+            AgentErrorCode::ValidationFailed,
+            "unsupported agent protocol version",
+        );
+
+        let error = decode_response::<SessionStatus>(response).unwrap_err();
+
+        assert_eq!(error.code, Some(AgentErrorCode::ValidationFailed));
     }
 }

@@ -20,10 +20,11 @@
     SyncReport,
     ThemePreference
   } from "../../types";
-  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate, persistUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
+  import { checkForUpdates, clearPendingUpdate, getStoredUpdateChannel, inferUpdateChannel, installUpdate, persistUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
   import { buildTimeLabel } from "../../build";
   import { Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
+  import UpdateRestartConfirmModal from "../shared/UpdateRestartConfirmModal.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
 
   export let autoLockMinutes = 60;
@@ -55,6 +56,9 @@
   export let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
   export let serverBusy = "";
   export let onClose: () => MaybePromise = () => {};
+  export let proxyRunning = false;
+  export let onCheckProxyRunning: () => MaybePromise<boolean> = () => proxyRunning;
+  export let onUpdateChannelChanged: (channel: UpdateChannel) => MaybePromise = () => {};
   export let onSavePreferences: () => MaybePromise = () => {};
   export let onChangeMasterPassword: () => MaybePromise = () => {};
   export let onRotateVault: () => MaybePromise = () => {};
@@ -191,6 +195,9 @@
   let updateChannel: UpdateChannel = "official";
   let updateError: MessageValue = "";
   let updateErrorText = "";
+  let updateRestartConfirmOpen = false;
+  let updateInstallConfirmChecking = false;
+  let updateCheckRequestId = 0;
   $: updateErrorText = resolveMessage($t, updateError);
   $: updateProgressPercent = updateProgress?.totalBytes && updateProgress.totalBytes > 0
     ? Math.min(100, Math.round((updateProgress.downloadedBytes / updateProgress.totalBytes) * 100))
@@ -232,19 +239,30 @@
     updateChannel = next;
     persistUpdateChannel(next);
     updateCheck = undefined;
-    void runUpdateCheck();
+    void onUpdateChannelChanged(next);
+    // A stale cache must not prevent the new channel from being checked when
+    // cache cleanup is unavailable (for example during a transient IPC error).
+    void clearPendingUpdate()
+      .catch(() => undefined)
+      .then(() => runUpdateCheck());
   }
 
   async function runUpdateCheck() {
     updateChecking = true;
     updateError = "";
+    const channel = updateChannel;
+    const requestId = ++updateCheckRequestId;
     try {
-      updateCheck = await checkForUpdates(updateChannel);
+      const result = await checkForUpdates(channel);
+      if (requestId !== updateCheckRequestId || channel !== updateChannel) return;
+      updateCheck = result;
       if (updateCheck.error) updateError = updateCheck.error;
     } catch (err) {
-      updateError = isLocalizedMessage(err) ? err : String(err);
+      if (requestId === updateCheckRequestId && channel === updateChannel) {
+        updateError = isLocalizedMessage(err) ? err : String(err);
+      }
     } finally {
-      updateChecking = false;
+      if (requestId === updateCheckRequestId) updateChecking = false;
     }
   }
 
@@ -259,6 +277,20 @@
       updateProgress = undefined;
     } finally {
       updateInstalling = false;
+    }
+  }
+
+  async function requestUpdateInstall() {
+    if (updateInstalling || updateInstallConfirmChecking) return;
+    updateInstallConfirmChecking = true;
+    try {
+      if (await onCheckProxyRunning()) {
+        updateRestartConfirmOpen = true;
+        return;
+      }
+      void runUpdateInstall();
+    } finally {
+      updateInstallConfirmChecking = false;
     }
   }
 
@@ -694,8 +726,8 @@
                     </div>
                     <ProgressButton
                       variant="primary"
-                      on:click={() => runUpdateInstall()}
-                      disabled={updateInstalling}
+                      on:click={requestUpdateInstall}
+                      disabled={updateInstalling || updateInstallConfirmChecking}
                       progress={updateProgressPercent}
                       indeterminate={updateInstalling && (updateProgress?.phase === "installing" || updateProgressPercent === undefined)}
                     >
@@ -747,6 +779,11 @@
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>
+
+<UpdateRestartConfirmModal
+  bind:open={updateRestartConfirmOpen}
+  onConfirm={() => runUpdateInstall()}
+/>
 
 <style lang="scss">
   :global(.settings-overlay) {

@@ -11,7 +11,7 @@
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
-  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Button, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
+  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Brand, Button, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
@@ -25,6 +25,7 @@
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
+  import UpdateRestartConfirmModal from "./lib/components/shared/UpdateRestartConfirmModal.svelte";
   import type {
     AppPreferences,
     AuthMode,
@@ -66,7 +67,7 @@
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { buildRouteTarget, buildSingleEntryRoute, enforceSingleEnabledRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
-  import { checkForUpdates, getStoredUpdateChannel, inferUpdateChannel, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
+  import { checkForUpdates, downloadUpdate, getStoredUpdateChannel, inferUpdateChannel, installPendingUpdate, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
   import type { MessageValue } from "./lib/types";
@@ -89,6 +90,11 @@
 
   function nextFrame() {
     return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  }
+
+  function currentTimezoneOffsetMinutes(): number {
+    // Date#getTimezoneOffset is UTC minus local time; the agent expects local minus UTC.
+    return -new Date().getTimezoneOffset();
   }
 
   async function flushUiBeforeBlockingWork() {
@@ -209,6 +215,9 @@
   let updateProgress: UpdateProgress | undefined;
   let updateInstallError: MessageValue = "";
   let updateInstallErrorText = "";
+  let updatePreparing = false;
+  let updateRestartConfirmOpen = false;
+  let updateInstallConfirmChecking = false;
   let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
   let selectedId = "";
   let showForm = false;
@@ -276,7 +285,7 @@
   let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
   let serverUsageSeries: UsageTimeseriesPoint[] = [];
   let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
-  let serverStatus: ProxyStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
+  let serverStatus: ProxyStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0, successRateBps: 0 };
   let selectedRouteId = "";
   let pricingConfig: PricingConfig = { groups: [], assignments: [] };
   let toolDetections: ToolDetection[] = [];
@@ -368,22 +377,31 @@
   const UPDATE_LAST_CHECK_KEY = "aipass.updates.lastCheck";
   const UPDATE_DISMISSED_KEY = "aipass.updates.dismissed";
 
-  function scheduleAutoUpdateCheck() {
+  function scheduleAutoUpdateCheck(initial = false) {
+    const now = Date.now();
     let lastCheck = 0;
     try {
       lastCheck = Number(localStorage.getItem(UPDATE_LAST_CHECK_KEY) ?? "0");
     } catch {
       lastCheck = 0;
     }
-    if (Number.isFinite(lastCheck) && lastCheck > 0 && Date.now() - lastCheck < UPDATE_CHECK_INTERVAL_MS) {
-      return;
-    }
+    const hasValidLastCheck = Number.isFinite(lastCheck) && lastCheck > 0 && lastCheck <= now;
+    // A failed check, a clock adjustment, or corrupted localStorage must not
+    // turn the follow-up timer into a zero-delay retry loop.
+    const delay = hasValidLastCheck
+      ? Math.max(0, UPDATE_CHECK_INTERVAL_MS - (now - lastCheck))
+      : initial
+        ? UPDATE_CHECK_DELAY_MS
+        : UPDATE_CHECK_INTERVAL_MS;
+    clearTimeout(updateCheckTimer);
     updateCheckTimer = setTimeout(() => {
       void runAutoUpdateCheck();
-    }, UPDATE_CHECK_DELAY_MS);
+    }, delay);
   }
 
   async function runAutoUpdateCheck() {
+    if (updatePreparing || updateInstalling) return;
+    updatePreparing = true;
     try {
       const version = await getVersion();
       const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
@@ -391,12 +409,27 @@
       // Stamp the 24h cadence only after a check actually reached the feed,
       // so a transient failure (offline, rate limit) retries on next launch.
       if (result.error) return;
+      if (!result.available || !result.latestVersion) {
+        localStorage.setItem(UPDATE_LAST_CHECK_KEY, String(Date.now()));
+        updateAvailableVersion = "";
+        return;
+      }
+      const downloadedVersion = await downloadUpdate(channel);
+      const currentChannel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+      if (currentChannel !== channel) return;
       localStorage.setItem(UPDATE_LAST_CHECK_KEY, String(Date.now()));
-      if (!result.available || !result.latestVersion) return;
-      if (localStorage.getItem(UPDATE_DISMISSED_KEY) === result.latestVersion) return;
-      updateAvailableVersion = result.latestVersion;
+      updateProgress = undefined;
+      if (localStorage.getItem(UPDATE_DISMISSED_KEY) === downloadedVersion) {
+        updateAvailableVersion = "";
+        return;
+      }
+      updateAvailableVersion = downloadedVersion;
     } catch {
       // Background checks stay silent; manual checks in settings surface errors.
+      updateProgress = undefined;
+    } finally {
+      updatePreparing = false;
+      scheduleAutoUpdateCheck();
     }
   }
 
@@ -404,9 +437,20 @@
     try {
       localStorage.setItem(UPDATE_DISMISSED_KEY, updateAvailableVersion);
     } catch {
-      // Ignore storage failures; the prompt simply reappears on next launch.
+      // Ignore storage failures; the prompt is still dismissed for this run.
     }
     updateAvailableVersion = "";
+  }
+
+  function resetUpdatePromptForChannel() {
+    updateAvailableVersion = "";
+    updateProgress = undefined;
+    updateInstallError = "";
+    try {
+      localStorage.removeItem(UPDATE_DISMISSED_KEY);
+    } catch {
+      // Ignore storage failures; the next check still uses the new channel.
+    }
   }
 
   async function installAvailableUpdate() {
@@ -422,6 +466,29 @@
       updateProgress = undefined;
     } finally {
       updateInstalling = false;
+    }
+  }
+
+  async function checkProxyRunningForUpdate(): Promise<boolean> {
+    try {
+      serverStatus = await invokeTauri<ProxyStatus>("server_status");
+    } catch {
+      // Keep the last known state if the status probe is unavailable.
+    }
+    return serverStatus.running;
+  }
+
+  async function requestInstallAvailableUpdate() {
+    if (updateInstalling || updateInstallConfirmChecking) return;
+    updateInstallConfirmChecking = true;
+    try {
+      if (await checkProxyRunningForUpdate()) {
+        updateRestartConfirmOpen = true;
+        return;
+      }
+      void installAvailableUpdate();
+    } finally {
+      updateInstallConfirmChecking = false;
     }
   }
 
@@ -474,6 +541,15 @@
           } catch (err) {
             console.error("failed to reveal desktop window", err);
           }
+          // A package left for later is rechecked and installed after the
+          // window is visible, so an offline feed cannot hide the app at launch.
+          try {
+            const version = await getVersion();
+            const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+            await installPendingUpdate(channel);
+          } catch (err) {
+            console.error("failed to install pending desktop update", err);
+          }
         }
         if (hasTauriRuntime()) {
           unlistenVaultAuth = await listen<VaultAuthTaskStatus>("vault-auth-finished", ({ payload }) => {
@@ -509,9 +585,7 @@
             setAuthMode("unlock");
           }
           pendingServerView ||= windowTarget === "server";
-          if (windowTarget === "main") {
-            scheduleAutoUpdateCheck();
-          }
+          scheduleAutoUpdateCheck(true);
           logStartupStage("window_target_finished");
         }
         if (!status.locked && status.exists) {
@@ -828,7 +902,7 @@
     showSettings = false;
     showServer = false;
     serverConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
-    serverStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0 };
+    serverStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0, successRateBps: 0 };
     serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
     serverUsageSeries = [];
     selectedRouteId = "";
@@ -1367,7 +1441,10 @@
         console.warn("server state load failed", err);
       }
       try {
-        const nextSeries = await invokeTauri<UsageTimeseriesPoint[]>("server_usage_timeseries", { days: 30 });
+        const nextSeries = await invokeTauri<UsageTimeseriesPoint[]>("server_usage_timeseries", {
+          days: 30,
+          timezoneOffsetMinutes: currentTimezoneOffsetMinutes()
+        });
         if (!serverMutationInFlight && refreshVersion === serverMutationVersion) {
           serverUsageSeries = nextSeries;
         }
@@ -1561,6 +1638,26 @@
       };
     } catch (err) {
       error = String(err);
+    } finally {
+      endServerMutation();
+      serverBusy = "";
+    }
+  }
+
+  async function clearServerUsage(): Promise<boolean> {
+    if (serverBusy) return false;
+    serverBusy = "clear-usage";
+    beginServerMutation();
+    error = "";
+    try {
+      await invokeTauri<void>("server_usage_clear");
+      await loadServer();
+      notice = localizedMessage("notice.usageCleared");
+      setTimeout(() => (notice = ""), 1800);
+      return true;
+    } catch (err) {
+      error = String(err);
+      return false;
     } finally {
       endServerMutation();
       serverBusy = "";
@@ -2262,7 +2359,14 @@
   />
 
   {#if !statusReady}
-    <div class="boot-shell" aria-hidden="true"></div>
+    <main class="boot-shell" aria-live="polite" aria-busy="true">
+      <div class="boot-content">
+        <Brand size="md" />
+        <div class="boot-status" role="status" aria-label={$t("common.loading")}>
+          <span class="boot-spinner" aria-hidden="true"></span>
+        </div>
+      </div>
+    </main>
   {:else}
     {#if showAuthScreen}
       <AuthScreen
@@ -2331,11 +2435,13 @@
           {selectedRouteId}
           busy={serverBusy}
           {toolDetections}
+          onRefreshToolDetections={loadToolDetections}
           onStart={startServer}
           onStop={stopServer}
           onSaveConfig={saveServerConfig}
           onRotateToken={rotateServerToken}
           onCopyToken={copyServerToken}
+          onClearUsage={clearServerUsage}
           onPreviewIntegration={previewProxyIntegration}
           onApplyIntegration={applyProxyIntegration}
         />
@@ -2401,6 +2507,7 @@
         pricingGroups={pricingConfig.groups}
         pricingAssignments={pricingConfig.assignments}
         {toolDetections}
+        onRefreshToolDetections={loadToolDetections}
         onSetPricingAssignment={setPricingAssignment}
         onUpsertPricingGroup={upsertPricingGroup}
         onDeletePricingGroup={deletePricingGroup}
@@ -2418,8 +2525,8 @@
         <ProgressButton
           variant="primary"
           size="sm"
-          on:click={() => installAvailableUpdate()}
-          disabled={updateInstalling}
+          on:click={requestInstallAvailableUpdate}
+          disabled={updateInstalling || updateInstallConfirmChecking}
           progress={updateProgressPercent}
           indeterminate={updateInstalling && (updateProgress?.phase === "installing" || updateProgressPercent === undefined)}
         >
@@ -2445,6 +2552,11 @@
     </div>
   {/if}
 </div>
+
+<UpdateRestartConfirmModal
+  bind:open={updateRestartConfirmOpen}
+  onConfirm={() => installAvailableUpdate()}
+/>
 
 {#if showSettings && !status.locked}
   <SettingsPanel
@@ -2475,6 +2587,9 @@
     {devices}
     {devicesLoading}
     bind:serverConfig
+    proxyRunning={serverStatus.running}
+    onCheckProxyRunning={checkProxyRunningForUpdate}
+    onUpdateChannelChanged={resetUpdatePromptForChannel}
     {serverBusy}
     onClose={closeSettings}
     onSavePreferences={savePreferences}
@@ -2559,7 +2674,50 @@
 
   .boot-shell {
     flex: 1;
-    background: var(--bg);
+    display: grid;
+    place-items: center;
+    min-height: 0;
+    padding: 48px 24px 24px;
+    background: transparent;
+  }
+
+  .boot-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 22px;
+    color: var(--text-secondary);
+  }
+
+  .boot-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 20px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+  }
+
+  .boot-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid color-mix(in oklab, var(--accent) 20%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: boot-spin 800ms linear infinite;
+  }
+
+  @keyframes boot-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .boot-spinner {
+      animation: none;
+      border-top-color: var(--accent);
+    }
   }
 
   .workspace {

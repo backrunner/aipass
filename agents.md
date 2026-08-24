@@ -1,5 +1,10 @@
 # Commit Convention
 
+## Desktop UI Validation
+
+- The desktop UI is shipped inside Tauri. The authoritative minimum viewport is `960x640`, from `apps/desktop/src-tauri/tauri.conf.json` and `tauri.dev.conf.json`.
+- Review and verify desktop pages, lists, forms, and dialogs at the Tauri minimum window size. Do not add phone-sized or browser-only responsive workarounds unless a separate product surface explicitly requires them.
+
 Use this format for all commits:
 
 `op(component): desc`

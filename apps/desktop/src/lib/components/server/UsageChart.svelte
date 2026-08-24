@@ -21,7 +21,10 @@
   type ChartSegment = UsageTimeseriesModel & { tokenCount: number; color: string };
 
   function dateKey(date: Date): string {
-    return date.toISOString().slice(0, 10);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
   }
 
   function emptyPoint(date: string): UsageTimeseriesPoint {
@@ -41,10 +44,10 @@
     const byDate = new Map(points.map((point) => [point.date, point]));
     const result: UsageTimeseriesPoint[] = [];
     const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
     for (let index = days - 1; index >= 0; index -= 1) {
       const date = new Date(today);
-      date.setUTCDate(date.getUTCDate() - index);
+      date.setDate(date.getDate() - index);
       const key = dateKey(date);
       result.push(byDate.get(key) ?? emptyPoint(key));
     }

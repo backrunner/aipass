@@ -60,6 +60,21 @@ export async function checkForUpdates(channel: UpdateChannel): Promise<UpdateChe
   return invoke<UpdateCheckResult>("check_for_updates", { channel });
 }
 
+export async function downloadUpdate(channel: UpdateChannel): Promise<string> {
+  if (!hasTauri()) throw localizedMessage("error.updatesUnavailable");
+  return invoke<string>("download_update", { channel });
+}
+
+export async function installPendingUpdate(channel: UpdateChannel): Promise<boolean> {
+  if (!hasTauri()) return false;
+  return invoke<boolean>("install_pending_update", { channel });
+}
+
+export async function clearPendingUpdate(): Promise<void> {
+  if (!hasTauri()) return;
+  await invoke("clear_pending_update");
+}
+
 export async function installUpdate(channel: UpdateChannel): Promise<void> {
   if (!hasTauri()) throw localizedMessage("error.updatesUnavailable");
   await invoke("install_update", { channel });

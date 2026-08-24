@@ -156,6 +156,7 @@
     z-index: 201;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     gap: 12px;
     width: min(760px, calc(100vw - 48px));
     max-height: min(640px, calc(100vh - 64px));
@@ -164,6 +165,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-modal);
+    overflow: hidden;
     transform: translate(-50%, -50%);
     animation: preview-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }

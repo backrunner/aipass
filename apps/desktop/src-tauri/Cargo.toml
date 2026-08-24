@@ -31,8 +31,10 @@ aipass-storage = { path = "../../../crates/aipass-storage" }
 aipass-sync = { path = "../../../crates/aipass-sync" }
 aipass-vault = { path = "../../../crates/aipass-vault" }
 anyhow.workspace = true
+base64.workspace = true
 directories.workspace = true
 interprocess.workspace = true
+minisign-verify = "0.2"
 reqwest.workspace = true
 semver.workspace = true
 serde.workspace = true

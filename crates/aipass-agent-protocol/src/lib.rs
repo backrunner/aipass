@@ -501,8 +501,14 @@ pub enum AgentRequest {
     ServerTokenRotate { route_id: Uuid },
     #[serde(rename = "server.usage.summary")]
     ServerUsageSummary,
+    #[serde(rename = "server.usage.clear")]
+    ServerUsageClear,
     #[serde(rename = "server.usage_timeseries")]
-    ServerUsageTimeseries { days: u32 },
+    ServerUsageTimeseries {
+        days: u32,
+        #[serde(default)]
+        timezone_offset_minutes: i32,
+    },
     #[serde(rename = "server.pricing_config.get")]
     ServerPricingConfigGet,
     #[serde(rename = "server.pricing_assignment.set")]
@@ -1120,5 +1126,27 @@ mod tests {
         assert_eq!(value["request"]["entryIds"][0], Uuid::nil().to_string());
         assert_eq!(value["request"]["limit"], 4);
         assert!(value["request"].get("entry_ids").is_none());
+    }
+
+    #[test]
+    fn usage_clear_request_has_a_stable_wire_name() {
+        let value = serde_json::to_value(AgentRequest::ServerUsageClear).unwrap();
+        assert_eq!(value["type"], "server.usage.clear");
+    }
+
+    #[test]
+    fn usage_timeseries_defaults_to_utc_for_older_clients() {
+        let request: AgentRequest = serde_json::from_value(serde_json::json!({
+            "type": "server.usage_timeseries",
+            "days": 7
+        }))
+        .unwrap();
+        assert!(matches!(
+            request,
+            AgentRequest::ServerUsageTimeseries {
+                days: 7,
+                timezone_offset_minutes: 0
+            }
+        ));
     }
 }

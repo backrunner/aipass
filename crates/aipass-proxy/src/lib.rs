@@ -243,6 +243,10 @@ pub struct ProxyStatus {
     /// Tokens (input + output + cache) consumed in the last 60 seconds (for TPM display).
     #[serde(default)]
     pub recent_tokens: u64,
+    #[serde(default)]
+    pub success_rate_bps: u16,
+    #[serde(default)]
+    pub average_first_token_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -251,6 +255,8 @@ pub struct UsageRecord {
     pub id: Uuid,
     pub started_at: i64,
     pub duration_ms: u64,
+    #[serde(default)]
+    pub first_token_ms: Option<u64>,
     pub route_id: Uuid,
     pub provider_entry_id: Uuid,
     pub secret_id: String,
@@ -293,6 +299,8 @@ pub struct UsageRow {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
+    pub status: u16,
+    pub first_token_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -310,8 +318,49 @@ struct AttemptStats {
     attempt_count: u64,
     completed_attempts: u64,
     successful_attempts: u64,
-    first_token_total_ms: u64,
-    first_token_samples: u64,
+}
+
+#[derive(Default)]
+struct RequestStats {
+    request_count: u64,
+    successful_requests: u64,
+    recent_first_tokens: VecDeque<Option<u64>>,
+}
+
+impl RequestStats {
+    fn observe(&mut self, row: &UsageRow) {
+        self.request_count = self.request_count.saturating_add(1);
+        if (200..300).contains(&row.status) {
+            self.successful_requests = self.successful_requests.saturating_add(1);
+        }
+        self.recent_first_tokens.push_back(row.first_token_ms);
+        while self.recent_first_tokens.len() > 100 {
+            self.recent_first_tokens.pop_front();
+        }
+    }
+
+    fn success_rate_bps(&self) -> u16 {
+        if self.request_count == 0 {
+            return 0;
+        }
+        let bps = self
+            .successful_requests
+            .saturating_mul(10_000)
+            .saturating_add(self.request_count / 2)
+            / self.request_count;
+        u16::try_from(bps.min(10_000)).unwrap_or(10_000)
+    }
+
+    fn average_first_token_ms(&self) -> Option<u64> {
+        let (total, count) = self
+            .recent_first_tokens
+            .iter()
+            .flatten()
+            .fold((0_u64, 0_u64), |(total, count), value| {
+                (total.saturating_add(*value), count.saturating_add(1))
+            });
+        (count > 0).then(|| total / count)
+    }
 }
 
 impl AttemptStats {
@@ -321,29 +370,8 @@ impl AttemptStats {
             self.completed_attempts = self.completed_attempts.saturating_add(1);
             if success {
                 self.successful_attempts = self.successful_attempts.saturating_add(1);
-                if let Some(first_token_ms) = row.first_token_ms {
-                    self.first_token_total_ms =
-                        self.first_token_total_ms.saturating_add(first_token_ms);
-                    self.first_token_samples = self.first_token_samples.saturating_add(1);
-                }
             }
         }
-    }
-
-    fn success_rate_bps(self) -> u16 {
-        if self.completed_attempts == 0 {
-            return 0;
-        }
-        let bps = self
-            .successful_attempts
-            .saturating_mul(10_000)
-            .saturating_add(self.completed_attempts / 2)
-            / self.completed_attempts;
-        u16::try_from(bps.min(10_000)).unwrap_or(10_000)
-    }
-
-    fn average_first_token_ms(self) -> Option<u64> {
-        (self.first_token_samples > 0).then(|| self.first_token_total_ms / self.first_token_samples)
     }
 }
 
@@ -359,7 +387,22 @@ impl UsageStore {
             std::fs::create_dir_all(parent).map_err(ProxyError::Io)?;
         }
         let connection = Connection::open(&path).map_err(ProxyError::Sqlite)?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS proxy_usage (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, route_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, inbound_protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, status INTEGER NOT NULL, attempts INTEGER NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_creation_tokens INTEGER NOT NULL, estimated_cost_micros INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS proxy_usage_started_at_idx ON proxy_usage(started_at); CREATE TABLE IF NOT EXISTS proxy_attempts (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, first_token_ms INTEGER, route_id TEXT NOT NULL, target_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, status INTEGER, success INTEGER); CREATE INDEX IF NOT EXISTS proxy_attempts_started_at_idx ON proxy_attempts(started_at)").map_err(ProxyError::Sqlite)?;
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS proxy_usage (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, first_token_ms INTEGER, route_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, inbound_protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, status INTEGER NOT NULL, attempts INTEGER NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_creation_tokens INTEGER NOT NULL, estimated_cost_micros INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS proxy_usage_started_at_idx ON proxy_usage(started_at); CREATE TABLE IF NOT EXISTS proxy_attempts (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, first_token_ms INTEGER, route_id TEXT NOT NULL, target_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, status INTEGER, success INTEGER); CREATE INDEX IF NOT EXISTS proxy_attempts_started_at_idx ON proxy_attempts(started_at)").map_err(ProxyError::Sqlite)?;
+        let has_first_token = connection
+            .prepare("PRAGMA table_info(proxy_usage)")
+            .map_err(ProxyError::Sqlite)?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(ProxyError::Sqlite)?
+            .filter_map(Result::ok)
+            .any(|name| name == "first_token_ms");
+        if !has_first_token {
+            connection
+                .execute(
+                    "ALTER TABLE proxy_usage ADD COLUMN first_token_ms INTEGER",
+                    [],
+                )
+                .map_err(ProxyError::Sqlite)?;
+        }
         Ok(Self {
             path,
             connection: Mutex::new(connection),
@@ -372,7 +415,7 @@ impl UsageStore {
 
     pub fn record(&self, item: &UsageRecord) -> Result<(), ProxyError> {
         let conn = self.connection.lock().map_err(|_| ProxyError::Poisoned)?;
-        conn.execute("INSERT OR REPLACE INTO proxy_usage (id, started_at, duration_ms, route_id, provider_entry_id, secret_id, model, inbound_protocol, upstream_protocol, status, attempts, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_micros) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)", params![item.id.to_string(), item.started_at, item.duration_ms, item.route_id.to_string(), item.provider_entry_id.to_string(), item.secret_id, item.model, serde_json::to_string(&item.inbound_protocol).unwrap_or_default(), serde_json::to_string(&item.upstream_protocol).unwrap_or_default(), item.status, item.attempts, item.input_tokens, item.output_tokens, item.cache_read_tokens, item.cache_creation_tokens, item.estimated_cost_micros]).map_err(ProxyError::Sqlite)?;
+        conn.execute("INSERT OR REPLACE INTO proxy_usage (id, started_at, duration_ms, first_token_ms, route_id, provider_entry_id, secret_id, model, inbound_protocol, upstream_protocol, status, attempts, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_micros) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)", params![item.id.to_string(), item.started_at, item.duration_ms, item.first_token_ms, item.route_id.to_string(), item.provider_entry_id.to_string(), item.secret_id, item.model, serde_json::to_string(&item.inbound_protocol).unwrap_or_default(), serde_json::to_string(&item.upstream_protocol).unwrap_or_default(), item.status, item.attempts, item.input_tokens, item.output_tokens, item.cache_read_tokens, item.cache_creation_tokens, item.estimated_cost_micros]).map_err(ProxyError::Sqlite)?;
         Ok(())
     }
 
@@ -425,11 +468,16 @@ impl UsageStore {
 
     pub fn summary(&self, cost: impl Fn(&UsageRow) -> u64) -> Result<UsageAggregate, ProxyError> {
         let mut aggregate = UsageAggregate::default();
+        let mut request_stats = RequestStats::default();
         let mut providers: HashMap<(Uuid, String), (ProviderUsageAggregate, i64)> = HashMap::new();
         let mut models: HashMap<(Uuid, String, Option<String>), (ModelUsageAggregate, i64)> =
             HashMap::new();
+        let mut provider_request_stats: HashMap<(Uuid, String), RequestStats> = HashMap::new();
+        let mut model_request_stats: HashMap<(Uuid, String, Option<String>), RequestStats> =
+            HashMap::new();
         self.visit_rows_since(None, |_, row| {
             let row_cost = cost(&row);
+            request_stats.observe(&row);
             aggregate.request_count = aggregate.request_count.saturating_add(1);
             aggregate.input_tokens = aggregate.input_tokens.saturating_add(row.input_tokens);
             aggregate.output_tokens = aggregate.output_tokens.saturating_add(row.output_tokens);
@@ -442,7 +490,7 @@ impl UsageStore {
             aggregate.estimated_cost_micros =
                 aggregate.estimated_cost_micros.saturating_add(row_cost);
             let key = (row.provider_entry_id, row.secret_id.clone());
-            let (provider, last_started) = providers.entry(key).or_insert_with(|| {
+            let (provider, last_started) = providers.entry(key.clone()).or_insert_with(|| {
                 (
                     ProviderUsageAggregate {
                         provider_entry_id: row.provider_entry_id,
@@ -474,6 +522,10 @@ impl UsageStore {
             provider.estimated_cost_micros =
                 provider.estimated_cost_micros.saturating_add(row_cost);
             *last_started = (*last_started).max(row.started_at);
+            provider_request_stats
+                .entry(key.clone())
+                .or_default()
+                .observe(&row);
 
             let model_key = (
                 row.provider_entry_id,
@@ -484,8 +536,8 @@ impl UsageStore {
                 (
                     ModelUsageAggregate {
                         provider_entry_id: model_key.0,
-                        secret_id: model_key.1,
-                        model: model_key.2,
+                        secret_id: model_key.1.clone(),
+                        model: model_key.2.clone(),
                         request_count: 0,
                         input_tokens: 0,
                         output_tokens: 0,
@@ -512,6 +564,10 @@ impl UsageStore {
                 .saturating_add(row.cache_creation_tokens);
             model.estimated_cost_micros = model.estimated_cost_micros.saturating_add(row_cost);
             *last_started = (*last_started).max(row.started_at);
+            model_request_stats
+                .entry(model_key)
+                .or_default()
+                .observe(&row);
         })?;
         let mut attempt_stats = AttemptStats::default();
         let mut provider_attempts: HashMap<(Uuid, String), AttemptStats> = HashMap::new();
@@ -547,8 +603,6 @@ impl UsageStore {
             provider.attempt_count = stats.attempt_count;
             provider.completed_attempts = stats.completed_attempts;
             provider.successful_attempts = stats.successful_attempts;
-            provider.success_rate_bps = stats.success_rate_bps();
-            provider.average_first_token_ms = stats.average_first_token_ms();
 
             let model_key = (
                 row.provider_entry_id,
@@ -582,21 +636,37 @@ impl UsageStore {
             model.attempt_count = stats.attempt_count;
             model.completed_attempts = stats.completed_attempts;
             model.successful_attempts = stats.successful_attempts;
-            model.success_rate_bps = stats.success_rate_bps();
-            model.average_first_token_ms = stats.average_first_token_ms();
         })?;
         aggregate.attempt_count = attempt_stats.attempt_count;
         aggregate.completed_attempts = attempt_stats.completed_attempts;
         aggregate.successful_attempts = attempt_stats.successful_attempts;
-        aggregate.success_rate_bps = attempt_stats.success_rate_bps();
-        aggregate.average_first_token_ms = attempt_stats.average_first_token_ms();
+        aggregate.success_rate_bps = request_stats.success_rate_bps();
+        aggregate.average_first_token_ms = request_stats.average_first_token_ms();
         let mut providers: Vec<(ProviderUsageAggregate, i64)> = providers.into_values().collect();
+        for (provider, _) in &mut providers {
+            let key = (provider.provider_entry_id, provider.secret_id.clone());
+            if let Some(stats) = provider_request_stats.get(&key) {
+                provider.success_rate_bps = stats.success_rate_bps();
+                provider.average_first_token_ms = stats.average_first_token_ms();
+            }
+        }
         providers.sort_by_key(|provider| std::cmp::Reverse(provider.1));
         aggregate.providers = providers
             .into_iter()
             .map(|(provider, _)| provider)
             .collect();
         let mut models: Vec<(ModelUsageAggregate, i64)> = models.into_values().collect();
+        for (model, _) in &mut models {
+            let key = (
+                model.provider_entry_id,
+                model.secret_id.clone(),
+                model.model.clone(),
+            );
+            if let Some(stats) = model_request_stats.get(&key) {
+                model.success_rate_bps = stats.success_rate_bps();
+                model.average_first_token_ms = stats.average_first_token_ms();
+            }
+        }
         models.sort_by_key(|model| std::cmp::Reverse(model.1));
         aggregate.models = models.into_iter().map(|(model, _)| model).collect();
         Ok(aggregate)
@@ -605,14 +675,17 @@ impl UsageStore {
     pub fn timeseries(
         &self,
         days: u32,
+        timezone_offset_minutes: i32,
         cost: impl Fn(&UsageRow) -> u64,
     ) -> Result<Vec<UsageTimeseriesPoint>, ProxyError> {
         let days = i64::from(days.max(1));
-        let today_start = now_unix() / 86_400 * 86_400;
+        let timezone_offset_minutes = timezone_offset_minutes.clamp(-1_440, 1_440);
+        let timezone_offset_seconds = i64::from(timezone_offset_minutes) * 60;
+        let today_start = local_day_start(now_unix(), timezone_offset_seconds);
         let cutoff = today_start - (days - 1) * 86_400;
         let mut buckets: std::collections::BTreeMap<String, UsageTimeseriesPoint> =
             std::collections::BTreeMap::new();
-        self.visit_rows_since(Some(cutoff), |date, row| {
+        self.visit_rows_since_with_offset(Some(cutoff), timezone_offset_seconds, |date, row| {
             let point = buckets
                 .entry(date.clone())
                 .or_insert_with(|| UsageTimeseriesPoint {
@@ -703,10 +776,20 @@ impl UsageStore {
     fn visit_rows_since(
         &self,
         since: Option<i64>,
+        visit: impl FnMut(String, UsageRow),
+    ) -> Result<(), ProxyError> {
+        self.visit_rows_since_with_offset(since, 0, visit)
+    }
+
+    fn visit_rows_since_with_offset(
+        &self,
+        since: Option<i64>,
+        timezone_offset_seconds: i64,
         mut visit: impl FnMut(String, UsageRow),
     ) -> Result<(), ProxyError> {
         let conn = self.connection.lock().map_err(|_| ProxyError::Poisoned)?;
-        let columns = "date(started_at, 'unixepoch'), started_at, provider_entry_id, secret_id, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens";
+        let date_modifier = format!("{timezone_offset_seconds:+} seconds");
+        let columns = format!("date(started_at, 'unixepoch', '{date_modifier}'), started_at, provider_entry_id, secret_id, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, status, first_token_ms");
         let sql = if since.is_some() {
             format!("SELECT {columns} FROM proxy_usage WHERE started_at >= ?1 ORDER BY started_at")
         } else {
@@ -755,6 +838,10 @@ fn decode_usage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, UsageR
             output_tokens: row.get::<_, i64>(6)?.max(0) as u64,
             cache_read_tokens: row.get::<_, i64>(7)?.max(0) as u64,
             cache_creation_tokens: row.get::<_, i64>(8)?.max(0) as u64,
+            status: row.get::<_, i64>(9)?.clamp(0, u16::MAX as i64) as u16,
+            first_token_ms: row
+                .get::<_, Option<i64>>(10)?
+                .map(|value| value.max(0) as u64),
         },
     ))
 }
@@ -861,6 +948,9 @@ struct RuntimeStats {
     requests: u64,
     failures: u64,
     last_error: Option<String>,
+    first_token_samples: VecDeque<Option<u64>>,
+    recent_request_times: VecDeque<Instant>,
+    recent_token_totals: VecDeque<(Instant, u64)>,
 }
 
 #[derive(Default)]
@@ -970,12 +1060,62 @@ impl ProxyHandle {
                 )
             })
             .unwrap_or_default();
-        let stats = self
-            .state
-            .stats
-            .lock()
-            .map(|s| (s.requests, s.failures, s.last_error.clone()))
+        let stats = self.state.stats.lock();
+        let (
+            requests,
+            failures,
+            last_error,
+            average_first_token_ms,
+            recent_requests,
+            recent_tokens,
+        ) = stats
+            .as_ref()
+            .map(|stats| {
+                let cutoff = Instant::now() - Duration::from_secs(60);
+                let mut recent_request_times = stats.recent_request_times.clone();
+                while recent_request_times
+                    .front()
+                    .is_some_and(|time| *time < cutoff)
+                {
+                    recent_request_times.pop_front();
+                }
+                let mut recent_token_totals = stats.recent_token_totals.clone();
+                while recent_token_totals
+                    .front()
+                    .is_some_and(|(time, _)| *time < cutoff)
+                {
+                    recent_token_totals.pop_front();
+                }
+                let (total, count) = stats
+                    .first_token_samples
+                    .iter()
+                    .flatten()
+                    .fold((0_u64, 0_u64), |(total, count), value| {
+                        (total.saturating_add(*value), count.saturating_add(1))
+                    });
+                (
+                    stats.requests,
+                    stats.failures,
+                    stats.last_error.clone(),
+                    (count > 0).then(|| total / count),
+                    recent_request_times.len() as u64,
+                    recent_token_totals.iter().map(|(_, tokens)| *tokens).sum(),
+                )
+            })
             .unwrap_or_default();
+        let success_rate_bps = if requests == 0 {
+            0
+        } else {
+            u16::try_from(
+                requests
+                    .saturating_sub(failures)
+                    .saturating_mul(10_000)
+                    .saturating_add(requests / 2)
+                    .checked_div(requests)
+                    .unwrap_or_default(),
+            )
+            .unwrap_or(10_000)
+        };
         ProxyStatus {
             running: self
                 .thread
@@ -984,11 +1124,13 @@ impl ProxyHandle {
             enabled: config.0,
             bind_addr: self.bind_addr.clone(),
             active_routes: config.1,
-            requests: stats.0,
-            failures: stats.1,
-            last_error: stats.2,
-            recent_requests: 0,
-            recent_tokens: 0,
+            requests,
+            failures,
+            last_error,
+            recent_requests,
+            recent_tokens,
+            success_rate_bps,
+            average_first_token_ms,
         }
     }
 
@@ -1589,9 +1731,23 @@ async fn handle_request(
         );
         targets.rotate_left(start);
     }
+    // Keep an identity for a request that is rejected after every target is
+    // filtered by its circuit breaker. Such failures still belong in the
+    // request-level usage history and must not disappear from the denominator.
+    let mut failure_target = targets.first().map(|target| {
+        (
+            target.config.provider_entry_id,
+            target.config.secret_id.clone(),
+        )
+    });
     targets.retain(|target| !circuit_open(&state, target.config.id));
     targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
+    let target_attempts = u8::try_from(targets.len()).unwrap_or(u8::MAX);
     for (attempt_index, target) in targets.into_iter().enumerate() {
+        failure_target = Some((
+            target.config.provider_entry_id,
+            target.config.secret_id.clone(),
+        ));
         let attempt_started_at = now_unix();
         let attempt_started = Instant::now();
         let attempts = u8::try_from(attempt_index + 1).unwrap_or(u8::MAX);
@@ -1913,6 +2069,7 @@ async fn handle_request(
             id: Uuid::new_v4(),
             started_at,
             duration_ms: started.elapsed().as_millis() as u64,
+            first_token_ms,
             route_id: route.config.id,
             provider_entry_id: target.config.provider_entry_id,
             secret_id: target.config.secret_id.clone(),
@@ -2074,21 +2231,31 @@ async fn handle_request(
         let response = builder.body(stream_body).unwrap_or_else(|_| {
             error_response(StatusCode::BAD_GATEWAY, "failed to build proxy response")
         });
-        if let Ok(mut stats) = state.stats.lock() {
-            stats.requests += 1;
-            if !status.is_success() {
-                stats.failures += 1;
-            } else {
-                stats.last_error = None;
-            }
-        }
         return Ok(response);
     }
     let diagnostic = last_error.unwrap_or_else(|| "all upstream targets failed".into());
-    if let Ok(mut stats) = state.stats.lock() {
-        stats.requests += 1;
-        stats.failures += 1;
-        stats.last_error = Some(diagnostic);
+    record_request(&state, false, None);
+    set_error(&state, diagnostic);
+    if let Some((provider_entry_id, secret_id)) = failure_target {
+        let _ = state.usage.record(&UsageRecord {
+            id: Uuid::new_v4(),
+            started_at,
+            duration_ms: started.elapsed().as_millis() as u64,
+            first_token_ms: None,
+            route_id: route.config.id,
+            provider_entry_id,
+            secret_id,
+            model,
+            inbound_protocol: route.config.inbound_protocol,
+            upstream_protocol: route.config.upstream_protocol,
+            status: StatusCode::BAD_GATEWAY.as_u16(),
+            attempts: target_attempts,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            estimated_cost_micros: 0,
+        });
     }
     Ok(error_response(
         StatusCode::BAD_GATEWAY,
@@ -2680,7 +2847,19 @@ where
             );
         }
         merge_usage(&mut observed_usage, usage_from_wire_bytes(protocol, &tail));
+        record_recent_tokens(
+            &failure_state,
+            observed_usage
+                .input_tokens
+                .saturating_add(observed_usage.output_tokens)
+                .saturating_add(observed_usage.cache_read_tokens)
+                .saturating_add(observed_usage.cache_creation_tokens),
+        );
         record.duration_ms = started.elapsed().as_millis() as u64;
+        if !stream_succeeded {
+            record.status = StatusCode::BAD_GATEWAY.as_u16();
+        }
+        record_request(&failure_state, stream_succeeded, record.first_token_ms);
         record.input_tokens = observed_usage.input_tokens;
         record.output_tokens = observed_usage.output_tokens;
         record.cache_read_tokens = observed_usage.cache_read_tokens;
@@ -3044,15 +3223,58 @@ fn error_response(status: StatusCode, message: &str) -> Response<BoxBody> {
 }
 fn set_error(state: &RuntimeState, error: String) {
     if let Ok(mut stats) = state.stats.lock() {
-        stats.failures += 1;
         stats.last_error = Some(error);
     }
 }
+
+fn record_request(state: &RuntimeState, success: bool, first_token_ms: Option<u64>) {
+    if let Ok(mut stats) = state.stats.lock() {
+        stats.requests = stats.requests.saturating_add(1);
+        if !success {
+            stats.failures = stats.failures.saturating_add(1);
+        } else {
+            stats.last_error = None;
+        }
+        stats.first_token_samples.push_back(first_token_ms);
+        while stats.first_token_samples.len() > 100 {
+            stats.first_token_samples.pop_front();
+        }
+        stats.recent_request_times.push_back(Instant::now());
+        let cutoff = Instant::now() - Duration::from_secs(60);
+        while stats
+            .recent_request_times
+            .front()
+            .is_some_and(|time| *time < cutoff)
+        {
+            stats.recent_request_times.pop_front();
+        }
+    }
+}
+
+fn record_recent_tokens(state: &RuntimeState, tokens: u64) {
+    if let Ok(mut stats) = state.stats.lock() {
+        let now = Instant::now();
+        stats.recent_token_totals.push_back((now, tokens));
+        let cutoff = now - Duration::from_secs(60);
+        while stats
+            .recent_token_totals
+            .front()
+            .is_some_and(|(time, _)| *time < cutoff)
+        {
+            stats.recent_token_totals.pop_front();
+        }
+    }
+}
+
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
+}
+
+fn local_day_start(timestamp: i64, timezone_offset_seconds: i64) -> i64 {
+    (timestamp + timezone_offset_seconds).div_euclid(86_400) * 86_400 - timezone_offset_seconds
 }
 
 #[cfg(test)]
@@ -3599,6 +3821,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 started_at: 1,
                 duration_ms: 2,
+                first_token_ms: None,
                 route_id: Uuid::new_v4(),
                 provider_entry_id: Uuid::new_v4(),
                 secret_id: "key".into(),
@@ -3626,6 +3849,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 started_at: 1,
                 duration_ms: 2,
+                first_token_ms: None,
                 route_id: Uuid::new_v4(),
                 provider_entry_id: Uuid::new_v4(),
                 secret_id: "key".into(),
@@ -4896,7 +5120,7 @@ mod tests {
         let summary = usage.summary(|_| 0).unwrap();
         assert_eq!(summary.attempt_count, 2);
         assert_eq!(summary.successful_attempts, 1);
-        assert_eq!(summary.success_rate_bps, 5_000);
+        assert_eq!(summary.success_rate_bps, 10_000);
     }
 
     #[test]
@@ -4956,6 +5180,7 @@ mod tests {
             id: Uuid::new_v4(),
             started_at,
             duration_ms: 1,
+            first_token_ms: None,
             route_id: Uuid::new_v4(),
             provider_entry_id: Uuid::new_v4(),
             secret_id: "key".into(),
@@ -4984,7 +5209,7 @@ mod tests {
             .record(&record(today_start - 10 * 86_400, 99, None))
             .unwrap();
 
-        let points = store.timeseries(7, |_| 3).unwrap();
+        let points = store.timeseries(7, 0, |_| 3).unwrap();
         assert_eq!(points.len(), 2);
         assert_eq!(points[0].request_count, 1);
         assert_eq!(points[0].input_tokens, 7);
@@ -5008,6 +5233,40 @@ mod tests {
     }
 
     #[test]
+    fn usage_timeseries_uses_the_requested_local_timezone() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = UsageStore::open(temp.path().join("usage.sqlite")).unwrap();
+        let record = |started_at| UsageRecord {
+            id: Uuid::new_v4(),
+            started_at,
+            duration_ms: 1,
+            first_token_ms: None,
+            route_id: Uuid::new_v4(),
+            provider_entry_id: Uuid::new_v4(),
+            secret_id: "key".into(),
+            model: None,
+            inbound_protocol: ProxyProtocol::OpenAiResponses,
+            upstream_protocol: ProxyProtocol::OpenAiResponses,
+            status: 200,
+            attempts: 1,
+            input_tokens: 1,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            estimated_cost_micros: 3,
+        };
+        let offset_seconds = 8 * 60 * 60;
+        let local_today_start = local_day_start(now_unix(), offset_seconds);
+        store.record(&record(local_today_start - 60)).unwrap();
+        store.record(&record(local_today_start + 60)).unwrap();
+
+        let points = store.timeseries(2, 8 * 60, |_| 3).unwrap();
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].input_tokens, 1);
+        assert_eq!(points[1].input_tokens, 1);
+    }
+
+    #[test]
     fn usage_summary_recomputes_cost_with_injected_resolver() {
         let temp = tempfile::tempdir().unwrap();
         let store = UsageStore::open(temp.path().join("usage.sqlite")).unwrap();
@@ -5019,6 +5278,7 @@ mod tests {
                     id: Uuid::new_v4(),
                     started_at,
                     duration_ms: 1,
+                    first_token_ms: None,
                     route_id: Uuid::new_v4(),
                     provider_entry_id,
                     secret_id: secret_id.into(),
@@ -5097,6 +5357,35 @@ mod tests {
         let provider_a = Uuid::new_v4();
         let provider_b = Uuid::new_v4();
         let route_id = Uuid::new_v4();
+        let request =
+            |provider_entry_id, secret_id: &str, started_at, status, first_token_ms| UsageRecord {
+                id: Uuid::new_v4(),
+                started_at,
+                duration_ms: 10,
+                first_token_ms,
+                route_id,
+                provider_entry_id,
+                secret_id: secret_id.into(),
+                model: Some("gpt-test".into()),
+                inbound_protocol: ProxyProtocol::OpenAiResponses,
+                upstream_protocol: ProxyProtocol::OpenAiResponses,
+                status,
+                attempts: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                estimated_cost_micros: 0,
+            };
+        store
+            .record(&request(provider_a, "primary", 10, 502, None))
+            .unwrap();
+        store
+            .record(&request(provider_a, "primary", 20, 200, Some(120)))
+            .unwrap();
+        store
+            .record(&request(provider_b, "backup", 40, 502, None))
+            .unwrap();
         let attempt = |provider_entry_id, secret_id: &str, started_at, success, first_token_ms| {
             AttemptRecord {
                 id: Uuid::new_v4(),
@@ -5126,11 +5415,12 @@ mod tests {
             .unwrap();
 
         let summary = store.summary(|_| 0).unwrap();
-        assert_eq!(summary.request_count, 0);
+        assert_eq!(summary.request_count, 3);
         assert_eq!(summary.attempt_count, 4);
         assert_eq!(summary.completed_attempts, 3);
         assert_eq!(summary.successful_attempts, 1);
         assert_eq!(summary.success_rate_bps, 3_333);
+        assert_eq!(summary.average_first_token_ms, Some(120));
         let provider = summary
             .providers
             .iter()
@@ -5149,5 +5439,28 @@ mod tests {
         assert_eq!(model.attempt_count, 3);
         assert_eq!(model.success_rate_bps, 5_000);
         assert_eq!(model.average_first_token_ms, Some(120));
+    }
+
+    #[test]
+    fn request_stats_use_request_denominator_and_last_100_first_tokens() {
+        let provider = Uuid::new_v4();
+        let mut stats = RequestStats::default();
+        for index in 0..101 {
+            stats.observe(&UsageRow {
+                started_at: index,
+                provider_entry_id: provider,
+                secret_id: "key".into(),
+                model: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                status: if index == 0 { 502 } else { 200 },
+                first_token_ms: Some(index as u64),
+            });
+        }
+        assert_eq!(stats.request_count, 101);
+        assert_eq!(stats.success_rate_bps(), 9_901);
+        assert_eq!(stats.average_first_token_ms(), Some(50));
     }
 }

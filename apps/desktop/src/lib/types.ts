@@ -98,6 +98,8 @@ export type ProxyStatus = {
   lastError?: string;
   recentRequests: number;
   recentTokens: number;
+  successRateBps: number;
+  averageFirstTokenMs?: number;
 };
 
 export type ServerTokenResponse = { routeId: string; token: string };

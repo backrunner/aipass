@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIPass Architecture"
+  short_description: "Navigate AIPass ownership, boundaries, and runtimes"
+  default_prompt: "Use $aipass-architecture to trace this AIPass change through the correct components and runtime boundaries."

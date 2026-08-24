@@ -126,7 +126,18 @@ fn dispatch_request(
             proxy.usage_summary(&pricing, &list_prices)
         })
         .map(AgentResponse::success),
-        AgentRequest::ServerUsageTimeseries { days } => with_vault(state, true, |vault| {
+        AgentRequest::ServerUsageClear => with_vault(state, false, |_vault| {
+            let proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.clear_usage()
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ServerUsageTimeseries {
+            days,
+            timezone_offset_minutes,
+        } => with_vault(state, true, |vault| {
             let mut proxy = state
                 .proxy
                 .lock()
@@ -134,7 +145,7 @@ fn dispatch_request(
             proxy.load_config(vault)?;
             let pricing = proxy.pricing_config(vault)?;
             let list_prices = crate::pricing::load_list_prices(&state.vault_dir);
-            proxy.usage_timeseries(days, &pricing, &list_prices)
+            proxy.usage_timeseries(days, timezone_offset_minutes, &pricing, &list_prices)
         })
         .map(AgentResponse::success),
         AgentRequest::ServerPricingConfigGet => with_vault(state, true, |vault| {

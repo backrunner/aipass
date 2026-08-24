@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Banner, Button, Badge } from "@aipass/ui";
-  import { Eye, X } from "lucide-svelte";
+  import { Banner, Button, Badge, IconButton } from "@aipass/ui";
+  import { Eye, ScanSearch, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type {
@@ -26,6 +26,7 @@
   export let onApply: (tool: IntegrationToolDefinition) => Promise<ToolConfigApplyResult> = async () => {
     throw new Error("apply unavailable");
   };
+  export let onRefresh: () => Promise<void> | void = () => {};
   export let resetKey = "";
   export let disabled = false;
 
@@ -39,6 +40,7 @@
   let activePreview: ToolConfigPreview | undefined;
   let pendingTool: IntegrationToolDefinition | undefined;
   let confirming = false;
+  let refreshing = false;
 
   const APPLIED_NOTICE_MS = 4000;
 
@@ -86,6 +88,16 @@
     toolState = { ...toolState, [tool.id]: { ...stateFor(tool), ...patch } };
   }
 
+  async function refreshDetections() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      await onRefresh();
+    } finally {
+      refreshing = false;
+    }
+  }
+
   async function showPreview(tool: IntegrationToolDefinition, readonly: boolean) {
     patchState(tool, { busy: true, error: "" });
     try {
@@ -122,6 +134,18 @@
 </script>
 
 <Card title={$t("server.integrate")} collapsible>
+  <svelte:fragment slot="actions">
+    <IconButton
+      size="sm"
+      label={$t("integration.scanInstallations")}
+      disabled={refreshing}
+      on:click={refreshDetections}
+    >
+      <span class="refresh-icon" class:spinning={refreshing}>
+        <ScanSearch size={15} />
+      </span>
+    </IconButton>
+  </svelte:fragment>
   <div class="integrate-body">
     {#if $$slots.default}
       <div class="integration-context"><slot /></div>
@@ -210,6 +234,18 @@
   .integrate-body {
     display: flex;
     flex-direction: column;
+  }
+
+  .refresh-icon {
+    display: inline-flex;
+
+    &.spinning {
+      animation: integration-scan-spin 800ms linear infinite;
+    }
+  }
+
+  @keyframes integration-scan-spin {
+    to { transform: rotate(360deg); }
   }
 
   .integration-context {

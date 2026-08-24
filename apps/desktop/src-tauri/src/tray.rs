@@ -1163,6 +1163,8 @@ mod tests {
             last_error: None,
             recent_requests: 0,
             recent_tokens: 0,
+            success_rate_bps: 0,
+            average_first_token_ms: None,
         })
     }
 }

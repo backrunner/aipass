@@ -9,6 +9,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 
 #[derive(Clone, Debug)]
 pub struct AgentAutostartStatus {
@@ -32,6 +34,11 @@ pub struct TrayAutostartStatus {
 
 pub fn install_autostart(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAutostartStatus> {
     imp::install(agent_binary, vault_dir)
+}
+
+#[cfg(target_os = "macos")]
+pub fn ensure_autostart(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAutostartStatus> {
+    imp::ensure(agent_binary, vault_dir)
 }
 
 pub fn uninstall_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {
@@ -60,6 +67,15 @@ pub fn install_tray_autostart_with_socket(
     singleton_socket: &Path,
 ) -> Result<TrayAutostartStatus> {
     imp::install_tray_with_socket(desktop_binary, vault_dir, singleton_socket)
+}
+
+#[cfg(target_os = "macos")]
+pub fn ensure_tray_autostart_with_socket(
+    desktop_binary: &Path,
+    vault_dir: &Path,
+    singleton_socket: &Path,
+) -> Result<TrayAutostartStatus> {
+    imp::ensure_tray_with_socket(desktop_binary, vault_dir, singleton_socket)
 }
 
 pub fn uninstall_tray_autostart(vault_dir: &Path) -> Result<TrayAutostartStatus> {
@@ -111,10 +127,50 @@ mod imp {
     use interprocess::local_socket::{prelude::*, GenericFilePath, Stream};
 
     pub(super) fn install(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAutostartStatus> {
+        install_agent(agent_binary, vault_dir, true)
+    }
+
+    pub(super) fn ensure(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAutostartStatus> {
+        install_agent(agent_binary, vault_dir, false)
+    }
+
+    fn install_agent(
+        agent_binary: &Path,
+        vault_dir: &Path,
+        force_reload: bool,
+    ) -> Result<AgentAutostartStatus> {
         let service_name = agent_service_name(vault_dir)?;
         let paths = macos_paths(&service_name)?;
         let agent_binary = absolute_path(agent_binary);
         let vault_dir = absolute_path(vault_dir);
+
+        let supervisor = macos_supervisor_script(
+            &service_name,
+            &paths.plist_path,
+            &agent_binary,
+            &vault_dir,
+            &paths.out_log,
+            &paths.err_log,
+        );
+        let plist = macos_plist(
+            &service_name,
+            &paths.supervisor_path,
+            &paths.supervisor_log,
+            &paths.supervisor_err_log,
+        );
+        if !force_reload
+            && autostart_files_match(&paths, &supervisor, &plist)
+            && launch_agent_running(&service_name)
+        {
+            return Ok(AgentAutostartStatus {
+                service_name,
+                registered: true,
+                running: true,
+                install_path: Some(paths.plist_path),
+                supervisor_path: Some(paths.supervisor_path),
+                agent_binary: Some(agent_binary),
+            });
+        }
 
         fs::create_dir_all(
             paths
@@ -123,17 +179,7 @@ mod imp {
                 .context("invalid supervisor path")?,
         )?;
         fs::create_dir_all(paths.log_dir.as_path())?;
-        write_supervisor(
-            &paths.supervisor_path,
-            &macos_supervisor_script(
-                &service_name,
-                &paths.plist_path,
-                &agent_binary,
-                &vault_dir,
-                &paths.out_log,
-                &paths.err_log,
-            ),
-        )?;
+        write_supervisor(&paths.supervisor_path, &supervisor)?;
 
         fs::create_dir_all(
             paths
@@ -141,12 +187,6 @@ mod imp {
                 .parent()
                 .context("invalid LaunchAgent path")?,
         )?;
-        let plist = macos_plist(
-            &service_name,
-            &paths.supervisor_path,
-            &paths.supervisor_log,
-            &paths.supervisor_err_log,
-        );
         atomic_write_bytes(&paths.plist_path, plist.as_bytes())?;
 
         let _ = unload_launch_agent(&service_name, &paths.plist_path);
@@ -220,10 +260,57 @@ mod imp {
         vault_dir: &Path,
         singleton_socket: &Path,
     ) -> Result<TrayAutostartStatus> {
+        install_tray_impl(desktop_binary, vault_dir, singleton_socket, true)
+    }
+
+    pub(super) fn ensure_tray_with_socket(
+        desktop_binary: &Path,
+        vault_dir: &Path,
+        singleton_socket: &Path,
+    ) -> Result<TrayAutostartStatus> {
+        install_tray_impl(desktop_binary, vault_dir, singleton_socket, false)
+    }
+
+    fn install_tray_impl(
+        desktop_binary: &Path,
+        vault_dir: &Path,
+        singleton_socket: &Path,
+        force_reload: bool,
+    ) -> Result<TrayAutostartStatus> {
         let service_name = tray_service_name(vault_dir)?;
         let paths = macos_paths(&service_name)?;
         let desktop_binary = absolute_path(desktop_binary);
         let vault_dir = absolute_path(vault_dir);
+
+        let supervisor = macos_tray_supervisor_script(
+            &service_name,
+            &paths.plist_path,
+            &desktop_binary,
+            &vault_dir,
+            &paths.out_log,
+            &paths.err_log,
+            &paths.stop_child_path,
+            singleton_socket,
+        )?;
+        let plist = macos_plist(
+            &service_name,
+            &paths.supervisor_path,
+            &paths.supervisor_log,
+            &paths.supervisor_err_log,
+        );
+        if !force_reload
+            && autostart_files_match(&paths, &supervisor, &plist)
+            && launch_agent_running(&service_name)
+        {
+            return Ok(TrayAutostartStatus {
+                service_name,
+                registered: true,
+                running: true,
+                install_path: Some(paths.plist_path),
+                supervisor_path: Some(paths.supervisor_path),
+                desktop_binary: Some(desktop_binary),
+            });
+        }
 
         fs::create_dir_all(
             paths
@@ -232,19 +319,7 @@ mod imp {
                 .context("invalid tray supervisor path")?,
         )?;
         fs::create_dir_all(paths.log_dir.as_path())?;
-        write_supervisor(
-            &paths.supervisor_path,
-            &macos_tray_supervisor_script(
-                &service_name,
-                &paths.plist_path,
-                &desktop_binary,
-                &vault_dir,
-                &paths.out_log,
-                &paths.err_log,
-                &paths.stop_child_path,
-                singleton_socket,
-            )?,
-        )?;
+        write_supervisor(&paths.supervisor_path, &supervisor)?;
 
         fs::create_dir_all(
             paths
@@ -252,12 +327,6 @@ mod imp {
                 .parent()
                 .context("invalid tray LaunchAgent path")?,
         )?;
-        let plist = macos_plist(
-            &service_name,
-            &paths.supervisor_path,
-            &paths.supervisor_log,
-            &paths.supervisor_err_log,
-        );
         atomic_write_bytes(&paths.plist_path, plist.as_bytes())?;
 
         let _ = fs::remove_file(&paths.stop_child_path);
@@ -346,6 +415,21 @@ mod imp {
         supervisor_log: PathBuf,
         supervisor_err_log: PathBuf,
         stop_child_path: PathBuf,
+    }
+
+    fn autostart_files_match(paths: &MacosAutostartPaths, supervisor: &str, plist: &str) -> bool {
+        file_matches(&paths.supervisor_path, supervisor.as_bytes(), true)
+            && file_matches(&paths.plist_path, plist.as_bytes(), false)
+    }
+
+    fn file_matches(path: &Path, expected: &[u8], executable: bool) -> bool {
+        let contents_match = fs::read(path).is_ok_and(|contents| contents == expected);
+        if !contents_match || !executable {
+            return contents_match;
+        }
+        fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
     }
 
     fn macos_paths(service_name: &str) -> Result<MacosAutostartPaths> {
@@ -665,6 +749,8 @@ cleanup
         let service = format!("{domain}/{service_name}");
         Command::new("launchctl")
             .args(["print", service.as_str()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .is_ok_and(|status| status.success())
     }
@@ -722,6 +808,33 @@ cleanup
             assert!(script.contains("SINGLETON_SOCKET='/tmp/desktop-dev-bundle.sock'"));
             assert!(script.contains("STOP_CHILD="));
             assert!(script.contains("if [ -f \"$STOP_CHILD\" ]; then"));
+        }
+
+        #[test]
+        fn autostart_file_match_requires_current_contents_and_executable_supervisor() {
+            let temp = tempfile::tempdir().unwrap();
+            let supervisor_path = temp.path().join("service.sh");
+            let plist_path = temp.path().join("service.plist");
+            fs::write(&supervisor_path, "supervisor").unwrap();
+            fs::write(&plist_path, "plist").unwrap();
+            fs::set_permissions(&supervisor_path, fs::Permissions::from_mode(0o755)).unwrap();
+            let paths = MacosAutostartPaths {
+                plist_path,
+                supervisor_path: supervisor_path.clone(),
+                log_dir: temp.path().join("logs"),
+                out_log: temp.path().join("out.log"),
+                err_log: temp.path().join("err.log"),
+                supervisor_log: temp.path().join("supervisor.out.log"),
+                supervisor_err_log: temp.path().join("supervisor.err.log"),
+                stop_child_path: temp.path().join("stop-child"),
+            };
+
+            assert!(autostart_files_match(&paths, "supervisor", "plist"));
+            fs::set_permissions(&supervisor_path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!autostart_files_match(&paths, "supervisor", "plist"));
+            fs::set_permissions(&supervisor_path, fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(!autostart_files_match(&paths, "changed", "plist"));
+            assert!(!autostart_files_match(&paths, "supervisor", "changed"));
         }
     }
 }

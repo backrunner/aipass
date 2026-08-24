@@ -52,7 +52,7 @@ impl ProxyService {
     }
 
     pub fn status(&self) -> ProxyStatus {
-        let mut status = self
+        let status = self
             .handle
             .as_ref()
             .map(|handle| handle.status())
@@ -71,12 +71,9 @@ impl ProxyService {
                 last_error: None,
                 recent_requests: 0,
                 recent_tokens: 0,
+                success_rate_bps: 0,
+                average_first_token_ms: None,
             });
-        let since = OffsetDateTime::now_utc().unix_timestamp() - 60;
-        if let Ok((requests, tokens)) = self.usage.recent_totals(since) {
-            status.recent_requests = requests;
-            status.recent_tokens = tokens;
-        }
         status
     }
 
@@ -380,14 +377,25 @@ impl ProxyService {
         })
     }
 
+    pub fn clear_usage(&self) -> ServiceResult<()> {
+        self.usage
+            .clear()
+            .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))
+    }
+
     pub fn usage_timeseries(
         &self,
         days: u32,
+        timezone_offset_minutes: i32,
         pricing: &PricingConfig,
         list_prices: &[ModelPriceRule],
     ) -> ServiceResult<Vec<UsageTimeseriesPoint>> {
         self.usage
-            .timeseries(days, self.cost_resolver(pricing, list_prices))
+            .timeseries(
+                days,
+                timezone_offset_minutes,
+                self.cost_resolver(pricing, list_prices),
+            )
             .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))
     }
 

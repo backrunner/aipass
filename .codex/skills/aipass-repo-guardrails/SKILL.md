@@ -24,6 +24,11 @@ Use this skill whenever you change, review, commit, or push code in the AIPass r
 - `crates/aipass-cli`
   - CLI surface that must call the Rust core service instead of writing final state directly.
 
+## Desktop UI Scope
+
+- The authoritative desktop viewport is the Tauri window minimum of `960x640`, configured in `apps/desktop/src-tauri/tauri.conf.json` and `tauri.dev.conf.json`.
+- Desktop UI validation must cover that minimum window for pages, lists, forms, and dialogs. Do not introduce phone-sized or browser-preview responsive workarounds for the Tauri desktop surface unless the product explicitly adds that target.
+
 Read these repo docs before large changes:
 
 - `.agents/04-architecture.md`

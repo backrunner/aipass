@@ -113,6 +113,7 @@
   }) => Promise<ToolConfigApplyResult> = async () => {
     throw localizedMessage("error.toolApplyUnavailable");
   };
+  export let onRefreshToolDetections: () => MaybePromise = () => {};
   export let pricingGroups: PricingGroup[] = [];
   export let pricingAssignments: CredentialAssignment[] = [];
   export let toolDetections: ToolDetection[] = [];
@@ -893,6 +894,7 @@
           <IntegrationCard
             tools={integrationTools}
             detections={toolDetections}
+            onRefresh={onRefreshToolDetections}
             codexMode={codexIntegrationMode}
             codexModeOptions={codexIntegrationModeOptions}
             onCodexModeChange={setCodexIntegrationMode}

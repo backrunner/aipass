@@ -18,8 +18,9 @@ function point(date: string, tokens: number, requestCount = 1): UsageTimeseriesP
   };
 }
 
-function todayUTC(): string {
-  return new Date().toISOString().slice(0, 10);
+function todayLocal(): string {
+  const today = new Date();
+  return [today.getFullYear(), String(today.getMonth() + 1).padStart(2, "0"), String(today.getDate()).padStart(2, "0")].join("-");
 }
 
 let app: Record<string, unknown> | undefined;
@@ -38,7 +39,7 @@ function mountChart(series: UsageTimeseriesPoint[]) {
 }
 
 test("renders y-axis ticks and per-day x labels in the 7-day view", () => {
-  mountChart([point(todayUTC(), 2000, 3)]);
+  mountChart([point(todayLocal(), 2000, 3)]);
 
   const yLabels = Array.from(
     document.body.querySelectorAll<SVGTextElement>("text.axis-label[text-anchor='end']")
@@ -56,7 +57,7 @@ test("renders y-axis ticks and per-day x labels in the 7-day view", () => {
 });
 
 test("30-day view thins x labels and keeps the last day labeled", () => {
-  mountChart([point(todayUTC(), 100)]);
+  mountChart([point(todayLocal(), 100)]);
 
   const toggle = Array.from(document.body.querySelectorAll("button")).find(
     (button) => button.textContent?.match(/30|30天|近30/)
@@ -69,11 +70,11 @@ test("30-day view thins x labels and keeps the last day labeled", () => {
   );
   // Every 5 days plus the final day: 0,5,10,15,20,25,29.
   expect(xLabels.length).toBe(7);
-  expect(xLabels.at(-1)?.textContent?.trim()).toBe(todayUTC().slice(5));
+  expect(xLabels.at(-1)?.textContent?.trim()).toBe(todayLocal().slice(5));
 });
 
 test("day with requests but zero tokens still renders a visible sliver", () => {
-  mountChart([point(todayUTC(), 0, 4)]);
+  mountChart([point(todayLocal(), 0, 4)]);
 
   const bars = Array.from(document.body.querySelectorAll<SVGRectElement>("rect.bar"));
   const heights = bars.map((bar) => Number(bar.getAttribute("height")));
@@ -81,7 +82,7 @@ test("day with requests but zero tokens still renders a visible sliver", () => {
 });
 
 test("bars stay inside the chart area right of the y axis", () => {
-  mountChart([point(todayUTC(), 5000, 2)]);
+  mountChart([point(todayLocal(), 5000, 2)]);
 
   const bars = Array.from(document.body.querySelectorAll<SVGRectElement>("rect.bar"));
   for (const bar of bars) {
@@ -92,7 +93,7 @@ test("bars stay inside the chart area right of the y axis", () => {
 });
 
 test("stacks model segments and shows a detailed hover tooltip", () => {
-  const date = todayUTC();
+  const date = todayLocal();
   mountChart([{
     ...point(date, 300, 3),
     inputTokens: 100,

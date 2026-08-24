@@ -10,36 +10,29 @@
 <section class="card" class:collapsed={collapsible && !open}>
   {#if title || $$slots.title || $$slots.actions}
     <header class="card-header">
+      <span class="card-title">
+        {#if $$slots.title}
+          <slot name="title" />
+        {:else}
+          {title}
+        {/if}
+      </span>
+      {#if $$slots.actions}
+        <span class="card-actions"><slot name="actions" /></span>
+      {/if}
       {#if collapsible}
         <button
           type="button"
           class="card-toggle"
           aria-expanded={open}
           aria-label={title}
+          title={title}
           on:click={() => (open = !open)}
         >
-          <span class="card-title">
-            {#if $$slots.title}
-              <slot name="title" />
-            {:else}
-              {title}
-            {/if}
-          </span>
           <span class="card-chevron" class:rotated={!open}>
             <ChevronDown size={15} aria-hidden="true" />
           </span>
         </button>
-      {:else}
-        <span class="card-title">
-          {#if $$slots.title}
-            <slot name="title" />
-          {:else}
-            {title}
-          {/if}
-        </span>
-      {/if}
-      {#if $$slots.actions}
-        <span class="card-actions"><slot name="actions" /></span>
       {/if}
     </header>
   {/if}
@@ -71,25 +64,28 @@
   }
 
   .card-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-width: 0;
-    flex: 1;
-    color: inherit;
-    text-align: left;
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    margin: -4px;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    transition: background-color 80ms ease, color 120ms ease;
+
+    &:hover {
+      background: var(--surface-2);
+      color: var(--text);
+    }
 
     &:focus-visible {
       outline: 2px solid var(--accent-ring);
       outline-offset: 2px;
-      border-radius: var(--radius-sm);
     }
 
     .card-chevron {
       display: inline-flex;
-      flex-shrink: 0;
-      color: var(--text-tertiary);
       transition: transform 140ms ease;
     }
 
@@ -99,6 +95,8 @@
   }
 
   .card-title {
+    flex: 1;
+    min-width: 0;
     color: var(--text);
     font-size: 13px;
     font-weight: 600;

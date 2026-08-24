@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Badge, Banner, Button, IconButton } from "@aipass/ui";
-  import { Copy, Play, RotateCw, Server, Square } from "lucide-svelte";
+  import { Copy, Play, RotateCw, Server, Square, Trash2 } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
 
   import { t } from "../../stores/i18n";
@@ -9,6 +9,7 @@
   import { integrationToolDefinitions, localProxyAvailability } from "../../utils/integrations";
   import { advertisedProxyAddress } from "../../utils/server";
   import Card from "../shared/Card.svelte";
+  import ConfirmModal from "../shared/ConfirmModal.svelte";
   import IntegrationCard from "../integration/IntegrationCard.svelte";
   import UsageBreakdown from "./UsageBreakdown.svelte";
   import UsageChart from "./UsageChart.svelte";
@@ -26,14 +27,17 @@
   export let onSaveConfig: (config: ProxyConfig) => MaybePromise<boolean | void> = () => {};
   export let onRotateToken: (routeId: string) => MaybePromise = () => {};
   export let onCopyToken: (token: string) => MaybePromise = () => {};
+  export let onClearUsage: () => MaybePromise<boolean | void> = () => {};
   export let onPreviewIntegration: (tool: ToolConfigTarget, routeId: string) => Promise<ToolConfigPreview> = async () => {
     throw new Error("preview unavailable");
   };
   export let onApplyIntegration: (tool: ToolConfigTarget, routeId: string) => Promise<ToolConfigApplyResult> = async () => {
     throw new Error("apply unavailable");
   };
+  export let onRefreshToolDetections: () => MaybePromise = () => {};
 
   let bindAddrDraft = config.bindAddr;
+  let clearUsageConfirmOpen = false;
   let lastBindAddr = config.bindAddr;
   $: if (config.bindAddr !== lastBindAddr) {
     lastBindAddr = config.bindAddr;
@@ -94,18 +98,27 @@
         <h1><Server size={18} /> {$t("server.localProxy")}</h1>
       </div>
     </div>
-    <div class="bind-chip" title={$t("server.bindAddress")}>
-      {#if status.running}
-        <code class="mono">{status.bindAddr}</code>
-      {:else}
-        <input class="mono" bind:value={bindAddrDraft} spellcheck="false" aria-label={$t("server.bindAddress")} />
-        <button
-          type="button"
-          class="bind-save"
-          on:click={saveBindAddr}
-          disabled={Boolean(busy) || !bindAddrDraft.trim() || bindAddrDraft.trim() === config.bindAddr}
-        >{$t("common.save")}</button>
+    <div class="proxy-meta">
+      {#if enabledRoutes.length > 0}
+        <div class="group-badges" aria-label={$t("server.activeGroups")} title={$t("server.activeGroups")}>
+          {#each enabledRoutes as route (route.id)}
+            <Badge size="sm">{route.name}</Badge>
+          {/each}
+        </div>
       {/if}
+      <div class="bind-chip" title={$t("server.bindAddress")}>
+        {#if status.running}
+          <code class="mono">{status.bindAddr}</code>
+        {:else}
+          <input class="mono" bind:value={bindAddrDraft} spellcheck="false" aria-label={$t("server.bindAddress")} />
+          <button
+            type="button"
+            class="bind-save"
+            on:click={saveBindAddr}
+            disabled={Boolean(busy) || !bindAddrDraft.trim() || bindAddrDraft.trim() === config.bindAddr}
+          >{$t("common.save")}</button>
+        {/if}
+      </div>
     </div>
     <div class="actions">
       <Badge tone={status.running ? "success" : "neutral"}>
@@ -149,28 +162,27 @@
         </div>
         <div class="status-cell">
           <span class="cell-label">{$t("server.successRate")}</span>
-          <strong class="cell-number">{formatSuccessRate(usage.successRateBps ?? 0, usage.completedAttempts ?? 0)}</strong>
+          <strong class="cell-number">{formatSuccessRate(status.successRateBps ?? 0, status.requests)}</strong>
         </div>
         <div class="status-cell">
           <span class="cell-label">{$t("server.firstToken")}</span>
-          <strong class="cell-number">{usage.averageFirstTokenMs == null ? "-" : `${formatCompact(usage.averageFirstTokenMs)} ms`}</strong>
-        </div>
-        <div class="status-cell groups">
-          <span class="cell-label">{$t("server.activeGroups")}</span>
-          {#if enabledRoutes.length > 0}
-            <div class="group-badges">
-              {#each enabledRoutes as route (route.id)}
-                <Badge size="sm">{route.name}</Badge>
-              {/each}
-            </div>
-          {:else}
-            <span class="cell-muted">{$t("server.noneActive")}</span>
-          {/if}
+          <strong class="cell-number">{status.averageFirstTokenMs == null ? "-" : `${formatCompact(status.averageFirstTokenMs)} ms`}</strong>
         </div>
       </div>
     </Card>
 
     <Card title={$t("server.usageChart")} padded={false}>
+      <svelte:fragment slot="actions">
+        <IconButton
+          size="sm"
+          tone="danger"
+          label={$t("server.clearUsage")}
+          disabled={Boolean(busy)}
+          on:click={() => (clearUsageConfirmOpen = true)}
+        >
+          <Trash2 size={14} />
+        </IconButton>
+      </svelte:fragment>
       <UsageChart {series} />
     </Card>
 
@@ -183,6 +195,7 @@
       detections={toolDetections}
       resetKey={integrateRoute?.id ?? ""}
       disabled={Boolean(busy) || !integrateRoute?.token}
+      onRefresh={onRefreshToolDetections}
       onPreview={(tool) => integrateRoute ? onPreviewIntegration(tool.id, integrateRoute.id) : Promise.reject(new Error("no active route"))}
       onApply={(tool) => integrateRoute ? onApplyIntegration(tool.id, integrateRoute.id) : Promise.reject(new Error("no active route"))}
     >
@@ -220,6 +233,17 @@
 
   </div>
 </section>
+
+<ConfirmModal
+  bind:open={clearUsageConfirmOpen}
+  title={$t("server.clearUsageConfirmTitle")}
+  description={$t("server.clearUsageConfirmDescription")}
+  confirmLabel={$t("server.clearUsageConfirm")}
+  cancelLabel={$t("common.cancel")}
+  onConfirm={onClearUsage}
+>
+  <Trash2 slot="icon" size={19} />
+</ConfirmModal>
 
 <style lang="scss">
   .detail {
@@ -277,6 +301,15 @@
     gap: 8px;
   }
 
+  .proxy-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;
+    margin-inline-start: auto;
+  }
+
   .detail-body {
     flex: 1;
     overflow: auto;
@@ -290,7 +323,7 @@
 
   .status-grid {
     display: grid;
-    grid-template-columns: repeat(6, minmax(64px, auto)) minmax(140px, 1fr);
+    grid-template-columns: repeat(6, minmax(64px, 1fr));
     gap: 12px;
     align-items: center;
     padding: 12px 16px;
@@ -323,18 +356,11 @@
     font-size: 12px;
   }
 
-  .status-cell .cell-muted {
-    display: flex;
-    align-items: center;
-    min-height: 22px;
-  }
-
   .bind-chip {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
-    margin-inline-start: auto;
     padding: 4px 10px;
     background: var(--surface-2);
     border: 1px solid var(--divider);
@@ -373,10 +399,12 @@
 
   .group-badges {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 4px;
+    min-width: 0;
     min-height: 22px;
+    overflow: hidden;
   }
 
   .hint {
@@ -426,12 +454,25 @@
   }
 
   @container (max-width: 760px) {
-    .status-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+    .detail-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px 12px;
     }
 
-    .status-cell.groups {
+    .proxy-meta {
       grid-column: 1 / -1;
+      grid-row: 2;
+      width: 100%;
+    }
+
+    .actions {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .status-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
 

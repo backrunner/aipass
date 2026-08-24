@@ -215,11 +215,24 @@ pub(crate) async fn server_usage_summary(app: AppHandle) -> Result<ServerUsageSu
 }
 
 #[tauri::command]
+pub(crate) async fn server_usage_clear(app: AppHandle) -> Result<(), String> {
+    agent_request_async(app, AgentRequest::ServerUsageClear).await
+}
+
+#[tauri::command]
 pub(crate) async fn server_usage_timeseries(
     app: AppHandle,
     days: u32,
+    timezone_offset_minutes: Option<i32>,
 ) -> Result<Vec<UsageTimeseriesPoint>, String> {
-    agent_request_async(app, AgentRequest::ServerUsageTimeseries { days }).await
+    agent_request_async(
+        app,
+        AgentRequest::ServerUsageTimeseries {
+            days,
+            timezone_offset_minutes: timezone_offset_minutes.unwrap_or_default(),
+        },
+    )
+    .await
 }
 
 #[tauri::command]

@@ -9,7 +9,10 @@ mod tray_swift;
 mod updates;
 
 use commands::*;
-use updates::{check_for_updates, install_update};
+use updates::{
+    check_for_updates, clear_pending_update, download_update, install_pending_update,
+    install_update,
+};
 
 use crate::auth_tasks::AuthTasks;
 use crate::models::{
@@ -150,6 +153,18 @@ pub(crate) fn install_tray_autostart_for_current_desktop(
             .map(|_| ())
             .map_err(|err| err.to_string())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_tray_autostart_for_current_desktop(
+    desktop_binary: &Path,
+    vault_dir: &Path,
+) -> Result<(), String> {
+    let singleton_socket =
+        singleton::current_singleton_socket_path().map_err(|err| err.to_string())?;
+    aipass_agent::ensure_tray_autostart_with_socket(desktop_binary, vault_dir, &singleton_socket)
+        .map(|_| ())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -1827,7 +1842,7 @@ fn ensure_agent_resident_async(app: AppHandle) {
         match aipass_agent::agent_binary_path() {
             Ok(agent_binary) => {
                 if let Err(err) =
-                    aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
+                    aipass_agent::ensure_agent_autostart(&agent_binary, &client.config.vault_dir)
                 {
                     eprintln!("failed to refresh AIPass agent autostart: {err}");
                 }
@@ -1841,7 +1856,7 @@ fn ensure_agent_resident_async(app: AppHandle) {
         if singleton::should_install_tray_autostart() {
             match std::env::current_exe() {
                 Ok(desktop_binary) => {
-                    if let Err(err) = install_tray_autostart_for_current_desktop(
+                    if let Err(err) = ensure_tray_autostart_for_current_desktop(
                         &desktop_binary,
                         &client.config.vault_dir,
                     ) {
@@ -1987,6 +2002,7 @@ pub fn run() {
             server_config_set,
             server_token_rotate,
             server_usage_summary,
+            server_usage_clear,
             server_usage_timeseries,
             pricing_config_get,
             pricing_assignment_set,
@@ -2046,6 +2062,9 @@ pub fn run() {
             sync_accept_conflict,
             sync_discard_conflict,
             check_for_updates,
+            clear_pending_update,
+            download_update,
+            install_pending_update,
             install_update
         ])
         .build(tauri::generate_context!())
