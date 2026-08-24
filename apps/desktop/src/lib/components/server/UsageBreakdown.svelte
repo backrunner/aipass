@@ -4,7 +4,7 @@
 
   import { t } from "../../stores/i18n";
   import type { ServerUsageSummary } from "../../types";
-  import { formatCompact, formatCostMicros } from "../../utils/format";
+  import { formatCompact, formatCostMicros, formatTokenCacheRate } from "../../utils/format";
 
   export let usage: ServerUsageSummary;
   export let entries: ProviderEntry[] = [];
@@ -17,6 +17,7 @@
     inputTokens: number;
     outputTokens: number;
     cacheTokens: number;
+    cacheRate: string;
     estimatedCostMicros: number;
     completedAttempts: number;
     successRateBps: number;
@@ -44,6 +45,7 @@
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
       cacheTokens: row.cacheReadTokens + row.cacheCreationTokens,
+      cacheRate: formatTokenCacheRate(row.inputTokens, row.cacheReadTokens),
       estimatedCostMicros: row.estimatedCostMicros,
       completedAttempts: row.completedAttempts ?? 0,
       successRateBps: row.successRateBps ?? 0,
@@ -71,6 +73,7 @@
           <th>{$t("server.colInput")}</th>
           <th>{$t("server.colOutput")}</th>
           <th>{$t("server.colCache")}</th>
+          <th>{$t("server.tokenCacheRate")}</th>
           <th>{$t("server.successRate")}</th>
           <th>{$t("server.firstToken")}</th>
           <th>{$t("server.estimatedCost")}</th>
@@ -87,6 +90,7 @@
             <td>{formatCompact(row.inputTokens)}</td>
             <td>{formatCompact(row.outputTokens)}</td>
             <td>{formatCompact(row.cacheTokens)}</td>
+            <td>{row.cacheRate}</td>
             <td>{formatSuccessRate(row.successRateBps, row.completedAttempts)}</td>
             <td>{row.averageFirstTokenMs == null ? "-" : `${formatCompact(row.averageFirstTokenMs)} ms`}</td>
             <td>{formatCostMicros(row.estimatedCostMicros)}</td>
@@ -108,12 +112,18 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    min-width: 0;
+    max-width: 100%;
     padding: 12px 16px 14px;
     overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
   }
 
   .breakdown-table {
-    width: 100%;
+    flex: 0 0 auto;
+    width: max-content;
+    min-width: 100%;
     border-collapse: collapse;
     font-variant-numeric: tabular-nums;
 
@@ -136,16 +146,14 @@
     }
 
     .col-name {
-      width: 100%;
+      min-width: 140px;
       text-align: left;
     }
   }
 
   .row-label {
     display: inline-block;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap;
     vertical-align: bottom;
     color: var(--text);
     font-weight: 500;

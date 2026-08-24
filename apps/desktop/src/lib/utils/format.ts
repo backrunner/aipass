@@ -17,3 +17,10 @@ export function formatCostMicros(micros: number): string {
   if (usd >= 1000) return `$${compactFormatter.format(usd)}`;
   return `$${usd.toLocaleString(undefined, { maximumSignificantDigits: 4 })}`;
 }
+
+/** Input cache 命中率：cache read / (cache read + 未命中缓存的 input)。 */
+export function formatTokenCacheRate(inputTokens: number, cacheReadTokens: number): string {
+  const totalInput = inputTokens + cacheReadTokens;
+  if (!Number.isFinite(totalInput) || totalInput <= 0) return "-";
+  return `${((cacheReadTokens / totalInput) * 100).toFixed(1)}%`;
+}
