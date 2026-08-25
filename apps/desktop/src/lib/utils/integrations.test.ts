@@ -57,7 +57,6 @@ describe("local proxy integration availability", () => {
   });
 
   it("distinguishes Cursor local runtime from unsupported native APIs", () => {
-    expect(tool("cursor").localProxyRequirement).toBe("cursor-local-runtime");
     expect(tool("gemini-cli").localProxyUnsupportedReason).toBe("native-api");
     expect(localProxyAvailability(tool("cursor"), "open_ai_chat_completions", true)).toBe(
       "available"

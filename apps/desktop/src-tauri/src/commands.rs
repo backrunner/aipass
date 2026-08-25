@@ -164,6 +164,13 @@ pub(crate) async fn server_status(app: AppHandle) -> Result<ProxyStatus, String>
 }
 
 #[tauri::command]
+pub(crate) async fn server_logs(
+    app: AppHandle,
+) -> Result<Vec<aipass_agent_protocol::ProxyLogEntry>, String> {
+    agent_request_no_unlock_async(app, AgentRequest::ServerLogs).await
+}
+
+#[tauri::command]
 pub(crate) async fn server_start(app: AppHandle) -> Result<ProxyStatus, String> {
     let refresh_app = app.clone();
     let result = agent_request_async(app, AgentRequest::ServerStart).await;

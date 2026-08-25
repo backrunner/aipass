@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
   import { Button, IconButton, SelectField } from "@aipass/ui";
-  import { Dialog } from "bits-ui";
+  import { Dialog, Switch } from "bits-ui";
   import { ChevronDown, ChevronUp, KeyRound, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -21,6 +21,9 @@
   let name = route?.name ?? "";
   let strategy: ProxyRouteStrategy = route?.strategy ?? "fallback";
   let protocol: ProxyProtocol = route?.inboundProtocol ?? "open_ai_responses";
+  let advancedOpen = false;
+  let silentRetry = route?.retry?.silentRetry ?? false;
+  let maxSilentRetries = route?.retry?.maxSilentRetries ?? 3;
   let memberPickerValue = "";
   let members: Member[] = (route?.targets ?? []).flatMap((target) => {
     const entry = entries.find((item) => item.id === target.providerEntryId);
@@ -113,7 +116,19 @@
       protocol = "anthropic_messages";
     }
     const nextRoute: ProxyRouteConfig = route
-      ? { ...route, name: name.trim(), strategy, inboundProtocol: protocol, upstreamProtocol: protocol, targets }
+      ? {
+          ...route,
+          name: name.trim(),
+          strategy,
+          inboundProtocol: protocol,
+          upstreamProtocol: protocol,
+          targets,
+          retry: {
+            ...route.retry,
+            silentRetry,
+            maxSilentRetries: Math.max(1, Math.min(20, Math.round(maxSilentRetries) || 1))
+          }
+        }
       : {
         id: crypto.randomUUID(),
         name: name.trim(),
@@ -177,6 +192,42 @@
               {/if}
             </div>
           </div>
+
+          <section class="advanced-settings">
+            <button
+              type="button"
+              class="advanced-toggle"
+              aria-expanded={advancedOpen}
+              on:click={() => (advancedOpen = !advancedOpen)}
+            >
+              <span>{$t("server.advancedSettings")}</span>
+              <ChevronDown size={16} class={advancedOpen ? "rotated" : ""} />
+            </button>
+            {#if advancedOpen}
+              <div class="advanced-content">
+                <div class="advanced-row">
+                  <div class="advanced-copy">
+                    <strong>{$t("server.silentRetry")}</strong>
+                    <span>{$t("server.silentRetryDesc")}</span>
+                  </div>
+                  <Switch.Root
+                    checked={silentRetry}
+                    onCheckedChange={(checked) => (silentRetry = checked)}
+                    class="silent-retry-switch"
+                    aria-label={$t("server.silentRetry")}
+                  >
+                    <Switch.Thumb class="silent-retry-thumb" />
+                  </Switch.Root>
+                </div>
+                {#if silentRetry}
+                  <label class="field advanced-number-field">
+                    <span>{$t("server.maxSilentRetries")}</span>
+                    <input type="number" min="1" max="20" step="1" bind:value={maxSilentRetries} />
+                  </label>
+                {/if}
+              </div>
+            {/if}
+          </section>
 
           <div class="members-block">
             <div class="members-title">
@@ -322,6 +373,90 @@
   :global(.route-dialog-title) {
     font-size: 15px;
     font-weight: 600;
+  }
+
+  .advanced-settings {
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .advanced-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 12px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  :global(.advanced-toggle svg) {
+    transition: transform 160ms ease;
+  }
+
+  :global(.advanced-toggle svg.rotated) {
+    transform: rotate(180deg);
+  }
+
+  .advanced-content {
+    display: grid;
+    gap: 14px;
+    padding: 0 0 14px;
+  }
+
+  .advanced-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .advanced-copy {
+    display: grid;
+    gap: 3px;
+  }
+
+  .advanced-copy span {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .advanced-number-field {
+    max-width: 220px;
+  }
+
+  :global(.silent-retry-switch) {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 20px;
+    padding: 2px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface-strong);
+    cursor: pointer;
+  }
+
+  :global(.silent-retry-switch[data-state="checked"]) {
+    background: var(--accent);
+  }
+
+  :global(.silent-retry-thumb) {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: white;
+    transition: transform 160ms ease;
+  }
+
+  :global(.silent-retry-switch[data-state="checked"] .silent-retry-thumb) {
+    transform: translateX(16px);
   }
 
   .close-btn {

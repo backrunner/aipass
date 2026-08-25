@@ -42,6 +42,8 @@ export type RetryPolicy = {
   connectTimeoutMs: number;
   firstByteTimeoutMs: number;
   streamIdleTimeoutMs: number;
+  silentRetry?: boolean;
+  maxSilentRetries?: number;
 };
 
 export type ProxyTargetConfig = {
@@ -96,10 +98,17 @@ export type ProxyStatus = {
   requests: number;
   failures: number;
   lastError?: string;
+  degraded?: boolean;
   recentRequests: number;
   recentTokens: number;
   successRateBps: number;
   averageFirstTokenMs?: number;
+};
+
+export type ProxyLogEntry = {
+  timestamp: number;
+  level: string;
+  message: string;
 };
 
 export type ServerTokenResponse = { routeId: string; token: string };

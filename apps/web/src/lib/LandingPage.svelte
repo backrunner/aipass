@@ -64,7 +64,7 @@
       localeHref: '/',
       githubAria: '在 GitHub 上查看 AIPass',
       headlineA: '所有 AI 密钥，',
-      headlineB: '一座加密保险库。',
+      headlineB: '统一加密保管',
       detail: 'AIPass 将 AI 服务商的密钥保存在本机的端到端加密保险库中。工具只能获得限定范围、限时有效的授权——永远接触不到明文。',
       downloadCta: '下载 macOS 版',
       docsCta: '阅读文档',

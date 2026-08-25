@@ -1,10 +1,10 @@
 <script lang="ts">
   import { Badge, Banner, Button, IconButton } from "@aipass/ui";
-  import { Copy, Play, RotateCw, Server, Square, Trash2 } from "lucide-svelte";
+  import { AlertTriangle, Copy, Play, RotateCw, Server, Square, Trash2 } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
 
   import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyConfig, ProxyStatus, ServerUsageSummary, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
+  import type { MaybePromise, ProxyConfig, ProxyLogEntry, ProxyStatus, ServerUsageSummary, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
   import { formatCompact } from "../../utils/format";
   import { integrationToolDefinitions, localProxyAvailability } from "../../utils/integrations";
   import { advertisedProxyAddress } from "../../utils/server";
@@ -35,9 +35,13 @@
     throw new Error("apply unavailable");
   };
   export let onRefreshToolDetections: () => MaybePromise = () => {};
+  export let onLoadProxyLogs: () => Promise<ProxyLogEntry[]> = async () => [];
 
   let bindAddrDraft = config.bindAddr;
   let clearUsageConfirmOpen = false;
+  let logsOpen = false;
+  let proxyLogs: ProxyLogEntry[] = [];
+  let ProxyLogsDialog: typeof import("./ProxyLogsDialog.svelte").default | undefined;
   let lastBindAddr = config.bindAddr;
   $: if (config.bindAddr !== lastBindAddr) {
     lastBindAddr = config.bindAddr;
@@ -89,6 +93,19 @@
     const percent = value / 100;
     return `${percent.toFixed(Number.isInteger(percent) ? 0 : 1)}%`;
   }
+
+  async function openProxyLogs() {
+    if (!ProxyLogsDialog) {
+      ProxyLogsDialog = (await import("./ProxyLogsDialog.svelte")).default;
+    }
+    try {
+      proxyLogs = await onLoadProxyLogs();
+    } catch (error) {
+      console.error("failed to load proxy logs", error);
+      proxyLogs = [];
+    }
+    logsOpen = true;
+  }
 </script>
 
 <section class="detail">
@@ -121,9 +138,15 @@
       </div>
     </div>
     <div class="actions">
-      <Badge tone={status.running ? "success" : "neutral"}>
-        {status.running ? $t("server.running") : $t("server.stopped")}
-      </Badge>
+      {#if status.running && status.degraded}
+        <button type="button" class="status-trigger degraded" on:click={openProxyLogs} title={$t("server.viewLogs")}>
+          <AlertTriangle size={14} /> {$t("server.degraded")}
+        </button>
+      {:else}
+        <Badge tone={status.running ? "success" : "neutral"}>
+          {status.running ? $t("server.running") : $t("server.stopped")}
+        </Badge>
+      {/if}
       {#if status.running}
         <Button variant="secondary" on:click={() => onStop()} disabled={Boolean(busy)}>
           <Square size={14} /> {$t("server.stop")}
@@ -137,7 +160,6 @@
   </header>
 
   <div class="detail-body">
-    {#if status.lastError}<div class="error-line">{status.lastError}</div>{/if}
     {#if !status.running && config.routes.some((route) => Boolean(route.token))}
       <Banner tone="warning">{$t("server.integrationsInactive")}</Banner>
     {/if}
@@ -244,6 +266,10 @@
 >
   <Trash2 slot="icon" size={19} />
 </ConfirmModal>
+
+{#if ProxyLogsDialog}
+  <svelte:component this={ProxyLogsDialog} open={logsOpen} logs={proxyLogs} onOpenChange={(open) => (logsOpen = open)} />
+{/if}
 
 <style lang="scss">
   .detail {
@@ -445,12 +471,19 @@
     gap: 4px;
   }
 
-  .error-line {
-    padding: 9px 12px;
-    background: color-mix(in oklab, var(--danger) 8%, transparent);
-    color: var(--danger);
+  .status-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 10px;
+    border: 1px solid color-mix(in oklab, var(--warning) 45%, var(--border));
+    border-radius: 999px;
+    color: var(--warning);
+    background: var(--warning-soft);
     font-size: 12px;
-    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   @container (max-width: 760px) {

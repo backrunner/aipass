@@ -1996,6 +1996,7 @@ pub fn run() {
             preferences_load,
             preferences_save,
             server_status,
+            server_logs,
             server_start,
             server_stop,
             server_config_get,

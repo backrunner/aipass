@@ -9,7 +9,9 @@ export function defaultRetryPolicy(): RetryPolicy {
     circuitOpenSeconds: 30,
     connectTimeoutMs: 10_000,
     firstByteTimeoutMs: 30_000,
-    streamIdleTimeoutMs: 120_000
+    streamIdleTimeoutMs: 120_000,
+    silentRetry: false,
+    maxSilentRetries: 3
   };
 }
 

@@ -61,6 +61,13 @@ fn dispatch_request(
                 .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
             Ok(AgentResponse::success(proxy.status()))
         }
+        AgentRequest::ServerLogs => {
+            let proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            Ok(AgentResponse::success(proxy.logs()?))
+        }
         AgentRequest::ServerStart => with_vault(state, false, |vault| {
             let mut proxy = state
                 .proxy

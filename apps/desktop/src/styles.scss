@@ -23,4 +23,15 @@ body {
 
 body {
   min-width: 320px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+// Desktop chrome is not selectable, while form fields remain editable.
+input,
+select,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }

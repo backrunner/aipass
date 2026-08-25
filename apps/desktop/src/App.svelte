@@ -43,6 +43,7 @@
     ProviderCounts,
     ProviderFilter,
     ProxyConfig,
+    ProxyLogEntry,
     ProxyRouteConfig,
     ProxyStatus,
     ServerTokenResponse,
@@ -1457,6 +1458,10 @@
     return serverRefreshPromise;
   }
 
+  async function loadProxyLogs(): Promise<ProxyLogEntry[]> {
+    return invokeTauri<ProxyLogEntry[]>("server_logs");
+  }
+
   function beginServerMutation() {
     serverMutationInFlight = true;
     serverMutationVersion += 1;
@@ -2444,6 +2449,7 @@
           onClearUsage={clearServerUsage}
           onPreviewIntegration={previewProxyIntegration}
           onApplyIntegration={applyProxyIntegration}
+          onLoadProxyLogs={loadProxyLogs}
         />
       {:else}
       <ProviderListPane

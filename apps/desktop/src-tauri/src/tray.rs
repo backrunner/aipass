@@ -1161,6 +1161,7 @@ mod tests {
             requests: 0,
             failures: 0,
             last_error: None,
+            degraded: false,
             recent_requests: 0,
             recent_tokens: 0,
             success_rate_bps: 0,

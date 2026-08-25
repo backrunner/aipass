@@ -69,12 +69,21 @@ impl ProxyService {
                 requests: 0,
                 failures: 0,
                 last_error: None,
+                degraded: false,
                 recent_requests: 0,
                 recent_tokens: 0,
                 success_rate_bps: 0,
                 average_first_token_ms: None,
             });
         status
+    }
+
+    pub fn logs(&self) -> ServiceResult<Vec<aipass_agent_protocol::ProxyLogEntry>> {
+        self.handle
+            .as_ref()
+            .map(|handle| handle.logs())
+            .unwrap_or_else(|| Ok(Vec::new()))
+            .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))
     }
 
     pub fn load_config(&mut self, vault: &Vault) -> ServiceResult<ProxyConfig> {

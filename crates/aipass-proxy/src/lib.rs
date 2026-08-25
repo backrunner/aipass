@@ -37,6 +37,16 @@ pub struct RetryPolicy {
     pub connect_timeout_ms: u64,
     pub first_byte_timeout_ms: u64,
     pub stream_idle_timeout_ms: u64,
+    /// Retry failed upstream rounds without returning an error to the local caller.
+    #[serde(default)]
+    pub silent_retry: bool,
+    /// Number of additional target-selection rounds after the initial round.
+    #[serde(default = "default_max_silent_retries")]
+    pub max_silent_retries: u8,
+}
+
+fn default_max_silent_retries() -> u8 {
+    3
 }
 
 impl Default for RetryPolicy {
@@ -48,6 +58,8 @@ impl Default for RetryPolicy {
             connect_timeout_ms: 10_000,
             first_byte_timeout_ms: 30_000,
             stream_idle_timeout_ms: 120_000,
+            silent_retry: false,
+            max_silent_retries: default_max_silent_retries(),
         }
     }
 }
@@ -237,6 +249,8 @@ pub struct ProxyStatus {
     pub requests: u64,
     pub failures: u64,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub degraded: bool,
     /// Requests completed in the last 60 seconds (for RPM display).
     #[serde(default)]
     pub recent_requests: u64,
@@ -247,6 +261,14 @@ pub struct ProxyStatus {
     pub success_rate_bps: u16,
     #[serde(default)]
     pub average_first_token_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyLogEntry {
+    pub timestamp: i64,
+    pub level: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -948,8 +970,10 @@ struct RuntimeStats {
     requests: u64,
     failures: u64,
     last_error: Option<String>,
+    logs: VecDeque<ProxyLogEntry>,
     first_token_samples: VecDeque<Option<u64>>,
     recent_request_times: VecDeque<Instant>,
+    recent_failure_times: VecDeque<Instant>,
     recent_token_totals: VecDeque<(Instant, u64)>,
 }
 
@@ -1067,6 +1091,7 @@ impl ProxyHandle {
             last_error,
             average_first_token_ms,
             recent_requests,
+            recent_failures,
             recent_tokens,
         ) = stats
             .as_ref()
@@ -1086,6 +1111,13 @@ impl ProxyHandle {
                 {
                     recent_token_totals.pop_front();
                 }
+                let mut recent_failure_times = stats.recent_failure_times.clone();
+                while recent_failure_times
+                    .front()
+                    .is_some_and(|time| *time < cutoff)
+                {
+                    recent_failure_times.pop_front();
+                }
                 let (total, count) = stats
                     .first_token_samples
                     .iter()
@@ -1099,6 +1131,7 @@ impl ProxyHandle {
                     stats.last_error.clone(),
                     (count > 0).then(|| total / count),
                     recent_request_times.len() as u64,
+                    recent_failure_times.len() as u64,
                     recent_token_totals.iter().map(|(_, tokens)| *tokens).sum(),
                 )
             })
@@ -1116,17 +1149,22 @@ impl ProxyHandle {
             )
             .unwrap_or(10_000)
         };
+        let running = self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished());
+        let degraded = running
+            && recent_requests > 0
+            && recent_failures.saturating_mul(100) >= recent_requests.saturating_mul(20);
         ProxyStatus {
-            running: self
-                .thread
-                .as_ref()
-                .is_some_and(|thread| !thread.is_finished()),
+            running,
             enabled: config.0,
             bind_addr: self.bind_addr.clone(),
             active_routes: config.1,
             requests,
             failures,
             last_error,
+            degraded,
             recent_requests,
             recent_tokens,
             success_rate_bps,
@@ -1150,6 +1188,14 @@ impl ProxyHandle {
         health.clear();
         rr_counters.clear();
         Ok(())
+    }
+
+    pub fn logs(&self) -> Result<Vec<ProxyLogEntry>, ProxyError> {
+        self.state
+            .stats
+            .lock()
+            .map(|stats| stats.logs.iter().cloned().collect())
+            .map_err(|_| ProxyError::Poisoned)
     }
 
     pub fn usage_count(&self) -> Result<u64, ProxyError> {
@@ -1208,6 +1254,7 @@ type UpstreamBodyStream =
 const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024 * 1024;
 const REQUEST_BODY_MEMORY_THRESHOLD: usize = 8 * 1024 * 1024;
 const MAX_BUFFERED_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PROXY_LOG_ENTRIES: usize = 1_000;
 
 enum ReplayableRequestBody {
     Memory(Bytes),
@@ -1400,6 +1447,34 @@ fn select_route(
     })
 }
 
+fn silent_retry_rounds(policy: &RetryPolicy) -> u8 {
+    if policy.silent_retry {
+        policy.max_silent_retries.saturating_add(1).max(1)
+    } else {
+        1
+    }
+}
+
+fn select_route_targets(state: &RuntimeState, route: &ResolvedRoute) -> Vec<ResolvedTarget> {
+    let mut targets = route.targets.clone();
+    targets.retain(|target| target.config.enabled);
+    targets.sort_by_key(|target| target.config.priority);
+    if route.config.strategy == RouteStrategy::RoundRobin {
+        let start = round_robin_start(
+            state,
+            route.config.id,
+            &targets
+                .iter()
+                .map(|target| target.config.weight)
+                .collect::<Vec<_>>(),
+        );
+        targets.rotate_left(start);
+    }
+    targets.retain(|target| !circuit_open(state, target.config.id));
+    targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
+    targets
+}
+
 async fn handle_models_request(
     request: Request<Incoming>,
     state: RuntimeState,
@@ -1424,69 +1499,58 @@ async fn handle_models_request(
     };
     route.local_token.zeroize();
 
-    let mut targets = std::mem::take(&mut route.targets);
-    targets.retain(|target| target.config.enabled);
-    targets.sort_by_key(|target| target.config.priority);
-    if route.config.strategy == RouteStrategy::RoundRobin {
-        let start = round_robin_start(
-            &state,
-            route.config.id,
-            &targets
-                .iter()
-                .map(|target| target.config.weight)
-                .collect::<Vec<_>>(),
-        );
-        targets.rotate_left(start);
-    }
-    targets.retain(|target| !circuit_open(&state, target.config.id));
-    targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
-
     let mut last_error = None;
     let mut saw_not_found = false;
     let mut saw_other_failure = false;
-    for target in targets {
-        let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
-            Ok(client) => client,
-            Err(err) => {
-                last_error = Some(err);
-                saw_other_failure = true;
-                continue;
-            }
-        };
-        let upstream_path = if target.config.auth_scheme == "azure_api_key" {
-            "/models"
-        } else {
-            "/v1/models"
-        };
-        let url = match upstream_url_with_query(
-            &target.config.base_url,
-            upstream_path,
-            request_query.as_deref(),
-        ) {
-            Ok(url) => url,
-            Err(err) => {
-                last_error = Some(err.to_string());
-                saw_other_failure = true;
-                mark_failure(&state, target.config.id, &route.config.retry);
-                continue;
-            }
-        };
-        let headers = match build_upstream_headers(
-            &incoming_headers,
-            &target,
-            route.config.upstream_protocol,
-        ) {
-            Ok(headers) => headers,
-            Err(err) => {
-                last_error = Some(err);
-                saw_other_failure = true;
-                mark_failure(&state, target.config.id, &route.config.retry);
-                continue;
-            }
-        };
-        let timeout = Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1));
-        let response =
-            match tokio::time::timeout(timeout, client.get(url).headers(headers).send()).await {
+    for _round in 0..silent_retry_rounds(&route.config.retry) {
+        let targets = select_route_targets(&state, &route);
+        for target in targets {
+            let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
+                Ok(client) => client,
+                Err(err) => {
+                    last_error = Some(err);
+                    saw_other_failure = true;
+                    continue;
+                }
+            };
+            let upstream_path = if target.config.auth_scheme == "azure_api_key" {
+                "/models"
+            } else {
+                "/v1/models"
+            };
+            let url = match upstream_url_with_query(
+                &target.config.base_url,
+                upstream_path,
+                request_query.as_deref(),
+            ) {
+                Ok(url) => url,
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                    saw_other_failure = true;
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    continue;
+                }
+            };
+            let headers = match build_upstream_headers(
+                &incoming_headers,
+                &target,
+                route.config.upstream_protocol,
+            ) {
+                Ok(headers) => headers,
+                Err(err) => {
+                    last_error = Some(err);
+                    saw_other_failure = true;
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    continue;
+                }
+            };
+            let timeout = Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1));
+            let response = match tokio::time::timeout(
+                timeout,
+                client.get(url).headers(headers).send(),
+            )
+            .await
+            {
                 Ok(Ok(response)) => response,
                 Ok(Err(err)) => {
                     last_error = Some(err.to_string());
@@ -1501,52 +1565,54 @@ async fn handle_models_request(
                     continue;
                 }
             };
-        let status = response.status();
-        if !status.is_success() {
-            last_error = Some(format!("upstream returned {status}"));
-            if status == StatusCode::NOT_FOUND {
-                saw_not_found = true;
-            } else {
-                saw_other_failure = true;
-            }
-            if status_affects_circuit(status) {
-                mark_failure(&state, target.config.id, &route.config.retry);
-            }
-            continue;
-        }
-        let response_headers = response.headers().clone();
-        let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
-        let idle_timeout = Duration::from_millis(route.config.retry.stream_idle_timeout_ms.max(1));
-        let payload = match collect_upstream_body(None, &mut source, idle_timeout).await {
-            Ok(payload) => enrich_models_payload(payload, route.config.inbound_protocol),
-            Err(err) => {
-                last_error = Some(err);
-                saw_other_failure = true;
-                mark_failure(&state, target.config.id, &route.config.retry);
+            let status = response.status();
+            if !status.is_success() {
+                last_error = Some(format!("upstream returned {status}"));
+                if status == StatusCode::NOT_FOUND {
+                    saw_not_found = true;
+                } else {
+                    saw_other_failure = true;
+                }
+                if status_affects_circuit(status) {
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                }
                 continue;
             }
-        };
-        mark_success(&state, target.config.id);
-        let body = BodyExt::boxed_unsync(
-            Full::new(payload).map_err(|never| -> BoxError { match never {} }),
-        );
-        let mut builder = Response::builder().status(status);
-        let response_hop_headers = connection_header_names(&response_headers);
-        for (name, value) in response_headers.iter() {
-            if !is_hop_header(name)
-                && !response_hop_headers.contains(name)
-                && name != header::CONTENT_LENGTH
-                && name != header::CONTENT_ENCODING
-            {
-                builder = builder.header(name, value);
+            let response_headers = response.headers().clone();
+            let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
+            let idle_timeout =
+                Duration::from_millis(route.config.retry.stream_idle_timeout_ms.max(1));
+            let payload = match collect_upstream_body(None, &mut source, idle_timeout).await {
+                Ok(payload) => enrich_models_payload(payload, route.config.inbound_protocol),
+                Err(err) => {
+                    last_error = Some(err);
+                    saw_other_failure = true;
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    continue;
+                }
+            };
+            mark_success(&state, target.config.id);
+            let body = BodyExt::boxed_unsync(
+                Full::new(payload).map_err(|never| -> BoxError { match never {} }),
+            );
+            let mut builder = Response::builder().status(status);
+            let response_hop_headers = connection_header_names(&response_headers);
+            for (name, value) in response_headers.iter() {
+                if !is_hop_header(name)
+                    && !response_hop_headers.contains(name)
+                    && name != header::CONTENT_LENGTH
+                    && name != header::CONTENT_ENCODING
+                {
+                    builder = builder.header(name, value);
+                }
             }
+            return builder.body(body).unwrap_or_else(|_| {
+                error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "failed to build model list response",
+                )
+            });
         }
-        return builder.body(body).unwrap_or_else(|_| {
-            error_response(
-                StatusCode::BAD_GATEWAY,
-                "failed to build model list response",
-            )
-        });
     }
 
     // Model discovery is optional and several upstreams (notably Anthropic)
@@ -1717,162 +1783,113 @@ async fn handle_request(
     let streaming_request = request_metadata.stream;
     let model = request_metadata.model;
     let mut last_error = None;
-    let mut targets = std::mem::take(&mut route.targets);
-    targets.retain(|target| target.config.enabled);
-    targets.sort_by_key(|target| target.config.priority);
-    if route.config.strategy == RouteStrategy::RoundRobin {
-        let start = round_robin_start(
-            &state,
-            route.config.id,
-            &targets
-                .iter()
-                .map(|target| target.config.weight)
-                .collect::<Vec<_>>(),
-        );
-        targets.rotate_left(start);
-    }
     // Keep an identity for a request that is rejected after every target is
     // filtered by its circuit breaker. Such failures still belong in the
     // request-level usage history and must not disappear from the denominator.
-    let mut failure_target = targets.first().map(|target| {
-        (
-            target.config.provider_entry_id,
-            target.config.secret_id.clone(),
-        )
-    });
-    targets.retain(|target| !circuit_open(&state, target.config.id));
-    targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
-    let target_attempts = u8::try_from(targets.len()).unwrap_or(u8::MAX);
-    for (attempt_index, target) in targets.into_iter().enumerate() {
-        failure_target = Some((
-            target.config.provider_entry_id,
-            target.config.secret_id.clone(),
-        ));
-        let attempt_started_at = now_unix();
-        let attempt_started = Instant::now();
-        let attempts = u8::try_from(attempt_index + 1).unwrap_or(u8::MAX);
-        let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
-            Ok(client) => client,
-            Err(err) => {
-                last_error = Some(err);
-                mark_failure(&state, target.config.id, &route.config.retry);
-                persist_attempt(
-                    &state.usage,
-                    route.config.id,
-                    &target,
-                    model.as_deref(),
-                    attempt_started_at,
-                    attempt_started,
-                    AttemptOutcome::failure(None, None),
-                );
-                continue;
-            }
-        };
-        let mut rewritten_payload = None;
-        if route.config.conversion_enabled
-            && route.config.inbound_protocol != route.config.upstream_protocol
-        {
-            let Some(json_payload) = request_json.clone() else {
-                return Ok(error_response(
-                    StatusCode::BAD_REQUEST,
-                    "protocol conversion requires a JSON request",
-                ));
+    let mut failure_target = route
+        .targets
+        .iter()
+        .find(|target| target.config.enabled)
+        .map(|target| {
+            (
+                target.config.provider_entry_id,
+                target.config.secret_id.clone(),
+            )
+        });
+    let mut target_attempts = 0u8;
+    for _round in 0..silent_retry_rounds(&route.config.retry) {
+        let targets = select_route_targets(&state, &route);
+        let round_attempt_base = target_attempts;
+        target_attempts =
+            target_attempts.saturating_add(u8::try_from(targets.len()).unwrap_or(u8::MAX));
+        for (attempt_index, target) in targets.into_iter().enumerate() {
+            failure_target = Some((
+                target.config.provider_entry_id,
+                target.config.secret_id.clone(),
+            ));
+            let attempt_started_at = now_unix();
+            let attempt_started = Instant::now();
+            let attempts = round_attempt_base
+                .saturating_add(u8::try_from(attempt_index + 1).unwrap_or(u8::MAX));
+            let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
+                Ok(client) => client,
+                Err(err) => {
+                    last_error = Some(err);
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    persist_attempt(
+                        &state.usage,
+                        route.config.id,
+                        &target,
+                        model.as_deref(),
+                        attempt_started_at,
+                        attempt_started,
+                        AttemptOutcome::failure(None, None),
+                    );
+                    continue;
+                }
             };
-            rewritten_payload = Some(
-                match BuiltinConversionPlugin
-                    .convert_request(
-                        route.config.inbound_protocol,
-                        route.config.upstream_protocol,
-                        json_payload,
-                    )
-                    .and_then(|value| {
-                        serde_json::to_vec(&value).map_err(|err| {
-                            aipass_proxy_conversion::ConversionError::InvalidPayload {
-                                protocol: route.config.inbound_protocol,
-                                message: err.to_string(),
-                            }
-                        })
-                    }) {
-                    Ok(payload) => Bytes::from(payload),
-                    Err(err) => {
-                        return Ok(error_response(StatusCode::BAD_REQUEST, &err.to_string()))
-                    }
-                },
-            );
-        }
-        if let Some(payload) = rewritten_payload.take().or_else(|| body.bytes().cloned()) {
-            let updated = request_stream_usage(
-                route.config.upstream_protocol,
-                streaming_request,
-                payload.clone(),
-            );
-            if updated != payload {
-                rewritten_payload = Some(updated);
-            } else if route.config.conversion_enabled
+            let mut rewritten_payload = None;
+            if route.config.conversion_enabled
                 && route.config.inbound_protocol != route.config.upstream_protocol
             {
-                rewritten_payload = Some(payload);
-            }
-        }
-        let upstream_path = if target.config.auth_scheme == "azure_api_key" {
-            route
-                .config
-                .upstream_protocol
-                .path()
-                .strip_prefix("/v1")
-                .unwrap_or(route.config.upstream_protocol.path())
-        } else {
-            route.config.upstream_protocol.path()
-        };
-        let url = match upstream_url_with_query(
-            &target.config.base_url,
-            upstream_path,
-            request_query.as_deref(),
-        ) {
-            Ok(url) => url,
-            Err(err) => {
-                last_error = Some(err.to_string());
-                mark_failure(&state, target.config.id, &route.config.retry);
-                persist_attempt(
-                    &state.usage,
-                    route.config.id,
-                    &target,
-                    model.as_deref(),
-                    attempt_started_at,
-                    attempt_started,
-                    AttemptOutcome::failure(None, None),
+                let Some(json_payload) = request_json.clone() else {
+                    return Ok(error_response(
+                        StatusCode::BAD_REQUEST,
+                        "protocol conversion requires a JSON request",
+                    ));
+                };
+                rewritten_payload = Some(
+                    match BuiltinConversionPlugin
+                        .convert_request(
+                            route.config.inbound_protocol,
+                            route.config.upstream_protocol,
+                            json_payload,
+                        )
+                        .and_then(|value| {
+                            serde_json::to_vec(&value).map_err(|err| {
+                                aipass_proxy_conversion::ConversionError::InvalidPayload {
+                                    protocol: route.config.inbound_protocol,
+                                    message: err.to_string(),
+                                }
+                            })
+                        }) {
+                        Ok(payload) => Bytes::from(payload),
+                        Err(err) => {
+                            return Ok(error_response(StatusCode::BAD_REQUEST, &err.to_string()))
+                        }
+                    },
                 );
-                continue;
             }
-        };
-        let upstream_headers = match build_upstream_headers(
-            &incoming_headers,
-            &target,
-            route.config.upstream_protocol,
-        ) {
-            Ok(headers) => headers,
-            Err(err) => {
-                last_error = Some(err);
-                mark_failure(&state, target.config.id, &route.config.retry);
-                persist_attempt(
-                    &state.usage,
-                    route.config.id,
-                    &target,
-                    model.as_deref(),
-                    attempt_started_at,
-                    attempt_started,
-                    AttemptOutcome::failure(None, None),
+            if let Some(payload) = rewritten_payload.take().or_else(|| body.bytes().cloned()) {
+                let updated = request_stream_usage(
+                    route.config.upstream_protocol,
+                    streaming_request,
+                    payload.clone(),
                 );
-                continue;
+                if updated != payload {
+                    rewritten_payload = Some(updated);
+                } else if route.config.conversion_enabled
+                    && route.config.inbound_protocol != route.config.upstream_protocol
+                {
+                    rewritten_payload = Some(payload);
+                }
             }
-        };
-        let payload_len = rewritten_payload
-            .as_ref()
-            .map_or_else(|| body.len(), |payload| payload.len() as u64);
-        let payload = match rewritten_payload {
-            Some(payload) => reqwest::Body::from(payload),
-            None => match body.request_body().await {
-                Ok(payload) => payload,
+            let upstream_path = if target.config.auth_scheme == "azure_api_key" {
+                route
+                    .config
+                    .upstream_protocol
+                    .path()
+                    .strip_prefix("/v1")
+                    .unwrap_or(route.config.upstream_protocol.path())
+            } else {
+                route.config.upstream_protocol.path()
+            };
+            let url = match upstream_url_with_query(
+                &target.config.base_url,
+                upstream_path,
+                request_query.as_deref(),
+            ) {
+                Ok(url) => url,
                 Err(err) => {
                     last_error = Some(err.to_string());
                     mark_failure(&state, target.config.id, &route.config.retry);
@@ -1887,152 +1904,13 @@ async fn handle_request(
                     );
                     continue;
                 }
-            },
-        };
-        let mut upstream_headers = upstream_headers;
-        match HeaderValue::from_str(&payload_len.to_string()) {
-            Ok(value) => {
-                upstream_headers.insert(header::CONTENT_LENGTH, value);
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-                mark_failure(&state, target.config.id, &route.config.retry);
-                persist_attempt(
-                    &state.usage,
-                    route.config.id,
-                    &target,
-                    model.as_deref(),
-                    attempt_started_at,
-                    attempt_started,
-                    AttemptOutcome::failure(None, None),
-                );
-                continue;
-            }
-        }
-        let upstream = client
-            .request(method.clone(), url)
-            .headers(upstream_headers)
-            .body(payload);
-        let first_byte_timeout =
-            Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1));
-        let response = match tokio::time::timeout(first_byte_timeout, upstream.send()).await {
-            Ok(Ok(response)) => response,
-            Ok(Err(err)) => {
-                last_error = Some(err.to_string());
-                mark_failure(&state, target.config.id, &route.config.retry);
-                persist_attempt(
-                    &state.usage,
-                    route.config.id,
-                    &target,
-                    model.as_deref(),
-                    attempt_started_at,
-                    attempt_started,
-                    AttemptOutcome::failure(None, None),
-                );
-                continue;
-            }
-            Err(_) => {
-                last_error = Some("upstream response header timeout".into());
-                mark_failure(&state, target.config.id, &route.config.retry);
-                persist_attempt(
-                    &state.usage,
-                    route.config.id,
-                    &target,
-                    model.as_deref(),
-                    attempt_started_at,
-                    attempt_started,
-                    AttemptOutcome::failure(None, None),
-                );
-                continue;
-            }
-        };
-        let status = response.status();
-        let retryable_status = is_retryable_status(status);
-        if retryable_status {
-            last_error = Some(format!("upstream returned {status}"));
-            if status_affects_circuit(status) {
-                mark_failure(&state, target.config.id, &route.config.retry);
-            }
-            persist_attempt(
-                &state.usage,
-                route.config.id,
-                &target,
-                model.as_deref(),
-                attempt_started_at,
-                attempt_started,
-                AttemptOutcome::failure(Some(status), None),
-            );
-            continue;
-        }
-        let response_headers = response.headers().clone();
-        let content_type = response_headers
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        let streaming_response = streaming_request && is_event_stream(&content_type);
-        let mut upstream_stream: UpstreamBodyStream = Box::pin(response.bytes_stream());
-        let first_event_deadline = tokio::time::Instant::now() + first_byte_timeout;
-        let first_chunk =
-            match tokio::time::timeout_at(first_event_deadline, upstream_stream.next()).await {
-                Ok(Some(Ok(chunk))) => Some(chunk),
-                Ok(Some(Err(err))) => {
-                    last_error = Some(err.to_string());
-                    mark_failure(&state, target.config.id, &route.config.retry);
-                    persist_attempt(
-                        &state.usage,
-                        route.config.id,
-                        &target,
-                        model.as_deref(),
-                        attempt_started_at,
-                        attempt_started,
-                        AttemptOutcome::failure(Some(status), None),
-                    );
-                    continue;
-                }
-                Ok(None) => None,
-                Err(_) => {
-                    last_error = Some("upstream first-byte timeout".into());
-                    mark_failure(&state, target.config.id, &route.config.retry);
-                    persist_attempt(
-                        &state.usage,
-                        route.config.id,
-                        &target,
-                        model.as_deref(),
-                        attempt_started_at,
-                        attempt_started,
-                        AttemptOutcome::failure(Some(status), None),
-                    );
-                    continue;
-                }
             };
-        let stream_idle_timeout =
-            Duration::from_millis(route.config.retry.stream_idle_timeout_ms.max(1));
-        let (first_chunk, first_token_observed) = if streaming_response {
-            // Once this event is returned to the client, replaying on another target is unsafe.
-            match prefetch_sse_event(
+            let upstream_headers = match build_upstream_headers(
+                &incoming_headers,
+                &target,
                 route.config.upstream_protocol,
-                first_chunk,
-                &mut upstream_stream,
-                first_event_deadline,
-            )
-            .await
-            {
-                Ok(Some(prefetched)) => (Some(prefetched.bytes), prefetched.first_token_observed),
-                Ok(None) => {
-                    last_error = Some("upstream stream ended before the first event".into());
-                    mark_failure(&state, target.config.id, &route.config.retry);
-                    persist_attempt(
-                        &state.usage,
-                        route.config.id,
-                        &target,
-                        model.as_deref(),
-                        attempt_started_at,
-                        attempt_started,
-                        AttemptOutcome::failure(Some(status), None),
-                    );
-                    continue;
-                }
+            ) {
+                Ok(headers) => headers,
                 Err(err) => {
                     last_error = Some(err);
                     mark_failure(&state, target.config.id, &route.config.retry);
@@ -2043,57 +1921,248 @@ async fn handle_request(
                         model.as_deref(),
                         attempt_started_at,
                         attempt_started,
-                        AttemptOutcome::failure(Some(status), None),
+                        AttemptOutcome::failure(None, None),
+                    );
+                    continue;
+                }
+            };
+            let payload_len = rewritten_payload
+                .as_ref()
+                .map_or_else(|| body.len(), |payload| payload.len() as u64);
+            let payload = match rewritten_payload {
+                Some(payload) => reqwest::Body::from(payload),
+                None => match body.request_body().await {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        last_error = Some(err.to_string());
+                        mark_failure(&state, target.config.id, &route.config.retry);
+                        persist_attempt(
+                            &state.usage,
+                            route.config.id,
+                            &target,
+                            model.as_deref(),
+                            attempt_started_at,
+                            attempt_started,
+                            AttemptOutcome::failure(None, None),
+                        );
+                        continue;
+                    }
+                },
+            };
+            let mut upstream_headers = upstream_headers;
+            match HeaderValue::from_str(&payload_len.to_string()) {
+                Ok(value) => {
+                    upstream_headers.insert(header::CONTENT_LENGTH, value);
+                }
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    persist_attempt(
+                        &state.usage,
+                        route.config.id,
+                        &target,
+                        model.as_deref(),
+                        attempt_started_at,
+                        attempt_started,
+                        AttemptOutcome::failure(None, None),
                     );
                     continue;
                 }
             }
-        } else {
-            (first_chunk, false)
-        };
-        let first_token_ms =
-            first_token_observed.then(|| attempt_started.elapsed().as_millis() as u64);
-        let conversion = route.config.conversion_enabled
-            && route.config.inbound_protocol != route.config.upstream_protocol;
-        let upstream_protocol = route.config.upstream_protocol;
-        let inbound_protocol = route.config.inbound_protocol;
-        let model = model.clone();
-        let model_pricing = model.as_deref().and_then(|model| {
-            pricing
-                .iter()
-                .filter(|item| item.model == model || model.starts_with(&item.model))
-                .max_by_key(|item| item.model.len())
-                .cloned()
-        });
-        let record = UsageRecord {
-            id: Uuid::new_v4(),
-            started_at,
-            duration_ms: started.elapsed().as_millis() as u64,
-            first_token_ms,
-            route_id: route.config.id,
-            provider_entry_id: target.config.provider_entry_id,
-            secret_id: target.config.secret_id.clone(),
-            model: model.clone(),
-            inbound_protocol,
-            upstream_protocol,
-            status: status.as_u16(),
-            attempts,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            estimated_cost_micros: 0,
-        };
-        let body_stream: UpstreamBodyStream = if streaming_response {
-            if let Some(first_chunk) = first_chunk {
-                Box::pin(stream::once(async move { Ok(first_chunk) }).chain(upstream_stream))
-            } else {
-                Box::pin(stream::empty())
+            let upstream = client
+                .request(method.clone(), url)
+                .headers(upstream_headers)
+                .body(payload);
+            let first_byte_timeout =
+                Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1));
+            let response = match tokio::time::timeout(first_byte_timeout, upstream.send()).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(err)) => {
+                    last_error = Some(err.to_string());
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    persist_attempt(
+                        &state.usage,
+                        route.config.id,
+                        &target,
+                        model.as_deref(),
+                        attempt_started_at,
+                        attempt_started,
+                        AttemptOutcome::failure(None, None),
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    last_error = Some("upstream response header timeout".into());
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    persist_attempt(
+                        &state.usage,
+                        route.config.id,
+                        &target,
+                        model.as_deref(),
+                        attempt_started_at,
+                        attempt_started,
+                        AttemptOutcome::failure(None, None),
+                    );
+                    continue;
+                }
+            };
+            let status = response.status();
+            let retryable_status = is_retryable_status(status);
+            if retryable_status {
+                last_error = Some(format!("upstream returned {status}"));
+                if status_affects_circuit(status) {
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                }
+                persist_attempt(
+                    &state.usage,
+                    route.config.id,
+                    &target,
+                    model.as_deref(),
+                    attempt_started_at,
+                    attempt_started,
+                    AttemptOutcome::failure(Some(status), None),
+                );
+                continue;
             }
-        } else {
-            let buffered =
-                match collect_upstream_body(first_chunk, &mut upstream_stream, stream_idle_timeout)
-                    .await
+            let response_headers = response.headers().clone();
+            let content_type = response_headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let streaming_response = streaming_request && is_event_stream(&content_type);
+            // A silent retry must not commit a response before the upstream
+            // stream has completed. Buffer that mode so a mid-stream failure
+            // can be retried without leaking a transport error to the caller.
+            let buffer_streaming = streaming_response && route.config.retry.silent_retry;
+            let mut upstream_stream: UpstreamBodyStream = Box::pin(response.bytes_stream());
+            let first_event_deadline = tokio::time::Instant::now() + first_byte_timeout;
+            let first_chunk =
+                match tokio::time::timeout_at(first_event_deadline, upstream_stream.next()).await {
+                    Ok(Some(Ok(chunk))) => Some(chunk),
+                    Ok(Some(Err(err))) => {
+                        last_error = Some(err.to_string());
+                        mark_failure(&state, target.config.id, &route.config.retry);
+                        persist_attempt(
+                            &state.usage,
+                            route.config.id,
+                            &target,
+                            model.as_deref(),
+                            attempt_started_at,
+                            attempt_started,
+                            AttemptOutcome::failure(Some(status), None),
+                        );
+                        continue;
+                    }
+                    Ok(None) => None,
+                    Err(_) => {
+                        last_error = Some("upstream first-byte timeout".into());
+                        mark_failure(&state, target.config.id, &route.config.retry);
+                        persist_attempt(
+                            &state.usage,
+                            route.config.id,
+                            &target,
+                            model.as_deref(),
+                            attempt_started_at,
+                            attempt_started,
+                            AttemptOutcome::failure(Some(status), None),
+                        );
+                        continue;
+                    }
+                };
+            let stream_idle_timeout =
+                Duration::from_millis(route.config.retry.stream_idle_timeout_ms.max(1));
+            let (first_chunk, first_token_observed) = if streaming_response && !buffer_streaming {
+                // Once this event is returned to the client, replaying on another target is unsafe.
+                match prefetch_sse_event(
+                    route.config.upstream_protocol,
+                    first_chunk,
+                    &mut upstream_stream,
+                    first_event_deadline,
+                )
+                .await
+                {
+                    Ok(Some(prefetched)) => {
+                        (Some(prefetched.bytes), prefetched.first_token_observed)
+                    }
+                    Ok(None) => {
+                        last_error = Some("upstream stream ended before the first event".into());
+                        mark_failure(&state, target.config.id, &route.config.retry);
+                        persist_attempt(
+                            &state.usage,
+                            route.config.id,
+                            &target,
+                            model.as_deref(),
+                            attempt_started_at,
+                            attempt_started,
+                            AttemptOutcome::failure(Some(status), None),
+                        );
+                        continue;
+                    }
+                    Err(err) => {
+                        last_error = Some(err);
+                        mark_failure(&state, target.config.id, &route.config.retry);
+                        persist_attempt(
+                            &state.usage,
+                            route.config.id,
+                            &target,
+                            model.as_deref(),
+                            attempt_started_at,
+                            attempt_started,
+                            AttemptOutcome::failure(Some(status), None),
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                (first_chunk, false)
+            };
+            let first_token_ms =
+                first_token_observed.then(|| attempt_started.elapsed().as_millis() as u64);
+            let conversion = route.config.conversion_enabled
+                && route.config.inbound_protocol != route.config.upstream_protocol;
+            let upstream_protocol = route.config.upstream_protocol;
+            let inbound_protocol = route.config.inbound_protocol;
+            let model = model.clone();
+            let model_pricing = model.as_deref().and_then(|model| {
+                pricing
+                    .iter()
+                    .filter(|item| item.model == model || model.starts_with(&item.model))
+                    .max_by_key(|item| item.model.len())
+                    .cloned()
+            });
+            let record = UsageRecord {
+                id: Uuid::new_v4(),
+                started_at,
+                duration_ms: started.elapsed().as_millis() as u64,
+                first_token_ms,
+                route_id: route.config.id,
+                provider_entry_id: target.config.provider_entry_id,
+                secret_id: target.config.secret_id.clone(),
+                model: model.clone(),
+                inbound_protocol,
+                upstream_protocol,
+                status: status.as_u16(),
+                attempts,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                estimated_cost_micros: 0,
+            };
+            let body_stream: UpstreamBodyStream = if streaming_response && !buffer_streaming {
+                if let Some(first_chunk) = first_chunk {
+                    Box::pin(stream::once(async move { Ok(first_chunk) }).chain(upstream_stream))
+                } else {
+                    Box::pin(stream::empty())
+                }
+            } else {
+                let buffered = match collect_upstream_body(
+                    first_chunk,
+                    &mut upstream_stream,
+                    stream_idle_timeout,
+                )
+                .await
                 {
                     Ok(buffered) => buffered,
                     Err(err) => {
@@ -2111,9 +2180,43 @@ async fn handle_request(
                         continue;
                     }
                 };
-            if status.is_success() && is_upstream_error_payload(&buffered) {
-                last_error = Some("upstream returned an error payload".into());
-                mark_failure(&state, target.config.id, &route.config.retry);
+                if buffer_streaming
+                    && (stream_reports_error(&buffered)
+                        || !stream_reports_completion(route.config.upstream_protocol, &buffered))
+                {
+                    last_error = Some("upstream stream ended before protocol completion".into());
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    persist_attempt(
+                        &state.usage,
+                        route.config.id,
+                        &target,
+                        model.as_deref(),
+                        attempt_started_at,
+                        attempt_started,
+                        AttemptOutcome::failure(Some(status), first_token_ms),
+                    );
+                    continue;
+                }
+                if status.is_success() && is_upstream_error_payload(&buffered) {
+                    last_error = Some("upstream returned an error payload".into());
+                    mark_failure(&state, target.config.id, &route.config.retry);
+                    persist_attempt(
+                        &state.usage,
+                        route.config.id,
+                        &target,
+                        model.as_deref(),
+                        attempt_started_at,
+                        attempt_started,
+                        AttemptOutcome::failure(Some(status), first_token_ms),
+                    );
+                    continue;
+                }
+                Box::pin(stream::once(async move {
+                    Ok::<Bytes, reqwest::Error>(buffered)
+                }))
+            };
+            if !streaming_response {
+                mark_success(&state, target.config.id);
                 persist_attempt(
                     &state.usage,
                     route.config.id,
@@ -2121,117 +2224,101 @@ async fn handle_request(
                     model.as_deref(),
                     attempt_started_at,
                     attempt_started,
-                    AttemptOutcome::failure(Some(status), first_token_ms),
+                    AttemptOutcome::success(status, first_token_ms),
                 );
-                continue;
             }
-            Box::pin(stream::once(async move {
-                Ok::<Bytes, reqwest::Error>(buffered)
-            }))
-        };
-        if !streaming_response {
-            mark_success(&state, target.config.id);
-            persist_attempt(
-                &state.usage,
-                route.config.id,
-                &target,
-                model.as_deref(),
-                attempt_started_at,
-                attempt_started,
-                AttemptOutcome::success(status, first_token_ms),
-            );
-        }
-        let streaming_attempt = streaming_response.then(|| {
-            (
-                AttemptRecord {
-                    id: Uuid::new_v4(),
-                    started_at: attempt_started_at,
-                    duration_ms: 0,
-                    first_token_ms,
-                    route_id: route.config.id,
+            let streaming_attempt = streaming_response.then(|| {
+                (
+                    AttemptRecord {
+                        id: Uuid::new_v4(),
+                        started_at: attempt_started_at,
+                        duration_ms: 0,
+                        first_token_ms,
+                        route_id: route.config.id,
+                        target_id: target.config.id,
+                        provider_entry_id: target.config.provider_entry_id,
+                        secret_id: target.config.secret_id.clone(),
+                        model: model.clone(),
+                        status: Some(status.as_u16()),
+                        success: None,
+                    },
+                    attempt_started,
+                )
+            });
+            let body_stream = track_usage_stream(
+                body_stream,
+                UsageTrackingContext {
+                    protocol: upstream_protocol,
+                    store: state.usage.clone(),
+                    record,
+                    pricing: model_pricing,
+                    stream_idle_timeout,
+                    streaming: streaming_response,
+                    started,
+                    failure_state: state.clone(),
                     target_id: target.config.id,
-                    provider_entry_id: target.config.provider_entry_id,
-                    secret_id: target.config.secret_id.clone(),
-                    model: model.clone(),
-                    status: Some(status.as_u16()),
-                    success: None,
+                    retry_policy: route.config.retry.clone(),
+                    attempt: streaming_attempt,
                 },
-                attempt_started,
-            )
-        });
-        let body_stream = track_usage_stream(
-            body_stream,
-            UsageTrackingContext {
-                protocol: upstream_protocol,
-                store: state.usage.clone(),
-                record,
-                pricing: model_pricing,
-                stream_idle_timeout,
-                streaming: streaming_response,
-                started,
-                failure_state: state.clone(),
-                target_id: target.config.id,
-                retry_policy: route.config.retry.clone(),
-                attempt: streaming_attempt,
-            },
-        );
-        let output_stream: Pin<Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>> =
-            if conversion && streaming_response {
-                convert_sse_stream(body_stream, upstream_protocol, inbound_protocol)
-            } else if conversion {
-                let bytes = match body_stream
-                    .collect::<Vec<_>>()
-                    .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>, _>>()
-                {
-                    Ok(parts) => parts.into_iter().fold(Bytes::new(), |all, part| {
-                        let mut data = all.to_vec();
-                        data.extend_from_slice(&part);
-                        Bytes::from(data)
-                    }),
-                    Err(err) => {
-                        return Ok(error_response(StatusCode::BAD_GATEWAY, &err.to_string()))
-                    }
+            );
+            let output_stream: Pin<Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>> =
+                if conversion && streaming_response {
+                    convert_sse_stream(body_stream, upstream_protocol, inbound_protocol)
+                } else if conversion {
+                    let bytes = match body_stream
+                        .collect::<Vec<_>>()
+                        .await
+                        .into_iter()
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(parts) => parts.into_iter().fold(Bytes::new(), |all, part| {
+                            let mut data = all.to_vec();
+                            data.extend_from_slice(&part);
+                            Bytes::from(data)
+                        }),
+                        Err(err) => {
+                            return Ok(error_response(StatusCode::BAD_GATEWAY, &err.to_string()))
+                        }
+                    };
+                    let converted = match serde_json::from_slice::<serde_json::Value>(&bytes)
+                        .ok()
+                        .and_then(|value| {
+                            BuiltinConversionPlugin
+                                .convert_response(upstream_protocol, inbound_protocol, value)
+                                .ok()
+                        })
+                        .and_then(|value| serde_json::to_vec(&value).ok())
+                    {
+                        Some(value) => Bytes::from(value),
+                        None => {
+                            return Ok(error_response(
+                                StatusCode::BAD_GATEWAY,
+                                "protocol conversion failed for upstream response",
+                            ))
+                        }
+                    };
+                    Box::pin(stream::once(async move { Ok(converted) }))
+                } else {
+                    Box::pin(body_stream)
                 };
-                let converted = match serde_json::from_slice::<serde_json::Value>(&bytes)
-                    .ok()
-                    .and_then(|value| {
-                        BuiltinConversionPlugin
-                            .convert_response(upstream_protocol, inbound_protocol, value)
-                            .ok()
-                    })
-                    .and_then(|value| serde_json::to_vec(&value).ok())
+            let frame_stream = output_stream.map(|result| result.map(Frame::data));
+            let stream_body = BodyExt::boxed_unsync(StreamBody::new(frame_stream));
+            let mut builder = Response::builder().status(status);
+            let response_hop_headers = connection_header_names(&response_headers);
+            for (name, value) in response_headers.iter() {
+                if !(is_hop_header(name)
+                    || response_hop_headers.contains(name)
+                    || name == header::CONTENT_LENGTH
+                    || conversion && name == header::CONTENT_ENCODING)
                 {
-                    Some(value) => Bytes::from(value),
-                    None => {
-                        return Ok(error_response(
-                            StatusCode::BAD_GATEWAY,
-                            "protocol conversion failed for upstream response",
-                        ))
-                    }
-                };
-                Box::pin(stream::once(async move { Ok(converted) }))
-            } else {
-                Box::pin(body_stream)
-            };
-        let frame_stream = output_stream.map(|result| result.map(Frame::data));
-        let stream_body = BodyExt::boxed_unsync(StreamBody::new(frame_stream));
-        let mut builder = Response::builder().status(status);
-        let response_hop_headers = connection_header_names(&response_headers);
-        for (name, value) in response_headers.iter() {
-            if !(is_hop_header(name)
-                || response_hop_headers.contains(name)
-                || name == header::CONTENT_LENGTH
-                || conversion && name == header::CONTENT_ENCODING)
-            {
-                builder = builder.header(name, value);
+                    builder = builder.header(name, value);
+                }
             }
+            let response = builder.body(stream_body).unwrap_or_else(|_| {
+                error_response(StatusCode::BAD_GATEWAY, "failed to build proxy response")
+            });
+            return Ok(response);
         }
-        let response = builder.body(stream_body).unwrap_or_else(|_| {
-            error_response(StatusCode::BAD_GATEWAY, "failed to build proxy response")
-        });
-        return Ok(response);
     }
     let diagnostic = last_error.unwrap_or_else(|| "all upstream targets failed".into());
     record_request(&state, false, None);
@@ -2581,7 +2668,18 @@ fn is_upstream_error_payload(bytes: &[u8]) -> bool {
         })
 }
 
-#[cfg(test)]
+fn stream_reports_error(bytes: &[u8]) -> bool {
+    let mut offset = 0;
+    while let Some(relative_end) = sse_event_boundary_end(&bytes[offset..]) {
+        let end = offset + relative_end;
+        if sse_event_reports_error(&bytes[offset..end]) {
+            return true;
+        }
+        offset = end;
+    }
+    offset < bytes.len() && sse_event_reports_error(&bytes[offset..])
+}
+
 fn stream_reports_completion(protocol: ProxyProtocol, bytes: &[u8]) -> bool {
     let mut offset = 0;
     while let Some(relative_end) = sse_event_boundary_end(&bytes[offset..]) {
@@ -3223,7 +3321,15 @@ fn error_response(status: StatusCode, message: &str) -> Response<BoxBody> {
 }
 fn set_error(state: &RuntimeState, error: String) {
     if let Ok(mut stats) = state.stats.lock() {
-        stats.last_error = Some(error);
+        stats.last_error = Some(error.clone());
+        stats.logs.push_back(ProxyLogEntry {
+            timestamp: now_unix(),
+            level: "error".into(),
+            message: error,
+        });
+        while stats.logs.len() > MAX_PROXY_LOG_ENTRIES {
+            stats.logs.pop_front();
+        }
     }
 }
 
@@ -3240,6 +3346,9 @@ fn record_request(state: &RuntimeState, success: bool, first_token_ms: Option<u6
             stats.first_token_samples.pop_front();
         }
         stats.recent_request_times.push_back(Instant::now());
+        if !success {
+            stats.recent_failure_times.push_back(Instant::now());
+        }
         let cutoff = Instant::now() - Duration::from_secs(60);
         while stats
             .recent_request_times
@@ -3247,6 +3356,13 @@ fn record_request(state: &RuntimeState, success: bool, first_token_ms: Option<u6
             .is_some_and(|time| *time < cutoff)
         {
             stats.recent_request_times.pop_front();
+        }
+        while stats
+            .recent_failure_times
+            .front()
+            .is_some_and(|time| *time < cutoff)
+        {
+            stats.recent_failure_times.pop_front();
         }
     }
 }
@@ -4086,6 +4202,138 @@ mod tests {
         let value = response.json::<serde_json::Value>().unwrap();
         assert_eq!(value["source"], "fallback");
         assert!(!value.to_string().contains("Unsupported content type"));
+        primary_thread.join().unwrap();
+        fallback_thread.join().unwrap();
+    }
+
+    #[test]
+    fn silent_retry_replays_a_failed_upstream_round_before_returning_error() {
+        let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let upstream_thread = std::thread::spawn(move || {
+            for (index, status) in ["HTTP/1.1 503 Service Unavailable", "HTTP/1.1 200 OK"]
+                .into_iter()
+                .enumerate()
+            {
+                let (mut stream, _) = upstream.accept().unwrap();
+                let (_, body) = read_http_request(&mut stream);
+                assert!(!body.is_empty());
+                let response = if index == 0 {
+                    r#"{"error":{"message":"temporary upstream failure"}}"#
+                } else {
+                    r#"{"status":"completed"}"#
+                };
+                write!(
+                    stream,
+                    "{status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                )
+                .unwrap();
+            }
+        });
+
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let token = "aipass_silent_retry_test";
+        let route = single_target_route(
+            token,
+            format!("http://{upstream_addr}/v1"),
+            RetryPolicy {
+                silent_retry: true,
+                max_silent_retries: 1,
+                ..RetryPolicy::default()
+            },
+        );
+        let _proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/responses"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({"model":"retry-test","input":[]}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.json::<serde_json::Value>().unwrap()["status"],
+            "completed"
+        );
+        upstream_thread.join().unwrap();
+    }
+
+    #[test]
+    fn silent_retry_buffers_a_stream_until_completion_before_committing() {
+        let primary = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let primary_addr = primary.local_addr().unwrap();
+        let primary_thread = std::thread::spawn(move || {
+            let (mut stream, _) = primary.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let partial =
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                partial.len(),
+                partial
+            )
+            .unwrap();
+        });
+
+        let fallback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let fallback_addr = fallback.local_addr().unwrap();
+        let fallback_thread = std::thread::spawn(move || {
+            let (mut stream, _) = fallback.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let complete = concat!(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"complete\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+            );
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                complete.len(),
+                complete
+            )
+            .unwrap();
+        });
+
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let token = "aipass_silent_stream_retry_test";
+        let mut route = fallback_route(
+            token,
+            &[primary_addr, fallback_addr],
+            RetryPolicy {
+                max_attempts: 1,
+                silent_retry: true,
+                max_silent_retries: 1,
+                ..RetryPolicy::default()
+            },
+        );
+        route.config.strategy = RouteStrategy::RoundRobin;
+        let _proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/responses"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({"model":"stream-retry-test","stream":true}))
+            .send()
+            .unwrap();
+        let response_status = response.status();
+        let body = response.text().unwrap();
+        assert_eq!(response_status, StatusCode::OK);
+        assert!(body.contains("complete"));
+        assert!(!body.contains("partial"));
         primary_thread.join().unwrap();
         fallback_thread.join().unwrap();
     }

@@ -4,8 +4,8 @@ use aipass_provider_registry::{
 };
 pub use aipass_proxy::{
     ModelPricing, ModelUsageAggregate, Protocol as ProxyProtocol, ProviderUsageAggregate,
-    ProxyConfig, ProxyRouteConfig, ProxyStatus, ProxyTargetConfig, RetryPolicy, RouteStrategy,
-    UsageAggregate, UsageTimeseriesModel, UsageTimeseriesPoint,
+    ProxyConfig, ProxyLogEntry, ProxyRouteConfig, ProxyStatus, ProxyTargetConfig, RetryPolicy,
+    RouteStrategy, UsageAggregate, UsageTimeseriesModel, UsageTimeseriesPoint,
 };
 use aipass_sync::SyncObject;
 use aipass_vault::{
@@ -487,6 +487,8 @@ pub enum AgentRequest {
     SessionPolicySet { policy: SessionPolicy },
     #[serde(rename = "server.status")]
     ServerStatus,
+    #[serde(rename = "server.logs")]
+    ServerLogs,
     #[serde(rename = "server.start")]
     ServerStart,
     #[serde(rename = "server.stop")]

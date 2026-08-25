@@ -14,7 +14,6 @@ export type IntegrationToolDefinition = {
   defaultMode: ToolConfigMode;
   localProxyProtocols: ProxyProtocol[];
   localProxyUnsupportedReason?: "native-api" | "custom-endpoint" | "local-runtime-required";
-  localProxyRequirement?: "cursor-local-runtime";
   requiresDefaultModel?: boolean;
   disabledReason?: string;
 };
@@ -87,8 +86,7 @@ export const integrationToolDefinitions: IntegrationToolDefinition[] = [
       "open_ai_responses",
       "open_ai_chat_completions",
       "anthropic_messages"
-    ],
-    localProxyRequirement: "cursor-local-runtime"
+    ]
   }
 ];
 

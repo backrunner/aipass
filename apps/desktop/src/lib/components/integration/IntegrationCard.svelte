@@ -164,9 +164,6 @@
                 {#if tool.disabledReason}
                   <span class="tool-reason">{tool.disabledReason}</span>
                 {/if}
-                {#if tool.localProxyRequirement === "cursor-local-runtime"}
-                  <span class="tool-reason">{$t("integration.cursorLocalRuntimeRequired")}</span>
-                {/if}
               </span>
             </span>
             <span class="tool-side">
