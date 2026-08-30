@@ -223,6 +223,8 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
         provider_id: request.provider_id,
+        credential_kind: request.credential_kind,
+        account_identity: request.account_identity,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
         endpoints: endpoints_from(
@@ -238,6 +240,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
         quota: request.quota,
+        subscription: None,
         gateway: request.gateway,
         tags: clean_strings(request.tags),
         notes: request.notes.and_then(non_empty),
@@ -251,6 +254,8 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
         provider_id: request.provider_id,
+        credential_kind: request.credential_kind,
+        account_identity: request.account_identity,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
         endpoints: endpoints_from(
@@ -269,6 +274,7 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
         quota: request.quota,
+        subscription: None,
         gateway: request.gateway,
         tags: clean_strings(request.tags),
         notes: request.notes.and_then(non_empty),
@@ -1726,7 +1732,7 @@ pub(crate) fn persist_window_size(app: &AppHandle) -> Result<(), String> {
     persist_window_size_for_target(app, &target)
 }
 
-fn prepare_window_target(app: &AppHandle, target: &str) {
+fn prepare_window_target(app: &AppHandle, target: &str, center: bool) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -1749,12 +1755,14 @@ fn prepare_window_target(app: &AppHandle, target: &str) {
         height: size.height,
     }));
     configure_window_chrome(&window);
-    let _ = window.center();
+    if center {
+        let _ = window.center();
+    }
 }
 
 fn reveal_window_target(app: &AppHandle, target: &str) -> Result<(), String> {
     if target == "tray" {
-        prepare_window_target(app, target);
+        prepare_window_target(app, target, false);
         return Ok(());
     }
 
@@ -1787,7 +1795,7 @@ pub(crate) fn activate_window_target(app: &AppHandle, target: &str) {
             let _ = logging::log_event("desktop.window.size_persist_failed", &[("error", &err)]);
         }
     }
-    prepare_window_target(app, &target);
+    prepare_window_target(app, &target, !frontend_ready);
     if frontend_ready {
         let _ = reveal_window_target(app, &target);
     }
@@ -1822,7 +1830,7 @@ pub(crate) fn complete_desktop_startup(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut window_state = state.window_state();
     let target = window_state.complete_startup();
-    prepare_window_target(app, &target);
+    prepare_window_target(app, &target, false);
     let result = reveal_window_target(app, &target);
     drop(window_state);
     result
@@ -2021,6 +2029,7 @@ pub fn run() {
             vault_rotate,
             entries_list,
             entries_search,
+            official_accounts_refresh,
             provider_favicon_backfill,
             provider_add,
             provider_update,

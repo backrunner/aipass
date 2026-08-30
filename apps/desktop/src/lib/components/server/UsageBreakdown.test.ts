@@ -54,7 +54,7 @@ test("renders token cache rate from cache read and non-cached input", () => {
 
   const headers = Array.from(document.querySelectorAll("th"));
   const cacheRateColumn = headers.findIndex(
-    (header) => header.textContent?.trim() === "Token cache rate",
+    (header) => header.textContent?.trim() === "Cache %",
   );
   const cells = document.querySelectorAll("tbody td");
 

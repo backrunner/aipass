@@ -634,10 +634,32 @@ fn stop_proxy_async(app: AppHandle, feedback: TrayFeedback) {
 fn select_proxy_route_async(app: AppHandle, route_id: uuid::Uuid, feedback: TrayFeedback) {
     thread::spawn(move || {
         feedback.proxy_transient("Status: switching group...");
-        let result = agent_request_no_unlock::<ProxyConfig>(
-            &app,
-            AgentRequest::ServerRouteSelect { route_id },
-        );
+        // The proxy supports multiple enabled groups: clicking an active
+        // group disables it, clicking an inactive one enables it. The GET
+        // only decides intent; the toggle itself is atomic on the agent so a
+        // concurrent config edit cannot be clobbered.
+        let current =
+            agent_request_no_unlock::<ProxyConfig>(&app, AgentRequest::ServerConfigGet).ok();
+        let result = match current {
+            Some(config) => {
+                let active = config
+                    .routes
+                    .iter()
+                    .find(|route| route.id == route_id)
+                    .is_some_and(|route| route.enabled);
+                agent_request_no_unlock::<ProxyConfig>(
+                    &app,
+                    AgentRequest::ServerRouteSetEnabled {
+                        route_id,
+                        enabled: !active,
+                    },
+                )
+            }
+            None => agent_request_no_unlock::<ProxyConfig>(
+                &app,
+                AgentRequest::ServerRouteSelect { route_id },
+            ),
+        };
         if let Err(err) = result {
             eprintln!("failed to switch proxy group from tray: {err}");
             feedback.proxy_transient("Status: group switch failed");

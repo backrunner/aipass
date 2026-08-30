@@ -49,7 +49,6 @@
   <div class="toolbar">
     <div class="pane-heading">
       <h2>{$t("server.groups")}</h2>
-      <p>{$t("server.groupsDesc")}</p>
     </div>
     <button type="button" class="cta-btn primary" on:click={openCreate} disabled={entries.length === 0}>
       <Plus size={14} />
@@ -163,12 +162,6 @@
       font-weight: 650;
     }
 
-    p {
-      margin: 2px 0 0;
-      color: var(--text-tertiary);
-      font-size: 11px;
-      line-height: 1.4;
-    }
   }
 
   .cta-btn {

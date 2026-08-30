@@ -7,7 +7,9 @@ use aipass_agent_protocol::{
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
     ToolConfigRequest as AgentToolConfigRequest, ToolConfigTool as AgentToolConfigTool,
 };
-use aipass_provider_registry::{AuthScheme, GatewayMetadata, InterfaceType, QuotaInfo};
+use aipass_provider_registry::{
+    AuthScheme, CredentialKind, GatewayMetadata, InterfaceType, QuotaInfo,
+};
 use aipass_sync::SyncObject;
 use aipass_vault::{EntrySummary, SecretMetadataInput};
 use serde::{Deserialize, Serialize};
@@ -134,6 +136,10 @@ pub(crate) struct ProviderAddRequest {
     pub(crate) title: String,
     pub(crate) provider_id: Option<String>,
     #[serde(default)]
+    pub(crate) credential_kind: CredentialKind,
+    #[serde(default)]
+    pub(crate) account_identity: Option<String>,
+    #[serde(default)]
     pub(crate) domain: Vec<String>,
     pub(crate) endpoint: Option<String>,
     #[serde(default)]
@@ -165,6 +171,10 @@ pub(crate) struct ProviderUpdateRequest {
     pub(crate) id: Uuid,
     pub(crate) title: String,
     pub(crate) provider_id: Option<String>,
+    #[serde(default)]
+    pub(crate) credential_kind: Option<CredentialKind>,
+    #[serde(default)]
+    pub(crate) account_identity: Option<String>,
     #[serde(default)]
     pub(crate) domain: Vec<String>,
     pub(crate) endpoint: Option<String>,
@@ -306,6 +316,7 @@ pub(crate) enum ToolConfigTool {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ToolConfigMode {
+    Official,
     Helper,
     Env,
     Plaintext,
@@ -467,6 +478,7 @@ pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> Agen
         },
         id: request.id,
         mode: match request.mode {
+            ToolConfigMode::Official => AgentToolConfigMode::Official,
             ToolConfigMode::Helper => AgentToolConfigMode::Helper,
             ToolConfigMode::Env => AgentToolConfigMode::Env,
             ToolConfigMode::Plaintext => AgentToolConfigMode::Plaintext,
@@ -613,6 +625,7 @@ fn from_agent_sync_mode(mode: AgentSyncMode) -> SyncMode {
 
 fn from_agent_tool_mode(mode: AgentToolConfigMode) -> ToolConfigMode {
     match mode {
+        AgentToolConfigMode::Official => ToolConfigMode::Official,
         AgentToolConfigMode::Helper => ToolConfigMode::Helper,
         AgentToolConfigMode::Env => ToolConfigMode::Env,
         AgentToolConfigMode::Plaintext => ToolConfigMode::Plaintext,

@@ -16,9 +16,10 @@ use crate::models::{
     ToolDetection, UnlockVaultRequest, VaultExportRequest, VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
-    AgentRequest, FaviconBackfillRequest, FaviconBackfillResponse, LockReason, PricingApplyScope,
-    PricingConfig, PricingGroup, ProbeResult as AgentProbeResult, SecretValue, SensitiveString,
-    ServerTokenResponse, ServerUsageSummary, SessionPolicy, SessionStatus, SessionUnlockMode,
+    AgentRequest, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
+    OfficialAccountRefreshResult, PricingApplyScope, PricingConfig, PricingGroup,
+    ProbeResult as AgentProbeResult, SecretValue, SensitiveString, ServerTokenResponse,
+    ServerUsageSummary, SessionPolicy, SessionStatus, SessionUnlockMode,
     SyncConflictResponse as AgentSyncConflictResponse, SyncSettings as AgentSyncSettings,
     ToolConfigApplyResponse as AgentToolConfigApplyResponse,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
@@ -528,6 +529,20 @@ pub(crate) async fn entries_search(
     query: String,
 ) -> Result<Vec<EntrySummary>, String> {
     agent_request_async(app, AgentRequest::EntriesSearch { query }).await
+}
+
+#[tauri::command]
+pub(crate) async fn official_accounts_refresh(
+    app: AppHandle,
+    provider_ids: Option<Vec<String>>,
+) -> Result<Vec<OfficialAccountRefreshResult>, String> {
+    agent_request_async(
+        app,
+        AgentRequest::OfficialAccountsRefresh {
+            provider_ids: provider_ids.unwrap_or_default(),
+        },
+    )
+    .await
 }
 
 #[tauri::command]

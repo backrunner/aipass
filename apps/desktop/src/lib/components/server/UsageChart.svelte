@@ -369,6 +369,7 @@
     color: var(--text-secondary);
     font-size: 10px;
     line-height: 1.35;
+    text-align: left;
     pointer-events: none;
 
     strong {
@@ -384,7 +385,13 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    text-align: left;
     white-space: nowrap;
+  }
+
+  .tooltip-model {
+    display: grid;
+    grid-template-columns: 7px minmax(74px, 130px) repeat(3, max-content);
   }
 
   .tooltip-total {
@@ -402,7 +409,6 @@
   }
 
   .model-dot {
-    flex: 0 0 auto;
     width: 7px;
     height: 7px;
     border-radius: 50%;

@@ -68,15 +68,15 @@
     <table class="breakdown-table">
       <thead>
         <tr>
-          <th class="col-name">{$t("server.colProvider")}</th>
-          <th>{$t("server.requests")}</th>
-          <th>{$t("server.colInput")}</th>
-          <th>{$t("server.colOutput")}</th>
-          <th>{$t("server.colCache")}</th>
-          <th>{$t("server.tokenCacheRate")}</th>
-          <th>{$t("server.successRate")}</th>
-          <th>{$t("server.firstToken")}</th>
-          <th>{$t("server.estimatedCost")}</th>
+          <th class="col-name">{$t("server.usageProvider")}</th>
+          <th>{$t("server.usageRequests")}</th>
+          <th>{$t("server.usageInput")}</th>
+          <th>{$t("server.usageOutput")}</th>
+          <th>{$t("server.usageCache")}</th>
+          <th class="col-cache-rate">{$t("server.usageCacheRate")}</th>
+          <th>{$t("server.usageSuccessRate")}</th>
+          <th>{$t("server.usageFirstToken")}</th>
+          <th>{$t("server.usageCost")}</th>
         </tr>
       </thead>
       <tbody>
@@ -90,7 +90,7 @@
             <td>{formatCompact(row.inputTokens)}</td>
             <td>{formatCompact(row.outputTokens)}</td>
             <td>{formatCompact(row.cacheTokens)}</td>
-            <td>{row.cacheRate}</td>
+            <td class="col-cache-rate">{row.cacheRate}</td>
             <td>{formatSuccessRate(row.successRateBps, row.requestCount)}</td>
             <td>{row.averageFirstTokenMs == null ? "-" : `${formatCompact(row.averageFirstTokenMs)} ms`}</td>
             <td>{formatCostMicros(row.estimatedCostMicros)}</td>
@@ -146,14 +146,25 @@
     }
 
     .col-name {
-      min-width: 140px;
+      min-width: 96px;
+      width: 96px;
+      max-width: 96px;
+      overflow: hidden;
       text-align: left;
+    }
+
+    .col-cache-rate {
+      min-width: 64px;
+      width: 64px;
     }
   }
 
   .row-label {
     display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
     white-space: nowrap;
+    text-overflow: ellipsis;
     vertical-align: bottom;
     color: var(--text);
     font-weight: 500;
@@ -161,8 +172,13 @@
 
   .row-sublabel {
     margin-inline-start: 6px;
+    max-width: 100%;
+    overflow: hidden;
     color: var(--text-tertiary);
     font-size: 11px;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
   }
 
   .usage-empty {

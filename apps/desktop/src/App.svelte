@@ -9,7 +9,8 @@
     matchProviderByDomain,
     providerDefinitions,
     type ProviderEntry,
-    type QuotaInfo
+    type QuotaInfo,
+    type SubscriptionSnapshot
   } from "@aipass/schemas";
   import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Brand, Button, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
@@ -49,6 +50,7 @@
     ServerTokenResponse,
     ServerUsageSummary,
     CodexApiKeyMode,
+    OfficialAccountRefreshResult,
     SyncConflict,
     SyncSettings,
     SyncMode,
@@ -67,7 +69,7 @@
   } from "./lib/types";
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
-  import { buildRouteTarget, buildSingleEntryRoute, enforceSingleEnabledRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
+  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
   import { checkForUpdates, downloadUpdate, getStoredUpdateChannel, inferUpdateChannel, installPendingUpdate, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
@@ -327,6 +329,8 @@
       const haystack = [
         entry.title,
         entry.providerId ?? "",
+        entry.accountIdentity ?? "",
+        entry.credentialKind ?? "api",
         entry.interfaceType,
         entry.authScheme,
         entry.defaultModel ?? "",
@@ -335,6 +339,10 @@
         entry.quota?.limit ?? "",
         entry.quota?.remaining ?? "",
         entry.quota?.resetAt ?? "",
+        entry.subscription?.plan ?? "",
+        entry.subscription?.subscriptionExpiresAt ?? "",
+        entry.subscription?.creditsRemaining ?? "",
+        ...(entry.subscription?.windows ?? []).flatMap((window) => [window.id, window.label, window.resetsAt ?? "", String(window.usedPercent ?? "")]),
         entry.notes ?? "",
         ...entry.domains,
         ...entry.tags,
@@ -366,7 +374,13 @@
   }
   $: createPasswordStrength = passwordStrength(createPassword, $t);
   $: recoveryPasswordStrength = passwordStrength(recoveryPassword, $t);
-  $: errorText = resolveMessage($t, error);
+  // Agent launch/ready failures carry a long multi-line diagnostic (paths,
+  // tried binaries, connection errors). Show a localized summary and keep the
+  // raw diagnostics for a collapsed details section.
+  const AGENT_FAILURE_PREFIX = "AIPass agent ";
+  $: rawErrorText = resolveMessage($t, error);
+  $: errorDetail = rawErrorText.startsWith(AGENT_FAILURE_PREFIX) ? rawErrorText : "";
+  $: errorText = errorDetail ? $t("auth.agentStartFailed") : rawErrorText;
   $: noticeText = resolveMessage($t, notice);
   $: updateInstallErrorText = resolveMessage($t, updateInstallError);
   $: updateProgressPercent = updateProgress?.totalBytes && updateProgress.totalBytes > 0
@@ -912,7 +926,8 @@
   async function loadEntries(
     archived = showArchived,
     trash = showTrash,
-    favorite = showFavorites
+    favorite = showFavorites,
+    beforeCommit?: () => void
   ) {
     const requestId = ++entriesLoadRequestId;
     let summariesPromise: Promise<EntrySummary[]>;
@@ -927,8 +942,18 @@
       ? invokeTauri<EntrySummary[]>("entries_list", { archived: false })
       : summariesPromise;
     const [summaries, countSummaries] = await Promise.all([summariesPromise, countSummariesPromise]);
-    if (requestId !== entriesLoadRequestId) return;
+    if (requestId !== entriesLoadRequestId) {
+      // A newer load superseded this one, but a deferred view-state commit
+      // must never be dropped — it carries the user's click. Apply it and
+      // reload so the entries match the just-committed view state.
+      if (beforeCommit) {
+        beforeCommit();
+        return loadEntries();
+      }
+      return;
+    }
 
+    beforeCommit?.();
     entries = summaries.map(summaryToEntry);
     countEntries = countSummaries.map(summaryToEntry);
     if (!entries.some((entry) => entry.id === selectedId)) {
@@ -1006,16 +1031,45 @@
   async function setProviderFilter(value: ProviderFilter) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    providerFilter = value;
-    showServer = false;
     if (showArchived || showTrash || showFavorites) {
-      showArchived = false;
-      showTrash = false;
-      showFavorites = false;
-      await loadEntries(false, false, false);
+      await loadEntries(false, false, false, () => {
+        providerFilter = value;
+        showServer = false;
+        showArchived = false;
+        showTrash = false;
+        showFavorites = false;
+      });
+    } else {
+      providerFilter = value;
+      showServer = false;
     }
     if (!filtered.some((entry) => entry.id === selectedId)) {
       selectedId = filtered[0]?.id ?? "";
+    }
+  }
+
+  let officialAccountsBusy = false;
+
+  async function refreshOfficialAccounts() {
+    if (officialAccountsBusy) return;
+    officialAccountsBusy = true;
+    error = "";
+    try {
+      const results = await invokeTauri<OfficialAccountRefreshResult[]>("official_accounts_refresh", { providerIds: ["openai", "anthropic", "xai"] });
+      await loadEntries();
+      const failures = (results ?? []).filter((item) => item.error);
+      if (failures.length > 0) {
+        error = failures
+          .map((item) => `${item.providerId}${item.accountIdentity ? ` (${item.accountIdentity})` : ""}: ${item.error}`)
+          .join("; ");
+      } else {
+        notice = localizedMessage("providerList.accountsRefreshed");
+        setTimeout(() => (notice = ""), 1800);
+      }
+    } catch (err) {
+      error = String(err);
+    } finally {
+      officialAccountsBusy = false;
     }
   }
 
@@ -1023,7 +1077,8 @@
     if (filter === "all") return true;
     if (filter === "recent") return Boolean(entry.lastUsedAt);
     if (filter === "quota_low") return isQuotaLow(entry.quota);
-    if (filter === "expiring") return isExpiringSoon(entry.quota);
+    if (filter === "expiring") return isExpiringSoon(entry.quota, entry.subscription);
+    if (filter === "oauth" || filter === "api") return (entry.credentialKind ?? "api") === filter;
     if (filter.startsWith("tag:")) return entry.tags.includes(filter.slice("tag:".length));
     return entry.providerKind === filter;
   }
@@ -1036,9 +1091,11 @@
     return remaining <= 0;
   }
 
-  function isExpiringSoon(quota?: QuotaInfo): boolean {
-    const resetAt = quota?.resetAt ? Date.parse(quota.resetAt) : Number.NaN;
-    if (Number.isNaN(resetAt)) return false;
+  function isExpiringSoon(quota?: QuotaInfo, subscription?: SubscriptionSnapshot): boolean {
+    const candidates = [subscription?.subscriptionExpiresAt, subscription?.credentialExpiresAt, quota?.resetAt].filter(Boolean) as string[];
+    const timestamps = candidates.map((value) => Date.parse(value)).filter((value) => !Number.isNaN(value));
+    if (timestamps.length === 0) return false;
+    const resetAt = Math.min(...timestamps);
     const now = Date.now();
     return resetAt >= now && resetAt - now <= 30 * 24 * 60 * 60 * 1000;
   }
@@ -1371,24 +1428,19 @@
   async function setArchiveView(value: boolean) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    showArchived = value;
-    showTrash = false;
-    showFavorites = false;
-    showServer = false;
-    providerFilter = "all";
-    query = "";
-    await loadEntries(value, false, false);
+    await loadEntries(value, false, false, () => {
+      showArchived = value;
+      showTrash = false;
+      showFavorites = false;
+      showServer = false;
+      providerFilter = "all";
+      query = "";
+    });
   }
 
   async function setTrashView(value: boolean) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    showTrash = value;
-    showArchived = false;
-    showFavorites = false;
-    showServer = false;
-    providerFilter = "all";
-    query = "";
     if (value) {
       try {
         await invokeTauri("trash_purge_expired");
@@ -1396,19 +1448,27 @@
         console.warn("trash purge expired failed", err);
       }
     }
-    await loadEntries(false, value, false);
+    await loadEntries(false, value, false, () => {
+      showTrash = value;
+      showArchived = false;
+      showFavorites = false;
+      showServer = false;
+      providerFilter = "all";
+      query = "";
+    });
   }
 
   async function setFavoriteView(value: boolean) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    showFavorites = value;
-    showArchived = false;
-    showTrash = false;
-    showServer = false;
-    providerFilter = "all";
-    query = "";
-    await loadEntries(false, false, value);
+    await loadEntries(false, false, value, () => {
+      showFavorites = value;
+      showArchived = false;
+      showTrash = false;
+      showServer = false;
+      providerFilter = "all";
+      query = "";
+    });
   }
 
   function loadServer(): Promise<void> {
@@ -1680,8 +1740,7 @@
     const nextRoutes = exists
       ? serverConfig.routes.map((item) => (item.id === route.id ? route : item))
       : [...serverConfig.routes, route];
-    const routes = enforceSingleEnabledRoute(nextRoutes, route.enabled ? route.id : undefined);
-    const saved = await saveServerConfig({ ...serverConfig, routes });
+    const saved = await saveServerConfig({ ...serverConfig, routes: nextRoutes });
     if (saved && !exists) selectedRouteId = route.id;
     return saved;
   }
@@ -1696,10 +1755,7 @@
   async function toggleRouteGroup(routeId: string, enabled: boolean) {
     await saveServerConfig({
       ...serverConfig,
-      routes: enforceSingleEnabledRoute(
-        serverConfig.routes.map((route) => (route.id === routeId ? { ...route, enabled } : route)),
-        enabled ? routeId : undefined
-      )
+      routes: serverConfig.routes.map((route) => (route.id === routeId ? { ...route, enabled } : route))
     });
   }
 
@@ -1761,7 +1817,7 @@
       if (!route) return;
       const saved = await saveServerConfig({
         ...serverConfig,
-        routes: enforceSingleEnabledRoute([...serverConfig.routes, route], route.id)
+        routes: [...serverConfig.routes, route]
       });
       if (!saved) return;
       selectedRouteId = route.id;
@@ -2379,6 +2435,7 @@
         {authMode}
         busyMode={authBusy}
         error={errorText}
+        {errorDetail}
         bind:password
         bind:createPassword
         bind:createPasswordConfirm
@@ -2423,7 +2480,7 @@
       {#if showServer}
         <RouteListPane
           routes={serverConfig.routes}
-          {entries}
+          entries={countEntries}
           bind:selectedRouteId
           busy={serverBusy}
           onSave={saveRouteGroup}
@@ -2436,7 +2493,7 @@
           status={serverStatus}
           series={serverUsageSeries}
           usage={serverUsage}
-          {entries}
+          entries={countEntries}
           {selectedRouteId}
           busy={serverBusy}
           {toolDetections}
@@ -2464,6 +2521,8 @@
         routeGroups={serverConfig.routes.map((route) => ({ id: route.id, name: route.name }))}
         onSearch={runSearch}
         onAdd={openAdd}
+        onRefreshAccounts={refreshOfficialAccounts}
+        refreshAccountsBusy={officialAccountsBusy}
         onFilterChange={setProviderFilter}
         onEmptyTrash={emptyTrash}
         onSelect={selectProvider}

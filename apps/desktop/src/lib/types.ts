@@ -1,9 +1,11 @@
 import type {
   AuthScheme,
+  CredentialKind,
   InterfaceType,
   ProviderEntry,
   ProviderKind,
   QuotaInfo,
+  SubscriptionSnapshot,
   SecretRef,
 } from "@aipass/schemas";
 import type { LocalePreference } from "@aipass/ui";
@@ -28,7 +30,7 @@ export type ToolConfigTarget =
   | "grok"
   | "pi"
   | "cursor";
-export type ToolConfigMode = "helper" | "env" | "plaintext";
+export type ToolConfigMode = "official" | "helper" | "env" | "plaintext";
 export type CodexApiKeyMode = "experimental_bearer_token" | "auth_json";
 
 export type VaultStatus = { exists: boolean; locked: boolean };
@@ -279,6 +281,8 @@ export type EntrySummary = {
   favorite?: boolean;
   providerId?: string;
   providerKind: ProviderKind;
+  credentialKind?: CredentialKind;
+  accountIdentity?: string;
   domains: string[];
   faviconUrl?: string;
   endpoints: ProviderEntry["endpoints"];
@@ -290,6 +294,7 @@ export type EntrySummary = {
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;
   quota?: QuotaInfo;
+  subscription?: SubscriptionSnapshot;
   gateway?: ProviderEntry["gateway"];
   tags: string[];
   notes?: string;
@@ -299,6 +304,15 @@ export type EntrySummary = {
   lastUsedAt?: string;
   archivedAt?: string;
   deletedAt?: string;
+};
+
+export type OfficialAccountRefreshResult = {
+  providerId: string;
+  accountIdentity?: string;
+  credentialKind: CredentialKind;
+  snapshot?: SubscriptionSnapshot;
+  status: string;
+  error?: string;
 };
 
 export type FaviconBackfillResult = {
@@ -334,6 +348,8 @@ export type ProviderFilter =
   | "recent"
   | "quota_low"
   | "expiring"
+  | "oauth"
+  | "api"
   | ProviderKind
   | `tag:${string}`;
 

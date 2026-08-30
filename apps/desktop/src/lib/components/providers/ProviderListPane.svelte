@@ -2,7 +2,7 @@
   import type { ProviderEntry } from "@aipass/schemas";
   import { Button, ProviderIcon } from "@aipass/ui";
   import { ContextMenu, DropdownMenu } from "bits-ui";
-  import { ChevronRight, KeyRound, Plus, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
+  import { ChevronRight, KeyRound, Plus, RefreshCw, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderFilter } from "../../types";
@@ -18,6 +18,8 @@
   export let routeGroups: Array<{ id: string; name: string }> = [];
   export let onSearch: () => MaybePromise = () => {};
   export let onAdd: () => MaybePromise = () => {};
+  export let onRefreshAccounts: () => MaybePromise = () => {};
+  export let refreshAccountsBusy = false;
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
   export let onEmptyTrash: () => MaybePromise = () => {};
   export let onSelect: (id: string) => MaybePromise = () => {};
@@ -32,7 +34,9 @@
     { value: "self_hosted" as ProviderFilter, label: $t("sidebar.selfHosted") },
     { value: "unknown" as ProviderFilter, label: $t("sidebar.custom") },
     { value: "quota_low" as ProviderFilter, label: $t("providerList.lowQuota") },
-    { value: "expiring" as ProviderFilter, label: $t("providerList.expiringSoon") }
+    { value: "expiring" as ProviderFilter, label: $t("providerList.expiringSoon") },
+    { value: "oauth" as ProviderFilter, label: $t("providerList.oauth") },
+    { value: "api" as ProviderFilter, label: $t("providerList.api") }
   ];
 
   $: filterOptions = [
@@ -52,7 +56,11 @@
   }
 
   function entrySubtitle(entry: ProviderEntry): string {
-    return entry.domains[0] ?? entry.endpoints[0]?.url ?? entry.defaultModel ?? "";
+    const parts = [entry.credentialKind === "oauth" ? $t("providerDetail.oauth") : $t("providerDetail.api")];
+    if (entry.accountIdentity) parts.push(entry.accountIdentity);
+    const target = entry.domains[0] ?? entry.endpoints[0]?.url ?? entry.defaultModel;
+    if (target) parts.push(target);
+    return parts.join(" · ");
   }
 </script>
 
@@ -110,6 +118,9 @@
         <span>{$t("providerList.emptyTrash")}</span>
       </button>
     {:else}
+      <button type="button" class="icon-btn" class:spinning={refreshAccountsBusy} on:click={() => onRefreshAccounts()} disabled={refreshAccountsBusy} aria-label={$t("providerList.refreshAccounts")} title={$t("providerList.refreshAccounts")}>
+        <RefreshCw size={14} />
+      </button>
       <button type="button" class="cta-btn primary" on:click={() => onAdd()}>
         <Plus size={14} />
         <span>{$t("providerList.add")}</span>
@@ -286,6 +297,25 @@
         cursor: not-allowed;
       }
     }
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    &:hover { background: var(--surface-2); color: var(--text); }
+    &:disabled { opacity: 0.6; cursor: default; }
+    &.spinning :global(svg) { animation: refresh-spin 1s linear infinite; }
+  }
+
+  @keyframes refresh-spin {
+    to { transform: rotate(360deg); }
   }
 
   :global(.filter-menu) {
