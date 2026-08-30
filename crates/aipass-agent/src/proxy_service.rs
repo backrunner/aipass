@@ -100,8 +100,7 @@ impl ProxyService {
             .map_err(map_vault_error)?;
         self.config = serde_json::from_slice(&bytes).map_err(ServiceError::internal)?;
         let normalized = normalize_unavailable_conversion(&mut self.config)
-            | normalize_enabled_routes(&mut self.config)
-            | ensure_enabled_route_tokens(&mut self.config);
+            | ensure_route_tokens(&mut self.config);
         if self.pending_disabled_persist {
             self.config.enabled = false;
         }
@@ -142,7 +141,7 @@ impl ProxyService {
         mut config: ProxyConfig,
     ) -> ServiceResult<ProxyConfig> {
         self.load_config(vault)?;
-        let _ = ensure_enabled_route_tokens(&mut config);
+        let _ = ensure_route_tokens(&mut config);
         validate_config(&config)?;
         let previous = std::mem::replace(&mut self.config, config);
         let was_running = self
@@ -186,7 +185,7 @@ impl ProxyService {
         {
             return Err(ServiceError::new(
                 aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-                "every enabled route needs a local token",
+                "every proxy route group needs a local token",
             ));
         }
         let runtime = self.runtime_config(vault)?;
@@ -203,38 +202,67 @@ impl ProxyService {
         Ok(self.status())
     }
 
+    /// Restore a proxy that was enabled before the agent last stopped.
+    ///
+    /// The encrypted config is the durable source of truth for this intent;
+    /// an explicit stop persists `enabled = false`, so it is not restarted.
+    pub fn start_if_enabled(&mut self, vault: &Vault) -> ServiceResult<Option<ProxyStatus>> {
+        if self
+            .handle
+            .as_ref()
+            .is_some_and(|handle| handle.status().running)
+        {
+            return Ok(Some(self.status()));
+        }
+        let config = self.load_config(vault)?;
+        if !config.enabled {
+            return Ok(None);
+        }
+        self.start(vault).map(Some)
+    }
+
     pub fn stop(&mut self) -> ServiceResult<ProxyStatus> {
         self.handle.take();
         self.config.enabled = false;
         Ok(self.status())
     }
 
-    /// Select exactly one route as the active local-proxy group.
+    /// Activate a route group for the local proxy.
     pub fn select_route(&mut self, vault: &Vault, route_id: Uuid) -> ServiceResult<ProxyConfig> {
+        self.set_route_enabled(vault, route_id, true)
+    }
+
+    /// Enable or disable one route group atomically, leaving every other
+    /// route — and the rest of the config — untouched.
+    pub fn set_route_enabled(
+        &mut self,
+        vault: &Vault,
+        route_id: Uuid,
+        enabled: bool,
+    ) -> ServiceResult<ProxyConfig> {
         self.load_config(vault)?;
-        if !self.config.routes.iter().any(|route| route.id == route_id) {
-            return Err(ServiceError::new(
-                aipass_agent_protocol::AgentErrorCode::NotFound,
-                "proxy route not found",
-            ));
-        }
-        if self
+        let route_index = self
             .config
             .routes
             .iter()
-            .find(|route| route.id == route_id)
-            .is_some_and(|route| route.token.is_empty())
-        {
+            .position(|route| route.id == route_id)
+            .ok_or_else(|| {
+                ServiceError::new(
+                    aipass_agent_protocol::AgentErrorCode::NotFound,
+                    "proxy route not found",
+                )
+            })?;
+        if enabled && self.config.routes[route_index].token.is_empty() {
             return Err(ServiceError::new(
                 aipass_agent_protocol::AgentErrorCode::ValidationFailed,
                 "selected proxy route needs a local token",
             ));
         }
         let previous = self.config.clone();
-        for route in &mut self.config.routes {
-            route.enabled = route.id == route_id;
+        self.config.routes[route_index].enabled = enabled;
+        if enabled {
+            self.config.enabled = true;
         }
-        self.config.enabled = true;
         if let Err(err) = self.save_config(vault).and_then(|()| {
             self.handle
                 .is_some()
@@ -860,18 +888,12 @@ fn normalize_unavailable_conversion(config: &mut ProxyConfig) -> bool {
     changed
 }
 
-fn normalize_enabled_routes(config: &mut ProxyConfig) -> bool {
-    let mut found_enabled = false;
+fn ensure_route_tokens(config: &mut ProxyConfig) -> bool {
     let mut changed = false;
     for route in &mut config.routes {
-        if !route.enabled {
-            continue;
-        }
-        if found_enabled {
-            route.enabled = false;
+        if route.token.trim().is_empty() {
+            route.token = generate_local_token();
             changed = true;
-        } else {
-            found_enabled = true;
         }
     }
     changed
@@ -879,19 +901,6 @@ fn normalize_enabled_routes(config: &mut ProxyConfig) -> bool {
 
 fn generate_local_token() -> String {
     format!("sk-{}", Uuid::new_v4().simple())
-}
-
-fn ensure_enabled_route_tokens(config: &mut ProxyConfig) -> bool {
-    let mut changed = false;
-    for route in config
-        .routes
-        .iter_mut()
-        .filter(|route| route.enabled && route.token.trim().is_empty())
-    {
-        route.token = generate_local_token();
-        changed = true;
-    }
-    changed
 }
 
 fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
@@ -920,29 +929,30 @@ fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
             "protocol conversion is not available in this release",
         ));
     }
-    if config.routes.iter().filter(|route| route.enabled).count() > 1 {
-        return Err(ServiceError::new(
-            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-            "only one proxy route group can be enabled",
-        ));
-    }
     if config
         .routes
         .iter()
-        .any(|route| route.enabled && route.token.trim().is_empty())
+        .any(|route| route.token.trim().is_empty())
     {
         return Err(ServiceError::new(
             aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-            "every enabled proxy route needs a local token",
+            "every proxy route group needs a local token",
         ));
     }
     let mut route_ids = HashSet::new();
+    let mut route_tokens = HashSet::new();
     let mut target_ids = HashSet::new();
     for route in &config.routes {
         if !route_ids.insert(route.id) {
             return Err(ServiceError::new(
                 aipass_agent_protocol::AgentErrorCode::ValidationFailed,
                 "proxy route ids must be unique",
+            ));
+        }
+        if !route_tokens.insert(route.token.as_str()) {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                "proxy route group tokens must be unique",
             ));
         }
         for target in &route.targets {
@@ -1021,6 +1031,8 @@ mod tests {
             title: "Proxy upstream".into(),
             provider_kind: ProviderKind::Unknown,
             provider_id: None,
+            credential_kind: Default::default(),
+            account_identity: None,
             domains: Vec::new(),
             favicon_url: None,
             endpoints: vec![ProviderEndpoint::api(endpoint)],
@@ -1032,6 +1044,7 @@ mod tests {
             model_aliases: Vec::new(),
             headers: vec![("x-provider-header".into(), header.into())],
             quota: None,
+            subscription: None,
             gateway: None,
             tags: Vec::new(),
             notes: None,
@@ -1115,6 +1128,88 @@ mod tests {
             .client_config(&creation.vault)
             .expect("load client config");
         assert_eq!(client_config.routes[0].token, token);
+    }
+
+    #[test]
+    fn start_if_enabled_restores_persisted_proxy_runtime() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let provider_id = creation
+            .vault
+            .add_provider(provider_input(
+                "upstream-key",
+                "http://127.0.0.1:9/v1".into(),
+                "header",
+            ))
+            .expect("add provider");
+        let secret_id = creation
+            .vault
+            .get_provider_summary(provider_id)
+            .expect("provider summary")
+            .secret_refs[0]
+            .id
+            .clone();
+        let probe = TcpListener::bind("127.0.0.1:0").expect("reserve proxy address");
+        let bind_addr = probe.local_addr().expect("proxy address").to_string();
+        drop(probe);
+
+        let mut config = config_with_token("restore-token");
+        config.bind_addr = bind_addr;
+        config.routes[0].targets = vec![ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: provider_id,
+            secret_id,
+            label: "primary".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+        }];
+        config.enabled = true;
+
+        let mut persisted = ProxyService::new(temp.path()).expect("proxy service");
+        persisted.config = config;
+        persisted
+            .save_config(&creation.vault)
+            .expect("save enabled config");
+
+        let mut restored = ProxyService::new(temp.path()).expect("restored proxy service");
+        let status = restored
+            .start_if_enabled(&creation.vault)
+            .expect("restore proxy")
+            .expect("enabled proxy should start");
+        assert!(status.running);
+        assert_eq!(status.bind_addr, persisted.config.bind_addr);
+    }
+
+    #[test]
+    fn start_if_enabled_skips_explicitly_stopped_proxy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut persisted = ProxyService::new(temp.path()).expect("proxy service");
+        persisted.config = config_with_token("restore-token");
+        persisted.config.enabled = false;
+        persisted
+            .save_config(&creation.vault)
+            .expect("save disabled config");
+
+        let mut restored = ProxyService::new(temp.path()).expect("restored proxy service");
+        assert!(restored
+            .start_if_enabled(&creation.vault)
+            .expect("check persisted state")
+            .is_none());
+        assert!(!restored.status().running);
     }
 
     #[test]
@@ -1291,6 +1386,8 @@ mod tests {
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
                     provider_id: None,
+                    credential_kind: Default::default(),
+                    account_identity: None,
                     domains: Vec::new(),
                     favicon_url: None,
                     endpoints: vec![ProviderEndpoint::api(format!("http://{upstream_addr}/v1"))],
@@ -1302,6 +1399,7 @@ mod tests {
                     model_aliases: Vec::new(),
                     headers: Some(vec![("x-provider-header".into(), "new-header".into())]),
                     quota: None,
+                    subscription: None,
                     gateway: None,
                     tags: Vec::new(),
                     notes: None,
@@ -1384,6 +1482,8 @@ mod tests {
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
                     provider_id: None,
+                    credential_kind: Default::default(),
+                    account_identity: None,
                     domains: Vec::new(),
                     favicon_url: None,
                     endpoints: vec![ProviderEndpoint::api("http://127.0.0.1:9/v1")],
@@ -1395,6 +1495,7 @@ mod tests {
                     model_aliases: Vec::new(),
                     headers: None,
                     quota: None,
+                    subscription: None,
                     gateway: None,
                     tags: Vec::new(),
                     notes: None,
@@ -1465,6 +1566,8 @@ mod tests {
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
                     provider_id: None,
+                    credential_kind: Default::default(),
+                    account_identity: None,
                     domains: Vec::new(),
                     favicon_url: None,
                     endpoints: vec![ProviderEndpoint::api("http://127.0.0.1:9/v1")],
@@ -1476,6 +1579,7 @@ mod tests {
                     model_aliases: Vec::new(),
                     headers: None,
                     quota: None,
+                    subscription: None,
                     gateway: None,
                     tags: Vec::new(),
                     notes: None,
@@ -1586,26 +1690,129 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_multiple_enabled_routes() {
+    fn set_route_enabled_toggles_only_the_target_route_and_persists() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
         let mut config = config_with_token("first-token");
         let mut second = config.routes[0].clone();
         second.id = Uuid::new_v4();
         second.token = "second-token".into();
+        second.enabled = false;
+        config.routes.push(second);
+        let first_id = config.routes[0].id;
+        let second_id = config.routes[1].id;
+        service
+            .set_config(&creation.vault, config)
+            .expect("save config");
+
+        let updated = service
+            .set_route_enabled(&creation.vault, second_id, true)
+            .expect("enable second route");
+        assert!(updated.enabled);
+        assert!(
+            updated
+                .routes
+                .iter()
+                .find(|route| route.id == first_id)
+                .expect("first route")
+                .enabled
+        );
+        assert!(
+            updated
+                .routes
+                .iter()
+                .find(|route| route.id == second_id)
+                .expect("second route")
+                .enabled
+        );
+
+        let updated = service
+            .set_route_enabled(&creation.vault, first_id, false)
+            .expect("disable first route");
+        assert!(
+            !updated
+                .routes
+                .iter()
+                .find(|route| route.id == first_id)
+                .expect("first route")
+                .enabled
+        );
+        assert!(
+            updated
+                .routes
+                .iter()
+                .find(|route| route.id == second_id)
+                .expect("second route")
+                .enabled
+        );
+
+        let mut reloaded = ProxyService::new(temp.path()).expect("reloaded proxy service");
+        let persisted = reloaded
+            .load_config(&creation.vault)
+            .expect("load persisted config");
+        assert!(
+            !persisted
+                .routes
+                .iter()
+                .find(|route| route.id == first_id)
+                .expect("first route")
+                .enabled
+        );
+        assert!(
+            persisted
+                .routes
+                .iter()
+                .find(|route| route.id == second_id)
+                .expect("second route")
+                .enabled
+        );
+
+        let error = service
+            .set_route_enabled(&creation.vault, Uuid::new_v4(), true)
+            .expect_err("unknown route must be rejected");
+        assert_eq!(
+            error.code,
+            aipass_agent_protocol::AgentErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn config_allows_multiple_enabled_routes_with_independent_tokens() {
+        let mut config = config_with_token("first-token");
+        let mut second = config.routes[0].clone();
+        second.id = Uuid::new_v4();
+        second.token = "second-token".into();
+        config.routes.push(second);
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn config_rejects_duplicate_route_group_tokens() {
+        let mut config = config_with_token("same-token");
+        let mut second = config.routes[0].clone();
+        second.id = Uuid::new_v4();
         config.routes.push(second);
         assert!(validate_config(&config).is_err());
     }
 
     #[test]
-    fn legacy_config_keeps_only_first_enabled_route() {
+    fn loading_legacy_route_without_token_generates_one() {
         let mut config = config_with_token("first-token");
         let mut second = config.routes[0].clone();
         second.id = Uuid::new_v4();
-        second.token = "second-token".into();
+        second.token.clear();
+        second.enabled = false;
         config.routes.push(second);
 
-        assert!(normalize_enabled_routes(&mut config));
+        assert!(ensure_route_tokens(&mut config));
         assert!(config.routes[0].enabled);
         assert!(!config.routes[1].enabled);
+        assert!(config.routes[1].token.starts_with("sk-"));
         assert!(validate_config(&config).is_ok());
     }
 

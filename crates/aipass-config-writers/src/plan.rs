@@ -30,11 +30,69 @@ pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)
         replace_codex_provider_references(&mut doc, from_provider, &provider_name);
     }
     let content = doc.to_string();
+    let secret_redactions = codex_secret_values(&before);
+    let secret_redaction_refs = secret_redactions
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     let mut plan = new_plan(
         ToolId::Codex,
         target.clone(),
         format!("Configure Codex env-based config to use {}", entry.title),
-        redacted_diff_preview(&diff_preview_from(&before, &content), &[]),
+        redacted_diff_preview(
+            &diff_preview_from(&before, &content),
+            &secret_redaction_refs,
+        ),
+    );
+    append_codex_migration(
+        &codex_dir,
+        &mut plan,
+        provider_migration.as_deref(),
+        &provider_name,
+    )?;
+    Ok((plan, content))
+}
+
+/// Configure Codex to use the credentials managed by the official CLI.
+/// Existing auth.json is deliberately left untouched so an API-key switch can
+/// be reversed without destroying the user's OAuth session.
+pub fn plan_codex_official(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    ensure_codex_entry(entry)?;
+    let codex_dir = resolve_codex_dir(home);
+    let target = codex_dir.join("config.toml");
+    let before = fs::read_to_string(&target).unwrap_or_default();
+    let mut doc = read_toml(&target)?;
+    let (provider_name, provider_migration) = codex_provider_selection(&doc);
+    if let Some(from_provider) = provider_migration.as_deref() {
+        rename_codex_provider_block(&mut doc, from_provider, &provider_name);
+    }
+    update_codex_provider(
+        &mut doc,
+        &provider_name,
+        entry,
+        None,
+        Some(CodexAuthMode::Official),
+    )?;
+    if let Some(from_provider) = provider_migration.as_deref() {
+        replace_codex_provider_references(&mut doc, from_provider, &provider_name);
+    }
+    let content = doc.to_string();
+    let secret_redactions = codex_secret_values(&before);
+    let secret_redaction_refs = secret_redactions
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut plan = new_plan(
+        ToolId::Codex,
+        target.clone(),
+        format!(
+            "Configure Codex official OAuth subscription for {}",
+            entry.title
+        ),
+        redacted_diff_preview(
+            &diff_preview_from(&before, &content),
+            &secret_redaction_refs,
+        ),
     );
     append_codex_migration(
         &codex_dir,
@@ -179,6 +237,31 @@ pub fn plan_claude_code(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, S
         ToolId::ClaudeCode,
         target.clone(),
         format!("Configure Claude Code to use {}", entry.title),
+        redacted_diff_preview(&diff_preview_for_path(&target, &content), &[]),
+    );
+    Ok((plan, content))
+}
+
+/// Remove API-key overrides and let Claude Code use its native OAuth store.
+pub fn plan_claude_code_official(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    ensure_claude_code_entry(entry)?;
+    let target = home.join(".claude").join("settings.json");
+    let mut json = read_json_object(&target)?;
+    json.remove("apiKeyHelper");
+    json.remove("anthropicBaseUrl");
+    let env = ensure_json_object(&mut json, "env")?;
+    env.remove("ANTHROPIC_API_KEY");
+    env.remove("ANTHROPIC_AUTH_TOKEN");
+    env.remove("ANTHROPIC_BASE_URL");
+    env.remove("ANTHROPIC_MODEL");
+    let content = serde_json::to_string_pretty(&json)?;
+    let plan = new_plan(
+        ToolId::ClaudeCode,
+        target.clone(),
+        format!(
+            "Configure Claude Code official OAuth subscription for {}",
+            entry.title
+        ),
         redacted_diff_preview(&diff_preview_for_path(&target, &content), &[]),
     );
     Ok((plan, content))
@@ -769,6 +852,9 @@ fn aipass_config_id(entry: &ToolEntry) -> String {
 
 const CODEX_PROVIDER_NAME: &str = "aipass";
 
+/// Official Codex OAuth sessions only work against the real OpenAI endpoint.
+const CODEX_OFFICIAL_BASE_URL: &str = "https://api.openai.com/v1";
+
 fn codex_provider_selection(doc: &DocumentMut) -> (String, Option<String>) {
     let active = doc
         .get("model_provider")
@@ -857,6 +943,15 @@ fn update_codex_provider(
             provider.remove("experimental_bearer_token");
             provider["requires_openai_auth"] = value(true);
         }
+        CodexAuthMode::Official => {
+            provider.remove("env_key");
+            provider.remove("auth");
+            provider.remove("experimental_bearer_token");
+            // Official OAuth tokens must only ever be sent to the real OpenAI
+            // endpoint, regardless of the endpoint stored on the vault entry.
+            provider["base_url"] = value(CODEX_OFFICIAL_BASE_URL);
+            provider["requires_openai_auth"] = value(true);
+        }
         CodexAuthMode::Env => {
             provider["env_key"] = value(entry.env_key.clone());
             provider["requires_openai_auth"] = value(false);
@@ -865,6 +960,10 @@ fn update_codex_provider(
     doc["model_provider"] = value(provider_name.to_string());
     if matches!(auth_mode, CodexAuthMode::AuthJson) {
         doc["cli_auth_credentials_store"] = value("file");
+    } else {
+        // A stale file credential store would keep Codex reading an old
+        // API-key auth.json instead of the active auth mode.
+        doc.remove("cli_auth_credentials_store");
     }
     if let Some(model) = &entry.default_model {
         doc["model"] = value(model.clone());
@@ -878,6 +977,7 @@ enum CodexAuthMode {
     ExperimentalBearer,
     Command,
     AuthJson,
+    Official,
 }
 
 fn collect_json_strings(value: &Value, output: &mut Vec<String>) {
@@ -891,6 +991,89 @@ fn collect_json_strings(value: &Value, output: &mut Vec<String>) {
             .for_each(|value| collect_json_strings(value, output)),
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
+}
+
+/// Collect credential values from the existing Codex config so diff previews
+/// redact secrets that are being removed or replaced, not only ones being
+/// added. `redacted_diff_preview` line-redacts only the keys it recognizes, so
+/// values under keys like `auth` or `Authorization` headers need the explicit
+/// list.
+fn codex_secret_values(before: &str) -> Vec<String> {
+    let Ok(doc) = before.parse::<DocumentMut>() else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    collect_codex_secret_values(doc.as_table(), &mut values);
+    values
+}
+
+fn collect_codex_secret_values(table: &Table, output: &mut Vec<String>) {
+    for (key, item) in table.iter() {
+        if codex_secret_key(key) {
+            collect_toml_item_strings(item, output);
+            continue;
+        }
+        match item {
+            Item::Table(child) => collect_codex_secret_values(child, output),
+            Item::ArrayOfTables(children) => children
+                .iter()
+                .for_each(|child| collect_codex_secret_values(child, output)),
+            Item::Value(toml_edit::Value::InlineTable(child)) => {
+                collect_codex_secret_values_in_inline(child, output)
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_codex_secret_values_in_inline(table: &toml_edit::InlineTable, output: &mut Vec<String>) {
+    for (key, value) in table.iter() {
+        if codex_secret_key(key) {
+            collect_toml_value_strings(value, output);
+        } else if let toml_edit::Value::InlineTable(child) = value {
+            collect_codex_secret_values_in_inline(child, output);
+        }
+    }
+}
+
+fn collect_toml_item_strings(item: &Item, output: &mut Vec<String>) {
+    match item {
+        Item::Value(value) => collect_toml_value_strings(value, output),
+        Item::Table(table) => table
+            .iter()
+            .for_each(|(_, item)| collect_toml_item_strings(item, output)),
+        Item::ArrayOfTables(tables) => tables.iter().for_each(|table| {
+            table
+                .iter()
+                .for_each(|(_, item)| collect_toml_item_strings(item, output))
+        }),
+        Item::None => {}
+    }
+}
+
+fn collect_toml_value_strings(value: &toml_edit::Value, output: &mut Vec<String>) {
+    match value {
+        toml_edit::Value::String(value) => output.push(value.value().clone()),
+        toml_edit::Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_toml_value_strings(value, output)),
+        toml_edit::Value::InlineTable(table) => table
+            .iter()
+            .for_each(|(_, value)| collect_toml_value_strings(value, output)),
+        _ => {}
+    }
+}
+
+fn codex_secret_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    matches!(key.as_str(), "auth" | "authorization")
+        || key.contains("api_key")
+        || key.contains("apikey")
+        || key.contains("api-token")
+        || key.contains("access_token")
+        || key.contains("auth_token")
+        || key.contains("bearer_token")
+        || key.contains("secret")
 }
 
 fn replace_codex_provider_references(

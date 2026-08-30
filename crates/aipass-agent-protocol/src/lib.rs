@@ -1,6 +1,7 @@
 pub use aipass_config_writers::ToolId;
 use aipass_provider_registry::{
-    AuthScheme, BillingRule, GatewayMetadata, InterfaceType, ProviderEndpoint, QuotaInfo,
+    AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, ProviderEndpoint,
+    QuotaInfo, SubscriptionSnapshot,
 };
 pub use aipass_proxy::{
     ModelPricing, ModelUsageAggregate, Protocol as ProxyProtocol, ProviderUsageAggregate,
@@ -210,6 +211,8 @@ pub enum ToolConfigTool {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolConfigMode {
+    /// Use the provider's native official OAuth/subscription credentials.
+    Official,
     Helper,
     Env,
     Plaintext,
@@ -495,6 +498,8 @@ pub enum AgentRequest {
     ServerStop,
     #[serde(rename = "server.route.select")]
     ServerRouteSelect { route_id: Uuid },
+    #[serde(rename = "server.route.set_enabled")]
+    ServerRouteSetEnabled { route_id: Uuid, enabled: bool },
     #[serde(rename = "server.config.get")]
     ServerConfigGet,
     #[serde(rename = "server.config.set")]
@@ -635,6 +640,13 @@ pub enum AgentRequest {
         quota: Option<QuotaInfo>,
         gateway: Option<GatewayMetadata>,
     },
+    /// Discover locally authenticated official accounts and refresh their
+    /// provider-owned subscription snapshots. No credential values are returned.
+    #[serde(rename = "official_accounts.refresh")]
+    OfficialAccountsRefresh {
+        #[serde(default)]
+        provider_ids: Vec<String>,
+    },
     #[serde(rename = "provider.favicon_backfill")]
     ProviderFaviconBackfill { request: FaviconBackfillRequest },
     #[serde(rename = "tool_config.preview")]
@@ -700,6 +712,17 @@ pub enum AgentRequest {
     AgentShutdown,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficialAccountRefreshResult {
+    pub provider_id: String,
+    pub account_identity: Option<String>,
+    pub credential_kind: CredentialKind,
+    pub snapshot: Option<SubscriptionSnapshot>,
+    pub status: String,
+    pub error: Option<String>,
+}
+
 /// Ceiling for a request that has no inherent duration of its own.
 const DEFAULT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Password-derivation, whole-vault rewrites and network sync legitimately run
@@ -745,6 +768,7 @@ impl AgentRequest {
             | Self::SyncConfigured
             | Self::SyncConflicts { .. }
             | Self::ProviderFaviconBackfill { .. }
+            | Self::OfficialAccountsRefresh { .. }
             | Self::TrashPurgeExpired
             | Self::TrashEmpty
             | Self::ServerPricingGroupUpsert { .. } => LONG_RESPONSE_TIMEOUT,
@@ -1078,6 +1102,17 @@ mod tests {
         assert_eq!(
             timeout,
             std::time::Duration::from_secs(45) + RESPONSE_TIMEOUT_SLACK
+        );
+    }
+
+    #[test]
+    fn official_account_refresh_uses_the_long_network_timeout() {
+        assert_eq!(
+            AgentRequest::OfficialAccountsRefresh {
+                provider_ids: vec!["openai".to_string()]
+            }
+            .response_timeout(),
+            LONG_RESPONSE_TIMEOUT
         );
     }
 

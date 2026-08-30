@@ -358,6 +358,7 @@ enum EnvFormat {
 
 #[derive(Clone, ValueEnum)]
 enum ConfigureMode {
+    Official,
     Helper,
     Env,
     Plaintext,
@@ -1257,6 +1258,7 @@ impl From<ToolArg> for aipass_agent_protocol::ToolConfigTool {
 impl From<ConfigureMode> for aipass_agent_protocol::ToolConfigMode {
     fn from(value: ConfigureMode) -> Self {
         match value {
+            ConfigureMode::Official => Self::Official,
             ConfigureMode::Helper => Self::Helper,
             ConfigureMode::Env => Self::Env,
             ConfigureMode::Plaintext => Self::Plaintext,

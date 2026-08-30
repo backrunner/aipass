@@ -35,6 +35,21 @@ pub enum AuthScheme {
     CustomHeader,
 }
 
+/// How an account authenticates with its official provider.
+///
+/// This is intentionally separate from `AuthScheme`: OAuth is an account
+/// credential source, while `AuthScheme` describes the upstream wire header.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialKind {
+    #[default]
+    Api,
+    // serde's snake_case rule would turn this into "o_auth", but the
+    // TypeScript contract uses "oauth".
+    #[serde(rename = "oauth", alias = "o_auth")]
+    OAuth,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EndpointKind {
@@ -160,6 +175,39 @@ pub struct QuotaInfo {
     pub reset_at: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionWindow {
+    pub id: String,
+    pub label: String,
+    pub used_percent: Option<f64>,
+    pub resets_at: Option<String>,
+    pub window_minutes: Option<u64>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionSnapshot {
+    pub plan: Option<String>,
+    pub status: Option<String>,
+    pub subscription_expires_at: Option<String>,
+    pub subscription_renews_at: Option<String>,
+    pub billing_period_ends_at: Option<String>,
+    pub credential_expires_at: Option<String>,
+    pub credits_remaining: Option<String>,
+    pub credits_currency: Option<String>,
+    #[serde(default)]
+    pub windows: Vec<SubscriptionWindow>,
+    pub observed_at: String,
+    pub source: String,
+    #[serde(default)]
+    pub stale: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayMetadata {
@@ -167,7 +215,7 @@ pub struct GatewayMetadata {
     pub rate: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderEntry {
     pub id: Uuid,
@@ -176,6 +224,10 @@ pub struct ProviderEntry {
     pub favorite: bool,
     pub provider_kind: ProviderKind,
     pub provider_id: Option<String>,
+    #[serde(default)]
+    pub credential_kind: CredentialKind,
+    #[serde(default)]
+    pub account_identity: Option<String>,
     pub domains: Vec<String>,
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
@@ -186,6 +238,8 @@ pub struct ProviderEntry {
     pub model_aliases: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
+    #[serde(default)]
+    pub subscription: Option<SubscriptionSnapshot>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
@@ -437,7 +491,9 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
         ProviderDefinition {
             id: "xai",
             display_name: "xAI",
-            kind: ProviderKind::ThirdParty,
+            // xAI's Grok subscription and API accounts are first-party
+            // accounts even though the API hostname is separate from X.
+            kind: ProviderKind::Official,
             domains: &["x.ai", "console.x.ai", "api.x.ai"],
             interfaces: &[InterfaceType::OpenAiCompatible],
             auth_schemes: &[AuthScheme::Bearer],
@@ -816,6 +872,27 @@ mod tests {
     }
 
     #[test]
+    fn credential_kind_serializes_to_the_typescript_contract() {
+        assert_eq!(
+            serde_json::to_string(&CredentialKind::Api).unwrap(),
+            "\"api\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CredentialKind::OAuth).unwrap(),
+            "\"oauth\""
+        );
+        assert_eq!(
+            serde_json::from_str::<CredentialKind>("\"oauth\"").unwrap(),
+            CredentialKind::OAuth
+        );
+        // Tolerate the form serde's snake_case rule would have produced.
+        assert_eq!(
+            serde_json::from_str::<CredentialKind>("\"o_auth\"").unwrap(),
+            CredentialKind::OAuth
+        );
+    }
+
+    #[test]
     fn classifies_custom_providers_as_unknown() {
         assert_eq!(
             provider_kind_for_id(Some("custom_openai_compatible")),
@@ -850,6 +927,7 @@ mod tests {
             provider_kind_for_id(Some("mistral")),
             ProviderKind::Official
         );
+        assert_eq!(provider_kind_for_id(Some("xai")), ProviderKind::Official);
         assert_eq!(
             provider_kind_for_id(Some("replicate")),
             ProviderKind::ThirdParty

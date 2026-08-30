@@ -14,10 +14,10 @@ pub use models::{
     EncryptedBackup, ToolEntry, ToolId,
 };
 pub use plan::{
-    plan_claude_code, plan_claude_code_plaintext, plan_codex, plan_codex_plaintext,
-    plan_codex_plaintext_with_mode, plan_cursor_local, plan_cursor_local_plaintext,
-    plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok, plan_grok_plaintext,
-    plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
+    plan_claude_code, plan_claude_code_official, plan_claude_code_plaintext, plan_codex,
+    plan_codex_official, plan_codex_plaintext, plan_codex_plaintext_with_mode, plan_cursor_local,
+    plan_cursor_local_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok,
+    plan_grok_plaintext, plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
     plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext, plan_pi_plaintext_with_api,
     GrokApiBackend, OpenCodeApi, PiApi,
 };
@@ -674,6 +674,123 @@ mod tests {
         let (_plan, content) = plan_claude_code_plaintext(dir.path(), &entry).unwrap();
         assert!(content.contains("ANTHROPIC_AUTH_TOKEN"));
         assert!(!content.contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn claude_official_writer_removes_api_overrides_and_preserves_settings() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join(".claude").join("settings.json");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(
+            &target,
+            r#"{"apiKeyHelper":"aipass get old --reveal","env":{"ANTHROPIC_API_KEY":"secret","ANTHROPIC_AUTH_TOKEN":"token","ANTHROPIC_BASE_URL":"http://proxy","ANTHROPIC_MODEL":"old","KEEP":"yes"},"theme":"dark"}"#,
+        ).unwrap();
+        let (_plan, content) = plan_claude_code_official(
+            dir.path(),
+            &entry(InterfaceType::AnthropicMessages, AuthScheme::XApiKey),
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(json.get("apiKeyHelper").is_none());
+        assert_eq!(json["env"]["KEEP"], "yes");
+        assert!(json["env"].get("ANTHROPIC_API_KEY").is_none());
+        assert!(json["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
+        assert!(json["env"].get("ANTHROPIC_BASE_URL").is_none());
+        assert!(json["env"].get("ANTHROPIC_MODEL").is_none());
+    }
+
+    #[test]
+    fn codex_official_writer_keeps_auth_json_and_removes_api_overrides() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let oauth = r#"{"auth_mode":"chatgpt","tokens":{"access_token":"oauth-secret"}}"#;
+        std::fs::write(codex_dir.join("auth.json"), oauth).unwrap();
+        std::fs::write(codex_dir.join("config.toml"), "[model_providers.aipass]\nname=\"x\"\nexperimental_bearer_token=\"old\"\nrequires_openai_auth=false\n").unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("https://api.openai.com/v1".to_string());
+        let (plan, content) = plan_codex_official(dir.path(), &entry).unwrap();
+        assert!(!content.contains("experimental_bearer_token"));
+        let parsed = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["requires_openai_auth"].as_bool(),
+            Some(true)
+        );
+        assert!(plan.extra_writes.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(codex_dir.join("auth.json")).unwrap(),
+            oauth
+        );
+    }
+
+    #[test]
+    fn codex_official_removes_file_credential_store_and_forces_official_base_url() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(
+            codex_dir.join("config.toml"),
+            "cli_auth_credentials_store = \"file\"\n\n[model_providers.aipass]\nname = \"x\"\nbase_url = \"https://proxy.evil.example/v1\"\nrequires_openai_auth = true\n",
+        )
+        .unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("https://proxy.evil.example/v1".to_string());
+
+        let (_plan, content) = plan_codex_official(dir.path(), &entry).unwrap();
+        let parsed = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert!(parsed.get("cli_auth_credentials_store").is_none());
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["base_url"].as_str(),
+            Some("https://api.openai.com/v1")
+        );
+        assert!(!content.contains("proxy.evil.example"));
+    }
+
+    #[test]
+    fn codex_official_preview_redacts_removed_auth_values() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(
+            codex_dir.join("config.toml"),
+            "[model_providers.aipass]\nname = \"x\"\nexperimental_bearer_token = \"sk-removed-bearer-secret\"\nauth = { command = \"print-token\", args = [\"auth-arg-secret\"] }\nrequires_openai_auth = false\n",
+        )
+        .unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("https://api.openai.com/v1".to_string());
+
+        let (plan, content) = plan_codex_official(dir.path(), &entry).unwrap();
+        assert!(!content.contains("sk-removed-bearer-secret"));
+        assert!(!content.contains("auth-arg-secret"));
+        assert!(!plan.preview.contains("sk-removed-bearer-secret"));
+        assert!(!plan.preview.contains("auth-arg-secret"));
+        assert!(plan.preview.contains("[redacted]"));
+    }
+
+    #[test]
+    fn codex_writer_preview_redacts_auth_values_during_provider_rename() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(
+            codex_dir.join("config.toml"),
+            "model_provider = \"gateway\"\n\n[model_providers.gateway]\nname = \"Gateway\"\nauth = { command = \"print-token\", args = [\"rename-auth-secret\"] }\n",
+        )
+        .unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.title = "Gateway".to_string();
+        entry.provider_id = Some("gateway".to_string());
+        entry.endpoint = Some("https://gateway.example/v1".to_string());
+
+        let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
+        assert!(content.contains("[model_providers.aipass]"));
+        assert!(content.contains("rename-auth-secret"));
+        assert!(!plan.preview.contains("rename-auth-secret"));
+        assert!(plan.preview.contains("[redacted]"));
     }
 
     #[test]

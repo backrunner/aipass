@@ -5,8 +5,8 @@ use aipass_crypto::{
     VaultEpochKey, VaultRootKey, WrappedDek, KEY_LEN,
 };
 use aipass_provider_registry::{
-    AuthScheme, BillingRule, GatewayMetadata, InterfaceType, ProviderEndpoint, ProviderEntry,
-    ProviderKind, QuotaInfo, SecretRef,
+    AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, ProviderEndpoint,
+    ProviderEntry, ProviderKind, QuotaInfo, SecretRef, SubscriptionSnapshot,
 };
 use aipass_storage::atomic_write_bytes;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
@@ -219,6 +219,10 @@ pub struct ProviderEntryInput {
     pub title: String,
     pub provider_kind: ProviderKind,
     pub provider_id: Option<String>,
+    #[serde(default)]
+    pub credential_kind: CredentialKind,
+    #[serde(default)]
+    pub account_identity: Option<String>,
     pub domains: Vec<String>,
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
@@ -232,6 +236,9 @@ pub struct ProviderEntryInput {
     pub model_aliases: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
+    /// Agent-owned metadata; never accepted from external provider forms or IPC.
+    #[serde(skip)]
+    pub subscription: Option<SubscriptionSnapshot>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
@@ -246,6 +253,10 @@ pub struct ProviderEntryUpdateInput {
     pub title: String,
     pub provider_kind: ProviderKind,
     pub provider_id: Option<String>,
+    #[serde(default)]
+    pub credential_kind: Option<CredentialKind>,
+    #[serde(default)]
+    pub account_identity: Option<String>,
     pub domains: Vec<String>,
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
@@ -259,6 +270,9 @@ pub struct ProviderEntryUpdateInput {
     pub model_aliases: Vec<(String, String)>,
     pub headers: Option<Vec<(String, String)>>,
     pub quota: Option<QuotaInfo>,
+    /// Agent-owned metadata; never accepted from external provider forms or IPC.
+    #[serde(skip)]
+    pub subscription: Option<SubscriptionSnapshot>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
@@ -273,6 +287,10 @@ pub struct EntrySummary {
     pub favorite: bool,
     pub provider_id: Option<String>,
     pub provider_kind: ProviderKind,
+    #[serde(default)]
+    pub credential_kind: CredentialKind,
+    #[serde(default)]
+    pub account_identity: Option<String>,
     pub domains: Vec<String>,
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
@@ -284,6 +302,8 @@ pub struct EntrySummary {
     pub default_model: Option<String>,
     pub model_aliases: Vec<(String, String)>,
     pub quota: Option<QuotaInfo>,
+    #[serde(default)]
+    pub subscription: Option<SubscriptionSnapshot>,
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
@@ -809,6 +829,8 @@ impl Vault {
             favorite: false,
             provider_kind: input.provider_kind,
             provider_id: input.provider_id,
+            credential_kind: input.credential_kind,
+            account_identity: input.account_identity,
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
@@ -819,6 +841,7 @@ impl Vault {
             model_aliases: input.model_aliases,
             headers: input.headers,
             quota: input.quota,
+            subscription: input.subscription,
             gateway: input.gateway,
             tags: input.tags,
             notes: input.notes,
@@ -1074,6 +1097,8 @@ impl Vault {
             favorite: old.entry.favorite,
             provider_kind: input.provider_kind,
             provider_id: input.provider_id,
+            credential_kind: input.credential_kind.unwrap_or(old.entry.credential_kind),
+            account_identity: input.account_identity.or(old.entry.account_identity),
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
@@ -1084,6 +1109,7 @@ impl Vault {
             model_aliases: input.model_aliases,
             headers: input.headers.unwrap_or(old.entry.headers),
             quota: input.quota,
+            subscription: input.subscription.or(old.entry.subscription),
             gateway: input.gateway,
             tags: input.tags,
             notes: input.notes,
@@ -1113,6 +1139,22 @@ impl Vault {
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         self.write_provider_record(id, &plaintext)?;
         self.audit("provider.usage.update", Some(id), None)?;
+        Ok(())
+    }
+
+    /// Persist an automatically collected provider subscription snapshot.
+    /// User-editable provider metadata is deliberately not accepted here.
+    pub fn update_provider_subscription(
+        &self,
+        id: Uuid,
+        snapshot: Option<SubscriptionSnapshot>,
+    ) -> Result<(), VaultError> {
+        let path = self.record_path(id);
+        let mut plaintext = self.decrypt_provider_path(&path)?;
+        plaintext.entry.subscription = snapshot;
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("provider.subscription.refresh", Some(id), None)?;
         Ok(())
     }
 
@@ -1945,6 +1987,8 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
         favorite: entry.favorite,
         provider_id: entry.provider_id.clone(),
         provider_kind: entry.provider_kind.clone(),
+        credential_kind: entry.credential_kind.clone(),
+        account_identity: entry.account_identity.clone(),
         domains: entry.domains.clone(),
         favicon_url: entry.favicon_url.clone(),
         endpoints: entry.endpoints.clone(),
@@ -1960,6 +2004,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
         default_model: entry.default_model.clone(),
         model_aliases: entry.model_aliases.clone(),
         quota: entry.quota.clone(),
+        subscription: entry.subscription.clone(),
         gateway: entry.gateway.clone(),
         tags: entry.tags.clone(),
         notes: entry.notes.clone(),
@@ -2264,7 +2309,7 @@ fn host_from_origin(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aipass_provider_registry::EndpointKind;
+    use aipass_provider_registry::{EndpointKind, SubscriptionWindow};
     use tempfile::tempdir;
 
     fn input(secret: &str) -> ProviderEntryInput {
@@ -2272,6 +2317,8 @@ mod tests {
             title: "Anthropic Prod".to_string(),
             provider_kind: ProviderKind::Official,
             provider_id: Some("anthropic".to_string()),
+            credential_kind: CredentialKind::Api,
+            account_identity: None,
             domains: vec!["console.anthropic.com".to_string()],
             favicon_url: None,
             endpoints: vec![ProviderEndpoint {
@@ -2290,6 +2337,7 @@ mod tests {
             model_aliases: Vec::new(),
             headers: vec![("anthropic-version".to_string(), "2023-06-01".to_string())],
             quota: None,
+            subscription: None,
             gateway: None,
             tags: vec!["prod".to_string()],
             notes: Some("sensitive note".to_string()),
@@ -2302,6 +2350,8 @@ mod tests {
             title: "Anthropic Prod Renamed".to_string(),
             provider_kind: ProviderKind::Official,
             provider_id: Some("anthropic".to_string()),
+            credential_kind: Some(CredentialKind::Api),
+            account_identity: None,
             domains: vec!["console.anthropic.com".to_string()],
             favicon_url: Some("https://console.anthropic.com/favicon.ico".to_string()),
             endpoints: vec![ProviderEndpoint {
@@ -2325,6 +2375,7 @@ mod tests {
                 remaining: Some("500000".to_string()),
                 reset_at: Some("2026-06-01T00:00:00Z".to_string()),
             }),
+            subscription: None,
             gateway: None,
             tags: vec!["prod".to_string(), "team".to_string()],
             notes: Some("renamed without rotating key".to_string()),
@@ -2497,6 +2548,36 @@ mod tests {
             after.gateway.and_then(|gateway| gateway.group).as_deref(),
             Some("vip")
         );
+    }
+
+    #[test]
+    fn subscription_snapshot_is_persisted_as_agent_owned_metadata() {
+        let temp = tempdir().unwrap();
+        let password = SecretString::new("test password");
+        let vault = create_test_vault(temp.path(), &password);
+        let id = vault.add_provider(input("oauth-secret")).unwrap();
+        let snapshot = SubscriptionSnapshot {
+            plan: Some("Pro".into()),
+            status: Some("active".into()),
+            credits_remaining: Some("42".into()),
+            windows: vec![SubscriptionWindow {
+                id: "codex".into(),
+                label: "5h".into(),
+                used_percent: Some(12.5),
+                resets_at: Some("2026-08-28T12:00:00Z".into()),
+                window_minutes: Some(300),
+                source: Some("official-cli".into()),
+            }],
+            observed_at: "2026-08-28T00:00:00Z".into(),
+            source: "codex-official-cli".into(),
+            ..Default::default()
+        };
+        vault
+            .update_provider_subscription(id, Some(snapshot.clone()))
+            .unwrap();
+        let summary = vault.get_provider_summary(id).unwrap();
+        assert_eq!(summary.subscription, Some(snapshot));
+        assert_eq!(summary.credential_kind, CredentialKind::Api);
     }
 
     #[test]

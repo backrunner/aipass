@@ -98,6 +98,15 @@ fn dispatch_request(
             proxy.select_route(vault, route_id)
         })
         .map(AgentResponse::success),
+        AgentRequest::ServerRouteSetEnabled { route_id, enabled } => {
+            with_vault(state, false, |vault| {
+                let mut proxy = state.proxy.lock().map_err(|_| {
+                    ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned")
+                })?;
+                proxy.set_route_enabled(vault, route_id, enabled)
+            })
+            .map(AgentResponse::success)
+        }
         AgentRequest::ServerConfigGet => with_vault(state, true, |vault| {
             let mut proxy = state
                 .proxy
@@ -488,6 +497,17 @@ fn dispatch_request(
                     .map_err(map_vault_error)
             })
             .map(|_| AgentResponse::empty())
+        }
+        AgentRequest::OfficialAccountsRefresh { provider_ids } => {
+            // Discovery and usage refresh spawn subprocesses and do blocking
+            // network I/O; run them before taking the session lock so other
+            // requests are not stalled for the duration.
+            let collected = crate::official_accounts::collect_official_accounts(&provider_ids);
+            with_vault(state, false, |vault| {
+                crate::official_accounts::persist_official_accounts(vault, collected)
+                    .map_err(ServiceError::internal)
+            })
+            .map(AgentResponse::success)
         }
         AgentRequest::ProviderFaviconBackfill { request } => {
             backfill_provider_favicons(state, request).map(AgentResponse::success)
