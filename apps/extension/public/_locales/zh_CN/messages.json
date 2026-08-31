@@ -1,0 +1,8 @@
+{
+  "nativeForbidden": {
+    "message": "扩展未获得桌面端授权，正在打开 AIPass 自动修复…"
+  },
+  "nativeMissing": {
+    "message": "未找到 AIPass 桌面端组件，请先安装或启动桌面端。"
+  }
+}

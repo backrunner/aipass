@@ -1,9 +1,11 @@
 pub mod autostart;
+pub(crate) mod ccswitch;
 pub mod client;
 pub mod desktop;
 pub mod ipc;
 pub mod launcher;
 pub mod logging;
+pub(crate) mod official_accounts;
 pub mod paths;
 pub mod pricing;
 pub mod proxy_service;

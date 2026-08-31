@@ -139,6 +139,7 @@
   type CodexIntegrationMode = CodexApiKeyMode;
   let codexIntegrationMode: CodexIntegrationMode = "auth_json";
   let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
+  let lastIntegrationEntryId = "";
   let pricingDialogOpen = false;
   let pricingDialogGroupId: string | undefined;
   let pricingDialogAssign: { entryId: string; secretId: string } | undefined;
@@ -216,6 +217,7 @@
     selected?.quota &&
       (selected.quota.label || selected.quota.limit || selected.quota.remaining || selected.quota.resetAt)
   );
+  $: hasSubscription = Boolean(selected?.subscription);
   /**
    * Group, wire format and billing rule for one key. Falls back to the entry's
    * values for records written before these moved onto the key.
@@ -249,15 +251,21 @@
         defaultModel: selected.defaultModel
       })
     : [];
-  $: codexIntegrationModeOptions = [
-    { value: "auth_json", label: "auth.json" },
-    {
-      value: "experimental_bearer_token",
-      label: $t("providerDetail.codexModeExperimental")
-    }
-  ];
+  // Official OAuth accounts only support the tool's own credential store;
+  // API credentials keep the previous write-mode choices.
+  $: isOfficialOauth = selected?.credentialKind === "oauth" && selected?.providerKind === "official";
+  $: codexIntegrationModeOptions = isOfficialOauth
+    ? []
+    : [
+        { value: "auth_json", label: "auth.json" },
+        {
+          value: "experimental_bearer_token",
+          label: $t("providerDetail.codexModeExperimental")
+        }
+      ];
 
-  $: if (selected?.id) {
+  $: if (selected?.id && selected.id !== lastIntegrationEntryId) {
+    lastIntegrationEntryId = selected.id;
     codexIntegrationMode = "auth_json";
   }
 
@@ -267,6 +275,9 @@
   }
 
   function integrationRequest(tool: IntegrationToolDefinition, id: string) {
+    if ((tool.id === "codex" || tool.id === "claude-code") && isOfficialOauth) {
+      return { tool: tool.id, mode: "official" as ToolConfigMode, id };
+    }
     if (tool.id !== "codex") {
       return { tool: tool.id, mode: tool.defaultMode, id };
     }
@@ -284,6 +295,13 @@
 
   function fullyMasked(): string {
     return "•".repeat(16);
+  }
+
+  function formatDateTime(value: string | undefined): string {
+    if (!value) return "";
+    const timestamp = Date.parse(value);
+    if (Number.isNaN(timestamp)) return value;
+    return new Date(timestamp).toLocaleString();
   }
 
   function trashDaysRemaining(deletedAt: string | undefined): number | undefined {
@@ -360,6 +378,8 @@
           <div class="meta">
             <Badge tone={providerKindTone[selected.providerKind]}>{$t(providerKindLabelKey(selected.providerKind))}</Badge>
             <Badge>{$t(interfaceLabelKey(selected.interfaceType))}</Badge>
+            <Badge>{$t(selected.credentialKind === "oauth" ? "providerDetail.oauth" : "providerDetail.api")}</Badge>
+            {#if selected.accountIdentity}<span class="account-identity">{selected.accountIdentity}</span>{/if}
           </div>
         </div>
       </div>
@@ -449,6 +469,7 @@
           bind:draft
           {onInferDraftFromDomain}
           {onProviderChanged}
+          {isOfficialOauth}
         />
 
         {#if selected.secretRefs.length > 0}
@@ -634,6 +655,9 @@
         {/if}
       {:else}
         <Card title={$t("providerDetail.credentials")} collapsible padded={false}>
+          {#if selected.credentialKind === "oauth"}
+            <div class="oauth-note">{$t("providerDetail.oauthCredentialNote")}</div>
+          {/if}
           {#if endpointDisplay(selected)}
             <button
               type="button"
@@ -884,6 +908,34 @@
           </Card>
         {/if}
 
+        {#if hasSubscription}
+          <Card title={$t("providerDetail.subscription")} collapsible>
+            {#if selected.subscription?.plan}
+              <div class="kv-row"><span class="kv-label">{$t("providerDetail.plan")}</span><strong class="kv-value">{selected.subscription.plan}</strong><span></span></div>
+            {/if}
+            {#if selected.subscription?.subscriptionExpiresAt}
+              <div class="kv-row"><span class="kv-label">{$t("providerDetail.subscriptionExpires")}</span><code class="kv-value mono">{formatDateTime(selected.subscription.subscriptionExpiresAt)}</code><span></span></div>
+            {/if}
+            {#if selected.subscription?.subscriptionRenewsAt}
+              <div class="kv-row"><span class="kv-label">{$t("providerDetail.subscriptionRenews")}</span><code class="kv-value mono">{formatDateTime(selected.subscription.subscriptionRenewsAt)}</code><span></span></div>
+            {/if}
+            {#if selected.subscription?.billingPeriodEndsAt}
+              <div class="kv-row"><span class="kv-label">{$t("providerDetail.billingPeriodEnds")}</span><code class="kv-value mono">{formatDateTime(selected.subscription.billingPeriodEndsAt)}</code><span></span></div>
+            {/if}
+            {#if selected.subscription?.credentialExpiresAt}
+              <div class="kv-row"><span class="kv-label">{$t("providerDetail.credentialExpires")}</span><code class="kv-value mono">{formatDateTime(selected.subscription.credentialExpiresAt)}</code><span></span></div>
+            {/if}
+            {#if selected.subscription?.creditsRemaining}
+              <div class="kv-row"><span class="kv-label">{$t("providerDetail.credits")}</span><strong class="kv-value">{selected.subscription.creditsRemaining}{selected.subscription.creditsCurrency ? ` ${selected.subscription.creditsCurrency}` : ""}</strong><span></span></div>
+            {/if}
+            {#each selected.subscription?.windows ?? [] as window (window.id)}
+              <div class="kv-row"><span class="kv-label">{window.label}</span><span class="kv-value"><strong>{window.usedPercent !== undefined ? `${window.usedPercent.toFixed(1)}%` : "—"}</strong>{#if window.resetsAt}<span class="text-tertiary"> · {formatDateTime(window.resetsAt)}</span>{/if}</span><span></span></div>
+            {/each}
+            <div class="snapshot-source">{$t("providerDetail.snapshotSource", { source: selected.subscription?.source ?? "" })} · {formatDateTime(selected.subscription?.observedAt)}{#if selected.subscription?.stale} · <span class="probe-error">{$t("providerDetail.snapshotStale")}</span>{/if}</div>
+            {#if selected.subscription?.error}<div class="probe-error">{selected.subscription.error}</div>{/if}
+          </Card>
+        {/if}
+
         {#if selected.notes}
           <Card title={$t("providerDetail.notes")} collapsible>
             <div class="notes-body">{selected.notes}</div>
@@ -1006,6 +1058,29 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    align-items: center;
+  }
+
+  .account-identity {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 240px;
+  }
+
+  .snapshot-source {
+    margin-top: 8px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+  }
+
+  .oauth-note {
+    padding: 8px 14px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
   }
 
   .actions {

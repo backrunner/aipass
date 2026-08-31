@@ -1,6 +1,7 @@
 pub use aipass_config_writers::ToolId;
 use aipass_provider_registry::{
-    AuthScheme, BillingRule, GatewayMetadata, InterfaceType, ProviderEndpoint, QuotaInfo,
+    AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, ProviderEndpoint,
+    QuotaInfo, SubscriptionSnapshot,
 };
 pub use aipass_proxy::{
     ModelPricing, ModelUsageAggregate, Protocol as ProxyProtocol, ProviderUsageAggregate,
@@ -210,6 +211,8 @@ pub enum ToolConfigTool {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolConfigMode {
+    /// Use the provider's native official OAuth/subscription credentials.
+    Official,
     Helper,
     Env,
     Plaintext,
@@ -495,6 +498,8 @@ pub enum AgentRequest {
     ServerStop,
     #[serde(rename = "server.route.select")]
     ServerRouteSelect { route_id: Uuid },
+    #[serde(rename = "server.route.set_enabled")]
+    ServerRouteSetEnabled { route_id: Uuid, enabled: bool },
     #[serde(rename = "server.config.get")]
     ServerConfigGet,
     #[serde(rename = "server.config.set")]
@@ -635,6 +640,19 @@ pub enum AgentRequest {
         quota: Option<QuotaInfo>,
         gateway: Option<GatewayMetadata>,
     },
+    /// Discover locally authenticated official accounts and refresh their
+    /// provider-owned subscription snapshots. No credential values are returned.
+    #[serde(rename = "official_accounts.refresh")]
+    OfficialAccountsRefresh {
+        #[serde(default)]
+        provider_ids: Vec<String>,
+    },
+    /// Detect whether CC Switch is installed and its config file exists.
+    #[serde(rename = "ccswitch.detect")]
+    CcSwitchDetect,
+    /// Import providers from CC Switch's config into the vault.
+    #[serde(rename = "ccswitch.import")]
+    CcSwitchImport,
     #[serde(rename = "provider.favicon_backfill")]
     ProviderFaviconBackfill { request: FaviconBackfillRequest },
     #[serde(rename = "tool_config.preview")]
@@ -700,6 +718,29 @@ pub enum AgentRequest {
     AgentShutdown,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficialAccountRefreshResult {
+    pub provider_id: String,
+    pub account_identity: Option<String>,
+    pub credential_kind: CredentialKind,
+    pub snapshot: Option<SubscriptionSnapshot>,
+    /// One of "imported", "refreshed", "skipped", or "error".
+    pub status: String,
+    pub error: Option<String>,
+}
+
+/// Whether CC Switch's config is present on this machine and, on macOS,
+/// whether the app itself is installed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CcSwitchDetection {
+    pub config_exists: bool,
+    pub app_installed: bool,
+    #[serde(default)]
+    pub config_path: Option<String>,
+}
+
 /// Ceiling for a request that has no inherent duration of its own.
 const DEFAULT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Password-derivation, whole-vault rewrites and network sync legitimately run
@@ -745,9 +786,12 @@ impl AgentRequest {
             | Self::SyncConfigured
             | Self::SyncConflicts { .. }
             | Self::ProviderFaviconBackfill { .. }
+            | Self::OfficialAccountsRefresh { .. }
             | Self::TrashPurgeExpired
             | Self::TrashEmpty
             | Self::ServerPricingGroupUpsert { .. } => LONG_RESPONSE_TIMEOUT,
+            // Cheap local file reads only.
+            Self::CcSwitchDetect | Self::CcSwitchImport => DEFAULT_RESPONSE_TIMEOUT,
             _ => DEFAULT_RESPONSE_TIMEOUT,
         }
     }
@@ -1079,6 +1123,70 @@ mod tests {
             timeout,
             std::time::Duration::from_secs(45) + RESPONSE_TIMEOUT_SLACK
         );
+    }
+
+    #[test]
+    fn official_account_refresh_uses_the_long_network_timeout() {
+        assert_eq!(
+            AgentRequest::OfficialAccountsRefresh {
+                provider_ids: vec!["openai".to_string()]
+            }
+            .response_timeout(),
+            LONG_RESPONSE_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn ccswitch_requests_are_cheap_local_work() {
+        assert_eq!(
+            AgentRequest::CcSwitchDetect.response_timeout(),
+            DEFAULT_RESPONSE_TIMEOUT
+        );
+        assert_eq!(
+            AgentRequest::CcSwitchImport.response_timeout(),
+            DEFAULT_RESPONSE_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn ccswitch_requests_round_trip_with_stable_wire_names() {
+        let detect = serde_json::to_value(AgentRequest::CcSwitchDetect).unwrap();
+        assert_eq!(detect, serde_json::json!({"type": "ccswitch.detect"}));
+        assert!(matches!(
+            serde_json::from_value::<AgentRequest>(detect).unwrap(),
+            AgentRequest::CcSwitchDetect
+        ));
+
+        let import = serde_json::to_value(AgentRequest::CcSwitchImport).unwrap();
+        assert_eq!(import, serde_json::json!({"type": "ccswitch.import"}));
+        assert!(matches!(
+            serde_json::from_value::<AgentRequest>(import).unwrap(),
+            AgentRequest::CcSwitchImport
+        ));
+    }
+
+    #[test]
+    fn ccswitch_detection_uses_camel_case_payload() {
+        let detection = CcSwitchDetection {
+            config_exists: true,
+            app_installed: false,
+            config_path: Some("/home/u/.cc-switch/config.json".to_string()),
+        };
+        let value = serde_json::to_value(&detection).unwrap();
+        assert_eq!(value["configExists"], true);
+        assert_eq!(value["appInstalled"], false);
+        assert_eq!(value["configPath"], "/home/u/.cc-switch/config.json");
+        assert!(value.get("config_exists").is_none());
+
+        let parsed: CcSwitchDetection = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed, detection);
+        // Older payloads without configPath still parse.
+        let parsed: CcSwitchDetection = serde_json::from_value(serde_json::json!({
+            "configExists": false,
+            "appInstalled": false
+        }))
+        .unwrap();
+        assert_eq!(parsed.config_path, None);
     }
 
     /// Key derivation and whole-vault rewrites are slow by nature; cutting them

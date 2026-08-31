@@ -114,27 +114,27 @@
       <div class="identity-text">
         <h1><Server size={18} /> {$t("server.localProxy")}</h1>
       </div>
-    </div>
-    <div class="proxy-meta">
-      {#if enabledRoutes.length > 0}
-        <div class="group-badges" aria-label={$t("server.activeGroups")} title={$t("server.activeGroups")}>
-          {#each enabledRoutes as route (route.id)}
-            <Badge size="sm">{route.name}</Badge>
-          {/each}
-        </div>
-      {/if}
-      <div class="bind-chip" title={$t("server.bindAddress")}>
-        {#if status.running}
-          <code class="mono">{status.bindAddr}</code>
-        {:else}
-          <input class="mono" bind:value={bindAddrDraft} spellcheck="false" aria-label={$t("server.bindAddress")} />
-          <button
-            type="button"
-            class="bind-save"
-            on:click={saveBindAddr}
-            disabled={Boolean(busy) || !bindAddrDraft.trim() || bindAddrDraft.trim() === config.bindAddr}
-          >{$t("common.save")}</button>
+      <div class="proxy-meta">
+        {#if enabledRoutes.length > 0}
+          <div class="group-badges" aria-label={$t("server.activeGroups")} title={$t("server.activeGroups")}>
+            {#each enabledRoutes as route (route.id)}
+              <Badge size="sm">{route.name}</Badge>
+            {/each}
+          </div>
         {/if}
+        <div class="bind-chip" title={$t("server.bindAddress")}>
+          {#if status.running}
+            <code class="mono">{status.bindAddr}</code>
+          {:else}
+            <input class="mono" bind:value={bindAddrDraft} spellcheck="false" aria-label={$t("server.bindAddress")} />
+            <button
+              type="button"
+              class="bind-save"
+              on:click={saveBindAddr}
+              disabled={Boolean(busy) || !bindAddrDraft.trim() || bindAddrDraft.trim() === config.bindAddr}
+            >{$t("common.save")}</button>
+          {/if}
+        </div>
       </div>
     </div>
     <div class="actions">
@@ -299,7 +299,9 @@
   .identity {
     display: flex;
     align-items: center;
-    gap: 14px;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: 8px 14px;
     min-width: 0;
   }
 
@@ -329,11 +331,12 @@
 
   .proxy-meta {
     display: flex;
+    flex: 1 1 240px;
+    flex-wrap: wrap;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 6px;
     min-width: 0;
-    margin-inline-start: auto;
   }
 
   .detail-body {
@@ -425,12 +428,11 @@
 
   .group-badges {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
     gap: 4px;
     min-width: 0;
     min-height: 22px;
-    overflow: hidden;
   }
 
   .hint {
@@ -491,12 +493,6 @@
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 10px 12px;
-    }
-
-    .proxy-meta {
-      grid-column: 1 / -1;
-      grid-row: 2;
-      width: 100%;
     }
 
     .actions {

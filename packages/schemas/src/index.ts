@@ -16,6 +16,8 @@ export type AuthScheme =
   | "aws_profile"
   | "custom_header";
 
+export type CredentialKind = "api" | "oauth";
+
 export type EndpointKind = "api" | "console" | "auth" | "usage" | "custom";
 
 export interface ProviderEndpoint {
@@ -77,9 +79,51 @@ export interface QuotaInfo {
   resetAt?: string;
 }
 
+export interface SubscriptionWindow {
+  id: string;
+  label: string;
+  usedPercent?: number;
+  resetsAt?: string;
+  windowMinutes?: number;
+  source?: string;
+}
+
+export interface SubscriptionSnapshot {
+  plan?: string;
+  status?: string;
+  subscriptionExpiresAt?: string;
+  subscriptionRenewsAt?: string;
+  billingPeriodEndsAt?: string;
+  credentialExpiresAt?: string;
+  creditsRemaining?: string;
+  creditsCurrency?: string;
+  windows: SubscriptionWindow[];
+  observedAt: string;
+  source: string;
+  stale?: boolean;
+  error?: string;
+}
+
 export interface GatewayMetadata {
   group?: string;
   rate?: string;
+}
+
+export type OfficialAccountRefreshStatus = "imported" | "refreshed" | "skipped" | "error";
+
+export interface OfficialAccountRefreshResult {
+  providerId: string;
+  accountIdentity?: string;
+  credentialKind: CredentialKind;
+  snapshot?: SubscriptionSnapshot;
+  status: OfficialAccountRefreshStatus;
+  error?: string;
+}
+
+export interface CcSwitchDetection {
+  configExists: boolean;
+  appInstalled: boolean;
+  configPath?: string;
 }
 
 export interface ProviderEntry {
@@ -88,6 +132,8 @@ export interface ProviderEntry {
   favorite: boolean;
   providerKind: ProviderKind;
   providerId?: string;
+  credentialKind?: CredentialKind;
+  accountIdentity?: string;
   domains: string[];
   faviconUrl?: string;
   endpoints: ProviderEndpoint[];
@@ -97,6 +143,7 @@ export interface ProviderEntry {
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;
   quota?: QuotaInfo;
+  subscription?: SubscriptionSnapshot;
   gateway?: GatewayMetadata;
   tags: string[];
   notes?: string;
@@ -286,7 +333,7 @@ export const providerDefinitions: ProviderDefinition[] = [
   {
     id: "xai",
     displayName: "xAI",
-    kind: "third_party",
+    kind: "official",
     domains: ["x.ai", "console.x.ai", "api.x.ai"],
     interfaces: ["openai_compatible"],
     authSchemes: ["bearer"],

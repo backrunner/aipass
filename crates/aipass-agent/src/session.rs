@@ -192,8 +192,59 @@ pub fn unlock_with_password(
     replace_session_vault(&mut session, vault);
     drop(session);
     clear_last_lock_reason(state);
+    restore_proxy_if_enabled(state);
     state.session_changed.notify_all();
     session_status(state)
+}
+
+/// Recreate the local proxy runtime after unlocking an agent that was
+/// previously closed with the proxy enabled. Startup failures are logged but
+/// do not make an otherwise successful vault unlock fail; the user can retry
+/// from the Server controls after correcting the configuration.
+fn restore_proxy_if_enabled(state: &Arc<AgentState>) {
+    let session = match state.session.lock() {
+        Ok(session) => session,
+        Err(_) => {
+            crate::logging::write_component_log(
+                crate::logging::AGENT_LOG,
+                "WARN",
+                "failed to restore proxy after unlock: session lock poisoned",
+            );
+            return;
+        }
+    };
+    let vault = match &*session {
+        SessionState::Unlocked(info) => &info.vault,
+        SessionState::Locked => return,
+    };
+    let mut proxy = match state.proxy.lock() {
+        Ok(proxy) => proxy,
+        Err(_) => {
+            crate::logging::write_component_log(
+                crate::logging::AGENT_LOG,
+                "WARN",
+                "failed to restore proxy after unlock: proxy lock poisoned",
+            );
+            return;
+        }
+    };
+    match proxy.start_if_enabled(vault) {
+        Ok(Some(status)) if status.running => {
+            crate::logging::write_component_log(
+                crate::logging::AGENT_LOG,
+                "INFO",
+                &format!("restored local proxy on {}", status.bind_addr),
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            crate::logging::write_component_log(
+                crate::logging::AGENT_LOG,
+                "WARN",
+                &format!("failed to restore proxy after unlock: {}", err.message),
+            );
+        }
+    }
 }
 
 pub fn create_vault(

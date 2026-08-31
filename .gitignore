@@ -52,3 +52,6 @@ apps/extension/chrome-extension.pem
 
 # Wrangler local state
 .wrangler/
+
+# local dev instance vault
+.dev-vault/

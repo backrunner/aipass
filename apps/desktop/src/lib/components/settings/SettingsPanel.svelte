@@ -8,6 +8,7 @@
   import { themeStore, setTheme } from "../../stores/appearance";
   import { isLocalizedMessage, localeStore, resolveMessage, setLocale, t } from "../../stores/i18n";
   import type {
+    CcSwitchDetection,
     DeviceRecord,
     BrowserExtensionStatus,
     LocalePreference,
@@ -24,6 +25,7 @@
   import { buildTimeLabel } from "../../build";
   import { Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
+  import ConfirmModal from "../shared/ConfirmModal.svelte";
   import UpdateRestartConfirmModal from "../shared/UpdateRestartConfirmModal.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
 
@@ -47,6 +49,8 @@
   export let conflictBusy = "";
   export let browserExtensionStatus: BrowserExtensionStatus | undefined;
   export let browserExtensionBusy = "";
+  export let officialAccountsImport = false;
+  export let ccSwitchDetection: CcSwitchDetection | undefined;
   export let securityBusy = "";
   export let backupBusy = "";
   export let syncState: SyncReport["status"] = "idle";
@@ -72,6 +76,7 @@
   export let onRevokeDevice: (id: string) => MaybePromise = () => {};
   export let onLoadBrowserExtensionStatus: () => MaybePromise = () => {};
   export let onInstallBrowserExtension: () => MaybePromise = () => {};
+  export let onDetectCcSwitch: () => MaybePromise<CcSwitchDetection | undefined> = () => undefined;
   export let onSaveServerConfig: (config: ProxyConfig) => MaybePromise<boolean | void> = () => {};
 
   let activeTab = initialTab || "general";
@@ -139,6 +144,43 @@
       { value: autoLockMinutes, label: $t("settings.autoLockCustom", { minutes: autoLockMinutes }) },
       ...autoLockOptions
     ];
+  }
+
+  let ccSwitchConfirmOpen = false;
+  let ccSwitchToggling = false;
+  let ccSwitchAutoDetected = false;
+
+  $: if (activeTab === "general" && !ccSwitchAutoDetected) {
+    ccSwitchAutoDetected = true;
+    void onDetectCcSwitch();
+  }
+
+  async function onOfficialAccountsImportChange(next: boolean) {
+    if (!next) {
+      officialAccountsImport = false;
+      void onSavePreferences();
+      return;
+    }
+    if (ccSwitchToggling) return;
+    ccSwitchToggling = true;
+    try {
+      const detection = await onDetectCcSwitch();
+      if (detection && (detection.configExists || detection.appInstalled)) {
+        // Hold the switch off until the conflict warning is confirmed.
+        officialAccountsImport = false;
+        ccSwitchConfirmOpen = true;
+      } else {
+        officialAccountsImport = true;
+        void onSavePreferences();
+      }
+    } finally {
+      ccSwitchToggling = false;
+    }
+  }
+
+  function confirmOfficialAccountsImport() {
+    officialAccountsImport = true;
+    void onSavePreferences();
   }
 
   function onThemeChange(next: ThemePreference) {
@@ -362,6 +404,41 @@
                     onChange={onLocaleChange}
                   />
                 </div>
+              </div>
+            </Card>
+
+            <Card title={$t("settings.officialAccountsImport")}>
+              <span slot="actions">
+                <button type="button" class="link" on:click={() => onDetectCcSwitch()}>
+                  {$t("settings.refresh")}
+                </button>
+              </span>
+              <div class="rows">
+                <p class="hint">{$t("settings.officialAccountsImportDesc")}</p>
+                <div class="row">
+                  <div class="row-text">
+                    <span class="row-label">{$t("settings.ccSwitchStatus")}</span>
+                    {#if ccSwitchDetection?.configPath}
+                      <span class="row-desc">{ccSwitchDetection.configPath}</span>
+                    {/if}
+                  </div>
+                  <span class="row-desc">
+                    {#if ccSwitchDetection}
+                      {ccSwitchDetection.configExists || ccSwitchDetection.appInstalled
+                        ? $t("settings.ccSwitchDetected")
+                        : $t("settings.ccSwitchNotDetected")}
+                    {:else}
+                      {$t("common.loading")}
+                    {/if}
+                  </span>
+                </div>
+                <SwitchField
+                  label={$t("settings.officialAccountsImportEnable")}
+                  description={$t("settings.officialAccountsImportEnableDesc")}
+                  bind:checked={officialAccountsImport}
+                  disabled={ccSwitchToggling}
+                  onCheckedChange={(value) => void onOfficialAccountsImportChange(value)}
+                />
               </div>
             </Card>
           </Tabs.Content>
@@ -783,6 +860,16 @@
 <UpdateRestartConfirmModal
   bind:open={updateRestartConfirmOpen}
   onConfirm={() => runUpdateInstall()}
+/>
+
+<ConfirmModal
+  bind:open={ccSwitchConfirmOpen}
+  title={$t("settings.ccSwitchConfirmTitle")}
+  description={$t("settings.ccSwitchConfirmBody")}
+  confirmLabel={$t("settings.ccSwitchConfirmEnable")}
+  cancelLabel={$t("common.cancel")}
+  tone="warning"
+  onConfirm={confirmOfficialAccountsImport}
 />
 
 <style lang="scss">

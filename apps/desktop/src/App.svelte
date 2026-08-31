@@ -25,6 +25,7 @@
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
+  import ConfirmModal from "./lib/components/shared/ConfirmModal.svelte";
   import UpdateRestartConfirmModal from "./lib/components/shared/UpdateRestartConfirmModal.svelte";
   import type {
     AppPreferences,
@@ -49,6 +50,10 @@
     ServerTokenResponse,
     ServerUsageSummary,
     CodexApiKeyMode,
+    CcSwitchDetection,
+    CcSwitchProviderImportError,
+    CcSwitchProviderLink,
+    OfficialAccountRefreshResult,
     SyncConflict,
     SyncSettings,
     SyncMode,
@@ -66,8 +71,10 @@
     VaultStatus
   } from "./lib/types";
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
-  import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
-  import { buildRouteTarget, buildSingleEntryRoute, enforceSingleEnabledRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
+  import { emptyDraft, isExpiringSoon, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
+  import { ccSwitchLinkToDraft, findCcSwitchDuplicate } from "./lib/utils/deeplink";
+  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
   import { checkForUpdates, downloadUpdate, getStoredUpdateChannel, inferUpdateChannel, installPendingUpdate, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
@@ -115,6 +122,8 @@
   let unlistenOpenServer: (() => void) | undefined;
   let unlistenProxyStatus: (() => void) | undefined;
   let unlistenUpdateProgress: (() => void) | undefined;
+  let unlistenCcSwitchImport: (() => void) | undefined;
+  let unlistenCcSwitchImportError: (() => void) | undefined;
   let sessionPollTimer: ReturnType<typeof setInterval> | undefined;
   let sessionRefreshInFlight = false;
   const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
@@ -229,6 +238,10 @@
   let showFavorites = false;
   let showServer = false;
   let pendingServerView = false;
+  let pendingCcSwitchLink: CcSwitchProviderLink | null = null;
+  let ccSwitchDuplicateLink: CcSwitchProviderLink | null = null;
+  let ccSwitchDuplicateOpen = false;
+  let ccSwitchDuplicateName = "";
   let showSettings = false;
   let settingsInitialTab = "general";
   let providerFilter: ProviderFilter = "all";
@@ -242,6 +255,8 @@
   let clipboardClearSeconds = 45;
   let lockOnSleep = true;
   let lockOnScreenLock = true;
+  let officialAccountsImport = false;
+  let ccSwitchDetection: CcSwitchDetection | undefined;
   let newPassword = "";
   let syncState: SyncReport["status"] = "idle";
   let syncMode: SyncMode = "local";
@@ -327,6 +342,8 @@
       const haystack = [
         entry.title,
         entry.providerId ?? "",
+        entry.accountIdentity ?? "",
+        entry.credentialKind ?? "api",
         entry.interfaceType,
         entry.authScheme,
         entry.defaultModel ?? "",
@@ -335,6 +352,10 @@
         entry.quota?.limit ?? "",
         entry.quota?.remaining ?? "",
         entry.quota?.resetAt ?? "",
+        entry.subscription?.plan ?? "",
+        entry.subscription?.subscriptionExpiresAt ?? "",
+        entry.subscription?.creditsRemaining ?? "",
+        ...(entry.subscription?.windows ?? []).flatMap((window) => [window.id, window.label, window.resetsAt ?? "", String(window.usedPercent ?? "")]),
         entry.notes ?? "",
         ...entry.domains,
         ...entry.tags,
@@ -366,7 +387,13 @@
   }
   $: createPasswordStrength = passwordStrength(createPassword, $t);
   $: recoveryPasswordStrength = passwordStrength(recoveryPassword, $t);
-  $: errorText = resolveMessage($t, error);
+  // Agent launch/ready failures carry a long multi-line diagnostic (paths,
+  // tried binaries, connection errors). Show a localized summary and keep the
+  // raw diagnostics for a collapsed details section.
+  const AGENT_FAILURE_PREFIX = "AIPass agent ";
+  $: rawErrorText = resolveMessage($t, error);
+  $: errorDetail = rawErrorText.startsWith(AGENT_FAILURE_PREFIX) ? rawErrorText : "";
+  $: errorText = errorDetail ? $t("auth.agentStartFailed") : rawErrorText;
   $: noticeText = resolveMessage($t, notice);
   $: updateInstallErrorText = resolveMessage($t, updateInstallError);
   $: updateProgressPercent = updateProgress?.totalBytes && updateProgress.totalBytes > 0
@@ -515,6 +542,7 @@
         await loadServer();
         void loadPricing();
         await openPendingServerView();
+        openPendingCcSwitchLink();
       }
     } catch (err) {
       console.warn("vault status reconciliation failed", err);
@@ -571,6 +599,18 @@
           unlistenUpdateProgress = await listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, ({ payload }) => {
             updateProgress = payload;
           });
+          unlistenCcSwitchImport = await listen<CcSwitchProviderLink>(
+            "ccswitch-provider-import",
+            ({ payload }) => {
+              handleCcSwitchImport(payload);
+            }
+          );
+          unlistenCcSwitchImportError = await listen<CcSwitchProviderImportError>(
+            "ccswitch-provider-import-error",
+            ({ payload }) => {
+              handleCcSwitchImportError(payload);
+            }
+          );
           logStartupStage("listeners_ready");
         }
         await Promise.all([loadPreferences(), refreshStatus()]);
@@ -596,6 +636,18 @@
           logStartupStage("server_finished");
           void loadPricing();
           await openPendingServerView();
+          openPendingCcSwitchLink();
+        }
+        if (hasTauriRuntime()) {
+          // Drain a `ccswitch://` link buffered while the app was cold-starting.
+          try {
+            const pendingLink = await invokeTauri<CcSwitchProviderLink | null>(
+              "take_pending_ccswitch_link"
+            );
+            if (pendingLink) handleCcSwitchImport(pendingLink);
+          } catch (err) {
+            console.warn("failed to drain pending ccswitch link", err);
+          }
         }
         logStartupStage("complete");
       } catch (err) {
@@ -631,6 +683,8 @@
     unlistenOpenServer?.();
     unlistenProxyStatus?.();
     unlistenUpdateProgress?.();
+    unlistenCcSwitchImport?.();
+    unlistenCcSwitchImportError?.();
     pendingVaultAuthTasks.clear();
     finishedVaultAuthTasks.clear();
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
@@ -696,6 +750,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
+      openPendingCcSwitchLink();
     } catch (err) {
       error = String(err);
     } finally {
@@ -728,6 +783,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
+      openPendingCcSwitchLink();
     } catch (err) {
       error = err instanceof Error ? err.message : localizedMessage("error.unlockFailed");
     } finally {
@@ -771,6 +827,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
+      openPendingCcSwitchLink();
     } catch (err) {
       error = String(err);
     } finally {
@@ -912,7 +969,8 @@
   async function loadEntries(
     archived = showArchived,
     trash = showTrash,
-    favorite = showFavorites
+    favorite = showFavorites,
+    beforeCommit?: () => void
   ) {
     const requestId = ++entriesLoadRequestId;
     let summariesPromise: Promise<EntrySummary[]>;
@@ -927,8 +985,18 @@
       ? invokeTauri<EntrySummary[]>("entries_list", { archived: false })
       : summariesPromise;
     const [summaries, countSummaries] = await Promise.all([summariesPromise, countSummariesPromise]);
-    if (requestId !== entriesLoadRequestId) return;
+    if (requestId !== entriesLoadRequestId) {
+      // A newer load superseded this one, but a deferred view-state commit
+      // must never be dropped — it carries the user's click. Apply it and
+      // reload so the entries match the just-committed view state.
+      if (beforeCommit) {
+        beforeCommit();
+        return loadEntries();
+      }
+      return;
+    }
 
+    beforeCommit?.();
     entries = summaries.map(summaryToEntry);
     countEntries = countSummaries.map(summaryToEntry);
     if (!entries.some((entry) => entry.id === selectedId)) {
@@ -1006,16 +1074,57 @@
   async function setProviderFilter(value: ProviderFilter) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    providerFilter = value;
-    showServer = false;
     if (showArchived || showTrash || showFavorites) {
-      showArchived = false;
-      showTrash = false;
-      showFavorites = false;
-      await loadEntries(false, false, false);
+      await loadEntries(false, false, false, () => {
+        providerFilter = value;
+        showServer = false;
+        showArchived = false;
+        showTrash = false;
+        showFavorites = false;
+      });
+    } else {
+      providerFilter = value;
+      showServer = false;
     }
     if (!filtered.some((entry) => entry.id === selectedId)) {
       selectedId = filtered[0]?.id ?? "";
+    }
+  }
+
+  let officialAccountsBusy = false;
+
+  async function detectCcSwitch(): Promise<CcSwitchDetection | undefined> {
+    try {
+      ccSwitchDetection = await invokeTauri<CcSwitchDetection>("ccswitch_detect");
+      return ccSwitchDetection;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function refreshOfficialAccounts() {
+    if (!officialAccountsImport || officialAccountsBusy) return;
+    officialAccountsBusy = true;
+    error = "";
+    try {
+      const results = await invokeTauri<OfficialAccountRefreshResult[]>("official_accounts_refresh", { providerIds: ["openai", "anthropic", "xai"] });
+      const importResults = await invokeTauri<OfficialAccountRefreshResult[]>("ccswitch_import");
+      await loadEntries();
+      const combined = [...(results ?? []), ...(importResults ?? [])];
+      const failures = combined.filter((item) => item.error);
+      if (failures.length > 0) {
+        error = failures.map((item) => officialAccountFailureMessage(item, $t)).join("; ");
+      }
+      const succeeded = combined.length - failures.length;
+      if (succeeded > 0) {
+        const skipped = combined.filter((item) => !item.error && item.status === "skipped").length;
+        notice = localizedMessage("providerList.accountsRefreshedSummary", { refreshed: succeeded - skipped, skipped });
+        setTimeout(() => (notice = ""), 1800);
+      }
+    } catch (err) {
+      error = String(err);
+    } finally {
+      officialAccountsBusy = false;
     }
   }
 
@@ -1023,7 +1132,8 @@
     if (filter === "all") return true;
     if (filter === "recent") return Boolean(entry.lastUsedAt);
     if (filter === "quota_low") return isQuotaLow(entry.quota);
-    if (filter === "expiring") return isExpiringSoon(entry.quota);
+    if (filter === "expiring") return isExpiringSoon(entry.quota, entry.subscription);
+    if (filter === "oauth" || filter === "api") return (entry.credentialKind ?? "api") === filter;
     if (filter.startsWith("tag:")) return entry.tags.includes(filter.slice("tag:".length));
     return entry.providerKind === filter;
   }
@@ -1034,13 +1144,6 @@
     if (remaining === undefined) return false;
     if (limit && limit > 0) return remaining / limit <= 0.2;
     return remaining <= 0;
-  }
-
-  function isExpiringSoon(quota?: QuotaInfo): boolean {
-    const resetAt = quota?.resetAt ? Date.parse(quota.resetAt) : Number.NaN;
-    if (Number.isNaN(resetAt)) return false;
-    const now = Date.now();
-    return resetAt >= now && resetAt - now <= 30 * 24 * 60 * 60 * 1000;
   }
 
   function numericQuota(value?: string): number | undefined {
@@ -1371,24 +1474,19 @@
   async function setArchiveView(value: boolean) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    showArchived = value;
-    showTrash = false;
-    showFavorites = false;
-    showServer = false;
-    providerFilter = "all";
-    query = "";
-    await loadEntries(value, false, false);
+    await loadEntries(value, false, false, () => {
+      showArchived = value;
+      showTrash = false;
+      showFavorites = false;
+      showServer = false;
+      providerFilter = "all";
+      query = "";
+    });
   }
 
   async function setTrashView(value: boolean) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    showTrash = value;
-    showArchived = false;
-    showFavorites = false;
-    showServer = false;
-    providerFilter = "all";
-    query = "";
     if (value) {
       try {
         await invokeTauri("trash_purge_expired");
@@ -1396,19 +1494,27 @@
         console.warn("trash purge expired failed", err);
       }
     }
-    await loadEntries(false, value, false);
+    await loadEntries(false, value, false, () => {
+      showTrash = value;
+      showArchived = false;
+      showFavorites = false;
+      showServer = false;
+      providerFilter = "all";
+      query = "";
+    });
   }
 
   async function setFavoriteView(value: boolean) {
     clearTimeout(searchTimer);
     searchRequestId++;
-    showFavorites = value;
-    showArchived = false;
-    showTrash = false;
-    showServer = false;
-    providerFilter = "all";
-    query = "";
-    await loadEntries(false, false, value);
+    await loadEntries(false, false, value, () => {
+      showFavorites = value;
+      showArchived = false;
+      showTrash = false;
+      showServer = false;
+      providerFilter = "all";
+      query = "";
+    });
   }
 
   function loadServer(): Promise<void> {
@@ -1574,6 +1680,52 @@
     await setServerView();
   }
 
+  function openCcSwitchForm(link: CcSwitchProviderLink) {
+    error = "";
+    formMode = "add";
+    draft = { ...emptyDraft(), ...ccSwitchLinkToDraft(link) };
+    showForm = true;
+  }
+
+  function handleCcSwitchImport(link: CcSwitchProviderLink) {
+    // The auth screen is already shown while locked; stash the link until the
+    // vault unlocks, then openPendingCcSwitchLink picks it up.
+    if (!statusReady || !status.exists || status.locked) {
+      pendingCcSwitchLink = link;
+      return;
+    }
+    const duplicate = findCcSwitchDuplicate(entries, link);
+    if (duplicate) {
+      ccSwitchDuplicateLink = link;
+      ccSwitchDuplicateName = duplicate.title;
+      ccSwitchDuplicateOpen = true;
+      return;
+    }
+    openCcSwitchForm(link);
+  }
+
+  function openPendingCcSwitchLink() {
+    if (!pendingCcSwitchLink || !statusReady || !status.exists || status.locked) return;
+    const link = pendingCcSwitchLink;
+    pendingCcSwitchLink = null;
+    handleCcSwitchImport(link);
+  }
+
+  function confirmCcSwitchDuplicate() {
+    const link = ccSwitchDuplicateLink;
+    ccSwitchDuplicateLink = null;
+    if (link) openCcSwitchForm(link);
+  }
+
+  function handleCcSwitchImportError(payload: CcSwitchProviderImportError) {
+    if (payload.unsupported) {
+      notice = localizedMessage("deepLink.unsupportedResource", { type: payload.unsupported });
+      setTimeout(() => (notice = ""), 2400);
+      return;
+    }
+    error = localizedMessage("deepLink.importFailed", { message: payload.message });
+  }
+
   async function saveServerConfig(config: ProxyConfig): Promise<boolean> {
     if (serverBusy) return false;
     serverBusy = "save";
@@ -1680,8 +1832,7 @@
     const nextRoutes = exists
       ? serverConfig.routes.map((item) => (item.id === route.id ? route : item))
       : [...serverConfig.routes, route];
-    const routes = enforceSingleEnabledRoute(nextRoutes, route.enabled ? route.id : undefined);
-    const saved = await saveServerConfig({ ...serverConfig, routes });
+    const saved = await saveServerConfig({ ...serverConfig, routes: nextRoutes });
     if (saved && !exists) selectedRouteId = route.id;
     return saved;
   }
@@ -1696,10 +1847,7 @@
   async function toggleRouteGroup(routeId: string, enabled: boolean) {
     await saveServerConfig({
       ...serverConfig,
-      routes: enforceSingleEnabledRoute(
-        serverConfig.routes.map((route) => (route.id === routeId ? { ...route, enabled } : route)),
-        enabled ? routeId : undefined
-      )
+      routes: serverConfig.routes.map((route) => (route.id === routeId ? { ...route, enabled } : route))
     });
   }
 
@@ -1761,7 +1909,7 @@
       if (!route) return;
       const saved = await saveServerConfig({
         ...serverConfig,
-        routes: enforceSingleEnabledRoute([...serverConfig.routes, route], route.id)
+        routes: [...serverConfig.routes, route]
       });
       if (!saved) return;
       selectedRouteId = route.id;
@@ -2286,6 +2434,7 @@
       clipboardClearSeconds = clampPreference(prefs.clipboardClearSeconds, 0, 600, clipboardClearSeconds);
       lockOnSleep = prefs.lockOnSleep ?? lockOnSleep;
       lockOnScreenLock = prefs.lockOnScreenLock ?? lockOnScreenLock;
+      officialAccountsImport = prefs.officialAccountsImport ?? false;
       if (isThemePreference(prefs.theme)) {
         setTheme(prefs.theme);
       }
@@ -2307,6 +2456,7 @@
           clipboardClearSeconds,
           lockOnSleep,
           lockOnScreenLock,
+          officialAccountsImport,
           theme: $themeStore,
           locale: $localeStore
         }
@@ -2379,6 +2529,7 @@
         {authMode}
         busyMode={authBusy}
         error={errorText}
+        {errorDetail}
         bind:password
         bind:createPassword
         bind:createPasswordConfirm
@@ -2423,7 +2574,7 @@
       {#if showServer}
         <RouteListPane
           routes={serverConfig.routes}
-          {entries}
+          entries={countEntries}
           bind:selectedRouteId
           busy={serverBusy}
           onSave={saveRouteGroup}
@@ -2436,7 +2587,7 @@
           status={serverStatus}
           series={serverUsageSeries}
           usage={serverUsage}
-          {entries}
+          entries={countEntries}
           {selectedRouteId}
           busy={serverBusy}
           {toolDetections}
@@ -2464,6 +2615,9 @@
         routeGroups={serverConfig.routes.map((route) => ({ id: route.id, name: route.name }))}
         onSearch={runSearch}
         onAdd={openAdd}
+        onRefreshAccounts={refreshOfficialAccounts}
+        refreshAccountsBusy={officialAccountsBusy}
+        {officialAccountsImport}
         onFilterChange={setProviderFilter}
         onEmptyTrash={emptyTrash}
         onSelect={selectProvider}
@@ -2564,6 +2718,19 @@
   onConfirm={() => installAvailableUpdate()}
 />
 
+<ConfirmModal
+  bind:open={ccSwitchDuplicateOpen}
+  title={$t("deepLink.duplicateTitle")}
+  description={$t("deepLink.duplicateBody", { name: ccSwitchDuplicateName })}
+  confirmLabel={$t("deepLink.duplicateConfirm")}
+  cancelLabel={$t("common.cancel")}
+  tone="warning"
+  onOpenChange={(open) => {
+    if (!open) ccSwitchDuplicateLink = null;
+  }}
+  onConfirm={confirmCcSwitchDuplicate}
+/>
+
 {#if showSettings && !status.locked}
   <SettingsPanel
     initialTab={settingsInitialTab}
@@ -2587,6 +2754,8 @@
     {conflictBusy}
     {browserExtensionStatus}
     {browserExtensionBusy}
+    bind:officialAccountsImport
+    {ccSwitchDetection}
     {securityBusy}
     {backupBusy}
     {syncState}
@@ -2611,6 +2780,7 @@
     onRevokeDevice={revokeDevice}
     onLoadBrowserExtensionStatus={loadBrowserExtensionStatus}
     onInstallBrowserExtension={installBrowserExtension}
+    onDetectCcSwitch={detectCcSwitch}
     onSaveServerConfig={saveServerConfig}
   />
 {/if}

@@ -1,11 +1,9 @@
 import type { ProviderEntry } from "@aipass/schemas";
 import { describe, expect, it } from "vitest";
 
-import type { ProxyRouteConfig } from "../types";
 import {
   advertisedProxyAddress,
   buildRouteTarget,
-  enforceSingleEnabledRoute,
   proxySupportedEntry,
   routeProtocolFor
 } from "./server";
@@ -59,22 +57,4 @@ describe("local proxy route helpers", () => {
     expect(advertisedProxyAddress("127.0.0.1:8787")).toBe("127.0.0.1:8787");
   });
 
-  it("enables only the preferred route group", () => {
-    const first = { id: "first", enabled: true } as ProxyRouteConfig;
-    const second = { id: "second", enabled: true } as ProxyRouteConfig;
-
-    const routes = enforceSingleEnabledRoute([first, second], "second");
-
-    expect(routes.map((route) => [route.id, route.enabled])).toEqual([
-      ["first", false],
-      ["second", true]
-    ]);
-  });
-
-  it("allows all route groups to be disabled", () => {
-    const first = { id: "first", enabled: false } as ProxyRouteConfig;
-    const second = { id: "second", enabled: false } as ProxyRouteConfig;
-
-    expect(enforceSingleEnabledRoute([first, second]).every((route) => !route.enabled)).toBe(true);
-  });
 });

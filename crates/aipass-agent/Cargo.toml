@@ -32,6 +32,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 time.workspace = true
+toml = "1"
 uuid.workspace = true
 zeroize.workspace = true
 

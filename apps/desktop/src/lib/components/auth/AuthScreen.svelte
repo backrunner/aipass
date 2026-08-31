@@ -11,6 +11,7 @@
   export let authMode: AuthMode;
   export let busyMode: "" | AuthMode = "";
   export let error = "";
+  export let errorDetail = "";
   export let password = "";
   export let createPassword = "";
   export let createPasswordConfirm = "";
@@ -212,7 +213,19 @@
       </form>
     {/if}
 
-    {#if error}<Banner tone="danger">{error}</Banner>{/if}
+    {#if error}
+      <Banner tone="danger">
+        <div class="error-block">
+          <span>{error}</span>
+          {#if errorDetail}
+            <details class="error-detail">
+              <summary>{$t("auth.errorDetails")}</summary>
+              <pre class="error-detail-body">{errorDetail}</pre>
+            </details>
+          {/if}
+        </div>
+      </Banner>
+    {/if}
   </div>
 </main>
 
@@ -365,6 +378,46 @@
 
   .inline-error {
     color: var(--danger);
+  }
+
+  .error-block {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .error-detail {
+    summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: inherit;
+      opacity: 0.8;
+
+      &:hover {
+        opacity: 1;
+      }
+    }
+  }
+
+  .error-detail-body {
+    margin: 0 0 2px;
+    padding: 8px 10px;
+    max-height: 140px;
+    overflow-y: auto;
+    background: color-mix(in oklab, var(--danger) 8%, transparent);
+    border: 1px solid color-mix(in oklab, var(--danger) 22%, transparent);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .inline-ok {

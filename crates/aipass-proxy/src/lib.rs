@@ -3099,7 +3099,12 @@ fn upstream_url_with_query(
     let base =
         reqwest::Url::parse(base_url).map_err(|err| ProxyError::InvalidConfig(err.to_string()))?;
     let base_path = base.path().trim_end_matches('/').to_string();
-    let suffix = if base_path == "/v1" || base_path.ends_with("/v1") {
+    // The ChatGPT Codex OAuth backend serves `/backend-api/codex/responses`
+    // with no `/v1` segment; every other OpenAI-style base keeps it.
+    let strip_version_prefix = base_path == "/v1"
+        || base_path.ends_with("/v1")
+        || base_path.ends_with("/backend-api/codex");
+    let suffix = if strip_version_prefix {
         path.strip_prefix("/v1").unwrap_or(path)
     } else {
         path
@@ -3236,7 +3241,12 @@ fn build_upstream_headers(
             && name != header::CONTENT_TYPE
             && name != header::HOST
         {
-            headers.insert(name.clone(), value.clone());
+            if name == ANTHROPIC_BETA_HEADER && headers.contains_key(name) {
+                let merged = merge_anthropic_beta_values(headers.get_all(name).iter(), value)?;
+                headers.insert(name.clone(), merged);
+            } else {
+                headers.insert(name.clone(), value.clone());
+            }
         }
     }
 
@@ -3280,6 +3290,38 @@ fn build_upstream_headers(
         );
     }
     Ok(headers)
+}
+
+const ANTHROPIC_BETA_HEADER: &str = "anthropic-beta";
+
+/// `anthropic-beta` is a comma-separated feature-flag list. Clients such as
+/// Claude Code send their own flags while imported OAuth entries configure
+/// `oauth-2025-04-20`; merging (incoming first, then configured additions,
+/// deduped) keeps both instead of letting the configured value replace the
+/// client's list.
+fn merge_anthropic_beta_values<'a>(
+    incoming: impl Iterator<Item = &'a HeaderValue>,
+    configured: &'a HeaderValue,
+) -> Result<HeaderValue, String> {
+    let mut tokens: Vec<String> = Vec::new();
+    for value in incoming.chain(std::iter::once(configured)) {
+        let text = value
+            .to_str()
+            .map_err(|_| "invalid anthropic-beta header value".to_string())?;
+        for token in text
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
+            if !tokens.iter().any(|existing| existing == token) {
+                tokens.push(token.to_string());
+            }
+        }
+    }
+    let mut merged = HeaderValue::from_str(&tokens.join(", "))
+        .map_err(|_| "invalid merged anthropic-beta header value".to_string())?;
+    merged.set_sensitive(true);
+    Ok(merged)
 }
 
 fn connection_header_names(headers: &HeaderMap) -> HashSet<header::HeaderName> {
@@ -3789,6 +3831,14 @@ mod tests {
     }
 
     #[test]
+    fn upstream_url_strips_v1_for_chatgpt_codex_backend() {
+        assert_eq!(
+            upstream_url("https://chatgpt.com/backend-api/codex", "/v1/responses").unwrap(),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+    }
+
+    #[test]
     fn upstream_url_preserves_azure_query_without_v1_path() {
         assert_eq!(
             upstream_url_with_query(
@@ -3798,6 +3848,93 @@ mod tests {
             )
             .unwrap(),
             "https://example.openai.azure.com/openai/deployments/gpt/chat/completions?api-version=2024-10-21&trace=enabled"
+        );
+    }
+
+    fn beta_target(configured_beta: Option<&str>) -> ResolvedTarget {
+        let mut target = test_target("https://api.anthropic.com".into(), 0);
+        if let Some(value) = configured_beta {
+            target
+                .config
+                .headers
+                .push(("anthropic-beta".into(), value.into()));
+        }
+        target
+    }
+
+    fn beta_header(headers: &HeaderMap) -> String {
+        headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn anthropic_beta_incoming_only_is_preserved() {
+        let mut incoming = HeaderMap::new();
+        incoming.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("fine-grained-tool-results-2025-05-14"),
+        );
+        let target = beta_target(None);
+
+        let headers =
+            build_upstream_headers(&incoming, &target, ProxyProtocol::AnthropicMessages).unwrap();
+
+        assert_eq!(
+            beta_header(&headers),
+            "fine-grained-tool-results-2025-05-14"
+        );
+    }
+
+    #[test]
+    fn anthropic_beta_configured_only_is_applied() {
+        let incoming = HeaderMap::new();
+        let target = beta_target(Some("oauth-2025-04-20"));
+
+        let headers =
+            build_upstream_headers(&incoming, &target, ProxyProtocol::AnthropicMessages).unwrap();
+
+        assert_eq!(beta_header(&headers), "oauth-2025-04-20");
+    }
+
+    #[test]
+    fn anthropic_beta_incoming_and_configured_are_merged_and_deduped() {
+        let mut incoming = HeaderMap::new();
+        incoming.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("claude-code-20250219, oauth-2025-04-20"),
+        );
+        let target = beta_target(Some("oauth-2025-04-20, interleaved-thinking-2025-05-14"));
+
+        let headers =
+            build_upstream_headers(&incoming, &target, ProxyProtocol::AnthropicMessages).unwrap();
+
+        assert_eq!(
+            beta_header(&headers),
+            "claude-code-20250219, oauth-2025-04-20, interleaved-thinking-2025-05-14"
+        );
+    }
+
+    #[test]
+    fn unrelated_configured_headers_still_replace_incoming() {
+        let mut incoming = HeaderMap::new();
+        incoming.insert("x-custom-flag", HeaderValue::from_static("incoming"));
+        let mut target = beta_target(Some("oauth-2025-04-20"));
+        target
+            .config
+            .headers
+            .push(("x-custom-flag".into(), "configured".into()));
+
+        let headers =
+            build_upstream_headers(&incoming, &target, ProxyProtocol::AnthropicMessages).unwrap();
+
+        assert_eq!(
+            headers
+                .get("x-custom-flag")
+                .and_then(|value| value.to_str().ok()),
+            Some("configured")
         );
     }
 

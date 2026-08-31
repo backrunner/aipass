@@ -86,17 +86,3 @@ export function advertisedProxyAddress(bindAddr: string): string {
   if (bindAddr.startsWith("[::]:")) return `[::1]:${bindAddr.slice("[::]:".length)}`;
   return bindAddr;
 }
-
-export function enforceSingleEnabledRoute(
-  routes: ProxyRouteConfig[],
-  preferredRouteId?: string
-): ProxyRouteConfig[] {
-  const preferred = preferredRouteId
-    ? routes.find((route) => route.id === preferredRouteId && route.enabled)
-    : undefined;
-  const enabledRouteId = preferred?.id ?? routes.find((route) => route.enabled)?.id;
-  return routes.map((route) => {
-    const enabled = route.id === enabledRouteId;
-    return route.enabled === enabled ? route : { ...route, enabled };
-  });
-}

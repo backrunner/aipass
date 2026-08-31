@@ -29,6 +29,7 @@
   import { onDestroy } from "svelte";
 
   import { siteUrlForEntry } from "../entry-site-url";
+  import { desktopDeepLink, friendlyNativeError, isNativeLaunchFailure } from "../native-error";
   import { endpointForProvider, parseHttpEndpoint, providerForEndpoint } from "../provider-endpoint";
   import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
   import type { DraftItem, DraftPreview, Entry, FaviconBackfillResult, Grant, LookupData, NativeResponse, SafeDraft } from "./types";
@@ -255,7 +256,7 @@
         entryId: entry.id
       });
       if (!response?.ok) {
-        statusText = response?.error ?? $t("error.usageProbeUnavailable");
+        statusText = friendlyNativeError(response?.error, $t) || $t("error.usageProbeUnavailable");
         statusError = true;
         return;
       }
@@ -276,6 +277,13 @@
     }
   }
 
+  // Launch/focus the desktop app so it can merge this extension into the
+  // native host manifest's allowed origins, then retry from there.
+  function openDesktopForRecovery() {
+    if (typeof chrome === "undefined" || typeof chrome.tabs?.create !== "function") return;
+    chrome.tabs.create({ url: desktopDeepLink(chrome.runtime.id) }, () => undefined);
+  }
+
   async function openDesktopUnlock() {
     if (unlockBusy) return;
     desktopUnlockBusy = true;
@@ -283,8 +291,9 @@
     const response = await sendToWorker<{ locked?: boolean }>({ type: "aipass.openUnlock" });
     if (!response?.ok) {
       desktopUnlockBusy = false;
-      statusText = response?.error ?? $t("ext.unlockFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.unlockFailed");
       statusError = true;
+      if (isNativeLaunchFailure(response?.error)) openDesktopForRecovery();
       return;
     }
     if (response.data?.locked === false) {
@@ -304,8 +313,9 @@
     const response = await sendToWorker<{ opened?: boolean }>({ type: "aipass.openDesktop" });
     desktopUnlockBusy = false;
     if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.openAppFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.openAppFailed");
       statusError = true;
+      if (isNativeLaunchFailure(response?.error)) openDesktopForRecovery();
       return;
     }
     statusText = $t("ext.openAppStarted");
@@ -353,7 +363,7 @@
       secretId
     });
     if (!fill?.ok || typeof fill.data?.secret !== "string" || !fill.data.secret) {
-      statusText = fill?.error ?? $t("ext.fillFailed");
+      statusText = friendlyNativeError(fill?.error, $t) || $t("ext.fillFailed");
       statusError = true;
       usingEntryId = "";
       return;
@@ -396,7 +406,7 @@
     });
     searchLoading = false;
     if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.searchFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.searchFailed");
       return;
     }
     searchResults = response.data?.entries ?? [];
@@ -417,7 +427,7 @@
       query
     });
     if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.searchFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.searchFailed");
       statusError = true;
       return undefined;
     }
@@ -462,7 +472,7 @@
       if ((response?.data?.saved?.length ?? 0) > 0) {
         await refresh();
       }
-      statusText = response?.error ?? $t("ext.saveFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.saveFailed");
       draftItems = draftItems.map((item) => ({ ...item, saving: false }));
       return;
     }
@@ -479,7 +489,7 @@
       return;
     }
     if (!resume?.ok) {
-      statusText = resume?.error ?? $t("ext.saveFailed");
+      statusText = friendlyNativeError(resume?.error, $t) || $t("ext.saveFailed");
       statusError = true;
       return;
     }
@@ -511,7 +521,7 @@
       origin: currentOrigin
     });
     if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.ignoreFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.ignoreFailed");
       return;
     }
     clearPendingDraftUi();
@@ -698,7 +708,7 @@
       });
       if (requestId !== previewRequestId) return;
       if (!response?.ok) {
-        statusText = response?.error ?? $t("ext.previewFailed");
+        statusText = friendlyNativeError(response?.error, $t) || $t("ext.previewFailed");
         draftItems = draftItems.map((draftItem) =>
           draftItem.draftId === item.draftId ? { ...draftItem, previewLoading: false } : draftItem
         );
@@ -1250,7 +1260,7 @@
     });
     addBusy = false;
     if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.updateProviderFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.updateProviderFailed");
       statusError = true;
       return;
     }
@@ -1344,7 +1354,7 @@
         return;
       }
       if (!response?.ok) {
-        statusText = response?.error ?? $t("ext.addProviderFailed");
+        statusText = friendlyNativeError(response?.error, $t) || $t("ext.addProviderFailed");
         statusError = true;
         return;
       }
@@ -1379,7 +1389,7 @@
     });
     addBusy = false;
     if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.addProviderFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.addProviderFailed");
       statusError = true;
       return;
     }
@@ -1419,7 +1429,7 @@
     });
     deletingEntryId = "";
     if (!response?.ok) {
-      statusText = response?.error ?? $t("ext.deleteItemFailed");
+      statusText = friendlyNativeError(response?.error, $t) || $t("ext.deleteItemFailed");
       statusError = true;
       return;
     }

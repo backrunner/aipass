@@ -4,5 +4,11 @@
   },
   "extensionDescription": {
     "message": "Save and fill AI provider credentials through the local AIPass vault."
+  },
+  "nativeForbidden": {
+    "message": "Extension isn't authorized to connect to the AIPass desktop app. Opening AIPass to fix this automatically…"
+  },
+  "nativeMissing": {
+    "message": "AIPass desktop component not found. Install or start the AIPass desktop app first."
   }
 }

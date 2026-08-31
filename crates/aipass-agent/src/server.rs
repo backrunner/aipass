@@ -22,18 +22,19 @@ use aipass_agent_protocol::{
 };
 use aipass_config_writers::{
     apply_plan_encrypted, config_backup_path, diff_preview_for_path, plan_claude_code,
-    plan_claude_code_plaintext, plan_codex, plan_codex_plaintext, plan_codex_plaintext_with_mode,
-    plan_cursor_local, plan_cursor_local_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext,
-    plan_grok, plan_grok_plaintext, plan_grok_plaintext_with_backend, plan_opencode,
-    plan_opencode_plaintext, plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext,
-    plan_pi_plaintext_with_api, redacted_diff_preview, rollback_encrypted, ApplyResult,
+    plan_claude_code_official, plan_claude_code_plaintext, plan_codex, plan_codex_official,
+    plan_codex_plaintext, plan_codex_plaintext_with_mode, plan_cursor_local,
+    plan_cursor_local_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok,
+    plan_grok_plaintext, plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
+    plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext, plan_pi_plaintext_with_api,
+    redacted_diff_preview, rollback_encrypted, ApplyResult,
     CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan, GrokApiBackend, OpenCodeApi, PiApi,
     ToolEntry, ToolId,
 };
 use aipass_crypto::{mask_secret, SecretString};
 use aipass_provider_registry::{
     default_provider_definitions, match_provider_by_domain, provider_kind_for_id, AuthScheme,
-    EndpointKind, InterfaceType, ProviderEndpoint,
+    CredentialKind, EndpointKind, InterfaceType, ProviderEndpoint, ProviderKind,
 };
 use aipass_storage::atomic_write_bytes;
 use aipass_sync::{
@@ -573,6 +574,8 @@ fn save_detected_secret(
             title: preview.title,
             provider_kind,
             provider_id: preview.provider_id,
+            credential_kind: Default::default(),
+            account_identity: None,
             domains,
             favicon_url: preview.favicon_url,
             endpoints,
@@ -590,6 +593,7 @@ fn save_detected_secret(
                 .collect(),
             headers: fields.headers.clone(),
             quota: None,
+            subscription: None,
             gateway: preview.gateway,
             tags: preview.tags,
             notes: fields.notes.clone().and_then(non_empty),
@@ -963,6 +967,37 @@ fn build_tool_config_plan(
     let entry = vault
         .get_provider_summary(request.id)
         .map_err(map_vault_error)?;
+    if matches!(request.mode, ToolConfigMode::Official) {
+        // Official mode reuses the tool's own CLI credential store, so the
+        // vault entry must be that provider's official OAuth account.
+        let expected_provider = match request.tool {
+            ToolConfigTool::Codex => "openai",
+            ToolConfigTool::ClaudeCode => "anthropic",
+            _ => "",
+        };
+        if expected_provider.is_empty()
+            || !matches!(&entry.provider_kind, ProviderKind::Official)
+            || !matches!(&entry.credential_kind, CredentialKind::OAuth)
+            || entry.provider_id.as_deref() != Some(expected_provider)
+        {
+            return Err(ServiceError::new(
+                AgentErrorCode::ValidationFailed,
+                "official mode requires the tool's own official OAuth account",
+            ));
+        }
+    }
+    if matches!(request.mode, ToolConfigMode::Plaintext)
+        && matches!(
+            request.tool,
+            ToolConfigTool::Codex | ToolConfigTool::ClaudeCode
+        )
+        && !matches!(&entry.credential_kind, CredentialKind::Api)
+    {
+        return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "API key mode requires an API credential",
+        ));
+    }
     let home = home_dir()?;
     let mut tool_entry = ToolEntry {
         id: entry.id,
@@ -986,6 +1021,9 @@ fn build_tool_config_plan(
         tool_entry.api_key = Some(vault.reveal_secret(entry.id).map_err(map_vault_error)?);
     }
     let (plan, content) = match (&request.tool, &request.mode) {
+        (ToolConfigTool::Codex, ToolConfigMode::Official) => {
+            plan_codex_official(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
         (ToolConfigTool::Codex, ToolConfigMode::Helper) => {
             plan_codex(&home, &tool_entry).map_err(ServiceError::internal)?
         }
@@ -1008,6 +1046,9 @@ fn build_tool_config_plan(
         }
         (ToolConfigTool::ClaudeCode, ToolConfigMode::Helper) => {
             plan_claude_code(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        (ToolConfigTool::ClaudeCode, ToolConfigMode::Official) => {
+            plan_claude_code_official(&home, &tool_entry).map_err(ServiceError::internal)?
         }
         (ToolConfigTool::ClaudeCode, ToolConfigMode::Env) => {
             plan_tool_env_helper(&home, ToolConfigTool::ClaudeCode, &tool_entry)?
@@ -1056,6 +1097,12 @@ fn build_tool_config_plan(
         }
         (ToolConfigTool::Cursor, ToolConfigMode::Helper | ToolConfigMode::Env) => {
             plan_cursor_local(&home, &tool_entry).map_err(ServiceError::internal)?
+        }
+        _ => {
+            return Err(ServiceError::new(
+                AgentErrorCode::ValidationFailed,
+                "official mode is only supported for Codex and Claude Code",
+            ))
         }
     };
     Ok((entry, plan, content))
@@ -2259,6 +2306,8 @@ mod tests {
             favorite: false,
             provider_id: None,
             provider_kind: aipass_provider_registry::ProviderKind::Unknown,
+            credential_kind: Default::default(),
+            account_identity: None,
             domains: vec!["example.com".to_string()],
             favicon_url: None,
             endpoints: vec![ProviderEndpoint::api("https://api.example.com/v1")],
@@ -2270,6 +2319,7 @@ mod tests {
             default_model: None,
             model_aliases: Vec::new(),
             quota: None,
+            subscription: None,
             gateway: None,
             tags: Vec::new(),
             notes: None,

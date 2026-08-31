@@ -79,6 +79,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "time",
+ "toml 1.1.2+spec-1.1.0",
  "uuid",
  "windows-service",
  "zeroize",
@@ -223,6 +224,7 @@ name = "aipass-provider-registry"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "time",
  "uuid",
 ]

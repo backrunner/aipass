@@ -1,5 +1,6 @@
 mod auth_tasks;
 mod commands;
+mod deeplink;
 mod logging;
 mod models;
 mod singleton;
@@ -62,6 +63,7 @@ use std::ffi::OsString;
 struct AppState {
     auth_tasks: AuthTasks,
     window: Mutex<DesktopWindowState>,
+    pending_ccswitch_link: Mutex<Option<deeplink::CcSwitchProviderLink>>,
 }
 
 pub(crate) static ALLOW_PROCESS_EXIT: AtomicBool = AtomicBool::new(false);
@@ -105,6 +107,21 @@ impl AppState {
     pub(crate) fn window_target(&self) -> String {
         let target = self.window_state().target.clone();
         normalize_window_target(&target).to_string()
+    }
+
+    pub(crate) fn store_pending_ccswitch_link(&self, link: deeplink::CcSwitchProviderLink) {
+        let mut pending = self
+            .pending_ccswitch_link
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        *pending = Some(link);
+    }
+
+    pub(crate) fn take_pending_ccswitch_link(&self) -> Option<deeplink::CcSwitchProviderLink> {
+        self.pending_ccswitch_link
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
     }
 }
 
@@ -223,6 +240,8 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
         provider_id: request.provider_id,
+        credential_kind: request.credential_kind,
+        account_identity: request.account_identity,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
         endpoints: endpoints_from(
@@ -238,6 +257,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
         model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
         quota: request.quota,
+        subscription: None,
         gateway: request.gateway,
         tags: clean_strings(request.tags),
         notes: request.notes.and_then(non_empty),
@@ -251,6 +271,8 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
         provider_id: request.provider_id,
+        credential_kind: request.credential_kind,
+        account_identity: request.account_identity,
         domains: clean_strings(request.domain),
         favicon_url: request.favicon_url.and_then(non_empty),
         endpoints: endpoints_from(
@@ -269,6 +291,7 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         model_aliases: clean_pairs(request.model_aliases),
         headers: request.headers,
         quota: request.quota,
+        subscription: None,
         gateway: request.gateway,
         tags: clean_strings(request.tags),
         notes: request.notes.and_then(non_empty),
@@ -1148,14 +1171,25 @@ fn extension_ids_for_native_host(primary_extension_id: &str) -> Vec<String> {
 fn merged_extension_ids_for_native_host(
     extension_ids: impl IntoIterator<Item = String>,
 ) -> Vec<String> {
+    merge_extension_ids(extension_ids, discover_aipass_extension_ids(), Vec::new())
+}
+
+fn merge_extension_ids(
+    extension_ids: impl IntoIterator<Item = String>,
+    discovered_ids: impl IntoIterator<Item = String>,
+    existing_origins: impl IntoIterator<Item = String>,
+) -> Vec<String> {
     let mut ids = BTreeSet::new();
-    ids.extend(
-        extension_ids
-            .into_iter()
-            .map(|id| normalized_extension_id(&id))
-            .filter(|id| !id.is_empty()),
-    );
-    ids.extend(discover_aipass_extension_ids());
+    for value in extension_ids
+        .into_iter()
+        .chain(discovered_ids)
+        .chain(existing_origins)
+    {
+        let id = normalized_extension_id(&value);
+        if !id.is_empty() {
+            ids.insert(id);
+        }
+    }
     ids.into_iter().collect()
 }
 
@@ -1284,6 +1318,13 @@ fn value_contains_aipass_manifest_signal(value: &serde_json::Value) -> bool {
                 return true;
             }
             if map
+                .get("short_name")
+                .and_then(|value| value.as_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("AIPass"))
+            {
+                return true;
+            }
+            if map
                 .get("manifest")
                 .is_some_and(value_contains_aipass_manifest_signal)
             {
@@ -1300,7 +1341,9 @@ fn value_contains_aipass_manifest_signal(value: &serde_json::Value) -> bool {
             map.values().any(value_contains_aipass_manifest_signal)
         }
         serde_json::Value::Array(items) => items.iter().any(value_contains_aipass_manifest_signal),
-        serde_json::Value::String(value) => value.contains("\"name\": \"AIPass\""),
+        serde_json::Value::String(value) => {
+            value.contains("\"name\": \"AIPass\"") || value.contains("\"short_name\": \"AIPass\"")
+        }
         _ => false,
     }
 }
@@ -1412,9 +1455,14 @@ fn repair_native_host_manifest(extension_ids: Vec<String>) -> Result<NativeHostS
     let host_path = native_host_binary_path()?;
     ensure_native_host_binary_usable(&host_path)?;
     let extension_ids = merged_extension_ids_for_native_host(extension_ids);
-    let origins = allowed_origins(&extension_ids)?;
     let targets = repair_browser_targets()?;
+    let mut all_extension_ids: BTreeSet<String> = extension_ids.iter().cloned().collect();
     for target in &targets {
+        let existing_origins = read_manifest_allowed_origins(&target.manifest_path);
+        let target_extension_ids =
+            merge_extension_ids(extension_ids.iter().cloned(), Vec::new(), existing_origins);
+        all_extension_ids.extend(target_extension_ids.iter().cloned());
+        let origins = allowed_origins(&target_extension_ids)?;
         if let Some(parent) = target.manifest_path.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
@@ -1423,6 +1471,7 @@ fn repair_native_host_manifest(extension_ids: Vec<String>) -> Result<NativeHostS
         atomic_write_bytes(&target.manifest_path, &bytes).map_err(|err| err.to_string())?;
         install_native_manifest_reference(target, &target.manifest_path)?;
     }
+    let extension_ids: Vec<String> = all_extension_ids.into_iter().collect();
     save_allowed_extension_ids(&extension_ids).map_err(|err| err.to_string())?;
     let statuses = native_host_statuses_snapshot()?;
     preferred_native_host_status(&statuses, &extension_ids)
@@ -1715,7 +1764,7 @@ pub(crate) fn persist_window_size(app: &AppHandle) -> Result<(), String> {
     persist_window_size_for_target(app, &target)
 }
 
-fn prepare_window_target(app: &AppHandle, target: &str) {
+fn prepare_window_target(app: &AppHandle, target: &str, center: bool) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -1738,12 +1787,14 @@ fn prepare_window_target(app: &AppHandle, target: &str) {
         height: size.height,
     }));
     configure_window_chrome(&window);
-    let _ = window.center();
+    if center {
+        let _ = window.center();
+    }
 }
 
 fn reveal_window_target(app: &AppHandle, target: &str) -> Result<(), String> {
     if target == "tray" {
-        prepare_window_target(app, target);
+        prepare_window_target(app, target, false);
         return Ok(());
     }
 
@@ -1776,7 +1827,7 @@ pub(crate) fn activate_window_target(app: &AppHandle, target: &str) {
             let _ = logging::log_event("desktop.window.size_persist_failed", &[("error", &err)]);
         }
     }
-    prepare_window_target(app, &target);
+    prepare_window_target(app, &target, !frontend_ready);
     if frontend_ready {
         let _ = reveal_window_target(app, &target);
     }
@@ -1811,7 +1862,7 @@ pub(crate) fn complete_desktop_startup(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut window_state = state.window_state();
     let target = window_state.complete_startup();
-    prepare_window_target(app, &target);
+    prepare_window_target(app, &target, false);
     let result = reveal_window_target(app, &target);
     drop(window_state);
     result
@@ -1951,12 +2002,45 @@ pub fn run() {
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    if let Some(target) =
-                        url.path_segments().and_then(|mut segments| segments.next())
-                    {
-                        activate_window_target(&handle, target);
-                    } else {
-                        activate_window_target(&handle, "main");
+                    match url.scheme() {
+                        "ccswitch" => match deeplink::parse_ccswitch_link(&url) {
+                            Ok(link) => {
+                                handle
+                                    .state::<AppState>()
+                                    .store_pending_ccswitch_link(link.clone());
+                                let _ = handle.emit("ccswitch-provider-import", &link);
+                            }
+                            Err(err) => {
+                                let _ =
+                                    handle.emit("ccswitch-provider-import-error", &err.payload());
+                            }
+                        },
+                        "aipass" | "aipass-dev" => {
+                            let extension_id = url
+                                .query_pairs()
+                                .find(|(key, _)| key == "extensionId")
+                                .map(|(_, value)| value.into_owned())
+                                .filter(|value| looks_like_extension_id(value));
+                            if let Some(extension_id) = extension_id {
+                                thread::spawn(move || {
+                                    if let Err(err) =
+                                        repair_native_host_manifest(vec![extension_id])
+                                    {
+                                        eprintln!(
+                                            "failed to repair native host manifest from deep link: {err}"
+                                        );
+                                    }
+                                });
+                            }
+                            if let Some(target) =
+                                url.path_segments().and_then(|mut segments| segments.next())
+                            {
+                                activate_window_target(&handle, target);
+                            } else {
+                                activate_window_target(&handle, "main");
+                            }
+                        }
+                        _ => {}
                     }
                 }
             });
@@ -2010,6 +2094,9 @@ pub fn run() {
             vault_rotate,
             entries_list,
             entries_search,
+            official_accounts_refresh,
+            ccswitch_detect,
+            ccswitch_import,
             provider_favicon_backfill,
             provider_add,
             provider_update,
@@ -2055,7 +2142,8 @@ pub fn run() {
             clear_pending_update,
             download_update,
             install_pending_update,
-            install_update
+            install_update,
+            take_pending_ccswitch_link
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2081,7 +2169,56 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aipass_provider_registry::{EndpointKind, ProviderKind, SecretRef};
+    use aipass_provider_registry::{CredentialKind, EndpointKind, ProviderKind, SecretRef};
+
+    #[test]
+    fn extension_package_metadata_reads_zip_field_with_default_fallback() {
+        let metadata_dir = Path::new("/bundle/browser-extension");
+        let with_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3", "zip": "custom.zip"}"#;
+        let package = parse_extension_package_metadata(with_zip, metadata_dir).unwrap();
+        assert_eq!(package.id, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(package.version, "1.2.3");
+        assert_eq!(package.zip_path, metadata_dir.join("custom.zip"));
+
+        let without_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3"}"#;
+        let package = parse_extension_package_metadata(without_zip, metadata_dir).unwrap();
+        assert_eq!(package.zip_path, metadata_dir.join("aipass-extension.zip"));
+    }
+
+    #[test]
+    fn extract_extension_package_skips_entries_escaping_target_dir() {
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!("aipass-zip-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let zip_path = root.join("package.zip");
+        {
+            let file = fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("../evil.txt", options).unwrap();
+            writer.write_all(b"evil").unwrap();
+            writer.start_file("nested/manifest.json", options).unwrap();
+            writer.write_all(b"{}").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let extract_dir = root.join("extract");
+        extract_extension_package(&zip_path, &extract_dir).unwrap();
+
+        assert!(!root.join("evil.txt").exists());
+        assert_eq!(
+            fs::read_to_string(extract_dir.join("nested").join("manifest.json")).unwrap(),
+            "{}"
+        );
+
+        // Re-extraction clears stale files from a previous version.
+        fs::write(extract_dir.join("stale.txt"), b"stale").unwrap();
+        extract_extension_package(&zip_path, &extract_dir).unwrap();
+        assert!(!extract_dir.join("stale.txt").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn extension_package_metadata_reads_zip_field_with_default_fallback() {
@@ -2275,6 +2412,8 @@ mod tests {
             favorite: false,
             provider_id: Some("gemini".to_string()),
             provider_kind: ProviderKind::Official,
+            credential_kind: CredentialKind::Api,
+            account_identity: None,
             domains: vec!["ai.google.dev".to_string()],
             favicon_url: None,
             endpoints: vec![ProviderEndpoint::api("http://127.0.0.1:9")],
@@ -2294,6 +2433,7 @@ mod tests {
             gateway: None,
             tags: Vec::new(),
             notes: None,
+            subscription: None,
             header_names: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -2301,5 +2441,69 @@ mod tests {
             archived_at: None,
             deleted_at: None,
         }
+    }
+
+    #[test]
+    fn aipass_manifest_signal_matches_short_name_when_name_is_placeholder() {
+        let manifest = serde_json::json!({
+            "name": "__MSG_extensionName__",
+            "short_name": "AIPass",
+            "permissions": ["nativeMessaging"]
+        });
+
+        assert!(value_contains_aipass_manifest_signal(&manifest));
+    }
+
+    #[test]
+    fn aipass_manifest_signal_ignores_unrelated_manifests() {
+        let native_messaging_only = serde_json::json!({
+            "name": "Some Other Tool",
+            "permissions": ["nativeMessaging"]
+        });
+        let unrelated_short_name = serde_json::json!({
+            "name": "__MSG_extensionName__",
+            "short_name": "Definitely Not AIPass"
+        });
+
+        assert!(!value_contains_aipass_manifest_signal(
+            &native_messaging_only
+        ));
+        assert!(!value_contains_aipass_manifest_signal(
+            &unrelated_short_name
+        ));
+    }
+
+    #[test]
+    fn merge_extension_ids_unions_normalizes_and_dedups() {
+        let merged = merge_extension_ids(
+            vec!["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".to_string()],
+            vec!["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string()],
+            vec![
+                "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "chrome-extension://cccccccccccccccccccccccccccccccc/".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                "cccccccccccccccccccccccccccccccc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_extension_ids_handles_empty_and_partial_inputs() {
+        let merged = merge_extension_ids(Vec::new(), Vec::new(), Vec::new());
+        assert!(merged.is_empty());
+
+        let merged = merge_extension_ids(
+            Vec::<String>::new(),
+            Vec::new(),
+            vec!["chrome-extension://dddddddddddddddddddddddddddddddd/".to_string()],
+        );
+        assert_eq!(merged, vec!["dddddddddddddddddddddddddddddddd".to_string()]);
     }
 }

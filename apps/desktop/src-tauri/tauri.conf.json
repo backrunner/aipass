@@ -33,7 +33,8 @@
     "deep-link": {
       "desktop": {
         "schemes": [
-          "aipass"
+          "aipass",
+          "ccswitch"
         ]
       }
     },

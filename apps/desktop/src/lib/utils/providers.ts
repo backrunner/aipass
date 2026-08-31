@@ -1,8 +1,24 @@
-import type { ProviderEntry } from "@aipass/schemas";
+import type { ProviderEntry, QuotaInfo, SubscriptionSnapshot } from "@aipass/schemas";
 
 import type { EntrySummary, ProviderCounts } from "../types";
 
 export { emptyDraft } from "@aipass/ui";
+
+const EXPIRING_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Matches credentials whose earliest expiry/reset timestamp falls within the
+ * next 30 days — or already passed. Already-expired credentials are included
+ * deliberately: they are the ones that most urgently need re-authentication.
+ */
+export function isExpiringSoon(quota?: QuotaInfo, subscription?: SubscriptionSnapshot, now = Date.now()): boolean {
+  const candidates = [subscription?.subscriptionExpiresAt, subscription?.credentialExpiresAt, quota?.resetAt].filter(
+    Boolean
+  ) as string[];
+  const timestamps = candidates.map((value) => Date.parse(value)).filter((value) => !Number.isNaN(value));
+  if (timestamps.length === 0) return false;
+  return Math.min(...timestamps) <= now + EXPIRING_WINDOW_MS;
+}
 
 export function summaryToEntry(summary: EntrySummary): ProviderEntry {
   return {
@@ -11,6 +27,8 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     favorite: summary.favorite ?? false,
     providerId: summary.providerId,
     providerKind: summary.providerKind,
+    credentialKind: summary.credentialKind ?? "api",
+    accountIdentity: summary.accountIdentity,
     domains: summary.domains,
     faviconUrl: summary.faviconUrl,
     endpoints: summary.endpoints,
@@ -29,6 +47,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     defaultModel: summary.defaultModel,
     modelAliases: summary.modelAliases,
     quota: summary.quota,
+    subscription: summary.subscription,
     gateway: summary.gateway,
     tags: summary.tags,
     notes: summary.notes,
