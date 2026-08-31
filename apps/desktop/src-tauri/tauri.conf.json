@@ -33,7 +33,8 @@
     "deep-link": {
       "desktop": {
         "schemes": [
-          "aipass"
+          "aipass",
+          "ccswitch"
         ]
       }
     },
@@ -57,7 +58,7 @@
     "resources": {
       "../../../target/release/aipass-agent*": "",
       "../../../target/release/aipass-native-host*": "",
-      "../../extension/build/aipass-extension.crx": "browser-extension/aipass-extension.crx",
+      "../../extension/build/aipass-extension.zip": "browser-extension/aipass-extension.zip",
       "../../extension/build/aipass-extension.json": "browser-extension/aipass-extension.json"
     },
     "windows": {

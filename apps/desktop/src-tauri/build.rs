@@ -215,9 +215,9 @@ fn ensure_debug_bundle_resource_placeholders() {
     if std::fs::create_dir_all(&extension_build_dir).is_err() {
         return;
     }
-    let crx_path = extension_build_dir.join("aipass-extension.crx");
-    if !crx_path.exists() {
-        let _ = std::fs::write(&crx_path, []);
+    let zip_path = extension_build_dir.join("aipass-extension.zip");
+    if !zip_path.exists() {
+        let _ = std::fs::write(&zip_path, []);
     }
     let metadata_path = extension_build_dir.join("aipass-extension.json");
     if !metadata_path.exists() {
@@ -227,7 +227,6 @@ fn ensure_debug_bundle_resource_placeholders() {
   "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "name": "AIPass",
   "version": "0.0.0",
-  "crx": "aipass-extension.crx",
   "zip": "aipass-extension.zip"
 }
 "#,

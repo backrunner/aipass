@@ -1,5 +1,6 @@
 mod auth_tasks;
 mod commands;
+mod deeplink;
 mod logging;
 mod models;
 mod singleton;
@@ -16,8 +17,8 @@ use updates::{
 
 use crate::auth_tasks::AuthTasks;
 use crate::models::{
-    AppPreferences, BrowserExtensionInstallMode, BrowserExtensionInstallResult,
-    BrowserExtensionStatus, NativeHostStatus, ProviderAddRequest, ProviderUpdateRequest,
+    AppPreferences, BrowserExtensionInstallResult, BrowserExtensionStatus, NativeHostStatus,
+    ProviderAddRequest, ProviderUpdateRequest,
 };
 use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{AgentRequest, SessionStatus};
@@ -62,6 +63,7 @@ use std::ffi::OsString;
 struct AppState {
     auth_tasks: AuthTasks,
     window: Mutex<DesktopWindowState>,
+    pending_ccswitch_link: Mutex<Option<deeplink::CcSwitchProviderLink>>,
 }
 
 pub(crate) static ALLOW_PROCESS_EXIT: AtomicBool = AtomicBool::new(false);
@@ -105,6 +107,21 @@ impl AppState {
     pub(crate) fn window_target(&self) -> String {
         let target = self.window_state().target.clone();
         normalize_window_target(&target).to_string()
+    }
+
+    pub(crate) fn store_pending_ccswitch_link(&self, link: deeplink::CcSwitchProviderLink) {
+        let mut pending = self
+            .pending_ccswitch_link
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        *pending = Some(link);
+    }
+
+    pub(crate) fn take_pending_ccswitch_link(&self) -> Option<deeplink::CcSwitchProviderLink> {
+        self.pending_ccswitch_link
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
     }
 }
 
@@ -525,17 +542,13 @@ fn browser_extension_status_snapshot(app: &AppHandle) -> Result<BrowserExtension
     let native_host = preferred_native_host_status(&native_hosts, &extension_ids)?;
     let primary_target = preferred_browser_target(&targets);
     let browser_path = primary_target.and_then(find_browser_path);
-    let external_install_path = primary_target
-        .map(|target| default_external_extension_path(target, &package.id))
-        .transpose()?
-        .flatten();
     let installed_paths = installed_extension_paths(&extension_ids);
     let native_host_configured = native_hosts
         .iter()
         .any(|status| native_host_status_allows(status, &extension_ids));
 
-    let crx_exists = package.crx_path.exists()
-        && fs::metadata(&package.crx_path)
+    let zip_exists = package.zip_path.exists()
+        && fs::metadata(&package.zip_path)
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false)
         && package.version != "0.0.0";
@@ -553,20 +566,11 @@ fn browser_extension_status_snapshot(app: &AppHandle) -> Result<BrowserExtension
         extension_id: package.id,
         discovered_extension_ids: extension_ids,
         extension_version: package.version,
-        crx_exists,
-        crx_path: package.crx_path,
+        zip_exists,
+        zip_path: package.zip_path,
         extension_installed: !installed_paths.is_empty(),
         installed_paths,
-        external_install_exists: external_install_path
-            .as_ref()
-            .is_some_and(|path| path.exists()),
-        external_install_path,
         native_host_configured,
-        install_mode: if cfg!(target_os = "linux") {
-            BrowserExtensionInstallMode::ExternalCrx
-        } else {
-            BrowserExtensionInstallMode::ManualCrx
-        },
         native_host,
         native_hosts,
     })
@@ -574,15 +578,15 @@ fn browser_extension_status_snapshot(app: &AppHandle) -> Result<BrowserExtension
 
 fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallResult, String> {
     let package = bundled_extension_package(app)?;
-    if !package.crx_path.exists()
-        || fs::metadata(&package.crx_path)
+    if !package.zip_path.exists()
+        || fs::metadata(&package.zip_path)
             .map(|metadata| metadata.len() == 0)
             .unwrap_or(true)
         || package.version == "0.0.0"
     {
         return Err(format!(
             "bundled Chrome extension package is missing: {}",
-            package.crx_path.display()
+            package.zip_path.display()
         ));
     }
     let targets = detected_browser_targets();
@@ -595,15 +599,16 @@ fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallR
 
     repair_native_host_manifest(vec![package.id.clone()])?;
 
-    let external_install_ok =
-        cfg!(target_os = "linux") && install_external_crx(target, &package).is_ok();
+    let extract_dir = bundled_extension_extract_dir(&package.id)?;
+    extract_extension_package(&package.zip_path, &extract_dir).map_err(|err| {
+        format!(
+            "failed to extract bundled extension package to {}: {err}",
+            extract_dir.display()
+        )
+    })?;
 
     let opened_chrome = open_browser_extensions_page(target).is_ok();
-    let opened_package = if cfg!(target_os = "linux") {
-        !external_install_ok && reveal_path(&package.crx_path).is_ok()
-    } else {
-        reveal_path(&package.crx_path).is_ok()
-    };
+    let opened_package = reveal_path(&extract_dir).is_ok();
     let status = browser_extension_status_snapshot(app)?;
     Ok(BrowserExtensionInstallResult {
         status,
@@ -616,7 +621,7 @@ fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallR
 struct ExtensionPackage {
     id: String,
     version: String,
-    crx_path: PathBuf,
+    zip_path: PathBuf,
 }
 
 fn bundled_extension_package(app: &AppHandle) -> Result<ExtensionPackage, String> {
@@ -627,12 +632,18 @@ fn bundled_extension_package(app: &AppHandle) -> Result<ExtensionPackage, String
             metadata_path.display()
         )
     })?;
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_text).map_err(|err| {
-        format!(
-            "failed to parse bundled extension metadata at {}: {err}",
-            metadata_path.display()
-        )
-    })?;
+    let metadata_dir = metadata_path
+        .parent()
+        .ok_or_else(|| "bundled extension metadata path has no parent".to_string())?;
+    parse_extension_package_metadata(&metadata_text, metadata_dir)
+}
+
+fn parse_extension_package_metadata(
+    metadata_text: &str,
+    metadata_dir: &Path,
+) -> Result<ExtensionPackage, String> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata_text)
+        .map_err(|err| format!("failed to parse bundled extension metadata: {err}"))?;
     let id = metadata
         .get("id")
         .and_then(|value| value.as_str())
@@ -645,19 +656,67 @@ fn bundled_extension_package(app: &AppHandle) -> Result<ExtensionPackage, String
         .map(ToString::to_string)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "bundled extension metadata is missing version".to_string())?;
-    let crx_name = metadata
-        .get("crx")
+    let zip_name = metadata
+        .get("zip")
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("aipass-extension.crx");
-    let metadata_dir = metadata_path
-        .parent()
-        .ok_or_else(|| "bundled extension metadata path has no parent".to_string())?;
+        .unwrap_or("aipass-extension.zip");
     Ok(ExtensionPackage {
         id,
         version,
-        crx_path: metadata_dir.join(crx_name),
+        zip_path: metadata_dir.join(zip_name),
     })
+}
+
+fn bundled_extension_extract_dir(extension_id: &str) -> Result<PathBuf, String> {
+    let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
+        .ok_or_else(|| "cannot determine AIPass project directory".to_string())?;
+    Ok(dirs.data_dir().join("browser-extension").join(extension_id))
+}
+
+fn extract_extension_package(zip_path: &Path, extract_dir: &Path) -> Result<(), String> {
+    if extract_dir.exists() {
+        fs::remove_dir_all(extract_dir).map_err(|err| {
+            format!(
+                "failed to clear extension directory {}: {err}",
+                extract_dir.display()
+            )
+        })?;
+    }
+    fs::create_dir_all(extract_dir).map_err(|err| {
+        format!(
+            "failed to create extension directory {}: {err}",
+            extract_dir.display()
+        )
+    })?;
+    let archive_file = fs::File::open(zip_path)
+        .map_err(|err| format!("failed to open {}: {err}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(archive_file)
+        .map_err(|err| format!("{} is not a valid zip archive: {err}", zip_path.display()))?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|err| format!("failed to read zip entry {index}: {err}"))?;
+        // Skip entries that would escape the extraction directory (zip-slip).
+        let Some(relative_path) = entry.enclosed_name() else {
+            continue;
+        };
+        let out_path = extract_dir.join(relative_path);
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path)
+                .map_err(|err| format!("failed to create {}: {err}", out_path.display()))?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+        }
+        let mut out_file = fs::File::create(&out_path)
+            .map_err(|err| format!("failed to create {}: {err}", out_path.display()))?;
+        std::io::copy(&mut entry, &mut out_file)
+            .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
+    }
+    Ok(())
 }
 
 fn bundled_extension_metadata_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -691,54 +750,8 @@ struct BrowserTarget {
     manifest_path: PathBuf,
     profile_roots: Vec<PathBuf>,
     executable_candidates: Vec<PathBuf>,
-    #[cfg(target_os = "linux")]
-    external_extension_dir: Option<PathBuf>,
     #[cfg(target_os = "windows")]
     native_host_registry_key: &'static str,
-}
-
-fn default_external_extension_path(
-    target: &BrowserTarget,
-    extension_id: &str,
-) -> Result<Option<PathBuf>, String> {
-    #[cfg(target_os = "linux")]
-    {
-        Ok(target
-            .external_extension_dir
-            .as_ref()
-            .map(|dir| dir.join(format!("{extension_id}.json"))))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = target;
-        let _ = extension_id;
-        Ok(None)
-    }
-}
-
-fn install_external_crx(target: &BrowserTarget, package: &ExtensionPackage) -> Result<(), String> {
-    let install_path = default_external_extension_path(target, &package.id)?
-        .ok_or_else(|| "local CRX external install is only supported on Linux".to_string())?;
-    let copied_crx_path = user_extension_package_path(&package.id)?;
-    if let Some(parent) = copied_crx_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    fs::copy(&package.crx_path, &copied_crx_path).map_err(|err| err.to_string())?;
-    let external = serde_json::json!({
-        "external_crx": copied_crx_path,
-        "external_version": package.version,
-    });
-    write_json_atomic(&install_path, &external)
-}
-
-fn user_extension_package_path(extension_id: &str) -> Result<PathBuf, String> {
-    let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
-        .ok_or_else(|| "cannot determine AIPass project directory".to_string())?;
-    Ok(dirs
-        .data_dir()
-        .join("browser-extension")
-        .join(format!("{extension_id}.crx")))
 }
 
 fn installed_extension_paths(extension_ids: &[String]) -> Vec<PathBuf> {
@@ -937,35 +950,30 @@ fn known_browser_targets() -> Vec<BrowserTarget> {
                 "Google Chrome",
                 config.join("google-chrome"),
                 &["google-chrome", "google-chrome-stable"],
-                Some(PathBuf::from("/opt/google/chrome/extensions")),
             ),
             linux_browser_target(
                 "edge",
                 "Microsoft Edge",
                 config.join("microsoft-edge"),
                 &["microsoft-edge", "microsoft-edge-stable"],
-                Some(PathBuf::from("/opt/microsoft/msedge/extensions")),
             ),
             linux_browser_target(
                 "brave",
                 "Brave",
                 config.join("BraveSoftware").join("Brave-Browser"),
                 &["brave-browser", "brave"],
-                Some(PathBuf::from("/opt/brave.com/brave/extensions")),
             ),
             linux_browser_target(
                 "chromium",
                 "Chromium",
                 config.join("chromium"),
                 &["chromium", "chromium-browser"],
-                Some(PathBuf::from("/usr/share/chromium/extensions")),
             ),
             linux_browser_target(
                 "vivaldi",
                 "Vivaldi",
                 config.join("vivaldi"),
                 &["vivaldi", "vivaldi-stable"],
-                None,
             ),
         ]
     }
@@ -1089,7 +1097,6 @@ fn linux_browser_target(
     label: &'static str,
     profile_root: PathBuf,
     executable_names: &[&str],
-    external_extension_dir: Option<PathBuf>,
 ) -> BrowserTarget {
     BrowserTarget {
         id,
@@ -1102,7 +1109,6 @@ fn linux_browser_target(
             .iter()
             .filter_map(|name| find_executable_in_path(name))
             .collect(),
-        external_extension_dir,
     }
 }
 
@@ -1165,14 +1171,25 @@ fn extension_ids_for_native_host(primary_extension_id: &str) -> Vec<String> {
 fn merged_extension_ids_for_native_host(
     extension_ids: impl IntoIterator<Item = String>,
 ) -> Vec<String> {
+    merge_extension_ids(extension_ids, discover_aipass_extension_ids(), Vec::new())
+}
+
+fn merge_extension_ids(
+    extension_ids: impl IntoIterator<Item = String>,
+    discovered_ids: impl IntoIterator<Item = String>,
+    existing_origins: impl IntoIterator<Item = String>,
+) -> Vec<String> {
     let mut ids = BTreeSet::new();
-    ids.extend(
-        extension_ids
-            .into_iter()
-            .map(|id| normalized_extension_id(&id))
-            .filter(|id| !id.is_empty()),
-    );
-    ids.extend(discover_aipass_extension_ids());
+    for value in extension_ids
+        .into_iter()
+        .chain(discovered_ids)
+        .chain(existing_origins)
+    {
+        let id = normalized_extension_id(&value);
+        if !id.is_empty() {
+            ids.insert(id);
+        }
+    }
     ids.into_iter().collect()
 }
 
@@ -1301,6 +1318,13 @@ fn value_contains_aipass_manifest_signal(value: &serde_json::Value) -> bool {
                 return true;
             }
             if map
+                .get("short_name")
+                .and_then(|value| value.as_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("AIPass"))
+            {
+                return true;
+            }
+            if map
                 .get("manifest")
                 .is_some_and(value_contains_aipass_manifest_signal)
             {
@@ -1317,7 +1341,9 @@ fn value_contains_aipass_manifest_signal(value: &serde_json::Value) -> bool {
             map.values().any(value_contains_aipass_manifest_signal)
         }
         serde_json::Value::Array(items) => items.iter().any(value_contains_aipass_manifest_signal),
-        serde_json::Value::String(value) => value.contains("\"name\": \"AIPass\""),
+        serde_json::Value::String(value) => {
+            value.contains("\"name\": \"AIPass\"") || value.contains("\"short_name\": \"AIPass\"")
+        }
         _ => false,
     }
 }
@@ -1429,9 +1455,14 @@ fn repair_native_host_manifest(extension_ids: Vec<String>) -> Result<NativeHostS
     let host_path = native_host_binary_path()?;
     ensure_native_host_binary_usable(&host_path)?;
     let extension_ids = merged_extension_ids_for_native_host(extension_ids);
-    let origins = allowed_origins(&extension_ids)?;
     let targets = repair_browser_targets()?;
+    let mut all_extension_ids: BTreeSet<String> = extension_ids.iter().cloned().collect();
     for target in &targets {
+        let existing_origins = read_manifest_allowed_origins(&target.manifest_path);
+        let target_extension_ids =
+            merge_extension_ids(extension_ids.iter().cloned(), Vec::new(), existing_origins);
+        all_extension_ids.extend(target_extension_ids.iter().cloned());
+        let origins = allowed_origins(&target_extension_ids)?;
         if let Some(parent) = target.manifest_path.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
@@ -1440,6 +1471,7 @@ fn repair_native_host_manifest(extension_ids: Vec<String>) -> Result<NativeHostS
         atomic_write_bytes(&target.manifest_path, &bytes).map_err(|err| err.to_string())?;
         install_native_manifest_reference(target, &target.manifest_path)?;
     }
+    let extension_ids: Vec<String> = all_extension_ids.into_iter().collect();
     save_allowed_extension_ids(&extension_ids).map_err(|err| err.to_string())?;
     let statuses = native_host_statuses_snapshot()?;
     preferred_native_host_status(&statuses, &extension_ids)
@@ -1970,12 +2002,45 @@ pub fn run() {
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
-                    if let Some(target) =
-                        url.path_segments().and_then(|mut segments| segments.next())
-                    {
-                        activate_window_target(&handle, target);
-                    } else {
-                        activate_window_target(&handle, "main");
+                    match url.scheme() {
+                        "ccswitch" => match deeplink::parse_ccswitch_link(&url) {
+                            Ok(link) => {
+                                handle
+                                    .state::<AppState>()
+                                    .store_pending_ccswitch_link(link.clone());
+                                let _ = handle.emit("ccswitch-provider-import", &link);
+                            }
+                            Err(err) => {
+                                let _ =
+                                    handle.emit("ccswitch-provider-import-error", &err.payload());
+                            }
+                        },
+                        "aipass" | "aipass-dev" => {
+                            let extension_id = url
+                                .query_pairs()
+                                .find(|(key, _)| key == "extensionId")
+                                .map(|(_, value)| value.into_owned())
+                                .filter(|value| looks_like_extension_id(value));
+                            if let Some(extension_id) = extension_id {
+                                thread::spawn(move || {
+                                    if let Err(err) =
+                                        repair_native_host_manifest(vec![extension_id])
+                                    {
+                                        eprintln!(
+                                            "failed to repair native host manifest from deep link: {err}"
+                                        );
+                                    }
+                                });
+                            }
+                            if let Some(target) =
+                                url.path_segments().and_then(|mut segments| segments.next())
+                            {
+                                activate_window_target(&handle, target);
+                            } else {
+                                activate_window_target(&handle, "main");
+                            }
+                        }
+                        _ => {}
                     }
                 }
             });
@@ -2030,6 +2095,8 @@ pub fn run() {
             entries_list,
             entries_search,
             official_accounts_refresh,
+            ccswitch_detect,
+            ccswitch_import,
             provider_favicon_backfill,
             provider_add,
             provider_update,
@@ -2075,7 +2142,8 @@ pub fn run() {
             clear_pending_update,
             download_update,
             install_pending_update,
-            install_update
+            install_update,
+            take_pending_ccswitch_link
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2101,7 +2169,56 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aipass_provider_registry::{EndpointKind, ProviderKind, SecretRef};
+    use aipass_provider_registry::{CredentialKind, EndpointKind, ProviderKind, SecretRef};
+
+    #[test]
+    fn extension_package_metadata_reads_zip_field_with_default_fallback() {
+        let metadata_dir = Path::new("/bundle/browser-extension");
+        let with_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3", "zip": "custom.zip"}"#;
+        let package = parse_extension_package_metadata(with_zip, metadata_dir).unwrap();
+        assert_eq!(package.id, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(package.version, "1.2.3");
+        assert_eq!(package.zip_path, metadata_dir.join("custom.zip"));
+
+        let without_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3"}"#;
+        let package = parse_extension_package_metadata(without_zip, metadata_dir).unwrap();
+        assert_eq!(package.zip_path, metadata_dir.join("aipass-extension.zip"));
+    }
+
+    #[test]
+    fn extract_extension_package_skips_entries_escaping_target_dir() {
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!("aipass-zip-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let zip_path = root.join("package.zip");
+        {
+            let file = fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("../evil.txt", options).unwrap();
+            writer.write_all(b"evil").unwrap();
+            writer.start_file("nested/manifest.json", options).unwrap();
+            writer.write_all(b"{}").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let extract_dir = root.join("extract");
+        extract_extension_package(&zip_path, &extract_dir).unwrap();
+
+        assert!(!root.join("evil.txt").exists());
+        assert_eq!(
+            fs::read_to_string(extract_dir.join("nested").join("manifest.json")).unwrap(),
+            "{}"
+        );
+
+        // Re-extraction clears stale files from a previous version.
+        fs::write(extract_dir.join("stale.txt"), b"stale").unwrap();
+        extract_extension_package(&zip_path, &extract_dir).unwrap();
+        assert!(!extract_dir.join("stale.txt").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn endpoints_from_preserves_api_and_console_kinds() {
@@ -2246,6 +2363,8 @@ mod tests {
             favorite: false,
             provider_id: Some("gemini".to_string()),
             provider_kind: ProviderKind::Official,
+            credential_kind: CredentialKind::Api,
+            account_identity: None,
             domains: vec!["ai.google.dev".to_string()],
             favicon_url: None,
             endpoints: vec![ProviderEndpoint::api("http://127.0.0.1:9")],
@@ -2265,6 +2384,7 @@ mod tests {
             gateway: None,
             tags: Vec::new(),
             notes: None,
+            subscription: None,
             header_names: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -2272,5 +2392,69 @@ mod tests {
             archived_at: None,
             deleted_at: None,
         }
+    }
+
+    #[test]
+    fn aipass_manifest_signal_matches_short_name_when_name_is_placeholder() {
+        let manifest = serde_json::json!({
+            "name": "__MSG_extensionName__",
+            "short_name": "AIPass",
+            "permissions": ["nativeMessaging"]
+        });
+
+        assert!(value_contains_aipass_manifest_signal(&manifest));
+    }
+
+    #[test]
+    fn aipass_manifest_signal_ignores_unrelated_manifests() {
+        let native_messaging_only = serde_json::json!({
+            "name": "Some Other Tool",
+            "permissions": ["nativeMessaging"]
+        });
+        let unrelated_short_name = serde_json::json!({
+            "name": "__MSG_extensionName__",
+            "short_name": "Definitely Not AIPass"
+        });
+
+        assert!(!value_contains_aipass_manifest_signal(
+            &native_messaging_only
+        ));
+        assert!(!value_contains_aipass_manifest_signal(
+            &unrelated_short_name
+        ));
+    }
+
+    #[test]
+    fn merge_extension_ids_unions_normalizes_and_dedups() {
+        let merged = merge_extension_ids(
+            vec!["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".to_string()],
+            vec!["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string()],
+            vec![
+                "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "chrome-extension://cccccccccccccccccccccccccccccccc/".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                "cccccccccccccccccccccccccccccccc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_extension_ids_handles_empty_and_partial_inputs() {
+        let merged = merge_extension_ids(Vec::new(), Vec::new(), Vec::new());
+        assert!(merged.is_empty());
+
+        let merged = merge_extension_ids(
+            Vec::<String>::new(),
+            Vec::new(),
+            vec!["chrome-extension://dddddddddddddddddddddddddddddddd/".to_string()],
+        );
+        assert_eq!(merged, vec!["dddddddddddddddddddddddddddddddd".to_string()]);
     }
 }

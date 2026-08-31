@@ -20,6 +20,7 @@
   export let onAdd: () => MaybePromise = () => {};
   export let onRefreshAccounts: () => MaybePromise = () => {};
   export let refreshAccountsBusy = false;
+  export let officialAccountsImport = false;
   export let onFilterChange: (value: ProviderFilter) => MaybePromise = () => {};
   export let onEmptyTrash: () => MaybePromise = () => {};
   export let onSelect: (id: string) => MaybePromise = () => {};
@@ -118,9 +119,11 @@
         <span>{$t("providerList.emptyTrash")}</span>
       </button>
     {:else}
-      <button type="button" class="icon-btn" class:spinning={refreshAccountsBusy} on:click={() => onRefreshAccounts()} disabled={refreshAccountsBusy} aria-label={$t("providerList.refreshAccounts")} title={$t("providerList.refreshAccounts")}>
-        <RefreshCw size={14} />
-      </button>
+      {#if officialAccountsImport}
+        <button type="button" class="icon-btn" class:spinning={refreshAccountsBusy} on:click={() => onRefreshAccounts()} disabled={refreshAccountsBusy} aria-label={$t("providerList.refreshAccounts")} title={$t("providerList.refreshAccounts")}>
+          <RefreshCw size={14} />
+        </button>
+      {/if}
       <button type="button" class="cta-btn primary" on:click={() => onAdd()}>
         <Plus size={14} />
         <span>{$t("providerList.add")}</span>

@@ -109,6 +109,23 @@ export interface GatewayMetadata {
   rate?: string;
 }
 
+export type OfficialAccountRefreshStatus = "imported" | "refreshed" | "skipped" | "error";
+
+export interface OfficialAccountRefreshResult {
+  providerId: string;
+  accountIdentity?: string;
+  credentialKind: CredentialKind;
+  snapshot?: SubscriptionSnapshot;
+  status: OfficialAccountRefreshStatus;
+  error?: string;
+}
+
+export interface CcSwitchDetection {
+  configExists: boolean;
+  appInstalled: boolean;
+  configPath?: string;
+}
+
 export interface ProviderEntry {
   id: string;
   title: string;

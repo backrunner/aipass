@@ -16,7 +16,7 @@ use crate::models::{
     ToolDetection, UnlockVaultRequest, VaultExportRequest, VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
-    AgentRequest, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
+    AgentRequest, CcSwitchDetection, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
     OfficialAccountRefreshResult, PricingApplyScope, PricingConfig, PricingGroup,
     ProbeResult as AgentProbeResult, SecretValue, SensitiveString, ServerTokenResponse,
     ServerUsageSummary, SessionPolicy, SessionStatus, SessionUnlockMode,
@@ -58,6 +58,13 @@ async fn agent_request_no_unlock_async<T: DeserializeOwned + Send + 'static>(
 #[tauri::command]
 pub(crate) fn window_target(state: State<'_, AppState>) -> Option<String> {
     Some(state.window_target())
+}
+
+#[tauri::command]
+pub(crate) fn take_pending_ccswitch_link(
+    state: State<'_, AppState>,
+) -> Option<crate::deeplink::CcSwitchProviderLink> {
+    state.take_pending_ccswitch_link()
 }
 
 #[tauri::command]
@@ -116,6 +123,7 @@ pub(crate) async fn preferences_load(app: AppHandle) -> Result<AppPreferences, S
             lock_on_screen_lock: policy.lock_on_screen_lock,
             theme: local.theme,
             locale: local.locale,
+            official_accounts_import: local.official_accounts_import,
         })
     })
     .await
@@ -142,6 +150,9 @@ pub(crate) async fn preferences_save(
                 .unwrap_or(current_policy.lock_on_screen_lock),
             theme: request.theme.unwrap_or(stored.theme),
             locale: request.locale.unwrap_or(stored.locale),
+            official_accounts_import: request
+                .official_accounts_import
+                .unwrap_or(stored.official_accounts_import),
         };
         save_preferences(&app, &preferences)?;
         let _: SessionPolicy = agent_request_no_unlock(
@@ -543,6 +554,18 @@ pub(crate) async fn official_accounts_refresh(
         },
     )
     .await
+}
+
+#[tauri::command]
+pub(crate) async fn ccswitch_detect(app: AppHandle) -> Result<CcSwitchDetection, String> {
+    agent_request_no_unlock_async(app, AgentRequest::CcSwitchDetect).await
+}
+
+#[tauri::command]
+pub(crate) async fn ccswitch_import(
+    app: AppHandle,
+) -> Result<Vec<OfficialAccountRefreshResult>, String> {
+    agent_request_async(app, AgentRequest::CcSwitchImport).await
 }
 
 #[tauri::command]

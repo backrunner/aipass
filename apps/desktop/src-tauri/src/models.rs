@@ -34,6 +34,8 @@ pub(crate) struct AppPreferences {
     pub(crate) theme: ThemePreference,
     #[serde(default)]
     pub(crate) locale: LocalePreference,
+    #[serde(default)]
+    pub(crate) official_accounts_import: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,6 +67,7 @@ impl Default for AppPreferences {
             lock_on_screen_lock: true,
             theme: ThemePreference::System,
             locale: LocalePreference::System,
+            official_accounts_import: false,
         }
     }
 }
@@ -103,6 +106,7 @@ pub(crate) struct SavePreferencesRequest {
     pub(crate) lock_on_screen_lock: Option<bool>,
     pub(crate) theme: Option<ThemePreference>,
     pub(crate) locale: Option<LocalePreference>,
+    pub(crate) official_accounts_import: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -406,23 +410,13 @@ pub(crate) struct BrowserExtensionStatus {
     pub(crate) extension_id: String,
     pub(crate) discovered_extension_ids: Vec<String>,
     pub(crate) extension_version: String,
-    pub(crate) crx_path: PathBuf,
-    pub(crate) crx_exists: bool,
+    pub(crate) zip_path: PathBuf,
+    pub(crate) zip_exists: bool,
     pub(crate) extension_installed: bool,
     pub(crate) installed_paths: Vec<PathBuf>,
-    pub(crate) external_install_path: Option<PathBuf>,
-    pub(crate) external_install_exists: bool,
     pub(crate) native_host_configured: bool,
-    pub(crate) install_mode: BrowserExtensionInstallMode,
     pub(crate) native_host: NativeHostStatus,
     pub(crate) native_hosts: Vec<NativeHostStatus>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum BrowserExtensionInstallMode {
-    ExternalCrx,
-    ManualCrx,
 }
 
 #[derive(Clone, Debug, Serialize)]

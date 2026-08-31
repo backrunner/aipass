@@ -16,6 +16,9 @@
   export let onProviderChanged: () => MaybePromise = () => {};
   export let compactProviderSelect = false;
   export let showSecretLabel = true;
+  // Set when editing an official OAuth entry: the proxy sends the OAuth token
+  // to whatever endpoint is configured, so the form warns about untrusted URLs.
+  export let isOfficialOauth = false;
 
   type FieldId =
     | "domain"
@@ -257,6 +260,9 @@
             <X size={13} />
           </button>
         </div>
+        {#if isOfficialOauth && formMode === "edit"}
+          <p class="oauth-endpoint-warning">{$t("providerForm.oauthEndpointWarning")}</p>
+        {/if}
       {/if}
       {#if visibleFields.has("defaultModel")}
         <div class="removable-field" data-provider-field="defaultModel">
@@ -464,6 +470,13 @@
     &.align-top {
       align-items: start;
     }
+  }
+
+  .oauth-endpoint-warning {
+    margin: -4px 2px 0;
+    color: var(--warning);
+    font-size: 11px;
+    line-height: 1.4;
   }
 
   .remove-btn {

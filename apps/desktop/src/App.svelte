@@ -9,8 +9,7 @@
     matchProviderByDomain,
     providerDefinitions,
     type ProviderEntry,
-    type QuotaInfo,
-    type SubscriptionSnapshot
+    type QuotaInfo
   } from "@aipass/schemas";
   import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Brand, Button, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
@@ -26,6 +25,7 @@
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
+  import ConfirmModal from "./lib/components/shared/ConfirmModal.svelte";
   import UpdateRestartConfirmModal from "./lib/components/shared/UpdateRestartConfirmModal.svelte";
   import type {
     AppPreferences,
@@ -50,6 +50,9 @@
     ServerTokenResponse,
     ServerUsageSummary,
     CodexApiKeyMode,
+    CcSwitchDetection,
+    CcSwitchProviderImportError,
+    CcSwitchProviderLink,
     OfficialAccountRefreshResult,
     SyncConflict,
     SyncSettings,
@@ -68,7 +71,9 @@
     VaultStatus
   } from "./lib/types";
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
-  import { emptyDraft, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { emptyDraft, isExpiringSoon, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
+  import { ccSwitchLinkToDraft, findCcSwitchDuplicate } from "./lib/utils/deeplink";
   import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
   import { checkForUpdates, downloadUpdate, getStoredUpdateChannel, inferUpdateChannel, installPendingUpdate, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
@@ -117,6 +122,8 @@
   let unlistenOpenServer: (() => void) | undefined;
   let unlistenProxyStatus: (() => void) | undefined;
   let unlistenUpdateProgress: (() => void) | undefined;
+  let unlistenCcSwitchImport: (() => void) | undefined;
+  let unlistenCcSwitchImportError: (() => void) | undefined;
   let sessionPollTimer: ReturnType<typeof setInterval> | undefined;
   let sessionRefreshInFlight = false;
   const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
@@ -231,6 +238,10 @@
   let showFavorites = false;
   let showServer = false;
   let pendingServerView = false;
+  let pendingCcSwitchLink: CcSwitchProviderLink | null = null;
+  let ccSwitchDuplicateLink: CcSwitchProviderLink | null = null;
+  let ccSwitchDuplicateOpen = false;
+  let ccSwitchDuplicateName = "";
   let showSettings = false;
   let settingsInitialTab = "general";
   let providerFilter: ProviderFilter = "all";
@@ -244,6 +255,8 @@
   let clipboardClearSeconds = 45;
   let lockOnSleep = true;
   let lockOnScreenLock = true;
+  let officialAccountsImport = false;
+  let ccSwitchDetection: CcSwitchDetection | undefined;
   let newPassword = "";
   let syncState: SyncReport["status"] = "idle";
   let syncMode: SyncMode = "local";
@@ -529,6 +542,7 @@
         await loadServer();
         void loadPricing();
         await openPendingServerView();
+        openPendingCcSwitchLink();
       }
     } catch (err) {
       console.warn("vault status reconciliation failed", err);
@@ -585,6 +599,18 @@
           unlistenUpdateProgress = await listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, ({ payload }) => {
             updateProgress = payload;
           });
+          unlistenCcSwitchImport = await listen<CcSwitchProviderLink>(
+            "ccswitch-provider-import",
+            ({ payload }) => {
+              handleCcSwitchImport(payload);
+            }
+          );
+          unlistenCcSwitchImportError = await listen<CcSwitchProviderImportError>(
+            "ccswitch-provider-import-error",
+            ({ payload }) => {
+              handleCcSwitchImportError(payload);
+            }
+          );
           logStartupStage("listeners_ready");
         }
         await Promise.all([loadPreferences(), refreshStatus()]);
@@ -610,6 +636,18 @@
           logStartupStage("server_finished");
           void loadPricing();
           await openPendingServerView();
+          openPendingCcSwitchLink();
+        }
+        if (hasTauriRuntime()) {
+          // Drain a `ccswitch://` link buffered while the app was cold-starting.
+          try {
+            const pendingLink = await invokeTauri<CcSwitchProviderLink | null>(
+              "take_pending_ccswitch_link"
+            );
+            if (pendingLink) handleCcSwitchImport(pendingLink);
+          } catch (err) {
+            console.warn("failed to drain pending ccswitch link", err);
+          }
         }
         logStartupStage("complete");
       } catch (err) {
@@ -645,6 +683,8 @@
     unlistenOpenServer?.();
     unlistenProxyStatus?.();
     unlistenUpdateProgress?.();
+    unlistenCcSwitchImport?.();
+    unlistenCcSwitchImportError?.();
     pendingVaultAuthTasks.clear();
     finishedVaultAuthTasks.clear();
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
@@ -710,6 +750,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
+      openPendingCcSwitchLink();
     } catch (err) {
       error = String(err);
     } finally {
@@ -742,6 +783,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
+      openPendingCcSwitchLink();
     } catch (err) {
       error = err instanceof Error ? err.message : localizedMessage("error.unlockFailed");
     } finally {
@@ -785,6 +827,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
+      openPendingCcSwitchLink();
     } catch (err) {
       error = String(err);
     } finally {
@@ -1050,20 +1093,32 @@
 
   let officialAccountsBusy = false;
 
+  async function detectCcSwitch(): Promise<CcSwitchDetection | undefined> {
+    try {
+      ccSwitchDetection = await invokeTauri<CcSwitchDetection>("ccswitch_detect");
+      return ccSwitchDetection;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function refreshOfficialAccounts() {
-    if (officialAccountsBusy) return;
+    if (!officialAccountsImport || officialAccountsBusy) return;
     officialAccountsBusy = true;
     error = "";
     try {
       const results = await invokeTauri<OfficialAccountRefreshResult[]>("official_accounts_refresh", { providerIds: ["openai", "anthropic", "xai"] });
+      const importResults = await invokeTauri<OfficialAccountRefreshResult[]>("ccswitch_import");
       await loadEntries();
-      const failures = (results ?? []).filter((item) => item.error);
+      const combined = [...(results ?? []), ...(importResults ?? [])];
+      const failures = combined.filter((item) => item.error);
       if (failures.length > 0) {
-        error = failures
-          .map((item) => `${item.providerId}${item.accountIdentity ? ` (${item.accountIdentity})` : ""}: ${item.error}`)
-          .join("; ");
-      } else {
-        notice = localizedMessage("providerList.accountsRefreshed");
+        error = failures.map((item) => officialAccountFailureMessage(item, $t)).join("; ");
+      }
+      const succeeded = combined.length - failures.length;
+      if (succeeded > 0) {
+        const skipped = combined.filter((item) => !item.error && item.status === "skipped").length;
+        notice = localizedMessage("providerList.accountsRefreshedSummary", { refreshed: succeeded - skipped, skipped });
         setTimeout(() => (notice = ""), 1800);
       }
     } catch (err) {
@@ -1089,15 +1144,6 @@
     if (remaining === undefined) return false;
     if (limit && limit > 0) return remaining / limit <= 0.2;
     return remaining <= 0;
-  }
-
-  function isExpiringSoon(quota?: QuotaInfo, subscription?: SubscriptionSnapshot): boolean {
-    const candidates = [subscription?.subscriptionExpiresAt, subscription?.credentialExpiresAt, quota?.resetAt].filter(Boolean) as string[];
-    const timestamps = candidates.map((value) => Date.parse(value)).filter((value) => !Number.isNaN(value));
-    if (timestamps.length === 0) return false;
-    const resetAt = Math.min(...timestamps);
-    const now = Date.now();
-    return resetAt >= now && resetAt - now <= 30 * 24 * 60 * 60 * 1000;
   }
 
   function numericQuota(value?: string): number | undefined {
@@ -1632,6 +1678,52 @@
     if (!pendingServerView || !statusReady || !status.exists || status.locked) return;
     pendingServerView = false;
     await setServerView();
+  }
+
+  function openCcSwitchForm(link: CcSwitchProviderLink) {
+    error = "";
+    formMode = "add";
+    draft = { ...emptyDraft(), ...ccSwitchLinkToDraft(link) };
+    showForm = true;
+  }
+
+  function handleCcSwitchImport(link: CcSwitchProviderLink) {
+    // The auth screen is already shown while locked; stash the link until the
+    // vault unlocks, then openPendingCcSwitchLink picks it up.
+    if (!statusReady || !status.exists || status.locked) {
+      pendingCcSwitchLink = link;
+      return;
+    }
+    const duplicate = findCcSwitchDuplicate(entries, link);
+    if (duplicate) {
+      ccSwitchDuplicateLink = link;
+      ccSwitchDuplicateName = duplicate.title;
+      ccSwitchDuplicateOpen = true;
+      return;
+    }
+    openCcSwitchForm(link);
+  }
+
+  function openPendingCcSwitchLink() {
+    if (!pendingCcSwitchLink || !statusReady || !status.exists || status.locked) return;
+    const link = pendingCcSwitchLink;
+    pendingCcSwitchLink = null;
+    handleCcSwitchImport(link);
+  }
+
+  function confirmCcSwitchDuplicate() {
+    const link = ccSwitchDuplicateLink;
+    ccSwitchDuplicateLink = null;
+    if (link) openCcSwitchForm(link);
+  }
+
+  function handleCcSwitchImportError(payload: CcSwitchProviderImportError) {
+    if (payload.unsupported) {
+      notice = localizedMessage("deepLink.unsupportedResource", { type: payload.unsupported });
+      setTimeout(() => (notice = ""), 2400);
+      return;
+    }
+    error = localizedMessage("deepLink.importFailed", { message: payload.message });
   }
 
   async function saveServerConfig(config: ProxyConfig): Promise<boolean> {
@@ -2342,6 +2434,7 @@
       clipboardClearSeconds = clampPreference(prefs.clipboardClearSeconds, 0, 600, clipboardClearSeconds);
       lockOnSleep = prefs.lockOnSleep ?? lockOnSleep;
       lockOnScreenLock = prefs.lockOnScreenLock ?? lockOnScreenLock;
+      officialAccountsImport = prefs.officialAccountsImport ?? false;
       if (isThemePreference(prefs.theme)) {
         setTheme(prefs.theme);
       }
@@ -2363,6 +2456,7 @@
           clipboardClearSeconds,
           lockOnSleep,
           lockOnScreenLock,
+          officialAccountsImport,
           theme: $themeStore,
           locale: $localeStore
         }
@@ -2523,6 +2617,7 @@
         onAdd={openAdd}
         onRefreshAccounts={refreshOfficialAccounts}
         refreshAccountsBusy={officialAccountsBusy}
+        {officialAccountsImport}
         onFilterChange={setProviderFilter}
         onEmptyTrash={emptyTrash}
         onSelect={selectProvider}
@@ -2623,6 +2718,19 @@
   onConfirm={() => installAvailableUpdate()}
 />
 
+<ConfirmModal
+  bind:open={ccSwitchDuplicateOpen}
+  title={$t("deepLink.duplicateTitle")}
+  description={$t("deepLink.duplicateBody", { name: ccSwitchDuplicateName })}
+  confirmLabel={$t("deepLink.duplicateConfirm")}
+  cancelLabel={$t("common.cancel")}
+  tone="warning"
+  onOpenChange={(open) => {
+    if (!open) ccSwitchDuplicateLink = null;
+  }}
+  onConfirm={confirmCcSwitchDuplicate}
+/>
+
 {#if showSettings && !status.locked}
   <SettingsPanel
     initialTab={settingsInitialTab}
@@ -2646,6 +2754,8 @@
     {conflictBusy}
     {browserExtensionStatus}
     {browserExtensionBusy}
+    bind:officialAccountsImport
+    {ccSwitchDetection}
     {securityBusy}
     {backupBusy}
     {syncState}
@@ -2670,6 +2780,7 @@
     onRevokeDevice={revokeDevice}
     onLoadBrowserExtensionStatus={loadBrowserExtensionStatus}
     onInstallBrowserExtension={installBrowserExtension}
+    onDetectCcSwitch={detectCcSwitch}
     onSaveServerConfig={saveServerConfig}
   />
 {/if}

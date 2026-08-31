@@ -469,6 +469,7 @@
           bind:draft
           {onInferDraftFromDomain}
           {onProviderChanged}
+          {isOfficialOauth}
         />
 
         {#if selected.secretRefs.length > 0}

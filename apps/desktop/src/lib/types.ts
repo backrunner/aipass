@@ -1,7 +1,9 @@
 import type {
   AuthScheme,
+  CcSwitchDetection,
   CredentialKind,
   InterfaceType,
+  OfficialAccountRefreshResult,
   ProviderEntry,
   ProviderKind,
   QuotaInfo,
@@ -9,6 +11,29 @@ import type {
   SecretRef,
 } from "@aipass/schemas";
 import type { LocalePreference } from "@aipass/ui";
+
+export type { CcSwitchDetection, OfficialAccountRefreshResult };
+
+/** Payload of the `ccswitch-provider-import` deep-link event / buffered command. */
+export type CcSwitchProviderLink = {
+  name: string;
+  app: string;
+  homepage?: string;
+  endpoint?: string;
+  apiKey?: string;
+  model?: string;
+  notes?: string;
+  haikuModel?: string;
+  sonnetModel?: string;
+  opusModel?: string;
+  icon?: string;
+};
+
+/** Payload of the `ccswitch-provider-import-error` event. */
+export type CcSwitchProviderImportError = {
+  message: string;
+  unsupported?: string;
+};
 
 export type {
   Draft,
@@ -224,6 +249,7 @@ export type AppPreferences = {
   lockOnScreenLock: boolean;
   theme: ThemePreference;
   locale: LocalePreference;
+  officialAccountsImport: boolean;
 };
 
 export type SyncSettings = {
@@ -304,15 +330,6 @@ export type EntrySummary = {
   lastUsedAt?: string;
   archivedAt?: string;
   deletedAt?: string;
-};
-
-export type OfficialAccountRefreshResult = {
-  providerId: string;
-  accountIdentity?: string;
-  credentialKind: CredentialKind;
-  snapshot?: SubscriptionSnapshot;
-  status: string;
-  error?: string;
 };
 
 export type FaviconBackfillResult = {
@@ -448,8 +465,6 @@ export type NativeHostStatus = {
   allowedOrigins: string[];
 };
 
-export type BrowserExtensionInstallMode = "externalCrx" | "manualCrx";
-
 export type BrowserExtensionStatus = {
   browser: string;
   detectedBrowsers: string[];
@@ -458,14 +473,11 @@ export type BrowserExtensionStatus = {
   extensionId: string;
   discoveredExtensionIds: string[];
   extensionVersion: string;
-  crxPath: string;
-  crxExists: boolean;
+  zipPath: string;
+  zipExists: boolean;
   extensionInstalled: boolean;
   installedPaths: string[];
-  externalInstallPath?: string;
-  externalInstallExists: boolean;
   nativeHostConfigured: boolean;
-  installMode: BrowserExtensionInstallMode;
   nativeHost: NativeHostStatus;
   nativeHosts: NativeHostStatus[];
 };
