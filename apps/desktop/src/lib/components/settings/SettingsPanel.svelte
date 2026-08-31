@@ -93,7 +93,7 @@
   $: browserExtensionInstallDisabled =
     !!browserExtensionBusy ||
     !browserExtensionStatus?.chromeInstalled ||
-    !browserExtensionStatus?.crxExists;
+    !browserExtensionStatus?.zipExists;
   $: browserExtensionActionLabel =
     browserExtensionBusy === "install"
       ? $t("settings.extensionInstalling")
@@ -667,7 +667,7 @@
                           {$t("settings.extensionReady")}
                         {:else if !browserExtensionStatus.chromeInstalled}
                           {$t("settings.extensionBrowserMissing")}
-                        {:else if !browserExtensionStatus.crxExists}
+                        {:else if !browserExtensionStatus.zipExists}
                           {$t("settings.extensionPackageMissing")}
                         {:else}
                           {$t("settings.extensionAvailable")}

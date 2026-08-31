@@ -395,23 +395,13 @@ pub(crate) struct BrowserExtensionStatus {
     pub(crate) extension_id: String,
     pub(crate) discovered_extension_ids: Vec<String>,
     pub(crate) extension_version: String,
-    pub(crate) crx_path: PathBuf,
-    pub(crate) crx_exists: bool,
+    pub(crate) zip_path: PathBuf,
+    pub(crate) zip_exists: bool,
     pub(crate) extension_installed: bool,
     pub(crate) installed_paths: Vec<PathBuf>,
-    pub(crate) external_install_path: Option<PathBuf>,
-    pub(crate) external_install_exists: bool,
     pub(crate) native_host_configured: bool,
-    pub(crate) install_mode: BrowserExtensionInstallMode,
     pub(crate) native_host: NativeHostStatus,
     pub(crate) native_hosts: Vec<NativeHostStatus>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum BrowserExtensionInstallMode {
-    ExternalCrx,
-    ManualCrx,
 }
 
 #[derive(Clone, Debug, Serialize)]

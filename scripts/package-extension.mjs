@@ -1,10 +1,5 @@
 #!/usr/bin/env node
-import {
-  createHash,
-  createPublicKey,
-  createSign,
-  generateKeyPairSync
-} from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, relative, resolve, sep } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -15,7 +10,6 @@ const outDir = resolve(projectRoot, "build");
 const packageName = "aipass-extension";
 const privateKeyPath = resolve(process.env.AIPASS_EXTENSION_KEY_PATH ?? resolve(projectRoot, "chrome-extension.pem"));
 const zipPath = resolve(outDir, `${packageName}.zip`);
-const crxPath = resolve(outDir, `${packageName}.crx`);
 const metadataPath = resolve(outDir, `${packageName}.json`);
 
 const requiredFiles = [
@@ -42,10 +36,8 @@ const manifest = JSON.parse(await readFile(resolve(distDir, "manifest.json"), "u
 const privateKeyPem = await loadOrCreatePrivateKey(privateKeyPath);
 const publicKeyDer = publicKeyDerFromPrivateKey(privateKeyPem);
 const extensionId = extensionIdFromPublicKey(publicKeyDer);
-const zipBytes = await createZipArchive(distDir, zipPath);
-const crxBytes = createCrx3(zipBytes, privateKeyPem, publicKeyDer);
+await createZipArchive(distDir, zipPath);
 
-await writeFile(crxPath, crxBytes);
 await writeFile(
   metadataPath,
   JSON.stringify(
@@ -53,7 +45,6 @@ await writeFile(
       id: extensionId,
       name: manifest.name,
       version: manifest.version,
-      crx: basename(crxPath),
       zip: basename(zipPath)
     },
     null,
@@ -62,7 +53,7 @@ await writeFile(
 );
 
 console.log(`Extension package verified: ${extensionId}`);
-console.log(`Wrote ${relative(projectRoot, crxPath)} and ${relative(projectRoot, metadataPath)}.`);
+console.log(`Wrote ${relative(projectRoot, zipPath)} and ${relative(projectRoot, metadataPath)}.`);
 
 async function assertFile(path, label) {
   try {
@@ -179,7 +170,6 @@ async function createZipArchive(rootDir, path) {
 
   const archive = Buffer.concat([...localParts, centralDir, end]);
   await writeFile(path, archive);
-  return archive;
 }
 
 async function collectFiles(rootDir) {
@@ -201,50 +191,6 @@ async function collectFiles(rootDir) {
       }
     }
   }
-}
-
-function createCrx3(zipBytes, privateKeyPem, publicKeyDer) {
-  const signedData = encodeProtoMessage([{ field: 1, value: createHash("sha256").update(publicKeyDer).digest().subarray(0, 16) }]);
-  const signedHeaderSize = Buffer.alloc(4);
-  signedHeaderSize.writeUInt32LE(signedData.length, 0);
-  const sign = createSign("RSA-SHA256");
-  sign.update(Buffer.from("CRX3 SignedData\0", "utf8"));
-  sign.update(signedHeaderSize);
-  sign.update(signedData);
-  sign.update(zipBytes);
-  const signature = sign.sign(privateKeyPem);
-  const proof = encodeProtoMessage([
-    { field: 1, value: publicKeyDer },
-    { field: 2, value: signature }
-  ]);
-  const header = encodeProtoMessage([
-    { field: 2, value: proof },
-    { field: 10000, value: signedData }
-  ]);
-  const headerSize = Buffer.alloc(4);
-  headerSize.writeUInt32LE(header.length, 0);
-  const version = Buffer.alloc(4);
-  version.writeUInt32LE(3, 0);
-  return Buffer.concat([Buffer.from("Cr24"), version, headerSize, header, zipBytes]);
-}
-
-function encodeProtoMessage(fields) {
-  const chunks = [];
-  for (const field of fields) {
-    chunks.push(encodeVarint((field.field << 3) | 2), encodeVarint(field.value.length), Buffer.from(field.value));
-  }
-  return Buffer.concat(chunks);
-}
-
-function encodeVarint(value) {
-  const bytes = [];
-  let next = value >>> 0;
-  while (next >= 0x80) {
-    bytes.push((next & 0x7f) | 0x80);
-    next >>>= 7;
-  }
-  bytes.push(next);
-  return Buffer.from(bytes);
 }
 
 function crc32(buffer) {

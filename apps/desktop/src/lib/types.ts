@@ -432,8 +432,6 @@ export type NativeHostStatus = {
   allowedOrigins: string[];
 };
 
-export type BrowserExtensionInstallMode = "externalCrx" | "manualCrx";
-
 export type BrowserExtensionStatus = {
   browser: string;
   detectedBrowsers: string[];
@@ -442,14 +440,11 @@ export type BrowserExtensionStatus = {
   extensionId: string;
   discoveredExtensionIds: string[];
   extensionVersion: string;
-  crxPath: string;
-  crxExists: boolean;
+  zipPath: string;
+  zipExists: boolean;
   extensionInstalled: boolean;
   installedPaths: string[];
-  externalInstallPath?: string;
-  externalInstallExists: boolean;
   nativeHostConfigured: boolean;
-  installMode: BrowserExtensionInstallMode;
   nativeHost: NativeHostStatus;
   nativeHosts: NativeHostStatus[];
 };

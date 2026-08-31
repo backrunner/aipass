@@ -16,8 +16,8 @@ use updates::{
 
 use crate::auth_tasks::AuthTasks;
 use crate::models::{
-    AppPreferences, BrowserExtensionInstallMode, BrowserExtensionInstallResult,
-    BrowserExtensionStatus, NativeHostStatus, ProviderAddRequest, ProviderUpdateRequest,
+    AppPreferences, BrowserExtensionInstallResult, BrowserExtensionStatus, NativeHostStatus,
+    ProviderAddRequest, ProviderUpdateRequest,
 };
 use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{AgentRequest, SessionStatus};
@@ -519,17 +519,13 @@ fn browser_extension_status_snapshot(app: &AppHandle) -> Result<BrowserExtension
     let native_host = preferred_native_host_status(&native_hosts, &extension_ids)?;
     let primary_target = preferred_browser_target(&targets);
     let browser_path = primary_target.and_then(find_browser_path);
-    let external_install_path = primary_target
-        .map(|target| default_external_extension_path(target, &package.id))
-        .transpose()?
-        .flatten();
     let installed_paths = installed_extension_paths(&extension_ids);
     let native_host_configured = native_hosts
         .iter()
         .any(|status| native_host_status_allows(status, &extension_ids));
 
-    let crx_exists = package.crx_path.exists()
-        && fs::metadata(&package.crx_path)
+    let zip_exists = package.zip_path.exists()
+        && fs::metadata(&package.zip_path)
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false)
         && package.version != "0.0.0";
@@ -547,20 +543,11 @@ fn browser_extension_status_snapshot(app: &AppHandle) -> Result<BrowserExtension
         extension_id: package.id,
         discovered_extension_ids: extension_ids,
         extension_version: package.version,
-        crx_exists,
-        crx_path: package.crx_path,
+        zip_exists,
+        zip_path: package.zip_path,
         extension_installed: !installed_paths.is_empty(),
         installed_paths,
-        external_install_exists: external_install_path
-            .as_ref()
-            .is_some_and(|path| path.exists()),
-        external_install_path,
         native_host_configured,
-        install_mode: if cfg!(target_os = "linux") {
-            BrowserExtensionInstallMode::ExternalCrx
-        } else {
-            BrowserExtensionInstallMode::ManualCrx
-        },
         native_host,
         native_hosts,
     })
@@ -568,15 +555,15 @@ fn browser_extension_status_snapshot(app: &AppHandle) -> Result<BrowserExtension
 
 fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallResult, String> {
     let package = bundled_extension_package(app)?;
-    if !package.crx_path.exists()
-        || fs::metadata(&package.crx_path)
+    if !package.zip_path.exists()
+        || fs::metadata(&package.zip_path)
             .map(|metadata| metadata.len() == 0)
             .unwrap_or(true)
         || package.version == "0.0.0"
     {
         return Err(format!(
             "bundled Chrome extension package is missing: {}",
-            package.crx_path.display()
+            package.zip_path.display()
         ));
     }
     let targets = detected_browser_targets();
@@ -589,15 +576,16 @@ fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallR
 
     repair_native_host_manifest(vec![package.id.clone()])?;
 
-    let external_install_ok =
-        cfg!(target_os = "linux") && install_external_crx(target, &package).is_ok();
+    let extract_dir = bundled_extension_extract_dir(&package.id)?;
+    extract_extension_package(&package.zip_path, &extract_dir).map_err(|err| {
+        format!(
+            "failed to extract bundled extension package to {}: {err}",
+            extract_dir.display()
+        )
+    })?;
 
     let opened_chrome = open_browser_extensions_page(target).is_ok();
-    let opened_package = if cfg!(target_os = "linux") {
-        !external_install_ok && reveal_path(&package.crx_path).is_ok()
-    } else {
-        reveal_path(&package.crx_path).is_ok()
-    };
+    let opened_package = reveal_path(&extract_dir).is_ok();
     let status = browser_extension_status_snapshot(app)?;
     Ok(BrowserExtensionInstallResult {
         status,
@@ -610,7 +598,7 @@ fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallR
 struct ExtensionPackage {
     id: String,
     version: String,
-    crx_path: PathBuf,
+    zip_path: PathBuf,
 }
 
 fn bundled_extension_package(app: &AppHandle) -> Result<ExtensionPackage, String> {
@@ -621,12 +609,18 @@ fn bundled_extension_package(app: &AppHandle) -> Result<ExtensionPackage, String
             metadata_path.display()
         )
     })?;
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_text).map_err(|err| {
-        format!(
-            "failed to parse bundled extension metadata at {}: {err}",
-            metadata_path.display()
-        )
-    })?;
+    let metadata_dir = metadata_path
+        .parent()
+        .ok_or_else(|| "bundled extension metadata path has no parent".to_string())?;
+    parse_extension_package_metadata(&metadata_text, metadata_dir)
+}
+
+fn parse_extension_package_metadata(
+    metadata_text: &str,
+    metadata_dir: &Path,
+) -> Result<ExtensionPackage, String> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata_text)
+        .map_err(|err| format!("failed to parse bundled extension metadata: {err}"))?;
     let id = metadata
         .get("id")
         .and_then(|value| value.as_str())
@@ -639,19 +633,67 @@ fn bundled_extension_package(app: &AppHandle) -> Result<ExtensionPackage, String
         .map(ToString::to_string)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "bundled extension metadata is missing version".to_string())?;
-    let crx_name = metadata
-        .get("crx")
+    let zip_name = metadata
+        .get("zip")
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("aipass-extension.crx");
-    let metadata_dir = metadata_path
-        .parent()
-        .ok_or_else(|| "bundled extension metadata path has no parent".to_string())?;
+        .unwrap_or("aipass-extension.zip");
     Ok(ExtensionPackage {
         id,
         version,
-        crx_path: metadata_dir.join(crx_name),
+        zip_path: metadata_dir.join(zip_name),
     })
+}
+
+fn bundled_extension_extract_dir(extension_id: &str) -> Result<PathBuf, String> {
+    let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
+        .ok_or_else(|| "cannot determine AIPass project directory".to_string())?;
+    Ok(dirs.data_dir().join("browser-extension").join(extension_id))
+}
+
+fn extract_extension_package(zip_path: &Path, extract_dir: &Path) -> Result<(), String> {
+    if extract_dir.exists() {
+        fs::remove_dir_all(extract_dir).map_err(|err| {
+            format!(
+                "failed to clear extension directory {}: {err}",
+                extract_dir.display()
+            )
+        })?;
+    }
+    fs::create_dir_all(extract_dir).map_err(|err| {
+        format!(
+            "failed to create extension directory {}: {err}",
+            extract_dir.display()
+        )
+    })?;
+    let archive_file = fs::File::open(zip_path)
+        .map_err(|err| format!("failed to open {}: {err}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(archive_file)
+        .map_err(|err| format!("{} is not a valid zip archive: {err}", zip_path.display()))?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|err| format!("failed to read zip entry {index}: {err}"))?;
+        // Skip entries that would escape the extraction directory (zip-slip).
+        let Some(relative_path) = entry.enclosed_name() else {
+            continue;
+        };
+        let out_path = extract_dir.join(relative_path);
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path)
+                .map_err(|err| format!("failed to create {}: {err}", out_path.display()))?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+        }
+        let mut out_file = fs::File::create(&out_path)
+            .map_err(|err| format!("failed to create {}: {err}", out_path.display()))?;
+        std::io::copy(&mut entry, &mut out_file)
+            .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
+    }
+    Ok(())
 }
 
 fn bundled_extension_metadata_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -685,54 +727,8 @@ struct BrowserTarget {
     manifest_path: PathBuf,
     profile_roots: Vec<PathBuf>,
     executable_candidates: Vec<PathBuf>,
-    #[cfg(target_os = "linux")]
-    external_extension_dir: Option<PathBuf>,
     #[cfg(target_os = "windows")]
     native_host_registry_key: &'static str,
-}
-
-fn default_external_extension_path(
-    target: &BrowserTarget,
-    extension_id: &str,
-) -> Result<Option<PathBuf>, String> {
-    #[cfg(target_os = "linux")]
-    {
-        Ok(target
-            .external_extension_dir
-            .as_ref()
-            .map(|dir| dir.join(format!("{extension_id}.json"))))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = target;
-        let _ = extension_id;
-        Ok(None)
-    }
-}
-
-fn install_external_crx(target: &BrowserTarget, package: &ExtensionPackage) -> Result<(), String> {
-    let install_path = default_external_extension_path(target, &package.id)?
-        .ok_or_else(|| "local CRX external install is only supported on Linux".to_string())?;
-    let copied_crx_path = user_extension_package_path(&package.id)?;
-    if let Some(parent) = copied_crx_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    fs::copy(&package.crx_path, &copied_crx_path).map_err(|err| err.to_string())?;
-    let external = serde_json::json!({
-        "external_crx": copied_crx_path,
-        "external_version": package.version,
-    });
-    write_json_atomic(&install_path, &external)
-}
-
-fn user_extension_package_path(extension_id: &str) -> Result<PathBuf, String> {
-    let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
-        .ok_or_else(|| "cannot determine AIPass project directory".to_string())?;
-    Ok(dirs
-        .data_dir()
-        .join("browser-extension")
-        .join(format!("{extension_id}.crx")))
 }
 
 fn installed_extension_paths(extension_ids: &[String]) -> Vec<PathBuf> {
@@ -931,35 +927,30 @@ fn known_browser_targets() -> Vec<BrowserTarget> {
                 "Google Chrome",
                 config.join("google-chrome"),
                 &["google-chrome", "google-chrome-stable"],
-                Some(PathBuf::from("/opt/google/chrome/extensions")),
             ),
             linux_browser_target(
                 "edge",
                 "Microsoft Edge",
                 config.join("microsoft-edge"),
                 &["microsoft-edge", "microsoft-edge-stable"],
-                Some(PathBuf::from("/opt/microsoft/msedge/extensions")),
             ),
             linux_browser_target(
                 "brave",
                 "Brave",
                 config.join("BraveSoftware").join("Brave-Browser"),
                 &["brave-browser", "brave"],
-                Some(PathBuf::from("/opt/brave.com/brave/extensions")),
             ),
             linux_browser_target(
                 "chromium",
                 "Chromium",
                 config.join("chromium"),
                 &["chromium", "chromium-browser"],
-                Some(PathBuf::from("/usr/share/chromium/extensions")),
             ),
             linux_browser_target(
                 "vivaldi",
                 "Vivaldi",
                 config.join("vivaldi"),
                 &["vivaldi", "vivaldi-stable"],
-                None,
             ),
         ]
     }
@@ -1083,7 +1074,6 @@ fn linux_browser_target(
     label: &'static str,
     profile_root: PathBuf,
     executable_names: &[&str],
-    external_extension_dir: Option<PathBuf>,
 ) -> BrowserTarget {
     BrowserTarget {
         id,
@@ -1096,7 +1086,6 @@ fn linux_browser_target(
             .iter()
             .filter_map(|name| find_executable_in_path(name))
             .collect(),
-        external_extension_dir,
     }
 }
 
@@ -2093,6 +2082,55 @@ pub fn run() {
 mod tests {
     use super::*;
     use aipass_provider_registry::{EndpointKind, ProviderKind, SecretRef};
+
+    #[test]
+    fn extension_package_metadata_reads_zip_field_with_default_fallback() {
+        let metadata_dir = Path::new("/bundle/browser-extension");
+        let with_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3", "zip": "custom.zip"}"#;
+        let package = parse_extension_package_metadata(with_zip, metadata_dir).unwrap();
+        assert_eq!(package.id, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(package.version, "1.2.3");
+        assert_eq!(package.zip_path, metadata_dir.join("custom.zip"));
+
+        let without_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3"}"#;
+        let package = parse_extension_package_metadata(without_zip, metadata_dir).unwrap();
+        assert_eq!(package.zip_path, metadata_dir.join("aipass-extension.zip"));
+    }
+
+    #[test]
+    fn extract_extension_package_skips_entries_escaping_target_dir() {
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!("aipass-zip-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let zip_path = root.join("package.zip");
+        {
+            let file = fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("../evil.txt", options).unwrap();
+            writer.write_all(b"evil").unwrap();
+            writer.start_file("nested/manifest.json", options).unwrap();
+            writer.write_all(b"{}").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let extract_dir = root.join("extract");
+        extract_extension_package(&zip_path, &extract_dir).unwrap();
+
+        assert!(!root.join("evil.txt").exists());
+        assert_eq!(
+            fs::read_to_string(extract_dir.join("nested").join("manifest.json")).unwrap(),
+            "{}"
+        );
+
+        // Re-extraction clears stale files from a previous version.
+        fs::write(extract_dir.join("stale.txt"), b"stale").unwrap();
+        extract_extension_package(&zip_path, &extract_dir).unwrap();
+        assert!(!extract_dir.join("stale.txt").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn endpoints_from_preserves_api_and_console_kinds() {
