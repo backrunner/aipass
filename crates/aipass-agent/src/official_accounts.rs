@@ -10,6 +10,7 @@ use aipass_provider_registry::{
     SubscriptionSnapshot, SubscriptionWindow,
 };
 use aipass_vault::{ProviderEntryInput, Vault};
+use base64::Engine as _;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
@@ -21,6 +22,13 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 const CODEX_APP_SERVER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const GROK_BILLING_ENDPOINT: &str =
     "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+/// ChatGPT/Codex OAuth access tokens are rejected by api.openai.com; they
+/// only work against the Codex backend's Responses API.
+const CODEX_OAUTH_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex";
+/// `~/.grok/auth.json` holds xAI OIDC session tokens for the Grok CLI chat
+/// proxy, not the public api.x.ai API. The proxy requires the
+/// `X-XAI-Token-Auth` marker header documented in xai-org/grok-build.
+const GROK_CLI_PROXY_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1";
 
 type ClaudeUsage = (
     Vec<SubscriptionWindow>,
@@ -33,6 +41,9 @@ type ClaudeUsage = (
 struct DiscoveredAccount {
     provider_id: &'static str,
     identity: Option<String>,
+    /// Codex `tokens.account_id`; sent upstream as the `chatgpt-account-id`
+    /// header required by the Codex OAuth backend.
+    account_id: Option<String>,
     token: String,
     credential_expires_at: Option<String>,
     plan: Option<String>,
@@ -78,12 +89,18 @@ pub(crate) fn collect_official_accounts(provider_ids: &[String]) -> Vec<Collecte
 }
 
 /// Persist collected accounts into the vault. A failure on one account is
-/// reported in its result and never aborts the remaining accounts.
+/// reported in its result and never aborts the remaining accounts. Each
+/// result carries the vault entry it imported or refreshed so callers can
+/// propagate credential changes to a running proxy.
 pub(crate) fn persist_official_accounts(
     vault: &Vault,
     collected: Vec<CollectedAccount>,
-) -> anyhow::Result<Vec<OfficialAccountRefreshResult>> {
+) -> anyhow::Result<Vec<(OfficialAccountRefreshResult, Option<uuid::Uuid>)>> {
+    // Archived entries still belong to the user and must dedupe/refresh in
+    // place; only trashed entries (deleted_at) are forgotten. Both listing
+    // variants already skip trash.
     let mut existing = vault.list_provider_summaries()?;
+    existing.extend(vault.list_archived_provider_summaries()?);
     let mut batch_imported = HashSet::new();
     let mut results = Vec::new();
     for item in collected {
@@ -91,14 +108,17 @@ pub(crate) fn persist_official_accounts(
         let identity = item.account.identity.clone();
         match persist_account(vault, &mut existing, &mut batch_imported, item) {
             Ok(result) => results.push(result),
-            Err(error) => results.push(OfficialAccountRefreshResult {
-                provider_id,
-                account_identity: identity,
-                credential_kind: CredentialKind::OAuth,
-                snapshot: None,
-                status: "error".to_string(),
-                error: Some(error.to_string()),
-            }),
+            Err(error) => results.push((
+                OfficialAccountRefreshResult {
+                    provider_id,
+                    account_identity: identity,
+                    credential_kind: CredentialKind::OAuth,
+                    snapshot: None,
+                    status: "error".to_string(),
+                    error: Some(error.to_string()),
+                },
+                None,
+            )),
         }
     }
     Ok(results)
@@ -109,7 +129,7 @@ fn persist_account(
     existing: &mut Vec<aipass_vault::EntrySummary>,
     batch_imported: &mut HashSet<uuid::Uuid>,
     item: CollectedAccount,
-) -> anyhow::Result<OfficialAccountRefreshResult> {
+) -> anyhow::Result<(OfficialAccountRefreshResult, Option<uuid::Uuid>)> {
     let CollectedAccount { account, snapshot } = item;
     let fingerprint = vault.fingerprint_secret(&account.token);
     let identity = account.identity.clone().or_else(|| {
@@ -147,9 +167,12 @@ fn persist_account(
     } else {
         "imported"
     };
-    if let Some(existing_id) = existing_id {
+    let entry_id = if let Some(existing_id) = existing_id {
+        // Refresh in place even when the match is archived: archiving must
+        // not strand the entry with a stale token, and it stays archived.
         refresh_account_secret(vault, existing_id, &account.token)?;
         vault.update_provider_subscription(existing_id, snapshot.clone())?;
+        existing_id
     } else {
         let (interface_type, auth_scheme, endpoint) = match account.provider_id {
             "anthropic" => (
@@ -160,12 +183,12 @@ fn persist_account(
             "xai" => (
                 InterfaceType::OpenAiCompatible,
                 AuthScheme::Bearer,
-                "https://api.x.ai/v1",
+                GROK_CLI_PROXY_ENDPOINT,
             ),
             _ => (
                 InterfaceType::OpenAiCompatible,
                 AuthScheme::Bearer,
-                "https://api.openai.com/v1",
+                CODEX_OAUTH_ENDPOINT,
             ),
         };
         let title = account
@@ -173,6 +196,16 @@ fn persist_account(
             .as_deref()
             .map(|identity| format!("{} ({identity})", account.provider_id))
             .unwrap_or_else(|| account.provider_id.to_string());
+        let headers = match account.provider_id {
+            "anthropic" => vec![("anthropic-beta".to_string(), "oauth-2025-04-20".to_string())],
+            "xai" => vec![("X-XAI-Token-Auth".to_string(), "xai-grok-cli".to_string())],
+            "openai" => account
+                .account_id
+                .as_ref()
+                .map(|account_id| vec![("chatgpt-account-id".to_string(), account_id.clone())])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let new_id = vault.add_provider(ProviderEntryInput {
             title,
             provider_kind: ProviderKind::Official,
@@ -188,18 +221,12 @@ fn persist_account(
             secret_label: Some("oauth".to_string()),
             default_model: None,
             model_aliases: Vec::new(),
-            headers: if account.provider_id == "anthropic" {
-                vec![("anthropic-beta".to_string(), "oauth-2025-04-20".to_string())]
-            } else {
-                Vec::new()
-            },
+            headers,
             quota: None,
             subscription: snapshot.clone(),
             gateway: None,
             tags: vec!["official".to_string(), "oauth".to_string()],
-            notes: Some(
-                "Imported from the provider's official CLI credential store".to_string(),
-            ),
+            notes: Some("Imported from the provider's official CLI credential store".to_string()),
             secret_metadata: Default::default(),
         })?;
         // Make the freshly imported entry visible to later accounts in this
@@ -208,16 +235,20 @@ fn persist_account(
         if let Ok(summary) = vault.get_provider_summary(new_id) {
             existing.push(summary);
         }
-    }
+        new_id
+    };
     let refresh_error = snapshot.as_ref().and_then(|item| item.error.clone());
-    Ok(OfficialAccountRefreshResult {
-        provider_id: account.provider_id.to_string(),
-        account_identity: identity,
-        credential_kind: CredentialKind::OAuth,
-        snapshot,
-        status: status.to_string(),
-        error: refresh_error,
-    })
+    Ok((
+        OfficialAccountRefreshResult {
+            provider_id: account.provider_id.to_string(),
+            account_identity: identity,
+            credential_kind: CredentialKind::OAuth,
+            snapshot,
+            status: status.to_string(),
+            error: refresh_error,
+        },
+        Some(entry_id),
+    ))
 }
 
 /// Find the single vault entry an identity-less rotated token must belong to.
@@ -249,16 +280,32 @@ fn rotation_candidate(
     Some(candidate.id)
 }
 
-fn refresh_account_secret(vault: &Vault, id: uuid::Uuid, token: &str) -> anyhow::Result<()> {
+pub(crate) fn refresh_account_secret(
+    vault: &Vault,
+    id: uuid::Uuid,
+    token: &str,
+) -> anyhow::Result<()> {
     if vault.find_secret_id_by_value(id, token)?.is_some() {
         return Ok(());
     }
     let summary = vault.get_provider_summary(id)?;
-    let Some(primary) = summary.secret_refs.first() else {
-        return Ok(());
-    };
+    let primary = primary_secret_ref(&summary)?;
     vault.update_secret(id, &primary.id, &primary.label, Some(token.to_string()))?;
     Ok(())
+}
+
+/// The primary secret a rotated token is written into. An entry without any
+/// stored secret is a desync between the vault and the discovered credential
+/// store; report it instead of silently pretending the refresh happened.
+fn primary_secret_ref(
+    summary: &aipass_vault::EntrySummary,
+) -> anyhow::Result<&aipass_provider_registry::SecretRef> {
+    summary.secret_refs.first().ok_or_else(|| {
+        anyhow::anyhow!(
+            "provider entry {} has no stored secret to refresh",
+            summary.id
+        )
+    })
 }
 
 fn refresh_snapshot(account: &DiscoveredAccount) -> Option<SubscriptionSnapshot> {
@@ -446,7 +493,10 @@ fn unix_timestamp(value: i64) -> Option<String> {
 }
 
 fn discover_codex_accounts() -> Vec<DiscoveredAccount> {
-    let path = home().join(".codex").join("auth.json");
+    let dir = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".codex"));
+    let path = dir.join("auth.json");
     let Ok(value) = read_json(&path) else {
         return Vec::new();
     };
@@ -458,7 +508,13 @@ fn discover_codex_accounts() -> Vec<DiscoveredAccount> {
         &value,
         &["email", "email_address", "account_id", "accountId"],
     );
-    let expiry = find_timestamp(&value, &["expires_at", "expiresAt"]);
+    let account_id = value
+        .get("tokens")
+        .and_then(|tokens| find_string(tokens, &["account_id", "accountId"]));
+    // Codex auth.json carries no explicit expiry; the access token's own JWT
+    // `exp` claim is the only expiry signal available for display.
+    let expiry =
+        find_timestamp(&value, &["expires_at", "expiresAt"]).or_else(|| jwt_expiry(&token));
     let oauth = value
         .get("auth_mode")
         .and_then(Value::as_str)
@@ -470,10 +526,22 @@ fn discover_codex_accounts() -> Vec<DiscoveredAccount> {
     vec![DiscoveredAccount {
         provider_id: "openai",
         identity,
+        account_id,
         token,
         credential_expires_at: expiry,
         plan: None,
     }]
+}
+
+/// Read the `exp` claim from a JWT without verifying the signature. Used only
+/// to display credential expiry, never for an authorization decision.
+fn jwt_expiry(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let value = serde_json::from_slice::<Value>(&bytes).ok()?;
+    unix_timestamp(value.get("exp")?.as_i64()?)
 }
 
 fn discover_claude_accounts() -> Vec<DiscoveredAccount> {
@@ -497,6 +565,7 @@ fn discover_claude_accounts() -> Vec<DiscoveredAccount> {
     vec![DiscoveredAccount {
         provider_id: "anthropic",
         identity,
+        account_id: None,
         token,
         credential_expires_at: expiry,
         plan,
@@ -530,23 +599,39 @@ fn discover_grok_accounts() -> Vec<DiscoveredAccount> {
     let Ok(value) = read_json(&path) else {
         return Vec::new();
     };
+    grok_accounts_from(&value)
+}
+
+fn grok_accounts_from(value: &Value) -> Vec<DiscoveredAccount> {
     let Some(root) = value.as_object() else {
         return Vec::new();
     };
-    root.values()
-        .filter_map(|entry| {
+    root.iter()
+        .filter(|(issuer, entry)| grok_entry_is_oauth_session(issuer, entry))
+        .filter_map(|(_, entry)| {
             let token = find_string(entry, &["key", "access_token", "accessToken"])?;
             let identity = find_string(entry, &["email", "user_id", "userId", "principal_id"]);
             let expiry = find_timestamp(entry, &["expires_at", "expiresAt"]);
             Some(DiscoveredAccount {
                 provider_id: "xai",
                 identity,
+                account_id: None,
                 token,
                 credential_expires_at: expiry,
                 plan: None,
             })
         })
         .collect()
+}
+
+/// `~/.grok/auth.json` mixes xAI OIDC sessions (keyed by issuer URL, carrying
+/// refresh/expiry material) with plain API-key entries; only the sessions are
+/// official-account imports, so anything that is clearly a bare key is left
+/// alone.
+fn grok_entry_is_oauth_session(issuer: &str, entry: &Value) -> bool {
+    issuer.contains("accounts.x.ai")
+        || find_string(entry, &["refresh_token", "refreshToken"]).is_some()
+        || find_timestamp(entry, &["expires_at", "expiresAt"]).is_some()
 }
 
 fn claude_usage(token: &str) -> anyhow::Result<ClaudeUsage> {
@@ -852,7 +937,7 @@ fn timestamp_value(value: &Value) -> Option<String> {
         .and_then(|date| date.format(&Rfc3339).ok())
 }
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -880,6 +965,7 @@ mod tests {
             account: DiscoveredAccount {
                 provider_id: "anthropic",
                 identity: None,
+                account_id: None,
                 token: token.to_string(),
                 credential_expires_at: None,
                 plan: None,
@@ -895,21 +981,18 @@ mod tests {
 
         let first = persist_official_accounts(&vault, vec![identity_less_account("token-v1")])
             .expect("persist first");
-        assert_eq!(first[0].status, "imported");
+        assert_eq!(first[0].0.status, "imported");
 
         let second = persist_official_accounts(&vault, vec![identity_less_account("token-v2")])
             .expect("persist rotated");
-        assert_eq!(second[0].status, "refreshed");
+        assert_eq!(second[0].0.status, "refreshed");
 
         let entries = vault.list_provider_summaries().expect("summaries");
         assert_eq!(entries.len(), 1);
         // The vault entry keeps its original synthetic identity...
-        assert_eq!(entries[0].account_identity, first[0].account_identity);
+        assert_eq!(entries[0].account_identity, first[0].0.account_identity);
         // ...while its secret is rotated to the new token.
-        assert_eq!(
-            entries[0].fingerprint,
-            vault.fingerprint_secret("token-v2")
-        );
+        assert_eq!(entries[0].fingerprint, vault.fingerprint_secret("token-v2"));
     }
 
     #[test]
@@ -925,22 +1008,16 @@ mod tests {
             ],
         )
         .expect("persist batch");
-        assert_eq!(batch[0].status, "imported");
-        assert_eq!(batch[1].status, "imported");
-        assert_eq!(
-            vault.list_provider_summaries().expect("summaries").len(),
-            2
-        );
+        assert_eq!(batch[0].0.status, "imported");
+        assert_eq!(batch[1].0.status, "imported");
+        assert_eq!(vault.list_provider_summaries().expect("summaries").len(), 2);
 
         // Two identity-less candidates exist, so a rotated token cannot be
         // attributed to either one; keep importing instead of merging.
         let rotated = persist_official_accounts(&vault, vec![identity_less_account("token-a-v2")])
             .expect("persist rotated");
-        assert_eq!(rotated[0].status, "imported");
-        assert_eq!(
-            vault.list_provider_summaries().expect("summaries").len(),
-            3
-        );
+        assert_eq!(rotated[0].0.status, "imported");
+        assert_eq!(vault.list_provider_summaries().expect("summaries").len(), 3);
     }
 
     #[test]
@@ -972,6 +1049,7 @@ mod tests {
         let account = DiscoveredAccount {
             provider_id: "xai",
             identity: Some("user@example.test".into()),
+            account_id: None,
             token: "token".into(),
             credential_expires_at: None,
             plan: Some("SuperGrok".into()),
@@ -1025,6 +1103,138 @@ mod tests {
         assert!(merged.stale);
         assert_eq!(merged.credits_remaining.as_deref(), Some("12"));
         assert_eq!(merged.windows.len(), 1);
+    }
+
+    #[test]
+    fn openai_import_targets_codex_backend_with_account_header() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = test_vault(&temp);
+        let account = CollectedAccount {
+            account: DiscoveredAccount {
+                provider_id: "openai",
+                identity: Some("user@example.test".into()),
+                account_id: Some("acct-123".into()),
+                token: "codex-token".into(),
+                credential_expires_at: None,
+                plan: None,
+            },
+            snapshot: None,
+        };
+
+        let results = persist_official_accounts(&vault, vec![account]).expect("persist");
+        assert_eq!(results[0].0.status, "imported");
+
+        let entries = vault.list_provider_summaries().expect("summaries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].endpoints[0].url.as_deref(),
+            Some("https://chatgpt.com/backend-api/codex")
+        );
+        assert_eq!(entries[0].interface_type, InterfaceType::OpenAiCompatible);
+        assert_eq!(entries[0].auth_scheme, AuthScheme::Bearer);
+        assert_eq!(entries[0].header_names, vec!["chatgpt-account-id"]);
+    }
+
+    #[test]
+    fn grok_discovery_skips_plain_api_key_entries() {
+        let value = serde_json::json!({
+            "https://accounts.x.ai/sign-in": {
+                "key": "session-token",
+                "refresh_token": "refresh",
+                "expires_at": 1_893_456_000
+            },
+            "api-key": {"key": "xai-plain-api-key"}
+        });
+        let accounts = grok_accounts_from(&value);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].token, "session-token");
+        assert_eq!(
+            accounts[0].credential_expires_at.as_deref(),
+            Some("2030-01-01T00:00:00Z")
+        );
+
+        // An issuer under accounts.x.ai counts even without parsed refresh or
+        // expiry material; a bare key entry never does.
+        let value = serde_json::json!({
+            "https://accounts.x.ai/sign-in": {"key": "session-token"},
+            "ci": {"key": "xai-ci-key"}
+        });
+        let accounts = grok_accounts_from(&value);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].token, "session-token");
+    }
+
+    #[test]
+    fn secret_less_entry_reports_an_error_instead_of_a_false_refresh() {
+        let summary = aipass_vault::EntrySummary {
+            id: uuid::Uuid::new_v4(),
+            title: "desynced".to_string(),
+            favorite: false,
+            provider_id: Some("openai".to_string()),
+            provider_kind: ProviderKind::Official,
+            credential_kind: CredentialKind::OAuth,
+            account_identity: None,
+            domains: Vec::new(),
+            favicon_url: None,
+            endpoints: Vec::new(),
+            interface_type: InterfaceType::OpenAiCompatible,
+            auth_scheme: AuthScheme::Bearer,
+            masked_secret: String::new(),
+            fingerprint: String::new(),
+            secret_refs: Vec::new(),
+            default_model: None,
+            model_aliases: Vec::new(),
+            quota: None,
+            subscription: None,
+            gateway: None,
+            tags: Vec::new(),
+            notes: None,
+            header_names: Vec::new(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_used_at: None,
+            archived_at: None,
+            deleted_at: None,
+        };
+        let error = primary_secret_ref(&summary).expect_err("no secrets must error");
+        assert!(error.to_string().contains("no stored secret"));
+    }
+
+    #[test]
+    fn jwt_exp_claim_is_decoded_without_signature_verification() {
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"exp":1893456000}"#);
+        let token = format!("header.{payload}.signature");
+        assert_eq!(jwt_expiry(&token).as_deref(), Some("2030-01-01T00:00:00Z"));
+        assert_eq!(jwt_expiry("not-a-jwt"), None);
+        let no_exp = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"sub":"x"}"#);
+        assert_eq!(jwt_expiry(&format!("header.{no_exp}.signature")), None);
+    }
+
+    #[test]
+    fn archived_entry_is_refreshed_in_place_without_unarchiving() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = test_vault(&temp);
+        let first = persist_official_accounts(&vault, vec![identity_less_account("token-v1")])
+            .expect("persist first");
+        assert_eq!(first[0].0.status, "imported");
+        let id = first[0].1.expect("entry id");
+        vault.archive_provider(id).expect("archive");
+
+        let second = persist_official_accounts(&vault, vec![identity_less_account("token-v2")])
+            .expect("persist rotated");
+        assert_eq!(second[0].0.status, "refreshed");
+        assert_eq!(second[0].1, Some(id));
+
+        // The match refreshed the archived entry in place: still archived,
+        // still a single entry, holding the rotated token.
+        assert!(vault.list_provider_summaries().expect("active").is_empty());
+        let archived = vault.list_archived_provider_summaries().expect("archived");
+        assert_eq!(archived.len(), 1);
+        assert_eq!(
+            archived[0].fingerprint,
+            vault.fingerprint_secret("token-v2")
+        );
     }
 
     fn encode_varint(mut value: u64) -> Vec<u8> {

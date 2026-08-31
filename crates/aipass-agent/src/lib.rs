@@ -1,4 +1,5 @@
 pub mod autostart;
+pub(crate) mod ccswitch;
 pub mod client;
 pub mod desktop;
 pub mod ipc;

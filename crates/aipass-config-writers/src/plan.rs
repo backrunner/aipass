@@ -852,8 +852,12 @@ fn aipass_config_id(entry: &ToolEntry) -> String {
 
 const CODEX_PROVIDER_NAME: &str = "aipass";
 
-/// Official Codex OAuth sessions only work against the real OpenAI endpoint.
-const CODEX_OFFICIAL_BASE_URL: &str = "https://api.openai.com/v1";
+/// ChatGPT/Codex OAuth access tokens are rejected by api.openai.com; they only
+/// work against the Codex backend (Responses API). This must stay an explicit
+/// pin: codex-rs lets an explicit `base_url` win over its built-in OAuth
+/// substitution, and the pin ensures edited vault entries cannot redirect
+/// OAuth tokens to a different endpoint.
+const CODEX_OFFICIAL_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 fn codex_provider_selection(doc: &DocumentMut) -> (String, Option<String>) {
     let active = doc
@@ -947,8 +951,9 @@ fn update_codex_provider(
             provider.remove("env_key");
             provider.remove("auth");
             provider.remove("experimental_bearer_token");
-            // Official OAuth tokens must only ever be sent to the real OpenAI
-            // endpoint, regardless of the endpoint stored on the vault entry.
+            // Official OAuth tokens must only ever be sent to the real Codex
+            // OAuth backend, regardless of the endpoint stored on the vault
+            // entry.
             provider["base_url"] = value(CODEX_OFFICIAL_BASE_URL);
             provider["requires_openai_auth"] = value(true);
         }

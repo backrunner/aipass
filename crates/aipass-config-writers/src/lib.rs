@@ -743,7 +743,7 @@ mod tests {
         assert!(parsed.get("cli_auth_credentials_store").is_none());
         assert_eq!(
             parsed["model_providers"]["aipass"]["base_url"].as_str(),
-            Some("https://api.openai.com/v1")
+            Some("https://chatgpt.com/backend-api/codex")
         );
         assert!(!content.contains("proxy.evil.example"));
     }

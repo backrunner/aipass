@@ -499,16 +499,43 @@ fn dispatch_request(
             .map(|_| AgentResponse::empty())
         }
         AgentRequest::OfficialAccountsRefresh { provider_ids } => {
+            // Cheap unlocked pre-check: discovery spawns subprocesses and does
+            // blocking network I/O, so a locked vault must fail before any of
+            // that work (or any keychain/network access) starts.
+            if session_status(state)?.locked {
+                return Err(ServiceError::new(AgentErrorCode::Locked, "vault is locked"));
+            }
             // Discovery and usage refresh spawn subprocesses and do blocking
             // network I/O; run them before taking the session lock so other
             // requests are not stalled for the duration.
             let collected = crate::official_accounts::collect_official_accounts(&provider_ids);
             with_vault(state, false, |vault| {
-                crate::official_accounts::persist_official_accounts(vault, collected)
-                    .map_err(ServiceError::internal)
+                let persisted =
+                    crate::official_accounts::persist_official_accounts(vault, collected)
+                        .map_err(ServiceError::internal)?;
+                // Like the other credential-mutating handlers, reload the
+                // rotated secrets into a running proxy after the vault writes.
+                for (result, entry_id) in &persisted {
+                    if let Some(entry_id) = entry_id {
+                        if matches!(result.status.as_str(), "imported" | "refreshed") {
+                            refresh_proxy_provider_credentials(state, vault, *entry_id)?;
+                        }
+                    }
+                }
+                Ok(persisted
+                    .into_iter()
+                    .map(|(result, _)| result)
+                    .collect::<Vec<_>>())
             })
             .map(AgentResponse::success)
         }
+        AgentRequest::CcSwitchDetect => {
+            Ok(AgentResponse::success(crate::ccswitch::detect_ccswitch()))
+        }
+        AgentRequest::CcSwitchImport => with_vault(state, false, |vault| {
+            crate::ccswitch::import_ccswitch_providers(vault).map_err(ServiceError::internal)
+        })
+        .map(AgentResponse::success),
         AgentRequest::ProviderFaviconBackfill { request } => {
             backfill_provider_favicons(state, request).map(AgentResponse::success)
         }

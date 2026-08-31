@@ -5,7 +5,9 @@ use aipass_agent_protocol::{
     ServerTokenResponse, ServerUsageSummary,
 };
 use aipass_crypto::Ciphertext;
-use aipass_provider_registry::{AuthScheme, EndpointKind, InterfaceType};
+use aipass_provider_registry::{
+    AuthScheme, CredentialKind, EndpointKind, InterfaceType, ProviderKind,
+};
 use aipass_proxy::{
     ProxyConfig, ProxyHandle, ProxyStatus, ResolvedRoute, ResolvedTarget, RuntimeConfig, UsageRow,
     UsageStore, UsageTimeseriesPoint,
@@ -792,6 +794,24 @@ impl ProxyService {
                         }
                     };
                 let mut target_config = target.clone();
+                if let Some(pinned) = pinned_official_oauth_endpoint(
+                    &entry.provider_kind,
+                    &entry.credential_kind,
+                    entry.provider_id.as_deref(),
+                ) {
+                    target_config.base_url = pinned.to_string();
+                } else if entry.provider_kind == ProviderKind::Official
+                    && entry.credential_kind == CredentialKind::OAuth
+                {
+                    write_component_log(
+                        AGENT_LOG,
+                        "WARN",
+                        &format!(
+                            "official OAuth entry {} has no pinned upstream for provider_id {:?}; keeping entry endpoint",
+                            entry.id, entry.provider_id
+                        ),
+                    );
+                }
                 for (name, value) in provider_headers {
                     if let Some((_, existing)) = target_config
                         .headers
@@ -836,6 +856,24 @@ impl ProxyService {
         let mut runtime = RuntimeConfig::from_routes(self.config.bind_addr.clone(), routes);
         runtime.pricing = self.config.pricing.clone();
         Ok(runtime)
+    }
+}
+
+/// Official OAuth tokens are only valid against the provider's own backend,
+/// so an editable entry endpoint must never redirect them elsewhere.
+fn pinned_official_oauth_endpoint(
+    provider_kind: &ProviderKind,
+    credential_kind: &CredentialKind,
+    provider_id: Option<&str>,
+) -> Option<&'static str> {
+    if provider_kind != &ProviderKind::Official || credential_kind != &CredentialKind::OAuth {
+        return None;
+    }
+    match provider_id {
+        Some("anthropic") => Some("https://api.anthropic.com"),
+        Some("openai") => Some("https://chatgpt.com/backend-api/codex"),
+        Some("xai") => Some("https://cli-chat-proxy.grok.com/v1"),
+        _ => None,
     }
 }
 
@@ -1846,5 +1884,81 @@ mod tests {
             config.routes[0].inbound_protocol
         );
         assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn official_oauth_anthropic_endpoint_is_pinned() {
+        assert_eq!(
+            pinned_official_oauth_endpoint(
+                &ProviderKind::Official,
+                &CredentialKind::OAuth,
+                Some("anthropic"),
+            ),
+            Some("https://api.anthropic.com")
+        );
+    }
+
+    #[test]
+    fn official_oauth_openai_endpoint_is_pinned() {
+        assert_eq!(
+            pinned_official_oauth_endpoint(
+                &ProviderKind::Official,
+                &CredentialKind::OAuth,
+                Some("openai"),
+            ),
+            Some("https://chatgpt.com/backend-api/codex")
+        );
+    }
+
+    #[test]
+    fn official_oauth_xai_endpoint_is_pinned() {
+        assert_eq!(
+            pinned_official_oauth_endpoint(
+                &ProviderKind::Official,
+                &CredentialKind::OAuth,
+                Some("xai"),
+            ),
+            Some("https://cli-chat-proxy.grok.com/v1")
+        );
+    }
+
+    #[test]
+    fn official_oauth_unknown_provider_keeps_entry_endpoint() {
+        assert_eq!(
+            pinned_official_oauth_endpoint(&ProviderKind::Official, &CredentialKind::OAuth, None),
+            None
+        );
+        assert_eq!(
+            pinned_official_oauth_endpoint(
+                &ProviderKind::Official,
+                &CredentialKind::OAuth,
+                Some("gemini"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn non_oauth_official_entries_keep_entry_endpoint() {
+        assert_eq!(
+            pinned_official_oauth_endpoint(
+                &ProviderKind::Official,
+                &CredentialKind::Api,
+                Some("anthropic"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn third_party_oauth_entries_keep_entry_endpoint() {
+        assert_eq!(
+            pinned_official_oauth_endpoint(
+                &ProviderKind::ThirdParty,
+                &CredentialKind::OAuth,
+                Some("anthropic"),
+            ),
+            None
+        );
     }
 }
