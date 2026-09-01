@@ -305,6 +305,11 @@ fn install_verified_update(
     clear_cached_update(app);
     // The updater only swaps the bundle on disk; relaunch so the new
     // version actually runs ("Install & restart" in the UI promises this).
+    // The relaunched process inherits this process's environment, so drop a
+    // tray-mode AIPASS_WINDOW_TARGET (set when this instance was started by
+    // the tray autostart) — otherwise the updated app comes back hidden in
+    // the tray instead of showing the main window.
+    std::env::remove_var("AIPASS_WINDOW_TARGET");
     crate::ALLOW_PROCESS_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
     app.restart()
 }
