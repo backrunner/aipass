@@ -78,6 +78,7 @@ export interface ProviderSummary {
   quota?: {
     label?: string;
     limit?: string;
+    used?: string;
     remaining?: string;
     resetAt?: string;
   };
@@ -578,6 +579,7 @@ export interface ProviderAddRequest {
   quota?: {
     label?: string;
     limit?: string;
+    used?: string;
     remaining?: string;
     resetAt?: string;
   };
