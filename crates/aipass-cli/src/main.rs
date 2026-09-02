@@ -1,8 +1,8 @@
 use aipass_agent::{default_vault_dir, AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{
-    AgentRequest, CloudSyncProvider, CodexApiKeyMode, LockReason, ProbeResult, SecretValue,
-    SessionStatus, ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest,
-    VaultCreateResponse,
+    AgentRequest, CloudSyncProvider, CodexApiKeyMode, LockReason, OfficialAccountRefreshResult,
+    ProbeResult, SecretValue, SessionStatus, ToolConfigApplyResponse, ToolConfigPreviewResponse,
+    ToolConfigRequest, VaultCreateResponse,
 };
 use aipass_config_writers::endpoint_url;
 use aipass_native_host::native_manifest;
@@ -59,6 +59,10 @@ enum Command {
         #[command(subcommand)]
         command: SecretCommand,
     },
+    Accounts {
+        #[command(subcommand)]
+        command: AccountsCommand,
+    },
     NativeHost {
         #[command(subcommand)]
         command: NativeHostCommand,
@@ -73,6 +77,8 @@ enum Command {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Add a provider credential to the vault.
+    #[command(visible_aliases = ["credential", "credentials"])]
     Add {
         #[arg(long)]
         title: String,
@@ -207,7 +213,22 @@ enum Command {
     Configure {
         #[arg(value_enum)]
         tool: ToolArg,
-        id: Uuid,
+        /// Vault entry UUID or exact entry title (case-insensitive).
+        id: String,
+        #[arg(long, value_enum, default_value = "helper")]
+        mode: ConfigureMode,
+        #[arg(long, value_enum)]
+        codex_api_key_mode: Option<CodexApiKeyModeArg>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Switch an agent application to a credential already stored in the vault.
+    /// This is an alias for `configure` with the same preview/apply semantics.
+    Switch {
+        #[arg(value_enum)]
+        tool: ToolArg,
+        /// Vault entry UUID or exact entry title (case-insensitive).
+        id: String,
         #[arg(long, value_enum, default_value = "helper")]
         mode: ConfigureMode,
         #[arg(long, value_enum)]
@@ -321,6 +342,16 @@ enum SecretCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum AccountsCommand {
+    /// Discover local official CLI sessions and import or refresh their vault credentials.
+    Refresh {
+        /// Restrict discovery to provider ids such as `openai`, `anthropic`, or `xai`.
+        #[arg(long = "provider")]
+        provider_ids: Vec<String>,
+    },
+}
+
 #[derive(Clone, ValueEnum)]
 enum InterfaceArg {
     OpenaiCompatible,
@@ -348,6 +379,9 @@ enum ToolArg {
     GeminiCli,
     #[value(name = "opencode")]
     OpenCode,
+    Grok,
+    Pi,
+    Cursor,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -1022,15 +1056,22 @@ fn parse_model_aliases(values: &[String]) -> Result<Vec<(String, String)>> {
 fn quota_from_parts(
     label: Option<String>,
     limit: Option<String>,
+    used: Option<String>,
     remaining: Option<String>,
     reset_at: Option<String>,
 ) -> Option<QuotaInfo> {
-    if label.is_none() && limit.is_none() && remaining.is_none() && reset_at.is_none() {
+    if label.is_none()
+        && limit.is_none()
+        && used.is_none()
+        && remaining.is_none()
+        && reset_at.is_none()
+    {
         return None;
     }
     Some(QuotaInfo {
         label,
         limit,
+        used,
         remaining,
         reset_at,
     })
@@ -1251,6 +1292,9 @@ impl From<ToolArg> for aipass_agent_protocol::ToolConfigTool {
             ToolArg::ClaudeCode => Self::ClaudeCode,
             ToolArg::GeminiCli => Self::GeminiCli,
             ToolArg::OpenCode => Self::OpenCode,
+            ToolArg::Grok => Self::Grok,
+            ToolArg::Pi => Self::Pi,
+            ToolArg::Cursor => Self::Cursor,
         }
     }
 }
@@ -1272,5 +1316,99 @@ impl From<CodexApiKeyModeArg> for CodexApiKeyMode {
             CodexApiKeyModeArg::ExperimentalBearerToken => Self::ExperimentalBearerToken,
             CodexApiKeyModeArg::AuthJson => Self::AuthJson,
         }
+    }
+}
+
+/// Resolve a CLI entry selector without ever reading credential material.
+/// UUIDs remain the unambiguous fast path; names must match exactly once.
+fn resolve_entry_id(agent: &CliAgent, selector: &str) -> Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(selector) {
+        return Ok(id);
+    }
+
+    let wanted = selector.trim();
+    if wanted.is_empty() {
+        anyhow::bail!("credential name cannot be empty");
+    }
+    let mut entries =
+        agent.request::<Vec<aipass_vault::EntrySummary>>(AgentRequest::EntriesList {
+            archived: false,
+        })?;
+    entries.extend(agent.request::<Vec<aipass_vault::EntrySummary>>(
+        AgentRequest::EntriesList { archived: true },
+    )?);
+    let matches = entries
+        .into_iter()
+        .filter(|entry| entry.title.trim().eq_ignore_ascii_case(wanted))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [entry] => Ok(entry.id),
+        [] => anyhow::bail!("no credential named '{wanted}'"),
+        _ => anyhow::bail!("credential name '{wanted}' is ambiguous; use its UUID"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ENTRY_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+    #[test]
+    fn credential_alias_parses_as_add() {
+        let cli = Cli::try_parse_from([
+            "aipass",
+            "credential",
+            "--title",
+            "Gateway",
+            "--interface",
+            "openai-compatible",
+            "--auth",
+            "bearer",
+            "--api-key",
+            "test-key",
+        ])
+        .expect("credential alias should parse");
+
+        assert!(matches!(cli.command, Command::Add { .. }));
+    }
+
+    #[test]
+    fn switch_accepts_every_supported_agent_application() {
+        for tool in [
+            "codex",
+            "claude-code",
+            "gemini-cli",
+            "opencode",
+            "grok",
+            "pi",
+            "cursor",
+        ] {
+            let cli = Cli::try_parse_from(["aipass", "switch", tool, ENTRY_ID])
+                .expect("supported agent application should parse");
+            assert!(matches!(cli.command, Command::Switch { .. }));
+        }
+    }
+
+    #[test]
+    fn official_account_refresh_accepts_repeated_provider_filters() {
+        let cli = Cli::try_parse_from([
+            "aipass",
+            "accounts",
+            "refresh",
+            "--provider",
+            "openai",
+            "--provider",
+            "anthropic",
+        ])
+        .expect("account refresh should parse");
+
+        let Command::Accounts {
+            command: AccountsCommand::Refresh { provider_ids },
+        } = cli.command
+        else {
+            panic!("expected accounts refresh command");
+        };
+        assert_eq!(provider_ids, ["openai", "anthropic"]);
     }
 }

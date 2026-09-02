@@ -215,7 +215,7 @@
   }
   $: hasQuota = Boolean(
     selected?.quota &&
-      (selected.quota.label || selected.quota.limit || selected.quota.remaining || selected.quota.resetAt)
+      (selected.quota.label || selected.quota.limit || selected.quota.used || selected.quota.remaining || selected.quota.resetAt)
   );
   $: hasSubscription = Boolean(selected?.subscription);
   /**
@@ -875,8 +875,11 @@
               <span class="kv-value">
                 <span class={`probe-dot ${usageProbeResult.ok ? "ok" : "fail"}`}></span>
                 {usageProbeResult.ok ? $t(usageSourceLabelKey(usageProbeResult.source)) : $t("providerDetail.checkFailed")}
-                {#if usageProbeResult.quota?.remaining !== undefined}
+                {#if usageProbeResult.quota?.remaining != null}
                   · {$t("providerDetail.remaining")}: {usageProbeResult.quota.remaining}
+                {/if}
+                {#if usageProbeResult.quota?.used != null}
+                  · {$t("providerDetail.used")}: {usageProbeResult.quota.used}
                 {/if}
                 {#if usageProbeResult.gateway?.group}
                   · {$t("providerDetail.gatewayGroup")}: {usageProbeResult.gateway.group}
@@ -898,6 +901,13 @@
               </span>
               <span></span>
             </div>
+            {#if selected.quota?.used != null}
+              <div class="kv-row">
+                <span class="kv-label">{$t("providerDetail.used")}</span>
+                <strong class="kv-value tabular">{selected.quota.used}</strong>
+                <span></span>
+              </div>
+            {/if}
             {#if selected.quota?.resetAt}
               <div class="kv-row">
                 <span class="kv-label">{$t("providerDetail.resets")}</span>

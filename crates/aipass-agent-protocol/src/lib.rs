@@ -518,6 +518,8 @@ pub enum AgentRequest {
     },
     #[serde(rename = "server.pricing_config.get")]
     ServerPricingConfigGet,
+    #[serde(rename = "server.pricing_remote_sync")]
+    ServerPricingRemoteSync { id: Uuid, timeout_seconds: u64 },
     #[serde(rename = "server.pricing_assignment.set")]
     ServerPricingAssignmentSet {
         entry_id: Uuid,
@@ -768,6 +770,9 @@ impl AgentRequest {
                 timeout_seconds, ..
             }
             | Self::ProviderUsageProbe {
+                timeout_seconds, ..
+            } => std::time::Duration::from_secs(*timeout_seconds) + RESPONSE_TIMEOUT_SLACK,
+            Self::ServerPricingRemoteSync {
                 timeout_seconds, ..
             } => std::time::Duration::from_secs(*timeout_seconds) + RESPONSE_TIMEOUT_SLACK,
             // Argon2 derivation, full-vault rewrites, export/import.

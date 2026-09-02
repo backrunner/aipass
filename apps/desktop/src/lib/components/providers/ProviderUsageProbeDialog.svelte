@@ -208,10 +208,12 @@
                     <span>{$t("providerDetail.limit")}</span>
                     <strong>{activeUsageResult.quota.limit ?? "—"}</strong>
                   </div>
-                  <div>
-                    <span>{$t("providerDetail.used")}</span>
-                    <strong>{activeUsageResult.quota.used ?? "—"}</strong>
-                  </div>
+                  {#if activeUsageResult.quota.used != null}
+                    <div>
+                      <span>{$t("providerDetail.used")}</span>
+                      <strong>{activeUsageResult.quota.used}</strong>
+                    </div>
+                  {/if}
                 </div>
                 {#if activeUsageResult.quota.resetAt || activeUsageResult.quota.unit}
                   <div class="usage-meta-line">

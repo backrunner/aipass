@@ -32,6 +32,13 @@ aipass completions zsh      # print shell completions (bash, zsh, fish, ...)
 
 `init` requires a password from `--password` or `AIPASS_MASTER_PASSWORD`. `doctor` is read-only and safe to run anytime.
 
+When an official CLI is already signed in on the machine, let the agent discover and import or refresh its subscription credential:
+
+```bash
+aipass accounts refresh
+aipass accounts refresh --provider openai --provider anthropic
+```
+
 ## Managing entries
 
 ```bash
@@ -43,6 +50,8 @@ aipass add --title 'Anthropic Prod' --provider anthropic \
 ```
 
 Required flags for `add`: `--title`, `--interface`, `--auth`, `--api-key`. Optional flags:
+
+`aipass credential` is an alias for `aipass add` when you want the command to explicitly describe adding a credential.
 
 - `--provider <id>` — registry provider id (for example `anthropic`). If omitted, AIPass guesses it from the first `--domain`.
 - `--domain <host>` (repeatable) and `--console-url <url>` (repeatable) — used by the browser extension to recognize consoles.
@@ -121,7 +130,16 @@ aipass configure <tool> <id> --yes     # apply them
 aipass rollback <operation-id>         # restore the pre-apply state
 ```
 
-Tools: `codex`, `claude-code`, `gemini-cli`, `opencode`. Modes (`--mode`, default `helper`):
+Tools: `codex`, `claude-code`, `gemini-cli`, `opencode`, `grok`, `pi`, and `cursor`. `switch` is an equivalent alias for `configure`, making it easy to switch which vault credential an agent application uses:
+
+```bash
+aipass switch claude-code "Anthropic Prod" --yes
+aipass switch codex <other-entry-id> --yes
+```
+
+The `<id>` position accepts either a vault credential UUID or an exact case-insensitive credential title. Titles must be unique; use the UUID when duplicate titles exist.
+
+Modes (`--mode`, default `helper`):
 
 - `helper` — no key on disk. Claude Code gets an `apiKeyHelper` in `~/.claude/settings.json` that runs `aipass get <id> --field api_key --reveal`; Gemini CLI gets `~/.aipass/tools/gemini-cli.env` exporting `GEMINI_API_KEY` the same way.
 - `env` — environment-variable based configuration.

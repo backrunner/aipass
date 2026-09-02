@@ -2079,6 +2079,7 @@ pub fn run() {
             server_usage_clear,
             server_usage_timeseries,
             pricing_config_get,
+            pricing_remote_sync,
             pricing_assignment_set,
             pricing_group_upsert,
             pricing_group_delete,
@@ -2170,55 +2171,6 @@ pub fn run() {
 mod tests {
     use super::*;
     use aipass_provider_registry::{CredentialKind, EndpointKind, ProviderKind, SecretRef};
-
-    #[test]
-    fn extension_package_metadata_reads_zip_field_with_default_fallback() {
-        let metadata_dir = Path::new("/bundle/browser-extension");
-        let with_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3", "zip": "custom.zip"}"#;
-        let package = parse_extension_package_metadata(with_zip, metadata_dir).unwrap();
-        assert_eq!(package.id, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        assert_eq!(package.version, "1.2.3");
-        assert_eq!(package.zip_path, metadata_dir.join("custom.zip"));
-
-        let without_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3"}"#;
-        let package = parse_extension_package_metadata(without_zip, metadata_dir).unwrap();
-        assert_eq!(package.zip_path, metadata_dir.join("aipass-extension.zip"));
-    }
-
-    #[test]
-    fn extract_extension_package_skips_entries_escaping_target_dir() {
-        use std::io::Write;
-
-        let root = std::env::temp_dir().join(format!("aipass-zip-test-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let zip_path = root.join("package.zip");
-        {
-            let file = fs::File::create(&zip_path).unwrap();
-            let mut writer = zip::ZipWriter::new(file);
-            let options = zip::write::SimpleFileOptions::default();
-            writer.start_file("../evil.txt", options).unwrap();
-            writer.write_all(b"evil").unwrap();
-            writer.start_file("nested/manifest.json", options).unwrap();
-            writer.write_all(b"{}").unwrap();
-            writer.finish().unwrap();
-        }
-
-        let extract_dir = root.join("extract");
-        extract_extension_package(&zip_path, &extract_dir).unwrap();
-
-        assert!(!root.join("evil.txt").exists());
-        assert_eq!(
-            fs::read_to_string(extract_dir.join("nested").join("manifest.json")).unwrap(),
-            "{}"
-        );
-
-        // Re-extraction clears stale files from a previous version.
-        fs::write(extract_dir.join("stale.txt"), b"stale").unwrap();
-        extract_extension_package(&zip_path, &extract_dir).unwrap();
-        assert!(!extract_dir.join("stale.txt").exists());
-
-        let _ = fs::remove_dir_all(root);
-    }
 
     #[test]
     fn extension_package_metadata_reads_zip_field_with_default_fallback() {

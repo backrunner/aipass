@@ -32,6 +32,13 @@ aipass completions zsh      # 打印 shell 补全（bash、zsh、fish 等）
 
 `init` 需要通过 `--password` 或 `AIPASS_MASTER_PASSWORD` 提供密码。`doctor` 是只读的，可随时安全运行。
 
+如果本机已登录官方 CLI，可让代理发现并导入/刷新其订阅凭据：
+
+```bash
+aipass accounts refresh
+aipass accounts refresh --provider openai --provider anthropic
+```
+
 ## 管理记录
 
 ```bash
@@ -43,6 +50,8 @@ aipass add --title 'Anthropic Prod' --provider anthropic \
 ```
 
 `add` 的必填旗标：`--title`、`--interface`、`--auth`、`--api-key`。可选旗标：
+
+`aipass credential` 是 `aipass add` 的别名，适合在脚本中明确表达“添加凭据”。
 
 - `--provider <id>` —— 注册表中的服务商 ID（例如 `anthropic`）。省略时会根据第一个 `--domain` 猜测。
 - `--domain <host>`（可重复）和 `--console-url <url>`（可重复）——供浏览器扩展识别控制台。
@@ -121,7 +130,16 @@ aipass configure <tool> <id> --yes     # 应用变更
 aipass rollback <operation-id>         # 恢复应用前的状态
 ```
 
-工具：`codex`、`claude-code`、`gemini-cli`、`opencode`。模式（`--mode`，默认 `helper`）：
+工具：`codex`、`claude-code`、`gemini-cli`、`opencode`、`grok`、`pi`、`cursor`。`switch` 是 `configure` 的等价别名，便于在多个 agent 应用之间切换当前使用的保险库凭据：
+
+```bash
+aipass switch claude-code "Anthropic Prod" --yes
+aipass switch codex <other-entry-id> --yes
+```
+
+`<id>` 位置既可传凭据 UUID，也可传凭据名称（大小写不敏感的精确匹配）。名称必须唯一；同名时请改用 UUID。
+
+模式（`--mode`，默认 `helper`）：
 
 - `helper` —— 密钥不落盘。Claude Code 会在 `~/.claude/settings.json` 中写入运行 `aipass get <id> --field api_key --reveal` 的 `apiKeyHelper`；Gemini CLI 会在 `~/.aipass/tools/gemini-cli.env` 中以同样方式导出 `GEMINI_API_KEY`。
 - `env` —— 基于环境变量的配置。

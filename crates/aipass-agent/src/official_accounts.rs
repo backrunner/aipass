@@ -78,9 +78,7 @@ pub(crate) fn collect_official_accounts(provider_ids: &[String]) -> Vec<Collecte
     let mut seen_accounts = HashSet::new();
     discovered
         .into_iter()
-        .filter(|account| {
-            seen_accounts.insert((account.provider_id, account.token.clone()))
-        })
+        .filter(|account| seen_accounts.insert((account.provider_id, account.token.clone())))
         .map(|account| {
             let snapshot = refresh_snapshot(&account);
             CollectedAccount { account, snapshot }
@@ -955,9 +953,12 @@ mod tests {
     use aipass_crypto::SecretString;
 
     fn test_vault(temp: &tempfile::TempDir) -> Vault {
-        Vault::create(temp.path(), &SecretString::new("correct horse battery staple"))
-            .expect("create vault")
-            .vault
+        Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault")
+        .vault
     }
 
     fn identity_less_account(token: &str) -> CollectedAccount {

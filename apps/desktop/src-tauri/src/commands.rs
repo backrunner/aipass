@@ -260,6 +260,22 @@ pub(crate) async fn pricing_config_get(app: AppHandle) -> Result<PricingConfig, 
 }
 
 #[tauri::command]
+pub(crate) async fn pricing_remote_sync(
+    app: AppHandle,
+    id: Uuid,
+    timeout_seconds: Option<u64>,
+) -> Result<PricingConfig, String> {
+    agent_request_async(
+        app,
+        AgentRequest::ServerPricingRemoteSync {
+            id,
+            timeout_seconds: timeout_seconds.unwrap_or(15),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
 pub(crate) async fn pricing_assignment_set(
     app: AppHandle,
     entry_id: Uuid,

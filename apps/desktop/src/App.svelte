@@ -125,6 +125,9 @@
   let unlistenCcSwitchImport: (() => void) | undefined;
   let unlistenCcSwitchImportError: (() => void) | undefined;
   let sessionPollTimer: ReturnType<typeof setInterval> | undefined;
+  let usageRefreshTimer: ReturnType<typeof setInterval> | undefined;
+  let usageRefreshInFlight = false;
+  let pricingSyncInFlight = false;
   let sessionRefreshInFlight = false;
   const pendingVaultAuthTasks = new Map<string, (status: VaultAuthTaskStatus) => void>();
   const finishedVaultAuthTasks = new Map<string, VaultAuthTaskStatus>();
@@ -317,6 +320,13 @@
       serverPollTimer = setInterval(() => void loadServer(), 2000);
     }
   }
+  $: {
+    clearInterval(usageRefreshTimer);
+    usageRefreshTimer = undefined;
+    if (hasTauriRuntime() && status.exists && !status.locked) {
+      usageRefreshTimer = setInterval(() => void refreshProviderUsage(), 5 * 60 * 1000);
+    }
+  }
   $: if (showServer && !serverConfig.routes.some((route) => route.id === selectedRouteId)) {
     selectedRouteId = serverConfig.routes[0]?.id ?? "";
   }
@@ -350,6 +360,7 @@
         ...(entry.modelAliases ?? []).flatMap(([alias, model]) => [alias, model]),
         entry.quota?.label ?? "",
         entry.quota?.limit ?? "",
+        entry.quota?.used ?? "",
         entry.quota?.remaining ?? "",
         entry.quota?.resetAt ?? "",
         entry.subscription?.plan ?? "",
@@ -539,6 +550,7 @@
         showUnlockPassword = false;
         setAuthMode("unlock");
         await loadEntries();
+        void refreshProviderUsage();
         await loadServer();
         void loadPricing();
         await openPendingServerView();
@@ -632,6 +644,7 @@
         if (!status.locked && status.exists) {
           await loadEntries();
           logStartupStage("entries_finished");
+          void refreshProviderUsage();
           await loadServer();
           logStartupStage("server_finished");
           void loadPricing();
@@ -673,6 +686,7 @@
     if (hasTauriRuntime()) {
       window.addEventListener("focus", reconcileVisibleVaultStatus);
       document.addEventListener("visibilitychange", reconcileVisibleVaultStatus);
+      document.addEventListener("visibilitychange", refreshVisibleProviderUsage);
       sessionPollTimer = setInterval(reconcileVisibleVaultStatus, 2000);
     }
   });
@@ -691,12 +705,14 @@
     activityEvents.forEach((event) => window.removeEventListener(event, markActivity));
     window.removeEventListener("focus", reconcileVisibleVaultStatus);
     document.removeEventListener("visibilitychange", reconcileVisibleVaultStatus);
+    document.removeEventListener("visibilitychange", refreshVisibleProviderUsage);
     clearTimeout(clipboardClearTimer);
     clearTimeout(revealTimer);
     clearTimeout(searchTimer);
     clearTimeout(updateCheckTimer);
     clearInterval(serverPollTimer);
     clearInterval(sessionPollTimer);
+    clearInterval(usageRefreshTimer);
   });
 
   async function refreshStatus() {
@@ -747,6 +763,7 @@
       selectedId = "";
       setAuthMode("unlock");
       await loadEntries();
+      void refreshProviderUsage();
       await loadServer();
       void loadPricing();
       await openPendingServerView();
@@ -780,6 +797,7 @@
       showUnlockPassword = false;
       setAuthMode("unlock");
       await loadEntries();
+      void refreshProviderUsage();
       await loadServer();
       void loadPricing();
       await openPendingServerView();
@@ -824,6 +842,7 @@
       password = "";
       setAuthMode("unlock");
       await loadEntries();
+      void refreshProviderUsage();
       await loadServer();
       void loadPricing();
       await openPendingServerView();
@@ -1587,12 +1606,34 @@
   async function loadPricing() {
     try {
       pricingConfig = await invokeTauri<PricingConfig>("pricing_config_get");
+      void syncProviderPricing();
     } catch {
       // Pricing commands require an unlocked vault; stay on empty defaults.
     }
     if (!toolDetectionsLoaded) {
       toolDetectionsLoaded = true;
       void loadToolDetections();
+    }
+  }
+
+  async function syncProviderPricing(candidates = usageProbeCandidates()) {
+    const pricingCandidates = candidates.filter((entry) => isNewApiCandidate(entry) || isSubApiCandidate(entry));
+    if (!pricingCandidates.length || status.locked || pricingSyncInFlight) return;
+    pricingSyncInFlight = true;
+    try {
+      for (const entry of pricingCandidates) {
+        try {
+          pricingConfig = await invokeTauri<PricingConfig>("pricing_remote_sync", {
+            id: entry.id,
+            timeoutSeconds: 15
+          });
+        } catch (err) {
+          // A provider may not expose a public pricing table. Keep local rules.
+          console.debug("remote provider pricing unavailable", entry.id, err);
+        }
+      }
+    } finally {
+      pricingSyncInFlight = false;
     }
   }
 
@@ -2061,7 +2102,11 @@
   async function applyUsageProbe(result: UsageProbeResult) {
     if (!selected) return;
     const quota = mergeQuota(selected.quota, result.quota);
-    const gateway = mergeGateway(selected.gateway, result.gateway);
+    const gateway = mergeGateway(
+      selected.gateway,
+      result.gateway,
+      result.source === "sub_api_v1_usage"
+    );
     if (!quota && !gateway) return;
     error = "";
     try {
@@ -2080,23 +2125,101 @@
   }
 
   function mergeQuota(current: QuotaInfo | undefined, probed: UsageProbeResult["quota"]): QuotaInfo | undefined {
-    const next = {
-      label: probed?.label ?? current?.label,
-      limit: probed?.limit ?? current?.limit,
-      remaining: probed?.remaining ?? current?.remaining,
-      resetAt: probed?.resetAt ?? current?.resetAt
-    };
-    return next.label || next.limit || next.remaining || next.resetAt ? next : undefined;
+    // A successful probe is a complete upstream snapshot. Replacing the
+    // fields as a unit clears stale values when a provider intentionally does
+    // not expose `used` or `remaining` (for example wallet/unlimited modes).
+    const next = probed
+      ? {
+          label: probed.label,
+          limit: probed.limit,
+          used: probed.used,
+          remaining: probed.remaining,
+          resetAt: probed.resetAt
+        }
+      : current;
+    if (!next) return undefined;
+    return next.label || next.limit || next.used || next.remaining || next.resetAt ? next : undefined;
+  }
+
+  async function refreshProviderUsage() {
+    if (usageRefreshInFlight || !status.exists || status.locked || document.visibilityState !== "visible") return;
+    usageRefreshInFlight = true;
+    try {
+      const candidates = usageProbeCandidates();
+      for (const entry of candidates) {
+        try {
+          const result = await invokeTauri<UsageProbeResult>("provider_usage_probe", {
+            id: entry.id,
+            mode: "auto",
+            timeoutSeconds: 15
+          });
+          if (!result.ok || (!result.quota && !result.gateway)) continue;
+          const quota = mergeQuota(entry.quota, result.quota);
+          const gateway = mergeGateway(
+            entry.gateway,
+            result.gateway,
+            result.source === "sub_api_v1_usage"
+          );
+          if (!quota && !gateway) continue;
+          await invokeTauri("provider_usage_apply", { id: entry.id, quota, gateway });
+        } catch (err) {
+          console.debug("periodic provider usage unavailable", entry.id, err);
+        }
+      }
+      await syncProviderPricing(candidates);
+      if (candidates.length) await loadEntries();
+    } catch (err) {
+      console.warn("periodic provider usage refresh failed", err);
+    } finally {
+      usageRefreshInFlight = false;
+    }
+  }
+
+  function usageProbeCandidates(): ProviderEntry[] {
+    const source = countEntries.length ? countEntries : entries;
+    return source.filter((entry) => {
+      const provider = entry.providerId?.toLowerCase() ?? "";
+      const endpoint = entry.endpoints.find((item) => item.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "";
+      const normalizedProvider = provider.replaceAll("-", "_");
+      if (normalizedProvider === "new_api" || normalizedProvider === "one_api" || normalizedProvider === "sub2api") {
+        return true;
+      }
+      const haystack = `${entry.title} ${endpoint}`.toLowerCase().replaceAll("-", "_");
+      return haystack.includes("newapi") || haystack.includes("new_api") || haystack.includes("oneapi") || haystack.includes("one_api") || haystack.includes("subapi") || haystack.includes("sub_api") || haystack.includes("sub2api");
+    });
+  }
+
+  function isNewApiCandidate(entry: ProviderEntry): boolean {
+    const provider = entry.providerId?.toLowerCase() ?? "";
+    const endpoint = entry.endpoints.find((item) => item.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "";
+    const normalizedProvider = provider.replaceAll("-", "_");
+    if (normalizedProvider === "new_api" || normalizedProvider === "one_api") return true;
+    const haystack = `${entry.title} ${endpoint}`.toLowerCase().replaceAll("-", "_");
+    return haystack.includes("newapi") || haystack.includes("new_api") || haystack.includes("oneapi") || haystack.includes("one_api");
+  }
+
+  function isSubApiCandidate(entry: ProviderEntry): boolean {
+    const provider = entry.providerId?.toLowerCase() ?? "";
+    const endpoint = entry.endpoints.find((item) => item.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "";
+    if (provider.replaceAll("-", "_") === "sub2api") return true;
+    const haystack = `${entry.title} ${endpoint}`.toLowerCase().replaceAll("-", "_");
+    return haystack.includes("subapi") || haystack.includes("sub_api") || haystack.includes("sub2api");
+  }
+
+  function refreshVisibleProviderUsage() {
+    if (document.visibilityState === "visible") void refreshProviderUsage();
   }
 
   function mergeGateway(
     current: ProviderEntry["gateway"] | undefined,
-    probed: UsageProbeResult["gateway"]
+    probed: UsageProbeResult["gateway"],
+    clearMissing = false
   ): ProviderEntry["gateway"] | undefined {
     const next = {
-      group: probed?.group ?? current?.group,
-      rate: probed?.rate ?? current?.rate
+      group: probed?.group ?? (clearMissing ? undefined : current?.group),
+      rate: probed?.rate ?? (clearMissing ? undefined : current?.rate)
     };
+    if (clearMissing) return next;
     return next.group || next.rate ? next : undefined;
   }
 

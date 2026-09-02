@@ -1813,10 +1813,7 @@ mod tests {
         let error = service
             .set_route_enabled(&creation.vault, Uuid::new_v4(), true)
             .expect_err("unknown route must be rejected");
-        assert_eq!(
-            error.code,
-            aipass_agent_protocol::AgentErrorCode::NotFound
-        );
+        assert_eq!(error.code, aipass_agent_protocol::AgentErrorCode::NotFound);
     }
 
     #[test]

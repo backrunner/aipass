@@ -75,6 +75,7 @@ export function secretInterfaceType(
 export interface QuotaInfo {
   label?: string;
   limit?: string;
+  used?: string;
   remaining?: string;
   resetAt?: string;
 }

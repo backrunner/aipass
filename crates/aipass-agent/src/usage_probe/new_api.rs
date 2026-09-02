@@ -7,8 +7,8 @@ use super::errors::{parse_failure, validation_failure};
 use super::http::get_json;
 use super::urls::{newapi_token_urls, newapi_user_self_urls};
 use super::values::{
-    bool_field, data_object, expires_at, format_newapi_quota, is_success_like, number_field,
-    response_message, string_field,
+    bool_field, data_object, expires_at, format_newapi_quota, is_success_like, response_message,
+    string_field,
 };
 
 pub(super) fn run_newapi_token_probe(
@@ -121,9 +121,9 @@ fn parse_newapi_token_usage(
     let label = string_field(data, "name")
         .or_else(|| Some("New API token".to_string()))
         .filter(|value| !value.trim().is_empty());
-    let granted = number_field(data, "total_granted");
-    let used = number_field(data, "total_used");
-    let available = number_field(data, "total_available");
+    let granted = super::values::non_negative_number_field(data, "total_granted");
+    let used = super::values::non_negative_number_field(data, "total_used");
+    let available = super::values::non_negative_number_field(data, "total_available");
     let unlimited = bool_field(data, "unlimited_quota").unwrap_or(false);
     let reset_at = expires_at(data.get("expires_at"));
 
@@ -145,7 +145,11 @@ fn parse_newapi_token_usage(
                 granted.map(format_newapi_quota)
             },
             used: used.map(format_newapi_quota),
-            remaining: available.map(format_newapi_quota),
+            // Unlimited tokens do not have a meaningful remaining balance;
+            // avoid presenting a server sentinel (often 0 or -1) as money.
+            remaining: (!unlimited)
+                .then(|| available.map(format_newapi_quota))
+                .flatten(),
             reset_at,
             unit: Some("USD".to_string()),
         }),
@@ -170,13 +174,16 @@ fn parse_newapi_user_self(
 
     let data = data_object(body);
     let group = string_field(data, "group");
-    let quota_remaining = number_field(data, "quota");
-    let quota_used = number_field(data, "used_quota");
+    // New API's user quota is already the remaining wallet balance. It is not
+    // a limit, so never subtract used_quota from it. Both values use the
+    // server's 500_000 quota units per USD convention.
+    let quota_remaining = super::values::non_negative_number_field(data, "quota");
+    let quota_used = super::values::non_negative_number_field(data, "used_quota");
     let quota_total = match (quota_remaining, quota_used) {
         (Some(remaining), Some(used)) => Some(remaining + used),
         _ => None,
     };
-    let label = group.clone().unwrap_or_else(|| "New API".to_string());
+    let label = "New API".to_string();
 
     if group.is_none() && quota_remaining.is_none() && quota_used.is_none() {
         return Err("response is missing New API user quota fields".to_string());
@@ -266,5 +273,44 @@ mod tests {
         assert_eq!(quota.limit.as_deref(), Some("4"));
         assert_eq!(quota.used.as_deref(), Some("1"));
         assert_eq!(quota.remaining.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn user_self_quota_is_remaining_and_negative_values_are_ignored() {
+        let value = json!({
+            "success": true,
+            "data": {
+                "group": "default",
+                "quota": -100,
+                "used_quota": 500000
+            }
+        });
+
+        let result =
+            parse_newapi_user_self(&value, None, "https://n/api/user/self".to_string(), 200)
+                .expect("parsed");
+        let quota = result.quota.expect("quota");
+        assert_eq!(quota.remaining.as_deref(), Some("0"));
+        assert_eq!(quota.used.as_deref(), Some("1"));
+        assert_eq!(quota.limit.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn unlimited_token_does_not_show_sentinel_remaining_balance() {
+        let value = json!({
+            "code": true,
+            "data": {
+                "total_granted": 0,
+                "total_used": 0,
+                "total_available": -1,
+                "unlimited_quota": true
+            }
+        });
+        let result =
+            parse_newapi_token_usage(&value, None, "https://n/api/usage/token".to_string(), 200)
+                .expect("parsed");
+        let quota = result.quota.expect("quota");
+        assert_eq!(quota.limit.as_deref(), Some("unlimited"));
+        assert_eq!(quota.remaining, None);
     }
 }

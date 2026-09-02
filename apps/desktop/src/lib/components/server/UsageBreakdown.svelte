@@ -73,8 +73,8 @@
           <th>{$t("server.usageInput")}</th>
           <th>{$t("server.usageOutput")}</th>
           <th>{$t("server.usageCache")}</th>
-          <th class="col-cache-rate">{$t("server.usageCacheRate")}</th>
-          <th>{$t("server.usageSuccessRate")}</th>
+          <th class="col-rate">{$t("server.usageCacheRate")}</th>
+          <th class="col-rate">{$t("server.usageSuccessRate")}</th>
           <th>{$t("server.usageFirstToken")}</th>
           <th>{$t("server.usageCost")}</th>
         </tr>
@@ -90,8 +90,8 @@
             <td>{formatCompact(row.inputTokens)}</td>
             <td>{formatCompact(row.outputTokens)}</td>
             <td>{formatCompact(row.cacheTokens)}</td>
-            <td class="col-cache-rate">{row.cacheRate}</td>
-            <td>{formatSuccessRate(row.successRateBps, row.requestCount)}</td>
+            <td class="col-rate">{row.cacheRate}</td>
+            <td class="col-rate">{formatSuccessRate(row.successRateBps, row.requestCount)}</td>
             <td>{row.averageFirstTokenMs == null ? "-" : `${formatCompact(row.averageFirstTokenMs)} ms`}</td>
             <td>{formatCostMicros(row.estimatedCostMicros)}</td>
           </tr>
@@ -146,16 +146,17 @@
     }
 
     .col-name {
-      min-width: 96px;
-      width: 96px;
-      max-width: 96px;
+      min-width: 88px;
+      width: 88px;
+      max-width: 88px;
       overflow: hidden;
       text-align: left;
     }
 
-    .col-cache-rate {
+    .col-rate {
       min-width: 64px;
       width: 64px;
+      max-width: 64px;
     }
   }
 

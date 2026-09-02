@@ -171,6 +171,8 @@ impl SecretRef {
 pub struct QuotaInfo {
     pub label: Option<String>,
     pub limit: Option<String>,
+    #[serde(default)]
+    pub used: Option<String>,
     pub remaining: Option<String>,
     pub reset_at: Option<String>,
 }

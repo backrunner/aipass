@@ -15,6 +15,13 @@ pub(super) fn newapi_user_self_urls(endpoint: &str) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn newapi_pricing_urls(endpoint: &str) -> Vec<String> {
+    roots_for_endpoint(endpoint)
+        .into_iter()
+        .map(|root| join_url(&root, "api/pricing"))
+        .collect()
+}
+
 pub(super) fn subapi_usage_urls(endpoint: &str) -> Vec<String> {
     roots_for_endpoint(endpoint)
         .into_iter()
@@ -22,7 +29,14 @@ pub(super) fn subapi_usage_urls(endpoint: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn validate_probe_url(url: &str) -> Result<(), &'static str> {
+pub(crate) fn subapi_billing_urls(endpoint: &str) -> Vec<String> {
+    roots_for_endpoint(endpoint)
+        .into_iter()
+        .map(|root| join_url(&root, "v1/sub2api/billing"))
+        .collect()
+}
+
+pub(crate) fn validate_probe_url(url: &str) -> Result<(), &'static str> {
     let parsed = Url::parse(url).map_err(|_| "usage probe URL is invalid")?;
     if parsed.scheme() == "https" || is_loopback_url(&parsed) {
         Ok(())
@@ -104,5 +118,24 @@ mod tests {
         let roots = roots_for_endpoint("https://example.com/proxy/v1");
         assert_eq!(roots[0], "https://example.com/proxy");
         assert!(roots.contains(&"https://example.com".to_string()));
+    }
+
+    #[test]
+    fn pricing_and_subapi_billing_keep_endpoint_prefix() {
+        assert_eq!(
+            newapi_pricing_urls("https://example.com/proxy/v1")[0],
+            "https://example.com/proxy/api/pricing"
+        );
+        assert_eq!(
+            subapi_billing_urls("https://example.com/proxy/v1")[0],
+            "https://example.com/proxy/v1/sub2api/billing"
+        );
+    }
+
+    #[test]
+    fn probe_url_only_allows_https_or_loopback_http() {
+        assert!(validate_probe_url("https://example.com/api/pricing").is_ok());
+        assert!(validate_probe_url("http://127.0.0.1:8787/api/pricing").is_ok());
+        assert!(validate_probe_url("http://example.com/api/pricing").is_err());
     }
 }

@@ -153,6 +153,26 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 )
             }
         },
+        Command::Accounts { command } => match command {
+            AccountsCommand::Refresh { provider_ids } => {
+                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
+                let results: Vec<OfficialAccountRefreshResult> =
+                    agent.request(AgentRequest::OfficialAccountsRefresh { provider_ids })?;
+                let imported = results
+                    .iter()
+                    .filter(|result| result.status == "imported")
+                    .count();
+                let refreshed = results
+                    .iter()
+                    .filter(|result| result.status == "refreshed")
+                    .count();
+                output(
+                    json,
+                    serde_json::to_value(&results)?,
+                    &format!("{imported} imported, {refreshed} refreshed"),
+                )
+            }
+        },
         Command::NativeHost { command } => match command {
             NativeHostCommand::Manifest {
                 host_path,
@@ -321,6 +341,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     quota: quota_from_parts(
                         quota_label,
                         quota_limit,
+                        None,
                         quota_remaining,
                         quota_reset_at,
                     ),
@@ -428,8 +449,14 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 } else {
                     Some(parse_headers(&header)?)
                 },
-                quota: quota_from_parts(quota_label, quota_limit, quota_remaining, quota_reset_at)
-                    .or(existing.quota),
+                quota: quota_from_parts(
+                    quota_label,
+                    quota_limit,
+                    None,
+                    quota_remaining,
+                    quota_reset_at,
+                )
+                .or(existing.quota),
                 subscription: None,
                 gateway: existing.gateway,
                 tags: if tag.is_empty() { existing.tags } else { tag },
@@ -597,8 +624,16 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             mode,
             codex_api_key_mode,
             yes,
+        }
+        | Command::Switch {
+            tool,
+            id,
+            mode,
+            codex_api_key_mode,
+            yes,
         } => {
             let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
+            let id = resolve_entry_id(&agent, &id)?;
             let request = ToolConfigRequest {
                 tool: tool.into(),
                 id,

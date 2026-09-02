@@ -1,6 +1,6 @@
 use super::*;
 use crate::paths::cloud_sync_dir;
-use aipass_agent_protocol::CloudSyncProvider;
+use aipass_agent_protocol::{endpoint_url, CloudSyncProvider};
 
 const BROWSER_FILL_GRANT_LIMIT: usize = 5;
 
@@ -172,6 +172,125 @@ fn dispatch_request(
             proxy.pricing_config(vault)
         })
         .map(AgentResponse::success),
+        AgentRequest::ServerPricingRemoteSync {
+            id,
+            timeout_seconds,
+        } => {
+            let (entry, credentials) = with_vault(state, true, |vault| {
+                let entry = vault.get_provider_summary(id).map_err(map_vault_error)?;
+                let credentials = entry
+                    .secret_refs
+                    .iter()
+                    .map(|secret| {
+                        Ok((
+                            secret.id.clone(),
+                            secret.group.clone(),
+                            vault
+                                .reveal_secret_field(id, &secret.id)
+                                .map_err(map_vault_error)?,
+                        ))
+                    })
+                    .collect::<ServiceResult<Vec<_>>>()?;
+                Ok((entry, credentials))
+            })?;
+            let endpoint = endpoint_url(&entry.endpoints);
+            let pricing_kind = {
+                let provider_id = entry
+                    .provider_id
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .replace('-', "_");
+                match provider_id.as_str() {
+                    "new_api" | "one_api" => Some("new_api"),
+                    "sub2api" => Some("sub_api"),
+                    _ => {
+                        let hint = format!(
+                            "{} {}",
+                            entry.title,
+                            endpoint.as_deref().unwrap_or_default()
+                        )
+                        .to_ascii_lowercase()
+                        .replace('-', "_");
+                        if hint.contains("newapi")
+                            || hint.contains("new_api")
+                            || hint.contains("oneapi")
+                            || hint.contains("one_api")
+                        {
+                            Some("new_api")
+                        } else if hint.contains("subapi")
+                            || hint.contains("sub_api")
+                            || hint.contains("sub2api")
+                        {
+                            Some("sub_api")
+                        } else {
+                            None
+                        }
+                    }
+                }
+            };
+            let result = if pricing_kind == Some("new_api") {
+                let remote_pricing = endpoint.as_deref().and_then(|endpoint| {
+                    credentials.first().and_then(|(_, _, secret)| {
+                        crate::pricing::fetch_newapi_pricing(
+                            endpoint,
+                            secret,
+                            timeout_seconds.max(1),
+                        )
+                    })
+                });
+                let secret_groups = credentials
+                    .iter()
+                    .map(|(secret_id, group, _)| (secret_id.clone(), group.clone()))
+                    .collect::<Vec<_>>();
+                with_vault(state, true, |vault| {
+                    if let Some(remote_pricing) = remote_pricing.as_ref() {
+                        crate::pricing::sync_newapi_pricing(
+                            &state.vault_dir,
+                            vault,
+                            id,
+                            endpoint.as_deref().unwrap_or_default(),
+                            &secret_groups,
+                            remote_pricing,
+                        )
+                    } else {
+                        crate::pricing::load_pricing_config(&state.vault_dir, vault)
+                    }
+                })?
+            } else if pricing_kind == Some("sub_api") {
+                let mut result = with_vault(state, true, |vault| {
+                    crate::pricing::load_pricing_config(&state.vault_dir, vault)
+                })?;
+                for (secret_id, _, secret) in &credentials {
+                    let Some(endpoint) = endpoint.as_deref() else {
+                        continue;
+                    };
+                    let Some(payload) = crate::pricing::fetch_subapi_billing(
+                        endpoint,
+                        secret,
+                        timeout_seconds.max(1),
+                    ) else {
+                        continue;
+                    };
+                    result = with_vault(state, true, |vault| {
+                        crate::pricing::sync_subapi_pricing(
+                            &state.vault_dir,
+                            vault,
+                            id,
+                            secret_id,
+                            endpoint,
+                            &payload,
+                        )
+                    })?;
+                }
+                result
+            } else {
+                with_vault(state, true, |vault| {
+                    crate::pricing::load_pricing_config(&state.vault_dir, vault)
+                })?
+            };
+            Ok(AgentResponse::success(result))
+        }
         AgentRequest::ServerPricingAssignmentSet {
             entry_id,
             secret_id,

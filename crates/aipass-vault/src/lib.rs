@@ -1134,8 +1134,22 @@ impl Vault {
     ) -> Result<(), VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
-        plaintext.entry.quota = quota;
-        plaintext.entry.gateway = gateway;
+        if quota.is_some() {
+            // The caller sends a complete merged snapshot. Replacing it is
+            // important when an upstream explicitly omits used (for example
+            // SubAPI wallet mode), otherwise stale usage would remain visible.
+            plaintext.entry.quota = quota.filter(|next| {
+                next.label.is_some()
+                    || next.limit.is_some()
+                    || next.used.is_some()
+                    || next.remaining.is_some()
+                    || next.reset_at.is_some()
+            });
+        }
+        if gateway.is_some() {
+            plaintext.entry.gateway =
+                gateway.filter(|next| next.group.is_some() || next.rate.is_some());
+        }
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         self.write_provider_record(id, &plaintext)?;
         self.audit("provider.usage.update", Some(id), None)?;
@@ -2372,6 +2386,7 @@ mod tests {
             quota: Some(QuotaInfo {
                 label: Some("team-monthly".to_string()),
                 limit: Some("1000000".to_string()),
+                used: None,
                 remaining: Some("500000".to_string()),
                 reset_at: Some("2026-06-01T00:00:00Z".to_string()),
             }),
@@ -2471,6 +2486,7 @@ mod tests {
         input.quota = Some(QuotaInfo {
             label: Some("team-monthly".to_string()),
             limit: Some("1000000".to_string()),
+            used: None,
             remaining: Some("120000".to_string()),
             reset_at: Some("2026-06-30".to_string()),
         });
@@ -2525,6 +2541,7 @@ mod tests {
                 Some(QuotaInfo {
                     label: Some("vip".to_string()),
                     limit: Some("20".to_string()),
+                    used: Some("12.5".to_string()),
                     remaining: Some("7.5".to_string()),
                     reset_at: Some("2026-07-31T00:00:00Z".to_string()),
                 }),
@@ -2541,13 +2558,51 @@ mod tests {
         assert_eq!(after.header_names, before.header_names);
         assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-usage");
         assert_eq!(
-            after.quota.and_then(|quota| quota.remaining).as_deref(),
+            after
+                .quota
+                .as_ref()
+                .and_then(|quota| quota.remaining.as_deref()),
             Some("7.5")
         );
         assert_eq!(
-            after.gateway.and_then(|gateway| gateway.group).as_deref(),
+            after
+                .gateway
+                .as_ref()
+                .and_then(|gateway| gateway.group.as_deref()),
             Some("vip")
         );
+        assert_eq!(
+            after.quota.as_ref().and_then(|quota| quota.used.as_deref()),
+            Some("12.5")
+        );
+
+        // A successful wallet probe can explicitly omit both used and group;
+        // an empty snapshot must clear values learned by an older probe.
+        vault
+            .update_provider_usage(
+                id,
+                Some(QuotaInfo {
+                    label: Some("钱包余额".to_string()),
+                    limit: None,
+                    used: None,
+                    remaining: Some("5".to_string()),
+                    reset_at: None,
+                }),
+                Some(GatewayMetadata {
+                    group: None,
+                    rate: None,
+                }),
+            )
+            .unwrap();
+        let wallet = vault.get_provider_summary(id).unwrap();
+        assert_eq!(
+            wallet
+                .quota
+                .as_ref()
+                .and_then(|quota| quota.used.as_deref()),
+            None
+        );
+        assert_eq!(wallet.gateway, None);
     }
 
     #[test]

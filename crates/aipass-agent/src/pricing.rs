@@ -1,17 +1,23 @@
 use crate::logging::{write_component_log, AGENT_LOG};
 use crate::session::{map_vault_error, with_vault, AgentState, ServiceError, ServiceResult};
-use aipass_agent_protocol::{ModelPriceRule, OffPeakWindow, PricingConfig};
+use aipass_agent_protocol::{
+    GroupPriceVersion, ModelPriceRule, OffPeakWindow, PricingConfig, PricingGroup,
+};
 use aipass_crypto::Ciphertext;
 use aipass_proxy::ModelPricing;
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::Vault;
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+const NEWAPI_RATIO_MICROS_PER_UNIT: f64 = 2_000_000.0;
 
 const CONFIG_FILE: &str = "pricing.aipstate";
 const CONFIG_PURPOSE: &str = "proxy-pricing";
@@ -96,6 +102,371 @@ pub fn load_list_prices(vault_dir: &Path) -> Vec<ModelPriceRule> {
         }
     }
     builtin_list_prices().to_vec()
+}
+
+/// Best-effort synchronization of New API's public pricing table. New API's
+/// `model_ratio` uses the same convention as one-api: ratio 1 equals
+/// $0.002/1K tokens, or $2/M tokens. The resulting rules are stored as
+/// namespaced pricing groups so a remote refresh cannot overwrite a user's
+/// manually-created group with the same name.
+pub fn fetch_newapi_pricing(endpoint: &str, api_key: &str, timeout_seconds: u64) -> Option<Value> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(timeout_seconds.clamp(1, 120)))
+        .build()
+        .ok()?;
+    crate::usage_probe::newapi_pricing_urls(endpoint)
+        .into_iter()
+        .find_map(|url| {
+            // Pricing sync is allowed to contact the same HTTPS/loopback
+            // endpoints as usage probing. In particular, never put a vault
+            // API key into an arbitrary HTTP URL from provider metadata.
+            crate::usage_probe::validate_probe_url(&url).ok()?;
+            // New API exposes `/api/pricing` through a public-or-dashboard
+            // middleware, while an ordinary relay key is not a dashboard PAT.
+            // Try the public form first so a relay key cannot accidentally turn
+            // a public pricing request into a dashboard-auth failure.
+            let response = client.get(&url).send().ok()?;
+            let response = if response.status().is_success() {
+                response
+            } else {
+                client.get(&url).bearer_auth(api_key).send().ok()?
+            };
+            if !response.status().is_success() {
+                return None;
+            }
+            response.json::<Value>().ok()
+        })
+}
+
+/// Fetch the key-scoped billing multiplier exposed by SubAPI. SubAPI does not
+/// expose a model-price table to relay keys; its billing endpoint only tells us
+/// which multiplier applies to this key.
+pub fn fetch_subapi_billing(endpoint: &str, api_key: &str, timeout_seconds: u64) -> Option<Value> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(timeout_seconds.clamp(1, 120)))
+        .build()
+        .ok()?;
+    crate::usage_probe::subapi_billing_urls(endpoint)
+        .into_iter()
+        .find_map(|url| {
+            crate::usage_probe::validate_probe_url(&url).ok()?;
+            let response = client.get(&url).bearer_auth(api_key).send().ok()?;
+            if !response.status().is_success() {
+                return None;
+            }
+            response.json::<Value>().ok()
+        })
+}
+
+pub fn sync_newapi_pricing(
+    vault_dir: &Path,
+    vault: &Vault,
+    entry_id: Uuid,
+    endpoint: &str,
+    secret_groups: &[(String, Option<String>)],
+    payload: &Value,
+) -> ServiceResult<PricingConfig> {
+    let mut config = load_pricing_config(vault_dir, vault)?;
+    if payload
+        .get("success")
+        .and_then(Value::as_bool)
+        .is_some_and(|success| !success)
+    {
+        return Ok(config);
+    }
+    let data = payload.get("data").and_then(Value::as_array);
+    let ratios = payload.get("group_ratio").and_then(Value::as_object);
+    let (Some(models), Some(ratios)) = (data, ratios) else {
+        return Ok(config);
+    };
+
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let mut changed = false;
+    let mut group_ids = HashMap::new();
+    for (group_name, raw_ratio) in ratios {
+        let Some(group_ratio) =
+            json_number(raw_ratio).filter(|value| value.is_finite() && *value >= 0.0)
+        else {
+            continue;
+        };
+        let mut rules = models
+            .iter()
+            .filter_map(|model| newapi_model_rule(model, group_name, group_ratio))
+            .collect::<Vec<_>>();
+        rules.sort_by(|left, right| left.model.cmp(&right.model));
+        if rules.is_empty() {
+            continue;
+        }
+        // Keep independently hosted gateways from sharing a pricing group
+        // just because they use the same public group name (for example,
+        // both may expose a group called `default`).
+        let name = format!("New API / {group_name} @ {}", pricing_namespace(endpoint));
+        let group_id = if let Some(group) = config.groups.iter().find(|group| group.name == name) {
+            group.id
+        } else {
+            config.groups.push(PricingGroup {
+                id: Uuid::new_v4(),
+                name,
+                versions: Vec::new(),
+            });
+            changed = true;
+            config.groups.last().expect("just pushed pricing group").id
+        };
+        let group = config
+            .groups
+            .iter_mut()
+            .find(|group| group.id == group_id)
+            .expect("pricing group id must exist");
+        let current_rules = group.versions.last().map(|version| &version.rules);
+        if current_rules != Some(&rules) {
+            group
+                .versions
+                .retain(|version| version.effective_from != now);
+            group.versions.push(GroupPriceVersion {
+                effective_from: now,
+                rules,
+            });
+            changed = true;
+        }
+        group_ids.insert(group_name.clone(), group_id);
+    }
+    for (secret_id, secret_group) in secret_groups {
+        let assignment = config
+            .assignments
+            .iter_mut()
+            .find(|item| item.entry_id == entry_id && item.secret_id == *secret_id);
+        let Some(assignment) = assignment else {
+            if let Some(group_id) = secret_group.as_deref().and_then(|name| group_ids.get(name)) {
+                config
+                    .assignments
+                    .push(aipass_agent_protocol::CredentialAssignment {
+                        entry_id,
+                        secret_id: secret_id.clone(),
+                        group_id: Some(*group_id),
+                        multiplier: 1.0,
+                    });
+                changed = true;
+            }
+            continue;
+        };
+
+        // Only assignments created by this synchronizer may be changed. A
+        // user-created group remains authoritative even if its name happens
+        // to mention New API. When the key group disappears or changes, clear
+        // the old managed assignment so stale prices cannot be applied.
+        let managed_assignment = assignment
+            .group_id
+            .and_then(|group_id| config.groups.iter().find(|group| group.id == group_id))
+            .is_some_and(|group| is_managed_newapi_group(group, endpoint));
+        let next_group_id = secret_group
+            .as_deref()
+            .and_then(|name| group_ids.get(name))
+            .copied();
+        let can_auto_update =
+            managed_assignment || (assignment.group_id.is_none() && assignment.multiplier == 1.0);
+        if next_group_id.is_some() && can_auto_update {
+            if assignment.group_id != next_group_id || assignment.multiplier != 1.0 {
+                assignment.group_id = next_group_id;
+                assignment.multiplier = 1.0;
+                changed = true;
+            }
+        } else if next_group_id.is_none() && managed_assignment {
+            assignment.group_id = None;
+            assignment.multiplier = 1.0;
+            changed = true;
+        }
+    }
+    if changed {
+        save_pricing_config(vault_dir, vault, &config)?;
+    }
+    Ok(config)
+}
+
+fn is_managed_newapi_group(group: &PricingGroup, endpoint: &str) -> bool {
+    let Some(rest) = group.name.strip_prefix("New API / ") else {
+        return false;
+    };
+    let Some((group_name, namespace)) = rest.rsplit_once(" @ ") else {
+        return false;
+    };
+    !group_name.trim().is_empty() && namespace == pricing_namespace(endpoint)
+}
+
+/// Apply a SubAPI key's effective billing multiplier. The upstream billing
+/// endpoint is key-scoped and intentionally does not publish model prices, so
+/// `resolve_cost` keeps using local overrides or the official list snapshot as
+/// the base. The empty marker group also prevents an automatic sync from
+/// overriding a user's manually configured model prices.
+pub fn sync_subapi_pricing(
+    vault_dir: &Path,
+    vault: &Vault,
+    entry_id: Uuid,
+    secret_id: &str,
+    endpoint: &str,
+    payload: &Value,
+) -> ServiceResult<PricingConfig> {
+    let mut config = load_pricing_config(vault_dir, vault)?;
+    let Some(multiplier) = subapi_billing_multiplier(payload) else {
+        return Ok(config);
+    };
+
+    let name = format!("SubAPI / {}", pricing_namespace(endpoint));
+    let mut changed = false;
+    let group_id = if let Some(group) = config.groups.iter().find(|group| group.name == name) {
+        group.id
+    } else {
+        config.groups.push(PricingGroup {
+            id: Uuid::new_v4(),
+            name,
+            versions: Vec::new(),
+        });
+        changed = true;
+        config.groups.last().expect("just pushed pricing group").id
+    };
+
+    let assignment = config
+        .assignments
+        .iter_mut()
+        .find(|item| item.entry_id == entry_id && item.secret_id == secret_id);
+    if let Some(assignment) = assignment {
+        let managed_assignment = assignment
+            .group_id
+            .and_then(|group_id| config.groups.iter().find(|group| group.id == group_id))
+            .is_some_and(|group| is_managed_subapi_group(group, endpoint));
+        let can_update_assignment =
+            managed_assignment || (assignment.group_id.is_none() && assignment.multiplier == 1.0);
+        if can_update_assignment
+            && (assignment.group_id != Some(group_id) || assignment.multiplier != multiplier)
+        {
+            assignment.group_id = Some(group_id);
+            assignment.multiplier = multiplier;
+            changed = true;
+        }
+    } else {
+        config
+            .assignments
+            .push(aipass_agent_protocol::CredentialAssignment {
+                entry_id,
+                secret_id: secret_id.to_string(),
+                group_id: Some(group_id),
+                multiplier,
+            });
+        changed = true;
+    }
+    if changed {
+        save_pricing_config(vault_dir, vault, &config)?;
+    }
+    Ok(config)
+}
+
+fn is_managed_subapi_group(group: &PricingGroup, endpoint: &str) -> bool {
+    group
+        .name
+        .strip_prefix("SubAPI / ")
+        .is_some_and(|namespace| namespace == pricing_namespace(endpoint))
+}
+
+fn subapi_billing_multiplier(payload: &Value) -> Option<f64> {
+    let data = payload.get("data").unwrap_or(payload);
+    [
+        "effective_rate_multiplier",
+        "resolved_rate_multiplier",
+        "group_rate_multiplier",
+    ]
+    .iter()
+    .find_map(|field| data.get(*field).and_then(json_number))
+    .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn pricing_namespace(endpoint: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return endpoint.trim().trim_end_matches('/').to_string();
+    };
+    let mut namespace = url.host_str().unwrap_or("unknown-host").to_string();
+    if let Some(port) = url.port() {
+        namespace.push(':');
+        namespace.push_str(&port.to_string());
+    }
+    let path = url.path().trim_end_matches('/');
+    let path = path.strip_suffix("/v1").unwrap_or(path);
+    if !path.is_empty() {
+        namespace.push_str(path);
+    }
+    namespace
+}
+
+fn newapi_model_rule(model: &Value, group_name: &str, group_ratio: f64) -> Option<ModelPriceRule> {
+    let model_name = model.get("model_name").and_then(Value::as_str)?.trim();
+    if model_name.is_empty() {
+        return None;
+    }
+    let groups = model.get("enable_groups").and_then(Value::as_array);
+    let enabled = groups
+        .map(|groups| {
+            groups.iter().any(|group| {
+                group
+                    .as_str()
+                    .is_some_and(|group| group == "all" || group == group_name)
+            })
+        })
+        .unwrap_or(true);
+    if !enabled {
+        return None;
+    }
+    // QuotaType 1 is per-call pricing and cannot be represented by the
+    // token-based proxy pricing schema without inventing a token equivalent.
+    let quota_type = model
+        .get("quota_type")
+        .and_then(json_number)
+        .map(|value| value as i64)
+        .unwrap_or(0);
+    if quota_type == 1 {
+        return None;
+    }
+    let ratio = json_number(model.get("model_ratio")?)
+        .filter(|value| value.is_finite() && *value >= 0.0)?;
+    let input = ratio * group_ratio * NEWAPI_RATIO_MICROS_PER_UNIT;
+    let completion = model
+        .get("completion_ratio")
+        .and_then(json_number)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(1.0);
+    let cache = model
+        .get("cache_ratio")
+        .and_then(json_number)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        // New API defaults an omitted cache ratio to 1 (same as normal input).
+        .unwrap_or(1.0);
+    let cache_creation = model
+        .get("create_cache_ratio")
+        .and_then(json_number)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        // New API defaults an omitted cache-creation ratio to 1.25.
+        .unwrap_or(1.25);
+    Some(ModelPriceRule {
+        model: model_name.to_string(),
+        input_micros_per_million: rounded_price(input),
+        output_micros_per_million: rounded_price(input * completion),
+        cache_read_micros_per_million: rounded_price(input * cache),
+        cache_creation_micros_per_million: rounded_price(input * cache_creation),
+        off_peak: None,
+    })
+}
+
+fn json_number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|value| value as f64))
+        .or_else(|| value.as_u64().map(|value| value as f64))
+        .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+}
+
+fn rounded_price(value: f64) -> u64 {
+    if value.is_finite() && value > 0.0 && value < u64::MAX as f64 {
+        value.round() as u64
+    } else {
+        0
+    }
 }
 
 /// Recompute the cost of a single usage row at query time. Group rules win
@@ -355,8 +726,126 @@ fn litellm_micros(value: Option<&serde_json::Value>) -> u64 {
 mod tests {
     use super::*;
     use aipass_agent_protocol::{CredentialAssignment, GroupPriceVersion, PricingGroup};
+    use serde_json::json;
 
     const DAY: i64 = 86_400 * 20_000;
+
+    #[test]
+    fn converts_newapi_ratios_to_token_prices() {
+        let model = json!({
+            "model_name": "gpt-test",
+            "model_ratio": 1.5,
+            "completion_ratio": 2.0,
+            "cache_ratio": 0.25,
+            "create_cache_ratio": 0.5,
+            "enable_groups": ["default"]
+        });
+        let rule = newapi_model_rule(&model, "default", 0.8).expect("pricing rule");
+        assert_eq!(rule.input_micros_per_million, 2_400_000);
+        assert_eq!(rule.output_micros_per_million, 4_800_000);
+        assert_eq!(rule.cache_read_micros_per_million, 600_000);
+        assert_eq!(rule.cache_creation_micros_per_million, 1_200_000);
+    }
+
+    #[test]
+    fn skips_newapi_models_not_enabled_for_group() {
+        let model = json!({
+            "model_name": "gpt-test",
+            "model_ratio": 1.0,
+            "enable_groups": ["vip"]
+        });
+        assert!(newapi_model_rule(&model, "default", 1.0).is_none());
+    }
+
+    #[test]
+    fn skips_newapi_per_call_models() {
+        let model = json!({
+            "model_name": "image-model",
+            "quota_type": 1,
+            "model_price": 0.02,
+            "model_ratio": 1.0
+        });
+        assert!(newapi_model_rule(&model, "default", 1.0).is_none());
+    }
+
+    #[test]
+    fn keeps_free_newapi_models_free() {
+        let model = json!({
+            "model_name": "free-model",
+            "model_ratio": 0,
+            "completion_ratio": 0
+        });
+        let rule = newapi_model_rule(&model, "default", 1.0).expect("free pricing rule");
+        assert_eq!(rule.input_micros_per_million, 0);
+        assert_eq!(rule.output_micros_per_million, 0);
+    }
+
+    #[test]
+    fn uses_newapi_default_cache_ratios_when_omitted() {
+        let model = json!({
+            "model_name": "gpt-test",
+            "model_ratio": 1.0
+        });
+        let rule = newapi_model_rule(&model, "default", 1.0).expect("pricing rule");
+        assert_eq!(rule.cache_read_micros_per_million, 2_000_000);
+        assert_eq!(rule.cache_creation_micros_per_million, 2_500_000);
+    }
+
+    #[test]
+    fn namespaces_remote_groups_by_endpoint() {
+        assert_eq!(
+            pricing_namespace("https://example.com/proxy/v1"),
+            "example.com/proxy"
+        );
+        assert_eq!(
+            pricing_namespace("https://example.com:8443/v1"),
+            "example.com:8443"
+        );
+    }
+
+    #[test]
+    fn managed_newapi_groups_are_scoped_to_the_endpoint() {
+        let group = PricingGroup {
+            id: Uuid::nil(),
+            name: "New API / default @ example.com/proxy".to_string(),
+            versions: Vec::new(),
+        };
+        assert!(is_managed_newapi_group(
+            &group,
+            "https://example.com/proxy/v1"
+        ));
+        assert!(!is_managed_newapi_group(&group, "https://other.example/v1"));
+        assert!(!is_managed_newapi_group(
+            &PricingGroup {
+                id: Uuid::nil(),
+                name: "New API / default".to_string(),
+                versions: Vec::new(),
+            },
+            "https://example.com/proxy/v1"
+        ));
+    }
+
+    #[test]
+    fn parses_subapi_effective_billing_multiplier() {
+        assert_eq!(
+            subapi_billing_multiplier(&json!({
+                "group_rate_multiplier": 0.8,
+                "resolved_rate_multiplier": 0.6,
+                "effective_rate_multiplier": 0.9
+            })),
+            Some(0.9)
+        );
+        assert_eq!(
+            subapi_billing_multiplier(&json!({
+                "data": {"resolved_rate_multiplier": "0.6"}
+            })),
+            Some(0.6)
+        );
+        assert_eq!(
+            subapi_billing_multiplier(&json!({"effective_rate_multiplier": -1})),
+            None
+        );
+    }
 
     fn rule(model: &str, input: u64, output: u64) -> ModelPriceRule {
         ModelPriceRule {

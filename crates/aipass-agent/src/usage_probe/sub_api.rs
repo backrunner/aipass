@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::errors::{parse_failure, validation_failure};
 use super::http::get_json;
-use super::urls::subapi_usage_urls;
+use super::urls::{subapi_billing_urls, subapi_usage_urls};
 use super::values::{
     data_object, format_amount, is_valid_like, is_wallet_plan_name, number_field, response_message,
     string_field,
@@ -32,7 +32,26 @@ pub(super) fn run_subapi_probe(
         ) {
             Ok((status, body)) => {
                 match parse_subapi_usage(&body, provider_id.clone(), url.clone(), status) {
-                    Ok(result) => return result,
+                    Ok(mut result) => {
+                        // Billing metadata is key-scoped and optional. A
+                        // wallet-only key legitimately returns 403 here; in
+                        // that case keep the balance result and omit group/rate.
+                        if let Some((group, rate)) = probe_subapi_billing(
+                            client,
+                            endpoint,
+                            api_key,
+                            provider_id.clone(),
+                            redactions,
+                        ) {
+                            let gateway = result.gateway.get_or_insert(GatewayMetadata {
+                                group: None,
+                                rate: None,
+                            });
+                            gateway.group = group.or_else(|| gateway.group.take());
+                            gateway.rate = rate.or_else(|| gateway.rate.take());
+                        }
+                        return result;
+                    }
                     Err(error) => {
                         last_failure = Some(parse_failure(
                             provider_id.clone(),
@@ -55,6 +74,44 @@ pub(super) fn run_subapi_probe(
             "unable to build SubAPI usage URL",
         )
     })
+}
+
+fn probe_subapi_billing(
+    client: &Client,
+    endpoint: &str,
+    api_key: &str,
+    provider_id: Option<String>,
+    redactions: &[String],
+) -> Option<(Option<String>, Option<String>)> {
+    for url in subapi_billing_urls(endpoint) {
+        let source = UsageProbeSource::SubApiV1Usage;
+        let Ok((_status, body)) = get_json(
+            client,
+            &url,
+            api_key,
+            &[],
+            provider_id.clone(),
+            source,
+            redactions,
+        ) else {
+            continue;
+        };
+        let data = data_object(&body);
+        if !is_valid_like(data) {
+            continue;
+        }
+        let rate = number_field(data, "effective_rate_multiplier")
+            .or_else(|| number_field(data, "resolved_rate_multiplier"))
+            .or_else(|| number_field(data, "group_rate_multiplier"))
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(format_amount)
+            .map(|value| format!("{value}x"));
+        let group = string_field(data, "group").or_else(|| string_field(data, "group_name"));
+        if group.is_some() || rate.is_some() {
+            return Some((group, rate));
+        }
+    }
+    None
 }
 
 fn parse_subapi_usage(
@@ -81,19 +138,31 @@ fn parse_subapi_usage(
         let quota_value = Value::Object(quota_obj.clone());
         Some(UsageProbeQuota {
             label: plan_name.clone().or_else(|| Some("SubAPI".to_string())),
-            limit: number_field(&quota_value, "limit").map(format_amount),
-            used: number_field(&quota_value, "used").map(format_amount),
-            remaining: number_field(&quota_value, "remaining").map(format_amount),
+            limit: number_field(&quota_value, "limit")
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(format_amount),
+            used: number_field(&quota_value, "used")
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(format_amount),
+            remaining: number_field(&quota_value, "remaining")
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(format_amount),
             reset_at: string_field(&quota_value, "reset_at")
                 .or_else(|| string_field(&quota_value, "resetAt")),
             unit: string_field(&quota_value, "unit").or_else(|| Some(unit.clone())),
         })
     } else {
-        let remaining = number_field(data, "remaining").or_else(|| number_field(data, "balance"));
+        let remaining = number_field(data, "remaining")
+            .or_else(|| number_field(data, "balance"))
+            .filter(|value| value.is_finite() && *value >= 0.0);
         remaining.map(|remaining| UsageProbeQuota {
             label: plan_name.clone().or_else(|| Some("SubAPI".to_string())),
-            limit: number_field(data, "total").map(format_amount),
-            used: number_field(data, "used").map(format_amount),
+            limit: number_field(data, "total")
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(format_amount),
+            used: number_field(data, "used")
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(format_amount),
             remaining: Some(format_amount(remaining)),
             reset_at: None,
             unit: Some(unit.clone()),
@@ -172,5 +241,23 @@ mod tests {
             result.gateway.and_then(|gateway| gateway.group).as_deref(),
             Some("pro")
         );
+    }
+
+    #[test]
+    fn subapi_wallet_balance_does_not_invent_used_or_group() {
+        let value = json!({
+            "mode": "unrestricted",
+            "isValid": true,
+            "planName": "钱包余额",
+            "balance": 42,
+            "unit": "USD"
+        });
+
+        let result = parse_subapi_usage(&value, None, "https://s/v1/usage".to_string(), 200)
+            .expect("parsed");
+        let quota = result.quota.expect("quota");
+        assert_eq!(quota.remaining.as_deref(), Some("42"));
+        assert_eq!(quota.used, None);
+        assert_eq!(result.gateway, None);
     }
 }

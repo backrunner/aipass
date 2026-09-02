@@ -54,6 +54,12 @@ pub(super) fn number_field(value: &Value, field: &str) -> Option<f64> {
     value.get(field).and_then(number_value)
 }
 
+pub(super) fn non_negative_number_field(value: &Value, field: &str) -> Option<f64> {
+    number_field(value, field)
+        .filter(|number| number.is_finite())
+        .map(|number| number.max(0.0))
+}
+
 pub(super) fn expires_at(value: Option<&Value>) -> Option<String> {
     let value = value?;
     if let Some(raw) = value

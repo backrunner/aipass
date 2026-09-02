@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { Button, ProviderIcon } from "@aipass/ui";
+  import { Badge, Button, ProviderIcon } from "@aipass/ui";
   import { ContextMenu, DropdownMenu } from "bits-ui";
   import { ChevronRight, KeyRound, Plus, RefreshCw, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
@@ -57,7 +57,7 @@
   }
 
   function entrySubtitle(entry: ProviderEntry): string {
-    const parts = [entry.credentialKind === "oauth" ? $t("providerDetail.oauth") : $t("providerDetail.api")];
+    const parts: string[] = [];
     if (entry.accountIdentity) parts.push(entry.accountIdentity);
     const target = entry.domains[0] ?? entry.endpoints[0]?.url ?? entry.defaultModel;
     if (target) parts.push(target);
@@ -187,7 +187,12 @@
             >
               <ProviderIcon title={entry.title} kind={entry.providerKind} faviconUrl={entry.faviconUrl} size="md" />
               <div class="entry-main">
-                <span class="title">{entry.title}</span>
+                <div class="title-row">
+                  <span class="title">{entry.title}</span>
+                  {#if entry.credentialKind === "oauth"}
+                    <Badge size="sm">{$t("providerDetail.oauth")}</Badge>
+                  {/if}
+                </div>
                 <span class="subtitle">{entrySubtitle(entry)}</span>
               </div>
             </button>
@@ -439,7 +444,16 @@
     gap: 2px;
   }
 
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .title {
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

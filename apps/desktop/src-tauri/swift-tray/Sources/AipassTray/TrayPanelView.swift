@@ -353,15 +353,11 @@ public struct TrayPanelView: View {
 
 /// Hover-highlight row style matching the desktop app's menu rows.
 private struct TrayRowButtonStyle: ButtonStyle {
-    @State private var hovering = false
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
                 RoundedRectangle(cornerRadius: TrayMetrics.rowRadius, style: .continuous)
-                    .fill(hovering || configuration.isPressed ? TrayColors.surface2 : Color.clear)
+                    .fill(configuration.isPressed ? TrayColors.surface2 : Color.clear)
             )
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

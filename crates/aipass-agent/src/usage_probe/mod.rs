@@ -5,6 +5,8 @@ mod sub_api;
 mod urls;
 mod values;
 
+pub(crate) use self::urls::{newapi_pricing_urls, subapi_billing_urls, validate_probe_url};
+
 use aipass_agent_protocol::{
     endpoint_url, SensitiveString, UsageProbeMode, UsageProbeResult, UsageProbeSource,
 };
@@ -152,10 +154,20 @@ fn run_auto_probe(
     redactions: &[String],
 ) -> UsageProbeResult {
     let endpoint_lower = endpoint.to_ascii_lowercase();
-    let prefer_newapi = endpoint_lower.contains("newapi")
+    let provider_lower = provider_id
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let provider_normalized = provider_lower.replace('-', "_");
+    let prefer_newapi = provider_normalized.contains("new_api")
+        || provider_normalized.contains("one_api")
+        || endpoint_lower.contains("newapi")
         || endpoint_lower.contains("new-api")
         || endpoint_lower.contains("one-api");
-    let prefer_subapi = endpoint_lower.contains("sub2api") || endpoint_lower.contains("subapi");
+    let prefer_subapi = provider_normalized.contains("sub2api")
+        || provider_normalized.contains("sub_api")
+        || endpoint_lower.contains("sub2api")
+        || endpoint_lower.contains("subapi");
 
     let mut failures = Vec::new();
     let mut attempts: Vec<KeyProbe> = if prefer_newapi && !prefer_subapi {

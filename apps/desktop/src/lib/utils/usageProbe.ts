@@ -5,6 +5,7 @@ export function canApplyUsageResult(result: UsageProbeResult | undefined): boole
   return Boolean(
     result.quota?.label ||
       result.quota?.limit ||
+      result.quota?.used ||
       result.quota?.remaining ||
       result.quota?.resetAt ||
       result.gateway?.group ||
