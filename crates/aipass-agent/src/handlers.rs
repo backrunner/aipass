@@ -182,9 +182,19 @@ fn dispatch_request(
                     .secret_refs
                     .iter()
                     .map(|secret| {
+                        // Group metadata was moved from the entry onto each
+                        // credential. Keep the legacy entry-level value as a
+                        // fallback so existing New API keys still select the
+                        // remote prices for their actual group.
+                        let group = secret.group.clone().or_else(|| {
+                            entry
+                                .gateway
+                                .as_ref()
+                                .and_then(|gateway| gateway.group.clone())
+                        });
                         Ok((
                             secret.id.clone(),
-                            secret.group.clone(),
+                            group,
                             vault
                                 .reveal_secret_field(id, &secret.id)
                                 .map_err(map_vault_error)?,

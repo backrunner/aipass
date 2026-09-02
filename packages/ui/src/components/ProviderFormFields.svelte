@@ -29,6 +29,7 @@
     | "consoleUrl"
     | "modelAlias"
     | "header"
+    | "quota"
     | "group"
     | "billing";
 
@@ -77,6 +78,19 @@
     { id: "defaultModel", label: "providerForm.defaultModel", section: "details", hasValue: () => Boolean(draft.defaultModel), clear: () => (draft.defaultModel = "") },
     { id: "tag", label: "providerForm.tags", section: "details", hasValue: () => Boolean(draft.tag), clear: () => (draft.tag = "") },
     { id: "notes", label: "providerForm.notes", section: "details", hasValue: () => Boolean(draft.notes), clear: () => (draft.notes = "") },
+    {
+      id: "quota",
+      label: "providerForm.quota",
+      section: "details",
+      hasValue: () => Boolean(draft.quotaLabel || draft.quotaLimit || draft.quotaUsed || draft.quotaRemaining || draft.quotaResetAt),
+      clear: () => {
+        draft.quotaLabel = "";
+        draft.quotaLimit = "";
+        draft.quotaUsed = "";
+        draft.quotaRemaining = "";
+        draft.quotaResetAt = "";
+      }
+    },
     { id: "consoleUrl", label: "providerForm.consoleUrl", section: "advanced", hasValue: () => Boolean(draft.consoleUrl), clear: () => (draft.consoleUrl = "") },
     { id: "modelAlias", label: "providerForm.modelAliases", section: "advanced", hasValue: () => Boolean(draft.modelAlias), clear: () => (draft.modelAlias = "") },
     { id: "header", label: "providerForm.customHeaders", section: "advanced", hasValue: () => Boolean(draft.header), clear: () => (draft.header = "") },
@@ -179,7 +193,8 @@
     visibleFields.has("endpoint") ||
     visibleFields.has("defaultModel") ||
     visibleFields.has("tag") ||
-    visibleFields.has("notes");
+    visibleFields.has("notes") ||
+    visibleFields.has("quota");
 </script>
 
 <div class="provider-form-fields" bind:this={formRoot}>
@@ -290,6 +305,30 @@
             <textarea bind:value={draft.notes} rows="3" placeholder={$t("providerForm.notes")}></textarea>
           </Field>
           <button type="button" class="remove-btn align-top" aria-label={$t("providerForm.removeField", { label: $t("providerForm.notes") })} on:click={() => removeField("notes")}>
+            <X size={13} />
+          </button>
+        </div>
+      {/if}
+      {#if visibleFields.has("quota")}
+        <div class="removable-field align-top" data-provider-field="quota">
+          <div class="quota-grid">
+            <Field label={$t("providerForm.quotaLabel")}>
+              <input bind:value={draft.quotaLabel} placeholder={$t("providerForm.quotaLabelPlaceholder")} />
+            </Field>
+            <Field label={$t("providerForm.limit")}>
+              <input bind:value={draft.quotaLimit} placeholder="100" />
+            </Field>
+            <Field label={$t("providerForm.used")}>
+              <input bind:value={draft.quotaUsed} placeholder="0" />
+            </Field>
+            <Field label={$t("providerForm.remaining")}>
+              <input bind:value={draft.quotaRemaining} placeholder="100" />
+            </Field>
+            <Field label={$t("providerForm.resetsAt")}>
+              <input bind:value={draft.quotaResetAt} placeholder="2026-12-31T00:00:00Z" />
+            </Field>
+          </div>
+          <button type="button" class="remove-btn align-top" aria-label={$t("providerForm.removeField", { label: $t("providerForm.quota") })} on:click={() => removeField("quota")}>
             <X size={13} />
           </button>
         </div>
@@ -512,6 +551,13 @@
     grid-template-columns: minmax(0, 90px) minmax(0, 90px) minmax(0, 1fr);
   }
 
+  .quota-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    min-width: 0;
+  }
+
   .chip-group {
     display: flex;
     flex-wrap: wrap;
@@ -552,7 +598,8 @@
 
   @media (max-width: 540px) {
     .gateway-grid,
-    .billing-grid {
+    .billing-grid,
+    .quota-grid {
       grid-template-columns: 1fr;
     }
   }

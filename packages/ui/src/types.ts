@@ -22,6 +22,9 @@ export type Draft = {
   consoleUrl: string;
   faviconUrl: string;
   providerId: string;
+  /** Optional storage metadata carried by an AIPass provider deep link. */
+  credentialKind?: "api" | "oauth";
+  accountIdentity?: string;
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
   apiKey: string;
@@ -32,6 +35,7 @@ export type Draft = {
   header: string;
   quotaLabel: string;
   quotaLimit: string;
+  quotaUsed: string;
   quotaRemaining: string;
   quotaResetAt: string;
   /** Gateway group this key belongs to. Stored on the key, not the entry. */

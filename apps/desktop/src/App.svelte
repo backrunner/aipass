@@ -1239,6 +1239,7 @@
       header: "",
       quotaLabel: entry.quota?.label ?? "",
       quotaLimit: entry.quota?.limit ?? "",
+      quotaUsed: entry.quota?.used ?? "",
       quotaRemaining: entry.quota?.remaining ?? "",
       quotaResetAt: entry.quota?.resetAt ?? "",
       gatewayGroup: "",
@@ -2436,10 +2437,11 @@
   }
 
   function quotaFromDraft(): QuotaInfo | undefined {
-    if (!draft.quotaLabel && !draft.quotaLimit && !draft.quotaRemaining && !draft.quotaResetAt) return undefined;
+    if (!draft.quotaLabel && !draft.quotaLimit && !draft.quotaUsed && !draft.quotaRemaining && !draft.quotaResetAt) return undefined;
     return {
       label: draft.quotaLabel || undefined,
       limit: draft.quotaLimit || undefined,
+      used: draft.quotaUsed || undefined,
       remaining: draft.quotaRemaining || undefined,
       resetAt: draft.quotaResetAt || undefined
     };

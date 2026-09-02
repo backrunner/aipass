@@ -645,6 +645,7 @@
     );
     next.quotaLabel = entry.quota?.label ?? "";
     next.quotaLimit = entry.quota?.limit ?? "";
+    next.quotaUsed = entry.quota?.used ?? "";
     next.quotaRemaining = entry.quota?.remaining ?? "";
     next.quotaResetAt = entry.quota?.resetAt ?? "";
     next.notes = entry.notes ?? "";
@@ -1082,6 +1083,7 @@
       entry.notes ?? "",
       entry.quota?.label ?? "",
       entry.quota?.limit ?? "",
+      entry.quota?.used ?? "",
       entry.quota?.remaining ?? "",
       entry.quota?.resetAt ?? "",
       entry.gateway?.group ?? "",
@@ -1466,10 +1468,11 @@
   }
 
   function quotaFrom(draft: Draft) {
-    if (!draft.quotaLabel && !draft.quotaLimit && !draft.quotaRemaining && !draft.quotaResetAt) return undefined;
+    if (!draft.quotaLabel && !draft.quotaLimit && !draft.quotaUsed && !draft.quotaRemaining && !draft.quotaResetAt) return undefined;
     return {
       label: draft.quotaLabel || undefined,
       limit: draft.quotaLimit || undefined,
+      used: draft.quotaUsed || undefined,
       remaining: draft.quotaRemaining || undefined,
       resetAt: draft.quotaResetAt || undefined
     };
@@ -1674,7 +1677,7 @@
         </div>
       </section>
 
-      {#if entry.quota && (entry.quota.label || entry.quota.limit || entry.quota.remaining || entry.quota.resetAt)}
+      {#if entry.quota && (entry.quota.label || entry.quota.limit || entry.quota.used || entry.quota.remaining || entry.quota.resetAt)}
         <section class="card">
           <header class="card-header"><span class="card-title">{$t("providerDetail.quota")}</span></header>
           <div class="card-body">
@@ -1686,6 +1689,13 @@
               </span>
               <span></span>
             </div>
+            {#if entry.quota.used}
+              <div class="kv-row">
+                <span class="kv-label">{$t("providerDetail.used")}</span>
+                <strong class="kv-value tabular">{entry.quota.used}</strong>
+                <span></span>
+              </div>
+            {/if}
             {#if entry.quota.resetAt}
               <div class="kv-row">
                 <span class="kv-label">{$t("providerDetail.resets")}</span>
