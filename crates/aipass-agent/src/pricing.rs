@@ -25,18 +25,6 @@ const LIST_PRICES_FILE: &str = "list-prices.json";
 const LITELLM_PRICES_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const LIST_PRICE_TIMEOUT: Duration = Duration::from_secs(15);
-const TRACKED_PREFIXES: [&str; 10] = [
-    "gpt-",
-    "o1",
-    "o3",
-    "o4",
-    "claude-",
-    "deepseek-",
-    "moonshot-",
-    "kimi-",
-    "qwen-",
-    "gemini-",
-];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PersistedPricingConfig {
@@ -658,12 +646,6 @@ fn refresh_list_prices(state: &Arc<AgentState>) -> anyhow::Result<()> {
     let mut merged = builtin_list_prices().to_vec();
     let mut extra: Vec<ModelPriceRule> = Vec::new();
     for (name, info) in table {
-        if !TRACKED_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-        {
-            continue;
-        }
         let Some(rule) = litellm_rule(name, info) else {
             continue;
         };

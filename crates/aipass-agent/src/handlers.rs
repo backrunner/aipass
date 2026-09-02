@@ -230,33 +230,40 @@ fn dispatch_request(
                 }
             };
             let result = if pricing_kind == Some("new_api") {
-                let remote_pricing = endpoint.as_deref().and_then(|endpoint| {
-                    credentials.first().and_then(|(_, _, secret)| {
-                        crate::pricing::fetch_newapi_pricing(
+                if let Some(endpoint) = endpoint.as_deref() {
+                    let mut result = with_vault(state, true, |vault| {
+                        crate::pricing::load_pricing_config(&state.vault_dir, vault)
+                    })?;
+                    for (secret_id, group, secret) in &credentials {
+                        let Some(remote_pricing) = crate::pricing::fetch_newapi_pricing(
                             endpoint,
                             secret,
                             timeout_seconds.max(1),
-                        )
-                    })
-                });
-                let secret_groups = credentials
-                    .iter()
-                    .map(|(secret_id, group, _)| (secret_id.clone(), group.clone()))
-                    .collect::<Vec<_>>();
-                with_vault(state, true, |vault| {
-                    if let Some(remote_pricing) = remote_pricing.as_ref() {
-                        crate::pricing::sync_newapi_pricing(
-                            &state.vault_dir,
-                            vault,
-                            id,
-                            endpoint.as_deref().unwrap_or_default(),
-                            &secret_groups,
-                            remote_pricing,
-                        )
-                    } else {
-                        crate::pricing::load_pricing_config(&state.vault_dir, vault)
+                        ) else {
+                            continue;
+                        };
+                        // `/api/pricing` can be user-scoped on protected
+                        // instances. Sync one payload with only the credential
+                        // that produced it so another key cannot inherit its
+                        // visible groups or clear a managed assignment.
+                        let secret_groups = [(secret_id.clone(), group.clone())];
+                        result = with_vault(state, true, |vault| {
+                            crate::pricing::sync_newapi_pricing(
+                                &state.vault_dir,
+                                vault,
+                                id,
+                                endpoint,
+                                &secret_groups,
+                                &remote_pricing,
+                            )
+                        })?;
                     }
-                })?
+                    result
+                } else {
+                    with_vault(state, true, |vault| {
+                        crate::pricing::load_pricing_config(&state.vault_dir, vault)
+                    })?
+                }
             } else if pricing_kind == Some("sub_api") {
                 let mut result = with_vault(state, true, |vault| {
                     crate::pricing::load_pricing_config(&state.vault_dir, vault)

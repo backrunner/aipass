@@ -2101,7 +2101,11 @@
 
   async function applyUsageProbe(result: UsageProbeResult) {
     if (!selected) return;
-    const quota = mergeQuota(selected.quota, result.quota);
+    const quota = mergeQuota(
+      selected.quota,
+      result.quota,
+      result.source === "sub_api_v1_usage"
+    );
     const gateway = mergeGateway(
       selected.gateway,
       result.gateway,
@@ -2124,7 +2128,11 @@
     }
   }
 
-  function mergeQuota(current: QuotaInfo | undefined, probed: UsageProbeResult["quota"]): QuotaInfo | undefined {
+  function mergeQuota(
+    current: QuotaInfo | undefined,
+    probed: UsageProbeResult["quota"],
+    clearMissing = false
+  ): QuotaInfo | undefined {
     // A successful probe is a complete upstream snapshot. Replacing the
     // fields as a unit clears stale values when a provider intentionally does
     // not expose `used` or `remaining` (for example wallet/unlimited modes).
@@ -2136,8 +2144,15 @@
           remaining: probed.remaining,
           resetAt: probed.resetAt
         }
-      : current;
+      : clearMissing
+        ? { label: undefined, limit: undefined, used: undefined, remaining: undefined, resetAt: undefined }
+        : current;
     if (!next) return undefined;
+    // An explicit empty snapshot is meaningful: it tells the Rust owner to
+    // clear stale quota fields when the provider exposes only gateway data
+    // (for example an unlimited SubAPI subscription). `undefined` still
+    // means "leave the stored value untouched" when no snapshot was returned.
+    if (clearMissing) return next;
     return next.label || next.limit || next.used || next.remaining || next.resetAt ? next : undefined;
   }
 
@@ -2154,7 +2169,11 @@
             timeoutSeconds: 15
           });
           if (!result.ok || (!result.quota && !result.gateway)) continue;
-          const quota = mergeQuota(entry.quota, result.quota);
+          const quota = mergeQuota(
+            entry.quota,
+            result.quota,
+            result.source === "sub_api_v1_usage"
+          );
           const gateway = mergeGateway(
             entry.gateway,
             result.gateway,
@@ -2176,8 +2195,7 @@
   }
 
   function usageProbeCandidates(): ProviderEntry[] {
-    const source = countEntries.length ? countEntries : entries;
-    return source.filter((entry) => {
+    return countEntries.filter((entry) => {
       const provider = entry.providerId?.toLowerCase() ?? "";
       const endpoint = entry.endpoints.find((item) => item.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "";
       const normalizedProvider = provider.replaceAll("-", "_");

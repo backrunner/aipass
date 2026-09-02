@@ -772,9 +772,9 @@ impl AgentRequest {
             | Self::ProviderUsageProbe {
                 timeout_seconds, ..
             } => std::time::Duration::from_secs(*timeout_seconds) + RESPONSE_TIMEOUT_SLACK,
-            Self::ServerPricingRemoteSync {
-                timeout_seconds, ..
-            } => std::time::Duration::from_secs(*timeout_seconds) + RESPONSE_TIMEOUT_SLACK,
+            // Pricing synchronization may query every credential in an entry,
+            // so its total duration can exceed one upstream timeout.
+            Self::ServerPricingRemoteSync { .. } => LONG_RESPONSE_TIMEOUT,
             // Argon2 derivation, full-vault rewrites, export/import.
             Self::SessionUnlock { .. }
             | Self::VaultCreate { .. }
@@ -1127,6 +1127,18 @@ mod tests {
         assert_eq!(
             timeout,
             std::time::Duration::from_secs(45) + RESPONSE_TIMEOUT_SLACK
+        );
+    }
+
+    #[test]
+    fn pricing_sync_uses_the_long_network_timeout_for_multiple_keys() {
+        assert_eq!(
+            AgentRequest::ServerPricingRemoteSync {
+                id: uuid::Uuid::nil(),
+                timeout_seconds: 15,
+            }
+            .response_timeout(),
+            LONG_RESPONSE_TIMEOUT
         );
     }
 

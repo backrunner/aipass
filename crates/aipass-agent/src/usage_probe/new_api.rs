@@ -183,7 +183,10 @@ fn parse_newapi_user_self(
         (Some(remaining), Some(used)) => Some(remaining + used),
         _ => None,
     };
-    let label = "New API".to_string();
+    // The user endpoint reports the account's actual gateway group. Keep it
+    // as the quota label so the group remains visible in the quota section;
+    // the gateway field is retained for callers that consume structured data.
+    let label = group.clone().unwrap_or_else(|| "New API".to_string());
 
     if group.is_none() && quota_remaining.is_none() && quota_used.is_none() {
         return Err("response is missing New API user quota fields".to_string());
