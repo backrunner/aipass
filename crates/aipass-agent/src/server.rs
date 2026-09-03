@@ -166,6 +166,7 @@ fn run_server_with_state(
     spawn_idle_lock_watcher(state.clone());
     crate::session::spawn_power_watcher(state.clone());
     crate::pricing::spawn_list_price_refresh(state.clone());
+    crate::oauth::spawn_token_refresh(state.clone());
     if launch_desktop_tray {
         ensure_desktop_tray_companion_async(state.vault_dir.clone());
     }

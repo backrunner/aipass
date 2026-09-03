@@ -17,7 +17,8 @@ use crate::models::{
 };
 use aipass_agent_protocol::{
     AgentRequest, CcSwitchDetection, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
-    OfficialAccountRefreshResult, PricingApplyScope, PricingConfig, PricingGroup,
+    OAuthAccountSummary, OAuthDeviceStart, OAuthLoginPoll, OfficialAccountRefreshResult,
+    PricingApplyScope, PricingConfig, PricingGroup,
     ProbeResult as AgentProbeResult, SecretValue, SensitiveString, ServerTokenResponse,
     ServerUsageSummary, SessionPolicy, SessionStatus, SessionUnlockMode,
     SyncConflictResponse as AgentSyncConflictResponse, SyncSettings as AgentSyncSettings,
@@ -26,7 +27,7 @@ use aipass_agent_protocol::{
     ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageProbeMode,
     UsageProbeResult as AgentUsageProbeResult, UsageTimeseriesPoint,
 };
-use aipass_provider_registry::{GatewayMetadata, QuotaInfo};
+use aipass_provider_registry::{GatewayMetadata, OAuthProvider, QuotaInfo};
 use aipass_proxy::{ProxyConfig, ProxyStatus};
 use aipass_sync::SyncReport;
 use aipass_vault::{DeviceRecord, EntrySummary};
@@ -61,10 +62,10 @@ pub(crate) fn window_target(state: State<'_, AppState>) -> Option<String> {
 }
 
 #[tauri::command]
-pub(crate) fn take_pending_ccswitch_link(
+pub(crate) fn take_pending_deep_links(
     state: State<'_, AppState>,
-) -> Option<crate::deeplink::CcSwitchProviderLink> {
-    state.take_pending_ccswitch_link()
+) -> Vec<crate::deeplink::PendingDeepLink> {
+    state.take_pending_deep_links()
 }
 
 #[tauri::command]
@@ -492,7 +493,10 @@ pub(crate) fn vault_auth_status(
 }
 
 #[tauri::command]
-pub(crate) async fn vault_lock(app: AppHandle) -> Result<VaultStatus, String> {
+pub(crate) async fn vault_lock(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<VaultStatus, String> {
     let refresh_app = app.clone();
     let status: SessionStatus = agent_request_no_unlock_async(
         app,
@@ -501,6 +505,7 @@ pub(crate) async fn vault_lock(app: AppHandle) -> Result<VaultStatus, String> {
         },
     )
     .await?;
+    state.clear_pending_deep_links();
     let _ = refresh_app.emit(crate::tray::VAULT_STATUS_CHANGED_EVENT, ());
     let _ = refresh_app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
     Ok(VaultStatus {
@@ -570,6 +575,65 @@ pub(crate) async fn official_accounts_refresh(
         },
     )
     .await
+}
+
+#[tauri::command]
+pub(crate) async fn oauth_login_start(
+    app: AppHandle,
+    provider: OAuthProvider,
+) -> Result<OAuthDeviceStart, String> {
+    agent_request_async(app, AgentRequest::OAuthLoginStart { provider }).await
+}
+
+#[tauri::command]
+pub(crate) async fn oauth_login_poll(
+    app: AppHandle,
+    provider: OAuthProvider,
+    device_code: String,
+) -> Result<OAuthLoginPoll, String> {
+    agent_request_async(app, AgentRequest::OAuthLoginPoll { provider, device_code }).await
+}
+
+#[tauri::command]
+pub(crate) async fn oauth_login_cancel(
+    app: AppHandle,
+    provider: OAuthProvider,
+    device_code: String,
+) -> Result<bool, String> {
+    agent_request_async(app, AgentRequest::OAuthLoginCancel { provider, device_code }).await
+}
+
+#[tauri::command]
+pub(crate) async fn oauth_accounts_list(
+    app: AppHandle,
+    provider: Option<OAuthProvider>,
+) -> Result<Vec<OAuthAccountSummary>, String> {
+    agent_request_async(app, AgentRequest::OAuthAccountsList { provider }).await
+}
+
+#[tauri::command]
+pub(crate) async fn oauth_accounts_remove(
+    app: AppHandle,
+    provider: OAuthProvider,
+    account_id: Uuid,
+) -> Result<(), String> {
+    let _: serde_json::Value =
+        agent_request_async(app, AgentRequest::OAuthAccountsRemove { provider, account_id }).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn oauth_accounts_set_default(
+    app: AppHandle,
+    provider: OAuthProvider,
+    account_id: Uuid,
+) -> Result<(), String> {
+    let _: serde_json::Value = agent_request_async(
+        app,
+        AgentRequest::OAuthAccountsSetDefault { provider, account_id },
+    )
+    .await?;
+    Ok(())
 }
 
 #[tauri::command]

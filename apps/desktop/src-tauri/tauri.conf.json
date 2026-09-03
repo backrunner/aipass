@@ -34,7 +34,8 @@
       "desktop": {
         "schemes": [
           "aipass",
-          "ccswitch"
+          "ccswitch",
+          "aipass-provider"
         ]
       }
     },

@@ -24,7 +24,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["aipass-dev", "ccswitch"]
+        "schemes": ["aipass-dev", "ccswitch", "aipass-provider"]
       }
     }
   },

@@ -7,11 +7,11 @@ use aipass_agent_protocol::{
 use aipass_config_writers::endpoint_url;
 use aipass_native_host::native_manifest;
 use aipass_provider_registry::{
-    match_provider_by_domain, provider_kind_for_id, AuthScheme, EndpointKind, InterfaceType,
-    ProviderEndpoint, QuotaInfo,
+    match_provider_by_domain, provider_kind_for_id, AuthScheme, CredentialKind, EndpointKind,
+    InterfaceType, ProviderEndpoint, QuotaInfo,
 };
 use aipass_storage::atomic_write_bytes;
-use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
+use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput, SecretMetadataInput};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
@@ -86,18 +86,25 @@ enum Command {
         provider: Option<String>,
         #[arg(long)]
         domain: Vec<String>,
+        /// API endpoint URL; repeat this option for multiple API endpoints.
         #[arg(long)]
-        endpoint: Option<String>,
+        endpoint: Vec<String>,
         #[arg(long = "console-url")]
         console_url: Vec<String>,
         #[arg(long)]
         favicon_url: Option<String>,
+        #[arg(long, value_enum, default_value = "api")]
+        credential_kind: CredentialKindArg,
+        #[arg(long)]
+        account_identity: Option<String>,
         #[arg(long, value_enum)]
         interface: InterfaceArg,
         #[arg(long, value_enum)]
         auth: AuthArg,
         #[arg(long, env = "AIPASS_INPUT_API_KEY")]
         api_key: String,
+        #[arg(long)]
+        secret_label: Option<String>,
         #[arg(long)]
         default_model: Option<String>,
         #[arg(long = "model-alias")]
@@ -112,6 +119,14 @@ enum Command {
         quota_remaining: Option<String>,
         #[arg(long)]
         quota_reset_at: Option<String>,
+        #[arg(long)]
+        group: Option<String>,
+        #[arg(long)]
+        billing_rate: Option<String>,
+        #[arg(long)]
+        billing_currency: Option<String>,
+        #[arg(long)]
+        billing_unit_price: Option<String>,
         #[arg(long)]
         notes: Option<String>,
         #[arg(long)]
@@ -133,18 +148,25 @@ enum Command {
         provider: Option<String>,
         #[arg(long)]
         domain: Vec<String>,
+        /// API endpoint URL; repeat this option for multiple API endpoints.
         #[arg(long)]
-        endpoint: Option<String>,
+        endpoint: Vec<String>,
         #[arg(long = "console-url")]
         console_url: Vec<String>,
         #[arg(long)]
         favicon_url: Option<String>,
+        #[arg(long, value_enum)]
+        credential_kind: Option<CredentialKindArg>,
+        #[arg(long)]
+        account_identity: Option<String>,
         #[arg(long, value_enum)]
         interface: Option<InterfaceArg>,
         #[arg(long, value_enum)]
         auth: Option<AuthArg>,
         #[arg(long, env = "AIPASS_INPUT_API_KEY")]
         api_key: Option<String>,
+        #[arg(long)]
+        secret_label: Option<String>,
         #[arg(long)]
         default_model: Option<String>,
         #[arg(long = "model-alias")]
@@ -159,6 +181,14 @@ enum Command {
         quota_remaining: Option<String>,
         #[arg(long)]
         quota_reset_at: Option<String>,
+        #[arg(long)]
+        group: Option<String>,
+        #[arg(long)]
+        billing_rate: Option<String>,
+        #[arg(long)]
+        billing_currency: Option<String>,
+        #[arg(long)]
+        billing_unit_price: Option<String>,
         #[arg(long)]
         notes: Option<String>,
         #[arg(long)]
@@ -360,6 +390,12 @@ enum InterfaceArg {
     AzureOpenai,
     Bedrock,
     CustomHttp,
+}
+
+#[derive(Clone, ValueEnum)]
+enum CredentialKindArg {
+    Api,
+    Oauth,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -1006,34 +1042,83 @@ fn parse_headers(values: &[String]) -> Result<Vec<(String, String)>> {
 }
 
 fn endpoints_from_cli(
-    endpoint: Option<String>,
+    endpoints: Vec<String>,
     console_urls: Vec<String>,
-) -> Vec<ProviderEndpoint> {
-    endpoint
-        .map(ProviderEndpoint::api)
+) -> Result<Vec<ProviderEndpoint>> {
+    let mut result = endpoints
         .into_iter()
-        .chain(console_urls.into_iter().map(ProviderEndpoint::console))
-        .collect()
+        .map(|value| validated_endpoint(value, EndpointKind::Api))
+        .collect::<Result<Vec<_>>>()?;
+    result.extend(
+        console_urls
+            .into_iter()
+            .map(|value| validated_endpoint(value, EndpointKind::Console))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    Ok(result)
 }
 
 fn update_endpoints_from_cli(
     existing: &[ProviderEndpoint],
-    endpoint: Option<String>,
+    endpoint_values: Vec<String>,
     console_urls: Vec<String>,
-) -> Vec<ProviderEndpoint> {
-    let mut endpoints = existing
+) -> Result<Vec<ProviderEndpoint>> {
+    let has_api = !endpoint_values.is_empty();
+    let has_console = !console_urls.is_empty();
+    let mut result = existing
         .iter()
         .filter(|item| {
-            (endpoint.is_none() || item.kind != EndpointKind::Api)
-                && (console_urls.is_empty() || item.kind != EndpointKind::Console)
+            (!has_api || item.kind != EndpointKind::Api)
+                && (!has_console || item.kind != EndpointKind::Console)
         })
         .cloned()
         .collect::<Vec<_>>();
-    if let Some(endpoint) = endpoint {
-        endpoints.push(ProviderEndpoint::api(endpoint));
+    result.extend(endpoints_from_cli(endpoint_values, console_urls)?);
+    Ok(result)
+}
+
+fn validated_endpoint(url: String, kind: EndpointKind) -> Result<ProviderEndpoint> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        anyhow::bail!("endpoint URL cannot be empty");
     }
-    endpoints.extend(console_urls.into_iter().map(ProviderEndpoint::console));
-    endpoints
+    let parsed =
+        reqwest::Url::parse(&url).with_context(|| format!("invalid endpoint URL: {url}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        anyhow::bail!("endpoint must be an absolute HTTP or HTTPS URL: {url}");
+    }
+    Ok(match kind {
+        EndpointKind::Api => ProviderEndpoint::api(url),
+        EndpointKind::Console => ProviderEndpoint::console(url),
+        _ => unreachable!("CLI endpoint helper only creates API or console endpoints"),
+    })
+}
+
+fn secret_metadata_from_cli(
+    group: Option<String>,
+    interface_type: Option<InterfaceType>,
+    billing_rate: Option<String>,
+    billing_currency: Option<String>,
+    billing_unit_price: Option<String>,
+) -> SecretMetadataInput {
+    let billing = [billing_rate, billing_currency, billing_unit_price]
+        .into_iter()
+        .collect::<Vec<_>>();
+    let billing = if billing.iter().all(Option::is_none) {
+        None
+    } else {
+        Some(aipass_provider_registry::BillingRule {
+            rate: billing[0].clone(),
+            currency: billing[1].clone(),
+            unit_price: billing[2].clone(),
+            note: None,
+        })
+    };
+    SecretMetadataInput {
+        group,
+        interface_type,
+        billing,
+    }
 }
 
 fn parse_model_aliases(values: &[String]) -> Result<Vec<(String, String)>> {
@@ -1272,6 +1357,15 @@ impl From<InterfaceArg> for InterfaceType {
     }
 }
 
+impl From<CredentialKindArg> for CredentialKind {
+    fn from(value: CredentialKindArg) -> Self {
+        match value {
+            CredentialKindArg::Api => Self::Api,
+            CredentialKindArg::Oauth => Self::OAuth,
+        }
+    }
+}
+
 impl From<AuthArg> for AuthScheme {
     fn from(value: AuthArg) -> Self {
         match value {
@@ -1371,6 +1465,65 @@ mod tests {
         .expect("credential alias should parse");
 
         assert!(matches!(cli.command, Command::Add { .. }));
+    }
+
+    #[test]
+    fn add_accepts_repeatable_endpoints() {
+        let cli = Cli::try_parse_from([
+            "aipass",
+            "add",
+            "--title",
+            "Gateway",
+            "--endpoint",
+            "https://api.example.test/v1",
+            "--endpoint",
+            "https://api-2.example.test/v1",
+            "--endpoint",
+            "https://api-3.example.test/v1",
+            "--console-url",
+            "https://console.example.test",
+            "--interface",
+            "openai-compatible",
+            "--auth",
+            "bearer",
+            "--api-key",
+            "test-key",
+        ])
+        .expect("repeatable endpoints should parse");
+
+        let Command::Add {
+            endpoint,
+            console_url,
+            ..
+        } = cli.command
+        else {
+            panic!("expected add command");
+        };
+        let endpoints = endpoints_from_cli(endpoint, console_url).expect("valid endpoints");
+        assert_eq!(endpoints.len(), 4);
+        assert_eq!(endpoints[0].id, "api");
+        assert_eq!(endpoints[3].kind, EndpointKind::Console);
+    }
+
+    #[test]
+    fn endpoint_query_commas_are_preserved() {
+        let endpoints = endpoints_from_cli(
+            vec!["https://api.example.test/v1?ids=a,b".to_string()],
+            vec![],
+        )
+        .expect("query commas should be valid URL content");
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(
+            endpoints[0].url.as_deref(),
+            Some("https://api.example.test/v1?ids=a,b")
+        );
+    }
+
+    #[test]
+    fn endpoint_validation_rejects_non_http_urls() {
+        let error = endpoints_from_cli(vec!["file:///tmp/provider".to_string()], vec![])
+            .expect_err("non-http endpoint should fail");
+        assert!(error.to_string().contains("absolute HTTP or HTTPS"));
     }
 
     #[test]

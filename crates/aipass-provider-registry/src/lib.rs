@@ -39,7 +39,7 @@ pub enum AuthScheme {
 ///
 /// This is intentionally separate from `AuthScheme`: OAuth is an account
 /// credential source, while `AuthScheme` describes the upstream wire header.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialKind {
     #[default]
@@ -48,6 +48,37 @@ pub enum CredentialKind {
     // TypeScript contract uses "oauth".
     #[serde(rename = "oauth", alias = "o_auth")]
     OAuth,
+}
+
+/// Which official provider an in-app OAuth device-code login targets.
+///
+/// Only providers whose CLI login we can replicate via a public device flow
+/// are offered in-app; everything else keeps using the CLI-import path.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthProvider {
+    #[serde(rename = "codex")]
+    Codex,
+    #[serde(rename = "grok")]
+    Grok,
+}
+
+impl OAuthProvider {
+    /// Canonical provider id, matching `official_accounts` discovery so an
+    /// in-app login and a CLI import resolve to the same provider entry.
+    pub fn provider_id(self) -> &'static str {
+        match self {
+            OAuthProvider::Codex => "openai",
+            OAuthProvider::Grok => "xai",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OAuthProvider::Codex => "ChatGPT (Codex)",
+            OAuthProvider::Grok => "Grok (xAI)",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,6 +194,29 @@ impl SecretRef {
             interface_type: None,
             billing: None,
         }
+    }
+}
+
+/// The label every entry's main credential is created with.
+pub const PRIMARY_SECRET_LABEL: &str = "primary";
+
+/// Select the primary credential of an entry: the ref labelled "primary" when
+/// one exists, otherwise the first ref. Callers that rotate or annotate the
+/// main credential must go through this so multi-key (relay) entries keep a
+/// stable primary regardless of ref ordering.
+pub fn primary_secret_ref(refs: &[SecretRef]) -> Option<&SecretRef> {
+    refs.iter()
+        .find(|secret| secret.label == PRIMARY_SECRET_LABEL)
+        .or_else(|| refs.first())
+}
+
+/// Mutable variant of [`primary_secret_ref`].
+pub fn primary_secret_ref_mut(refs: &mut [SecretRef]) -> Option<&mut SecretRef> {
+    if refs.iter().any(|secret| secret.label == PRIMARY_SECRET_LABEL) {
+        refs.iter_mut()
+            .find(|secret| secret.label == PRIMARY_SECRET_LABEL)
+    } else {
+        refs.first_mut()
     }
 }
 

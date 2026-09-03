@@ -10,7 +10,7 @@ use aipass_agent_protocol::{
     SessionStatus, SessionUnlockMode, UsageProbeResult,
 };
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
-use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput, PRIMARY_SECRET_FIELD};
+use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
 use anyhow::{bail, Result};
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -418,6 +418,7 @@ fn handle_request_inner(
                 gateway,
                 tags: tags.into_iter().filter_map(non_empty).collect(),
                 notes: notes.and_then(non_empty),
+                secret_metadata,
             };
             let _: serde_json::Value = request_agent(
                 config,
@@ -426,18 +427,6 @@ fn handle_request_inner(
                     input,
                 },
             )?;
-            // ProviderUpdate rewrites the entry but never per-key fields, so
-            // the primary key's group / format / billing are set separately.
-            if !secret_metadata.is_empty() {
-                let _: serde_json::Value = request_agent(
-                    config,
-                    &AgentRequest::SecretMetadataSet {
-                        id: entry_id,
-                        secret_id: PRIMARY_SECRET_FIELD.to_string(),
-                        metadata: secret_metadata,
-                    },
-                )?;
-            }
             Ok(json!({ "entryId": entry_id }))
         }
         NativeRequest::ProviderUsageProbe {

@@ -680,6 +680,7 @@ fn lock_vault_async(app: AppHandle, feedback: TrayFeedback) {
         );
         match result {
             Ok(_) => {
+                app.state::<crate::AppState>().clear_pending_deep_links();
                 let _ = app.emit(VAULT_STATUS_CHANGED_EVENT, ());
             }
             Err(err) => {

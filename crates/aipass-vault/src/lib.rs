@@ -5,8 +5,9 @@ use aipass_crypto::{
     VaultEpochKey, VaultRootKey, WrappedDek, KEY_LEN,
 };
 use aipass_provider_registry::{
-    AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, ProviderEndpoint,
-    ProviderEntry, ProviderKind, QuotaInfo, SecretRef, SubscriptionSnapshot,
+    primary_secret_ref_mut, AuthScheme, BillingRule, CredentialKind, GatewayMetadata,
+    InterfaceType, OAuthProvider, ProviderEndpoint, ProviderEntry, ProviderKind, QuotaInfo,
+    SecretRef, SubscriptionSnapshot,
 };
 use aipass_storage::atomic_write_bytes;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
@@ -276,6 +277,9 @@ pub struct ProviderEntryUpdateInput {
     pub gateway: Option<GatewayMetadata>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
+    /// Per-key metadata applied to the primary secret in the same vault write.
+    #[serde(default)]
+    pub secret_metadata: SecretMetadataInput,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -397,6 +401,37 @@ struct VaultExportFile {
 struct ProviderRecordPlaintext {
     entry: ProviderEntry,
     secrets: BTreeMap<String, String>,
+}
+
+/// Encrypted-at-rest record of an in-app OAuth device-code login. Holds the
+/// full refreshable token bundle so the agent can self-refresh without the
+/// external CLI. Contains secrets: never serialize this to the frontend; the
+/// agent maps it to a token-free summary instead.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedOAuthAccount {
+    pub id: Uuid,
+    pub provider: OAuthProvider,
+    pub account_identity: Option<String>,
+    #[serde(default)]
+    pub chatgpt_account_id: Option<String>,
+    pub access_token: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub id_token: Option<String>,
+    /// Access-token expiry in unix milliseconds; drives lazy + background refresh.
+    pub expires_at_ms: i64,
+    pub last_refresh_ms: i64,
+    /// Linked provider entry whose primary secret mirrors `access_token`.
+    #[serde(default)]
+    pub entry_id: Option<Uuid>,
+    #[serde(default)]
+    pub is_default: bool,
+    /// Set when the provider rejects the refresh token; needs interactive re-login.
+    #[serde(default)]
+    pub requires_reauth: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub authenticated_at: OffsetDateTime,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -830,7 +865,7 @@ impl Vault {
             provider_kind: input.provider_kind,
             provider_id: input.provider_id,
             credential_kind: input.credential_kind,
-            account_identity: input.account_identity,
+            account_identity: clean_optional(input.account_identity.as_deref()),
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
@@ -1091,6 +1126,9 @@ impl Vault {
             primary.masked = mask_secret(&api_key);
             primary.fingerprint = fingerprint;
         }
+        if let Some(primary) = primary_secret_ref_mut(&mut secret_refs) {
+            input.secret_metadata.apply_to(primary);
+        }
         let entry = ProviderEntry {
             id,
             title: input.title,
@@ -1098,7 +1136,12 @@ impl Vault {
             provider_kind: input.provider_kind,
             provider_id: input.provider_id,
             credential_kind: input.credential_kind.unwrap_or(old.entry.credential_kind),
-            account_identity: input.account_identity.or(old.entry.account_identity),
+            // `None` means the caller did not include the field and therefore
+            // must preserve it. A present blank value is an explicit clear.
+            account_identity: match input.account_identity {
+                Some(value) => clean_optional(Some(&value)),
+                None => old.entry.account_identity,
+            },
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
@@ -1623,6 +1666,116 @@ impl Vault {
         Ok(())
     }
 
+    fn write_oauth_record(&self, account: &ManagedOAuthAccount) -> Result<(), VaultError> {
+        self.write_envelope(
+            self.oauth_record_path(account.id),
+            account.id,
+            "oauth_account",
+            1,
+            &serde_json::to_vec(account)?,
+        )
+    }
+
+    fn decrypt_oauth_path(&self, path: &Path) -> Result<ManagedOAuthAccount, VaultError> {
+        if !path.exists() {
+            return Err(VaultError::RecordNotFound);
+        }
+        let envelope: ObjectEnvelope = read_json(path)?;
+        if envelope.tombstone || envelope.object_type != "oauth_account" {
+            return Err(VaultError::RecordNotFound);
+        }
+        self.decrypt_envelope_path(path)
+    }
+
+    fn clear_default_oauth_for(&self, provider: OAuthProvider) -> Result<(), VaultError> {
+        for path in self.oauth_record_paths()? {
+            let mut account = self.decrypt_oauth_path(&path)?;
+            if account.provider == provider && account.is_default {
+                account.is_default = false;
+                self.write_oauth_record(&account)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn add_oauth_account(&self, account: ManagedOAuthAccount) -> Result<(), VaultError> {
+        if account.is_default {
+            self.clear_default_oauth_for(account.provider)?;
+        }
+        self.write_oauth_record(&account)?;
+        self.audit("oauth.create", Some(account.id), None)?;
+        Ok(())
+    }
+
+    pub fn update_oauth_account(&self, account: ManagedOAuthAccount) -> Result<(), VaultError> {
+        // Confirm the target exists and really is an OAuth account before writing.
+        self.decrypt_oauth_path(&self.oauth_record_path(account.id))?;
+        if account.is_default {
+            self.clear_default_oauth_for(account.provider)?;
+        }
+        self.write_oauth_record(&account)?;
+        self.audit("oauth.update", Some(account.id), None)?;
+        Ok(())
+    }
+
+    pub fn get_oauth_account(&self, id: Uuid) -> Result<ManagedOAuthAccount, VaultError> {
+        self.decrypt_oauth_path(&self.oauth_record_path(id))
+    }
+
+    pub fn list_oauth_accounts(
+        &self,
+        provider: Option<OAuthProvider>,
+    ) -> Result<Vec<ManagedOAuthAccount>, VaultError> {
+        let mut accounts = Vec::new();
+        for path in self.oauth_record_paths()? {
+            let account = self.decrypt_oauth_path(&path)?;
+            if provider.map_or(true, |want| account.provider == want) {
+                accounts.push(account);
+            }
+        }
+        accounts.sort_by(|a, b| {
+            a.authenticated_at
+                .cmp(&b.authenticated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(accounts)
+    }
+
+    pub fn set_default_oauth_account(
+        &self,
+        provider: OAuthProvider,
+        id: Uuid,
+    ) -> Result<(), VaultError> {
+        let mut account = self.decrypt_oauth_path(&self.oauth_record_path(id))?;
+        if account.provider != provider {
+            return Err(VaultError::RecordNotFound);
+        }
+        self.clear_default_oauth_for(provider)?;
+        account.is_default = true;
+        self.write_oauth_record(&account)?;
+        self.audit("oauth.set_default", Some(id), None)?;
+        Ok(())
+    }
+
+    pub fn remove_oauth_account(&self, id: Uuid) -> Result<(), VaultError> {
+        let path = self.oauth_record_path(id);
+        if !path.exists() {
+            return Err(VaultError::RecordNotFound);
+        }
+        let mut envelope: ObjectEnvelope = read_json(&path)?;
+        if envelope.object_id != id || envelope.object_type != "oauth_account" {
+            return Err(VaultError::RecordNotFound);
+        }
+        envelope.wrapped_dek = None;
+        envelope.payload = None;
+        envelope.tombstone = true;
+        envelope.updated_at = OffsetDateTime::now_utc();
+        envelope.lamport = envelope.lamport.saturating_add(1);
+        write_json(path, &envelope)?;
+        self.audit("oauth.delete", Some(id), None)?;
+        Ok(())
+    }
+
     pub fn list_devices(&self) -> Result<Vec<DeviceRecord>, VaultError> {
         let mut devices: Vec<DeviceRecord> = Vec::new();
         for path in encrypted_paths(&self.root.join("devices"), "aipdevice")? {
@@ -1875,8 +2028,30 @@ impl Vault {
             .into_iter()
             .filter(|path| {
                 read_json::<ObjectEnvelope>(path)
-                    .map(|envelope| !envelope.tombstone)
+                    .map(|envelope| {
+                        !envelope.tombstone && envelope.object_type == "provider_entry"
+                    })
                     .unwrap_or(true)
+            })
+            .collect())
+    }
+
+    /// Managed OAuth accounts live beside provider entries in `objects/` so the
+    /// existing epoch-rewrap and encrypted-export globs cover them; they are
+    /// distinguished only by `object_type`.
+    fn oauth_record_path(&self, id: Uuid) -> PathBuf {
+        self.root.join("objects").join(format!("{id}.aipobj"))
+    }
+
+    fn oauth_record_paths(&self) -> Result<Vec<PathBuf>, VaultError> {
+        Ok(encrypted_paths(&self.root.join("objects"), "aipobj")?
+            .into_iter()
+            .filter(|path| {
+                read_json::<ObjectEnvelope>(path)
+                    .map(|envelope| {
+                        !envelope.tombstone && envelope.object_type == "oauth_account"
+                    })
+                    .unwrap_or(false)
             })
             .collect())
     }
@@ -2394,6 +2569,7 @@ mod tests {
             gateway: None,
             tags: vec!["prod".to_string(), "team".to_string()],
             notes: Some("renamed without rotating key".to_string()),
+            secret_metadata: SecretMetadataInput::default(),
         }
     }
 
@@ -2415,6 +2591,77 @@ mod tests {
         Vault::create_with_device_and_kdf(root, password, device_name, test_kdf())
             .unwrap()
             .vault
+    }
+
+    fn oauth_account(
+        provider: OAuthProvider,
+        refresh_token: &str,
+        is_default: bool,
+    ) -> ManagedOAuthAccount {
+        ManagedOAuthAccount {
+            id: Uuid::new_v4(),
+            provider,
+            account_identity: Some("user@example.com".to_string()),
+            chatgpt_account_id: None,
+            access_token: format!("access-{refresh_token}"),
+            refresh_token: refresh_token.to_string(),
+            id_token: None,
+            expires_at_ms: 1_893_456_000_000,
+            last_refresh_ms: 1_893_456_000_000,
+            entry_id: None,
+            is_default,
+            requires_reauth: false,
+            authenticated_at: OffsetDateTime::now_utc(),
+        }
+    }
+
+    #[test]
+    fn oauth_account_round_trip_default_and_isolation() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        vault.add_provider(input("sk-ant-api03-fake-secret-1234")).unwrap();
+
+        let codex_one = oauth_account(OAuthProvider::Codex, "refresh-codex-1", true);
+        let grok = oauth_account(OAuthProvider::Grok, "refresh-grok", true);
+        vault.add_oauth_account(codex_one.clone()).unwrap();
+        vault.add_oauth_account(grok.clone()).unwrap();
+
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        // OAuth objects share the objects/ dir but must never surface as entries.
+        assert_eq!(reopened.list_provider_summaries().unwrap().len(), 1);
+
+        let all = reopened.list_oauth_accounts(None).unwrap();
+        assert_eq!(all.len(), 2);
+        let codex_list = reopened.list_oauth_accounts(Some(OAuthProvider::Codex)).unwrap();
+        assert_eq!(codex_list.len(), 1);
+        assert_eq!(codex_list[0].refresh_token, "refresh-codex-1");
+        assert!(codex_list[0].is_default);
+        let grok_list = reopened.list_oauth_accounts(Some(OAuthProvider::Grok)).unwrap();
+        assert_eq!(grok_list.len(), 1);
+        assert!(grok_list[0].is_default);
+
+        // A second default Codex account demotes the first, Grok is untouched.
+        let codex_two = oauth_account(OAuthProvider::Codex, "refresh-codex-2", true);
+        let codex_two_id = codex_two.id;
+        reopened.add_oauth_account(codex_two).unwrap();
+        let codex_after = reopened.list_oauth_accounts(Some(OAuthProvider::Codex)).unwrap();
+        assert_eq!(codex_after.len(), 2);
+        assert_eq!(
+            codex_after.iter().filter(|a| a.is_default).count(),
+            1,
+            "exactly one Codex account stays default"
+        );
+        assert!(codex_after.iter().any(|a| a.id == codex_two_id && a.is_default));
+        assert!(
+            reopened.list_oauth_accounts(Some(OAuthProvider::Grok)).unwrap()[0].is_default,
+            "Grok default is untouched by a Codex default change"
+        );
+
+        // Removing the Grok account leaves only the two Codex accounts.
+        reopened.remove_oauth_account(grok.id).unwrap();
+        assert_eq!(reopened.list_oauth_accounts(None).unwrap().len(), 2);
+        assert!(reopened.get_oauth_account(grok.id).is_err());
     }
 
     #[test]
@@ -2525,6 +2772,45 @@ mod tests {
             .iter()
             .any(|name| name == "anthropic-version"));
         assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-original");
+    }
+
+    #[test]
+    fn provider_account_identity_can_be_set_preserved_and_cleared() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let mut provider = input("sk-ant-api03-identity");
+        provider.account_identity = Some(" team@example.com ".to_string());
+        let id = vault.add_provider(provider).unwrap();
+        assert_eq!(
+            vault
+                .get_provider_summary(id)
+                .unwrap()
+                .account_identity
+                .as_deref(),
+            Some("team@example.com")
+        );
+
+        // Omitted values preserve the existing identity.
+        vault.update_provider(id, update_input(None)).unwrap();
+        assert_eq!(
+            vault
+                .get_provider_summary(id)
+                .unwrap()
+                .account_identity
+                .as_deref(),
+            Some("team@example.com")
+        );
+
+        // A present blank value is an explicit clear.
+        let mut clear = update_input(None);
+        clear.account_identity = Some("   ".to_string());
+        vault.update_provider(id, clear).unwrap();
+        assert!(vault
+            .get_provider_summary(id)
+            .unwrap()
+            .account_identity
+            .is_none());
     }
 
     #[test]

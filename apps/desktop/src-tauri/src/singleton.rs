@@ -49,6 +49,8 @@ struct SingletonRequest {
     target: String,
     #[serde(default)]
     command: Option<SingletonCommand>,
+    #[serde(default)]
+    deep_link_urls: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,11 +73,16 @@ enum SingletonCommand {
     Quit,
 }
 
-pub(crate) fn acquire(current_version: &str, target: &str) -> Result<SingletonDecision> {
+pub(crate) fn acquire(
+    current_version: &str,
+    target: &str,
+    deep_link_urls: Vec<String>,
+) -> Result<SingletonDecision> {
     let request = SingletonRequest {
         version: current_version.to_string(),
         target: target.to_string(),
         command: None,
+        deep_link_urls,
     };
 
     if let Ok(decision) = request_existing_instance(&request, current_version) {
@@ -87,6 +94,21 @@ pub(crate) fn acquire(current_version: &str, target: &str) -> Result<SingletonDe
         Err(err) if is_addr_in_use(&err) => request_existing_instance(&request, current_version),
         Err(err) => Err(err),
     }
+}
+
+/// Return deep-link arguments that need forwarding when another desktop instance owns the socket.
+pub(crate) fn deep_link_urls_from_args() -> Vec<String> {
+    std::env::args()
+        .skip(1)
+        .filter_map(|value| value.parse::<url::Url>().ok())
+        .filter(|url| {
+            matches!(
+                url.scheme(),
+                "ccswitch" | "aipass-provider" | "aipass" | "aipass-dev"
+            )
+        })
+        .map(|url| url.to_string())
+        .collect()
 }
 
 pub(crate) fn spawn_server(app: AppHandle, singleton: DesktopSingleton, current_version: String) {
@@ -150,7 +172,15 @@ fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) 
     .context("failed to send desktop singleton response")?;
 
     match action {
-        SingletonAction::UseExisting => crate::activate_window_target(&app, &request.target),
+        SingletonAction::UseExisting => {
+            crate::activate_window_target(&app, &request.target);
+            let urls = request
+                .deep_link_urls
+                .iter()
+                .filter_map(|value| value.parse::<url::Url>().ok())
+                .collect::<Vec<_>>();
+            crate::handle_deep_link_urls(&app, urls);
+        }
         SingletonAction::ReplaceExisting => {
             thread::spawn(move || {
                 thread::sleep(REPLACEMENT_EXIT_DELAY);

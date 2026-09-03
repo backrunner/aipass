@@ -55,11 +55,14 @@ aipass add --title 'Anthropic Prod' --provider anthropic \
 
 - `--provider <id>` —— 注册表中的服务商 ID（例如 `anthropic`）。省略时会根据第一个 `--domain` 猜测。
 - `--domain <host>`（可重复）和 `--console-url <url>`（可重复）——供浏览器扩展识别控制台。
-- `--endpoint <url>` —— API 基础 URL。
+- `--endpoint <url>`（可重复）—— API 端点；多个值请重复此选项，每个值保存为 `api` 类型；`--console-url` 保存为 `console` 类型。
+- `--credential-kind api|oauth` 和 `--account-identity <value>` —— 标记 API 或官方 OAuth 凭据及关联账号。
+- `--secret-label <label>` —— 为主密钥设置标签（例如 `production`）。
 - `--favicon-url <url>`、`--notes <text>`、`--tag <tag>`（可重复）。
 - `--default-model <model>` 和 `--model-alias alias=model`（可重复）。
 - `--header name=value`（可重复）—— 随请求发送的额外请求头。
 - `--quota-label`、`--quota-limit`、`--quota-remaining`、`--quota-reset-at` —— 配额展示元数据。
+- `--group <name>`、`--billing-rate <rate>`、`--billing-currency <currency>`、`--billing-unit-price <price>` —— 每个密钥的网关分组和计费元数据。
 
 `--interface` 接受 `openai-compatible`、`anthropic-messages`、`gemini`、`azure-openai`、`bedrock`、`custom-http`。`--auth` 接受 `bearer`、`x-api-key`、`google-api-key`、`azure-api-key`、`aws-profile`、`custom-header`。
 

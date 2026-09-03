@@ -63,7 +63,7 @@ use std::ffi::OsString;
 struct AppState {
     auth_tasks: AuthTasks,
     window: Mutex<DesktopWindowState>,
-    pending_ccswitch_link: Mutex<Option<deeplink::CcSwitchProviderLink>>,
+    pending_deep_links: Mutex<Vec<deeplink::PendingDeepLink>>,
 }
 
 pub(crate) static ALLOW_PROCESS_EXIT: AtomicBool = AtomicBool::new(false);
@@ -111,17 +111,60 @@ impl AppState {
 
     pub(crate) fn store_pending_ccswitch_link(&self, link: deeplink::CcSwitchProviderLink) {
         let mut pending = self
-            .pending_ccswitch_link
+            .pending_deep_links
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        *pending = Some(link);
+        pending.push(deeplink::PendingDeepLink::CcSwitch(link));
     }
 
-    pub(crate) fn take_pending_ccswitch_link(&self) -> Option<deeplink::CcSwitchProviderLink> {
-        self.pending_ccswitch_link
+    pub(crate) fn store_pending_aipass_provider_link(&self, link: deeplink::AipassProviderLink) {
+        let mut pending = self
+            .pending_deep_links
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        pending.push(deeplink::PendingDeepLink::AipassProvider(link));
+    }
+
+    pub(crate) fn store_pending_ccswitch_link_error(
+        &self,
+        payload: deeplink::CcSwitchLinkErrorPayload,
+    ) {
+        let mut pending = self
+            .pending_deep_links
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        pending.push(deeplink::PendingDeepLink::CcSwitchError(payload));
+    }
+
+    pub(crate) fn store_pending_aipass_provider_link_error(
+        &self,
+        payload: deeplink::AipassProviderLinkErrorPayload,
+    ) {
+        let mut pending = self
+            .pending_deep_links
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        pending.push(deeplink::PendingDeepLink::AipassProviderError(payload));
+    }
+
+    pub(crate) fn take_pending_deep_links(&self) -> Vec<deeplink::PendingDeepLink> {
+        std::mem::take(
+            &mut *self
+                .pending_deep_links
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()),
+        )
+    }
+
+    pub(crate) fn clear_pending_deep_links(&self) {
+        self.pending_deep_links
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .take()
+            .clear();
+    }
+
+    fn frontend_ready(&self) -> bool {
+        self.window_state().frontend_ready
     }
 }
 
@@ -295,6 +338,7 @@ fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateI
         gateway: request.gateway,
         tags: clean_strings(request.tags),
         notes: request.notes.and_then(non_empty),
+        secret_metadata: request.secret_metadata,
     }
 }
 
@@ -1868,6 +1912,81 @@ pub(crate) fn complete_desktop_startup(app: &AppHandle) -> Result<(), String> {
     result
 }
 
+/// Process deep links from both the live listener and the platform's cold-start
+/// argument path so every entry surface follows the same validation and UI flow.
+pub(crate) fn handle_deep_link_urls(app: &AppHandle, urls: Vec<url::Url>) {
+    for url in urls {
+        match url.scheme() {
+            "ccswitch" => match deeplink::parse_ccswitch_link(&url) {
+                Ok(link) => {
+                    let state = app.state::<AppState>();
+                    if state.frontend_ready() {
+                        let _ = app.emit("ccswitch-provider-import", &link);
+                    } else {
+                        state.store_pending_ccswitch_link(link);
+                    }
+                    activate_window_target(app, "main");
+                }
+                Err(err) => {
+                    let state = app.state::<AppState>();
+                    let payload = err.payload();
+                    if state.frontend_ready() {
+                        let _ = app.emit("ccswitch-provider-import-error", &payload);
+                    } else {
+                        state.store_pending_ccswitch_link_error(payload);
+                    }
+                    activate_window_target(app, "main");
+                }
+            },
+            "aipass-provider" => match deeplink::parse_aipass_provider_link(&url) {
+                Ok(link) => {
+                    let state = app.state::<AppState>();
+                    if state.frontend_ready() {
+                        let _ = app.emit("aipass-provider-add", &link);
+                    } else {
+                        state.store_pending_aipass_provider_link(link);
+                    }
+                    activate_window_target(app, "main");
+                }
+                Err(err) => {
+                    let state = app.state::<AppState>();
+                    let payload = err.payload();
+                    if state.frontend_ready() {
+                        let _ = app.emit("aipass-provider-add-error", &payload);
+                    } else {
+                        state.store_pending_aipass_provider_link_error(payload);
+                    }
+                    activate_window_target(app, "main");
+                }
+            },
+            "aipass" | "aipass-dev" => {
+                let extension_id = url
+                    .query_pairs()
+                    .find(|(key, _)| key == "extensionId")
+                    .map(|(_, value)| value.into_owned())
+                    .filter(|value| looks_like_extension_id(value));
+                if let Some(extension_id) = extension_id {
+                    let _ = thread::Builder::new()
+                        .name("deep-link-native-host-repair".to_string())
+                        .spawn(move || {
+                            if let Err(err) = repair_native_host_manifest(vec![extension_id]) {
+                                eprintln!(
+                                    "failed to repair native host manifest from deep link: {err}"
+                                );
+                            }
+                        });
+                }
+                if let Some(target) = url.path_segments().and_then(|mut segments| segments.next()) {
+                    activate_window_target(app, target);
+                } else {
+                    activate_window_target(app, "main");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn ensure_agent_resident_async(app: AppHandle) {
     thread::spawn(move || {
         let client = match agent_client(&app) {
@@ -1975,7 +2094,9 @@ pub fn run() {
         "desktop.startup.begin",
         &[("version", version), ("target", &launch_target)],
     );
-    let singleton = match singleton::acquire(version, &launch_target) {
+    let launch_deep_link_urls = singleton::deep_link_urls_from_args();
+    let startup_deep_link_urls = launch_deep_link_urls.clone();
+    let singleton = match singleton::acquire(version, &launch_target, launch_deep_link_urls) {
         Ok(singleton::SingletonDecision::Run(singleton)) => {
             let _ = logging::log_event("desktop.singleton.acquired", &[]);
             singleton
@@ -2001,49 +2122,25 @@ pub fn run() {
             activate_window_target(app.handle(), &launch_target);
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
-                for url in event.urls() {
-                    match url.scheme() {
-                        "ccswitch" => match deeplink::parse_ccswitch_link(&url) {
-                            Ok(link) => {
-                                handle
-                                    .state::<AppState>()
-                                    .store_pending_ccswitch_link(link.clone());
-                                let _ = handle.emit("ccswitch-provider-import", &link);
-                            }
-                            Err(err) => {
-                                let _ =
-                                    handle.emit("ccswitch-provider-import-error", &err.payload());
-                            }
-                        },
-                        "aipass" | "aipass-dev" => {
-                            let extension_id = url
-                                .query_pairs()
-                                .find(|(key, _)| key == "extensionId")
-                                .map(|(_, value)| value.into_owned())
-                                .filter(|value| looks_like_extension_id(value));
-                            if let Some(extension_id) = extension_id {
-                                thread::spawn(move || {
-                                    if let Err(err) =
-                                        repair_native_host_manifest(vec![extension_id])
-                                    {
-                                        eprintln!(
-                                            "failed to repair native host manifest from deep link: {err}"
-                                        );
-                                    }
-                                });
-                            }
-                            if let Some(target) =
-                                url.path_segments().and_then(|mut segments| segments.next())
-                            {
-                                activate_window_target(&handle, target);
-                            } else {
-                                activate_window_target(&handle, "main");
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                handle_deep_link_urls(&handle, event.urls());
             });
+            let mut startup_urls = match app.deep_link().get_current() {
+                Ok(Some(urls)) => urls,
+                Ok(None) => Vec::new(),
+                Err(err) => {
+                    eprintln!("failed to read cold-start deep link: {err}");
+                    Vec::new()
+                }
+            };
+            for url in startup_deep_link_urls
+                .iter()
+                .filter_map(|value| value.parse::<url::Url>().ok())
+            {
+                if !startup_urls.iter().any(|existing| existing == &url) {
+                    startup_urls.push(url);
+                }
+            }
+            handle_deep_link_urls(app.handle(), startup_urls);
             #[cfg(all(debug_assertions, not(target_os = "macos")))]
             if let Err(err) = app.deep_link().register_all() {
                 eprintln!("failed to register development deep-link scheme: {err}");
@@ -2096,6 +2193,12 @@ pub fn run() {
             entries_list,
             entries_search,
             official_accounts_refresh,
+            oauth_login_start,
+            oauth_login_poll,
+            oauth_login_cancel,
+            oauth_accounts_list,
+            oauth_accounts_remove,
+            oauth_accounts_set_default,
             ccswitch_detect,
             ccswitch_import,
             provider_favicon_backfill,
@@ -2144,7 +2247,7 @@ pub fn run() {
             download_update,
             install_pending_update,
             install_update,
-            take_pending_ccswitch_link
+            take_pending_deep_links
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

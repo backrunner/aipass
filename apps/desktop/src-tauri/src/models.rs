@@ -200,6 +200,8 @@ pub(crate) struct ProviderUpdateRequest {
     #[serde(default)]
     pub(crate) tags: Vec<String>,
     pub(crate) notes: Option<String>,
+    #[serde(default)]
+    pub(crate) secret_metadata: SecretMetadataInput,
 }
 
 #[derive(Clone, Debug, Serialize)]

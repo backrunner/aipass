@@ -101,8 +101,7 @@ impl ProxyService {
             .decrypt_local_state(CONFIG_PURPOSE, &persisted.payload)
             .map_err(map_vault_error)?;
         self.config = serde_json::from_slice(&bytes).map_err(ServiceError::internal)?;
-        let normalized = normalize_unavailable_conversion(&mut self.config)
-            | ensure_route_tokens(&mut self.config);
+        let normalized = ensure_route_tokens(&mut self.config);
         if self.pending_disabled_persist {
             self.config.enabled = false;
         }
@@ -771,11 +770,30 @@ impl ProxyService {
                     .interface_type
                     .as_ref()
                     .unwrap_or(&entry.interface_type);
-                if !interface_supports_proxy_protocol(interface, route.upstream_protocol) {
+                let target_protocol =
+                    native_protocol_for_entry(&entry, credential).ok_or_else(|| {
+                        ServiceError::new(
+                            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                            format!(
+                            "proxy target {} uses a {interface:?} interface that cannot be proxied",
+                            target.label
+                        ),
+                        )
+                    })?;
+                if target_protocol != route.inbound_protocol && !route.conversion_enabled {
                     return Err(ServiceError::new(
                         aipass_agent_protocol::AgentErrorCode::ValidationFailed,
                         format!(
-                            "proxy target {} no longer supports the route protocol",
+                            "proxy target {} speaks a different protocol than route {}; enable protocol conversion for this route",
+                            target.label, route.name
+                        ),
+                    ));
+                }
+                if !aipass_proxy::supports(route.inbound_protocol, target_protocol) {
+                    return Err(ServiceError::new(
+                        aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                        format!(
+                            "proxy target {} has no conversion path from the route protocol",
                             target.label
                         ),
                     ));
@@ -794,6 +812,7 @@ impl ProxyService {
                         }
                     };
                 let mut target_config = target.clone();
+                target_config.protocol = Some(target_protocol);
                 if let Some(pinned) = pinned_official_oauth_endpoint(
                     &entry.provider_kind,
                     &entry.credential_kind,
@@ -887,17 +906,32 @@ fn proxy_auth_scheme(auth_scheme: &AuthScheme) -> Option<&'static str> {
     }
 }
 
-fn interface_supports_proxy_protocol(
-    interface: &InterfaceType,
-    protocol: aipass_proxy::Protocol,
-) -> bool {
+/// Native wire protocol of a provider entry, mirroring the desktop's
+/// `nativeProtocolForEntry`: Anthropic entries speak Anthropic Messages;
+/// OpenAI's own API and Codex OAuth credentials speak the Responses API;
+/// other OpenAI-compatible and Azure entries speak Chat Completions.
+/// Gemini, Bedrock, and custom-HTTP entries cannot be proxy targets.
+fn native_protocol_for_entry(
+    entry: &aipass_vault::EntrySummary,
+    credential: &aipass_provider_registry::SecretRef,
+) -> Option<aipass_proxy::Protocol> {
+    let interface = credential
+        .interface_type
+        .as_ref()
+        .unwrap_or(&entry.interface_type);
     match interface {
-        InterfaceType::AnthropicMessages => protocol == aipass_proxy::Protocol::AnthropicMessages,
-        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => matches!(
-            protocol,
-            aipass_proxy::Protocol::OpenAiResponses | aipass_proxy::Protocol::OpenAiChatCompletions
-        ),
-        InterfaceType::Gemini | InterfaceType::Bedrock | InterfaceType::CustomHttp => false,
+        InterfaceType::AnthropicMessages => Some(aipass_proxy::Protocol::AnthropicMessages),
+        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => {
+            let responses_native = entry.provider_id.as_deref() == Some("openai")
+                || (entry.provider_id.as_deref() == Some("codex")
+                    && entry.credential_kind == CredentialKind::OAuth);
+            Some(if responses_native {
+                aipass_proxy::Protocol::OpenAiResponses
+            } else {
+                aipass_proxy::Protocol::OpenAiChatCompletions
+            })
+        }
+        InterfaceType::Gemini | InterfaceType::Bedrock | InterfaceType::CustomHttp => None,
     }
 }
 
@@ -912,18 +946,6 @@ fn normalize_versions(versions: &mut Vec<aipass_agent_protocol::GroupPriceVersio
         }
     }
     *versions = deduped;
-}
-
-fn normalize_unavailable_conversion(config: &mut ProxyConfig) -> bool {
-    let mut changed = false;
-    for route in &mut config.routes {
-        if route.conversion_enabled || route.upstream_protocol != route.inbound_protocol {
-            route.conversion_enabled = false;
-            route.upstream_protocol = route.inbound_protocol;
-            changed = true;
-        }
-    }
-    changed
 }
 
 fn ensure_route_tokens(config: &mut ProxyConfig) -> bool {
@@ -957,15 +979,31 @@ fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
             "proxy bind port must be greater than zero",
         ));
     }
-    if config
-        .routes
-        .iter()
-        .any(|route| route.conversion_enabled || route.inbound_protocol != route.upstream_protocol)
-    {
-        return Err(ServiceError::new(
-            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-            "protocol conversion is not available in this release",
-        ));
+    for route in &config.routes {
+        // `upstream_protocol` is the legacy route-level fallback; targets
+        // with an explicit protocol validate against their own value.
+        let target_protocols = std::iter::once(route.upstream_protocol)
+            .chain(route.targets.iter().filter_map(|target| target.protocol));
+        for target_protocol in target_protocols {
+            if route.inbound_protocol != target_protocol && !route.conversion_enabled {
+                return Err(ServiceError::new(
+                    aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                    format!(
+                        "proxy route {} mixes protocols without enabling conversion",
+                        route.name
+                    ),
+                ));
+            }
+            if !aipass_proxy::supports(route.inbound_protocol, target_protocol) {
+                return Err(ServiceError::new(
+                    aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                    format!(
+                        "proxy route {} has no conversion path between its inbound and upstream protocols",
+                        route.name
+                    ),
+                ));
+            }
+        }
     }
     if config
         .routes
@@ -1068,7 +1106,9 @@ mod tests {
         ProviderEntryInput {
             title: "Proxy upstream".into(),
             provider_kind: ProviderKind::Unknown,
-            provider_id: None,
+            // Matches the routes these tests build: an OpenAI-native entry
+            // speaks the Responses API.
+            provider_id: Some("openai".into()),
             credential_kind: Default::default(),
             account_identity: None,
             domains: Vec::new(),
@@ -1209,6 +1249,7 @@ mod tests {
             priority: 0,
             weight: 1,
             enabled: true,
+            protocol: None,
         }];
         config.enabled = true;
 
@@ -1298,6 +1339,7 @@ mod tests {
                     priority: 0,
                     weight: 1,
                     enabled: true,
+                    protocol: None,
                 },
                 api_key: upstream_api_key.into(),
             }],
@@ -1396,6 +1438,7 @@ mod tests {
             priority: 0,
             weight: 1,
             enabled: true,
+            protocol: None,
         }];
         service
             .save_config(&creation.vault)
@@ -1423,7 +1466,7 @@ mod tests {
                 ProviderEntryUpdateInput {
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
-                    provider_id: None,
+                    provider_id: Some("openai".into()),
                     credential_kind: Default::default(),
                     account_identity: None,
                     domains: Vec::new(),
@@ -1441,6 +1484,7 @@ mod tests {
                     gateway: None,
                     tags: Vec::new(),
                     notes: None,
+                    secret_metadata: Default::default(),
                 },
             )
             .expect("update provider");
@@ -1505,6 +1549,7 @@ mod tests {
             priority: 0,
             weight: 1,
             enabled: true,
+            protocol: None,
         }];
         service
             .save_config(&creation.vault)
@@ -1537,6 +1582,7 @@ mod tests {
                     gateway: None,
                     tags: Vec::new(),
                     notes: None,
+                    secret_metadata: Default::default(),
                 },
             )
             .expect("update provider");
@@ -1593,6 +1639,7 @@ mod tests {
             priority: 0,
             weight: 1,
             enabled: true,
+            protocol: None,
         }];
         assert!(service.runtime_config(&creation.vault).is_ok());
 
@@ -1621,6 +1668,7 @@ mod tests {
                     gateway: None,
                     tags: Vec::new(),
                     notes: None,
+                    secret_metadata: Default::default(),
                 },
             )
             .expect("update provider protocol");
@@ -1852,35 +1900,199 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_unfinished_protocol_conversion() {
-        let token = "matching-token";
-        let mut config = config_with_token(token);
+    fn config_accepts_supported_protocol_conversion() {
+        let mut config = config_with_token("matching-token");
+        config.routes[0].inbound_protocol = aipass_proxy::Protocol::AnthropicMessages;
+        config.routes[0].upstream_protocol = aipass_proxy::Protocol::OpenAiChatCompletions;
+        config.routes[0].conversion_enabled = true;
+        assert!(validate_config(&config).is_ok());
+
+        let mut config = config_with_token("matching-token");
+        config.routes[0].inbound_protocol = aipass_proxy::Protocol::AnthropicMessages;
+        config.routes[0].upstream_protocol = aipass_proxy::Protocol::OpenAiResponses;
+        config.routes[0].conversion_enabled = true;
+        assert!(validate_config(&config).is_ok());
+
+        // Same-protocol routes with the flag on are harmless.
+        let mut config = config_with_token("matching-token");
+        config.routes[0].conversion_enabled = true;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn config_rejects_unsupported_protocol_conversion() {
+        // Chat Completions <-> Responses has no conversion path.
+        let mut config = config_with_token("matching-token");
+        config.routes[0].inbound_protocol = aipass_proxy::Protocol::OpenAiChatCompletions;
+        config.routes[0].upstream_protocol = aipass_proxy::Protocol::OpenAiResponses;
         config.routes[0].conversion_enabled = true;
         assert!(validate_config(&config).is_err());
     }
 
     #[test]
     fn config_rejects_cross_protocol_passthrough() {
-        let token = "matching-token";
-        let mut config = config_with_token(token);
+        let mut config = config_with_token("matching-token");
         config.routes[0].upstream_protocol = aipass_proxy::Protocol::AnthropicMessages;
         assert!(validate_config(&config).is_err());
     }
 
     #[test]
-    fn legacy_conversion_config_is_downgraded_to_same_protocol() {
-        let token = "matching-token";
-        let mut config = config_with_token(token);
-        config.routes[0].upstream_protocol = aipass_proxy::Protocol::AnthropicMessages;
+    fn config_rejects_target_protocol_mismatch_without_conversion() {
+        let mut config = config_with_token("matching-token");
+        config.routes[0].targets = vec![ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: Uuid::new_v4(),
+            secret_id: "primary".into(),
+            label: "primary".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            protocol: Some(aipass_proxy::Protocol::AnthropicMessages),
+        }];
+        assert!(validate_config(&config).is_err());
         config.routes[0].conversion_enabled = true;
-
-        assert!(normalize_unavailable_conversion(&mut config));
-        assert!(!config.routes[0].conversion_enabled);
-        assert_eq!(
-            config.routes[0].upstream_protocol,
-            config.routes[0].inbound_protocol
-        );
         assert!(validate_config(&config).is_ok());
+    }
+
+    fn summary_for(
+        interface: InterfaceType,
+        provider_id: Option<&str>,
+        credential_kind: CredentialKind,
+    ) -> (
+        aipass_vault::EntrySummary,
+        aipass_provider_registry::SecretRef,
+    ) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut input = provider_input("key", "http://127.0.0.1:9/v1".into(), "header");
+        input.provider_kind = ProviderKind::Official;
+        input.provider_id = provider_id.map(str::to_string);
+        input.credential_kind = credential_kind;
+        input.interface_type = interface.clone();
+        input.auth_scheme = if interface == InterfaceType::AnthropicMessages {
+            AuthScheme::XApiKey
+        } else {
+            AuthScheme::Bearer
+        };
+        let id = creation.vault.add_provider(input).expect("add provider");
+        let summary = creation
+            .vault
+            .get_provider_summary(id)
+            .expect("provider summary");
+        let secret = summary.secret_refs[0].clone();
+        (summary, secret)
+    }
+
+    #[test]
+    fn native_protocol_derivation_matches_desktop_contract() {
+        let (entry, secret) = summary_for(
+            InterfaceType::AnthropicMessages,
+            Some("anthropic"),
+            CredentialKind::default(),
+        );
+        assert_eq!(
+            native_protocol_for_entry(&entry, &secret),
+            Some(aipass_proxy::Protocol::AnthropicMessages)
+        );
+
+        let (entry, secret) = summary_for(
+            InterfaceType::OpenAiCompatible,
+            Some("openai"),
+            CredentialKind::default(),
+        );
+        assert_eq!(
+            native_protocol_for_entry(&entry, &secret),
+            Some(aipass_proxy::Protocol::OpenAiResponses)
+        );
+
+        // Codex OAuth credentials are Responses-native.
+        let (entry, secret) = summary_for(
+            InterfaceType::OpenAiCompatible,
+            Some("codex"),
+            CredentialKind::OAuth,
+        );
+        assert_eq!(
+            native_protocol_for_entry(&entry, &secret),
+            Some(aipass_proxy::Protocol::OpenAiResponses)
+        );
+
+        let (entry, secret) = summary_for(
+            InterfaceType::OpenAiCompatible,
+            Some("openrouter"),
+            CredentialKind::default(),
+        );
+        assert_eq!(
+            native_protocol_for_entry(&entry, &secret),
+            Some(aipass_proxy::Protocol::OpenAiChatCompletions)
+        );
+
+        let (entry, secret) =
+            summary_for(InterfaceType::AzureOpenAi, None, CredentialKind::default());
+        assert_eq!(
+            native_protocol_for_entry(&entry, &secret),
+            Some(aipass_proxy::Protocol::OpenAiChatCompletions)
+        );
+
+        for interface in [
+            InterfaceType::Gemini,
+            InterfaceType::Bedrock,
+            InterfaceType::CustomHttp,
+        ] {
+            let (entry, secret) = summary_for(interface, None, CredentialKind::default());
+            assert_eq!(native_protocol_for_entry(&entry, &secret), None);
+        }
+    }
+
+    #[test]
+    fn runtime_config_populates_target_protocols() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut input = provider_input("upstream-key", "http://127.0.0.1:9/v1".into(), "header");
+        input.provider_id = Some("openai".into());
+        let provider_id = creation.vault.add_provider(input).expect("add provider");
+        let secret_id = creation
+            .vault
+            .get_provider_summary(provider_id)
+            .expect("provider summary")
+            .secret_refs[0]
+            .id
+            .clone();
+
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        service.config = config_with_token("matching-token");
+        service.config.routes[0].targets = vec![ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: provider_id,
+            secret_id,
+            label: "primary".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            protocol: None,
+        }];
+        let runtime = service
+            .runtime_config(&creation.vault)
+            .expect("runtime config");
+        assert_eq!(
+            runtime.routes[0].targets[0].config.protocol,
+            Some(aipass_proxy::Protocol::OpenAiResponses)
+        );
     }
 
     #[test]

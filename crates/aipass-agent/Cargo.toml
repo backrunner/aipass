@@ -33,6 +33,7 @@ serde_json.workspace = true
 sha2.workspace = true
 time.workspace = true
 toml = "1"
+url = "2"
 uuid.workspace = true
 zeroize.workspace = true
 

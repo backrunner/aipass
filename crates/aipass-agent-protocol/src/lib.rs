@@ -1,7 +1,7 @@
 pub use aipass_config_writers::ToolId;
 use aipass_provider_registry::{
-    AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, ProviderEndpoint,
-    QuotaInfo, SubscriptionSnapshot,
+    AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, OAuthProvider,
+    ProviderEndpoint, QuotaInfo, SubscriptionSnapshot,
 };
 pub use aipass_proxy::{
     ModelPricing, ModelUsageAggregate, Protocol as ProxyProtocol, ProviderUsageAggregate,
@@ -21,7 +21,7 @@ use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
-pub const AGENT_PROTOCOL_VERSION: u32 = 1;
+pub const AGENT_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -655,6 +655,40 @@ pub enum AgentRequest {
     /// Import providers from CC Switch's config into the vault.
     #[serde(rename = "ccswitch.import")]
     CcSwitchImport,
+    /// Start an in-app OAuth device-code login for an official provider.
+    #[serde(rename = "oauth.login.start")]
+    OAuthLoginStart { provider: OAuthProvider },
+    /// Poll an in-flight device-code login; returns pending/authorized/expired.
+    #[serde(rename = "oauth.login.poll")]
+    OAuthLoginPoll {
+        provider: OAuthProvider,
+        device_code: String,
+    },
+    /// Abandon an in-flight device-code login.
+    #[serde(rename = "oauth.login.cancel")]
+    OAuthLoginCancel {
+        provider: OAuthProvider,
+        device_code: String,
+    },
+    /// List managed OAuth accounts (token-free summaries). No provider filter
+    /// means every supported provider.
+    #[serde(rename = "oauth.accounts.list")]
+    OAuthAccountsList {
+        #[serde(default)]
+        provider: Option<OAuthProvider>,
+    },
+    /// Remove a managed OAuth account and its linked provider entry secret.
+    #[serde(rename = "oauth.accounts.remove")]
+    OAuthAccountsRemove {
+        provider: OAuthProvider,
+        account_id: Uuid,
+    },
+    /// Choose which managed OAuth account is the default for a provider.
+    #[serde(rename = "oauth.accounts.set_default")]
+    OAuthAccountsSetDefault {
+        provider: OAuthProvider,
+        account_id: Uuid,
+    },
     #[serde(rename = "provider.favicon_backfill")]
     ProviderFaviconBackfill { request: FaviconBackfillRequest },
     #[serde(rename = "tool_config.preview")]
@@ -732,6 +766,65 @@ pub struct OfficialAccountRefreshResult {
     pub error: Option<String>,
 }
 
+/// Device-code challenge handed to the desktop so the user can authorize in a
+/// browser. Contains no secrets beyond the one-time user code.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthDeviceStart {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    #[serde(default)]
+    pub verification_uri_complete: Option<String>,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthLoginStatus {
+    Pending,
+    Authorized,
+    Expired,
+    Error,
+}
+
+/// Result of polling an in-flight device-code login. On `Authorized` the
+/// token-free account summary is returned; tokens stay inside the agent/vault.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthLoginPoll {
+    pub status: OAuthLoginStatus,
+    #[serde(default)]
+    pub account: Option<OAuthAccountSummary>,
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Current server-side poll interval in seconds. Present on `pending`
+    /// responses so the client backs off in step with `slow_down` bumps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_secs: Option<u64>,
+}
+
+/// Token-free view of a managed OAuth account, safe to send to the frontend.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAccountSummary {
+    pub id: Uuid,
+    pub provider: OAuthProvider,
+    pub account_identity: Option<String>,
+    #[serde(default)]
+    pub chatgpt_account_id: Option<String>,
+    #[serde(default)]
+    pub entry_id: Option<Uuid>,
+    pub is_default: bool,
+    /// Unix milliseconds.
+    pub authenticated_at: i64,
+    #[serde(default)]
+    pub credential_expires_at: Option<String>,
+    #[serde(default)]
+    pub requires_reauth: bool,
+}
+
 /// Whether CC Switch's config is present on this machine and, on macOS,
 /// whether the app itself is installed.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -792,6 +885,8 @@ impl AgentRequest {
             | Self::SyncConflicts { .. }
             | Self::ProviderFaviconBackfill { .. }
             | Self::OfficialAccountsRefresh { .. }
+            | Self::OAuthLoginStart { .. }
+            | Self::OAuthLoginPoll { .. }
             | Self::TrashPurgeExpired
             | Self::TrashEmpty
             | Self::ServerPricingGroupUpsert { .. } => LONG_RESPONSE_TIMEOUT,

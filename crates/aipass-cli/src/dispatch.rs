@@ -301,9 +301,12 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             endpoint,
             console_url,
             favicon_url,
+            credential_kind,
+            account_identity,
             interface,
             auth,
             api_key,
+            secret_label,
             default_model,
             model_alias,
             header,
@@ -311,6 +314,10 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             quota_limit,
             quota_remaining,
             quota_reset_at,
+            group,
+            billing_rate,
+            billing_currency,
+            billing_unit_price,
             notes,
             tag,
         } => {
@@ -320,21 +327,22 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     match_provider_by_domain(domain).map(|provider| provider.id.to_string())
                 })
             });
-            let endpoints = endpoints_from_cli(endpoint, console_url);
+            let interface_type: InterfaceType = interface.into();
+            let endpoints = endpoints_from_cli(endpoint, console_url)?;
             let id: Uuid = agent.request(AgentRequest::ProviderAdd {
                 input: ProviderEntryInput {
                     title,
                     provider_kind: provider_kind_for_id(provider_guess.as_deref()),
                     provider_id: provider_guess,
-                    credential_kind: Default::default(),
-                    account_identity: None,
+                    credential_kind: credential_kind.into(),
+                    account_identity,
                     domains: domain,
                     favicon_url,
                     endpoints,
-                    interface_type: interface.into(),
+                    interface_type: interface_type.clone(),
                     auth_scheme: auth.into(),
                     api_key,
-                    secret_label: None,
+                    secret_label,
                     default_model,
                     model_aliases: parse_model_aliases(&model_alias)?,
                     headers: parse_headers(&header)?,
@@ -349,7 +357,13 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     gateway: None,
                     tags: tag,
                     notes,
-                    secret_metadata: Default::default(),
+                    secret_metadata: secret_metadata_from_cli(
+                        group,
+                        Some(interface_type),
+                        billing_rate,
+                        billing_currency,
+                        billing_unit_price,
+                    ),
                 },
             })?;
             output(
@@ -397,9 +411,12 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             endpoint,
             console_url,
             favicon_url,
+            credential_kind,
+            account_identity,
             interface,
             auth,
             api_key,
+            secret_label,
             default_model,
             model_alias,
             header,
@@ -407,6 +424,10 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             quota_limit,
             quota_remaining,
             quota_reset_at,
+            group,
+            billing_rate,
+            billing_currency,
+            billing_unit_price,
             notes,
             tag,
         } => {
@@ -423,21 +444,30 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     match_provider_by_domain(domain).map(|provider| provider.id.to_string())
                 })
             });
+            let interface_changed = interface.is_some();
+            let interface_type = interface
+                .map(InterfaceType::from)
+                .unwrap_or(existing.interface_type.clone());
+            let secret_metadata = secret_metadata_from_cli(
+                group,
+                interface_changed.then_some(interface_type.clone()),
+                billing_rate,
+                billing_currency,
+                billing_unit_price,
+            );
             let input = ProviderEntryUpdateInput {
                 title: title.unwrap_or(existing.title),
                 provider_kind: provider_kind_for_id(provider_guess.as_deref()),
                 provider_id: provider_guess,
-                credential_kind: None,
-                account_identity: None,
+                credential_kind: credential_kind.map(Into::into),
+                account_identity,
                 domains,
                 favicon_url: favicon_url.or(existing.favicon_url),
-                endpoints: update_endpoints_from_cli(&existing.endpoints, endpoint, console_url),
-                interface_type: interface
-                    .map(InterfaceType::from)
-                    .unwrap_or(existing.interface_type),
+                endpoints: update_endpoints_from_cli(&existing.endpoints, endpoint, console_url)?,
+                interface_type: interface_type.clone(),
                 auth_scheme: auth.map(AuthScheme::from).unwrap_or(existing.auth_scheme),
                 api_key,
-                secret_label: None,
+                secret_label,
                 default_model: default_model.or(existing.default_model),
                 model_aliases: if model_alias.is_empty() {
                     existing.model_aliases
@@ -461,6 +491,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 gateway: existing.gateway,
                 tags: if tag.is_empty() { existing.tags } else { tag },
                 notes: notes.or(existing.notes),
+                secret_metadata,
             };
             let _: serde_json::Value = agent.request(AgentRequest::ProviderUpdate { id, input })?;
             output(

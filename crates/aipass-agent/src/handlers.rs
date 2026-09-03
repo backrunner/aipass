@@ -1,6 +1,11 @@
 use super::*;
 use crate::paths::cloud_sync_dir;
-use aipass_agent_protocol::{endpoint_url, CloudSyncProvider};
+use aipass_agent_protocol::{
+    endpoint_url, CloudSyncProvider, OAuthAccountSummary, OAuthDeviceStart, OAuthLoginPoll,
+    OAuthLoginStatus,
+};
+use aipass_provider_registry::{primary_secret_ref, OAuthProvider};
+use aipass_vault::ManagedOAuthAccount;
 
 const BROWSER_FILL_GRANT_LIMIT: usize = 5;
 
@@ -672,6 +677,123 @@ fn dispatch_request(
             crate::ccswitch::import_ccswitch_providers(vault).map_err(ServiceError::internal)
         })
         .map(AgentResponse::success),
+        AgentRequest::OAuthLoginStart { provider } => {
+            let challenge = crate::oauth::oauth_manager()
+                .start(provider)
+                .map_err(|err| ServiceError::new(AgentErrorCode::Internal, err.to_string()))?;
+            Ok(AgentResponse::success(OAuthDeviceStart {
+                device_code: challenge.device_code,
+                user_code: challenge.user_code,
+                verification_uri: challenge.verification_uri,
+                verification_uri_complete: challenge.verification_uri_complete,
+                expires_in: challenge.expires_in,
+                interval: challenge.interval,
+            }))
+        }
+        AgentRequest::OAuthLoginPoll {
+            provider,
+            device_code,
+        } => match crate::oauth::oauth_manager().poll(provider, &device_code) {
+            Ok(outcome) => match outcome.bundle {
+                None => Ok(AgentResponse::success(OAuthLoginPoll {
+                    status: OAuthLoginStatus::Pending,
+                    account: None,
+                    message: None,
+                    interval_secs: Some(outcome.interval_secs),
+                })),
+                Some(bundle) => {
+                    let account = complete_oauth_login(state, provider, bundle)?;
+                    // Consume the device entry only after persistence succeeds,
+                    // so a failed persist does not lose the token bundle.
+                    crate::oauth::oauth_manager().consume(&device_code);
+                    Ok(AgentResponse::success(OAuthLoginPoll {
+                        status: OAuthLoginStatus::Authorized,
+                        account: Some(account),
+                        message: None,
+                        interval_secs: None,
+                    }))
+                }
+            },
+            Err(crate::oauth::OAuthError::ExpiredDeviceCode) => {
+                Ok(AgentResponse::success(OAuthLoginPoll {
+                    status: OAuthLoginStatus::Expired,
+                    account: None,
+                    message: None,
+                    interval_secs: None,
+                }))
+            }
+            // Transient failures (network, 5xx) must not kill the login: report
+            // pending with a sanitized warning and let the client keep polling.
+            Err(err) if err.is_retryable() => Ok(AgentResponse::success(OAuthLoginPoll {
+                status: OAuthLoginStatus::Pending,
+                account: None,
+                message: Some(err.to_string()),
+                interval_secs: crate::oauth::oauth_manager().current_interval(&device_code),
+            })),
+            Err(err) => Ok(AgentResponse::success(OAuthLoginPoll {
+                status: OAuthLoginStatus::Error,
+                account: None,
+                message: Some(err.to_string()),
+                interval_secs: None,
+            })),
+        },
+        AgentRequest::OAuthLoginCancel { device_code, .. } => Ok(AgentResponse::success(
+            crate::oauth::oauth_manager().cancel(&device_code),
+        )),
+        AgentRequest::OAuthAccountsList { provider } => with_vault(state, false, |vault| {
+            let accounts = vault
+                .list_oauth_accounts(provider)
+                .map_err(map_vault_error)?;
+            Ok(accounts
+                .iter()
+                .map(oauth_account_summary)
+                .collect::<Vec<_>>())
+        })
+        .map(AgentResponse::success),
+        AgentRequest::OAuthAccountsRemove {
+            provider,
+            account_id,
+        } => with_vault(state, false, |vault| {
+            let account = vault
+                .get_oauth_account(account_id)
+                .map_err(map_vault_error)?;
+            // Same convention as set_default_oauth_account: refuse to act on an
+            // account belonging to a different provider than the request names.
+            if account.provider != provider {
+                return Err(ServiceError::new(
+                    AgentErrorCode::ValidationFailed,
+                    "oauth account does not belong to the requested provider",
+                ));
+            }
+            let entry_id = account.entry_id;
+            vault
+                .remove_oauth_account(account_id)
+                .map_err(map_vault_error)?;
+            if let Some(entry_id) = entry_id {
+                // Two logins of the same identity can share one entry; only
+                // retire it when no other managed account still references it.
+                let still_referenced = vault
+                    .list_oauth_accounts(None)
+                    .map_err(map_vault_error)?
+                    .iter()
+                    .any(|account| account.entry_id == Some(entry_id));
+                if !still_referenced {
+                    vault.trash_provider(entry_id).map_err(map_vault_error)?;
+                    cleanup_proxy_provider_references(state, vault, entry_id, None);
+                }
+            }
+            Ok(())
+        })
+        .map(|_| AgentResponse::empty()),
+        AgentRequest::OAuthAccountsSetDefault {
+            provider,
+            account_id,
+        } => with_vault(state, false, |vault| {
+            vault
+                .set_default_oauth_account(provider, account_id)
+                .map_err(map_vault_error)
+        })
+        .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderFaviconBackfill { request } => {
             backfill_provider_favicons(state, request).map(AgentResponse::success)
         }
@@ -961,6 +1083,160 @@ fn refresh_proxy_provider_credentials(
     };
     proxy.refresh_provider_credentials(vault, entry_id)?;
     Ok(())
+}
+
+fn oauth_account_summary(account: &ManagedOAuthAccount) -> OAuthAccountSummary {
+    let credential_expires_at = if account.expires_at_ms > 0 {
+        let formatted = crate::oauth::native_write::ms_to_rfc3339(account.expires_at_ms);
+        if formatted.is_empty() {
+            None
+        } else {
+            Some(formatted)
+        }
+    } else {
+        None
+    };
+    OAuthAccountSummary {
+        id: account.id,
+        provider: account.provider,
+        account_identity: account.account_identity.clone(),
+        chatgpt_account_id: account.chatgpt_account_id.clone(),
+        entry_id: account.entry_id,
+        is_default: account.is_default,
+        authenticated_at: (account.authenticated_at.unix_timestamp_nanos() / 1_000_000) as i64,
+        credential_expires_at,
+        requires_reauth: account.requires_reauth,
+    }
+}
+
+/// Persist a freshly authorized device-code login: create/refresh the provider
+/// entry, store the refreshable token bundle, write it back to the native CLI
+/// credential file, and push the access token into the running proxy.
+fn complete_oauth_login(
+    state: &Arc<AgentState>,
+    provider: OAuthProvider,
+    bundle: crate::oauth::OAuthTokenBundle,
+) -> ServiceResult<OAuthAccountSummary> {
+    use crate::oauth::native_write::{self, NativeSyncOutcome};
+    let now = crate::oauth::now_ms();
+    let expires_at_ms =
+        now.saturating_add(crate::oauth::clamp_expires_in(bundle.expires_in).saturating_mul(1000));
+    let credential_expires_at = native_write::ms_to_rfc3339(expires_at_ms);
+    with_vault(state, true, |vault| {
+        let entry_id = crate::official_accounts::persist_login_account(
+            vault,
+            provider.provider_id(),
+            bundle.account_identity.clone(),
+            bundle.chatgpt_account_id.clone(),
+            bundle.access_token.clone(),
+            Some(credential_expires_at),
+        )
+        .map_err(ServiceError::internal)?;
+        let provider_accounts = vault
+            .list_oauth_accounts(Some(provider))
+            .map_err(map_vault_error)?;
+        // Re-authenticating the same identity reuses the same provider entry, so
+        // update the existing managed account instead of creating a duplicate.
+        let existing = provider_accounts
+            .iter()
+            .find(|account| account.entry_id == Some(entry_id));
+        let is_update = existing.is_some();
+        let is_default = match existing {
+            Some(account) => account.is_default,
+            None => provider_accounts.is_empty(),
+        };
+        let account_id = existing
+            .map(|account| account.id)
+            .unwrap_or_else(Uuid::new_v4);
+        let mut account = ManagedOAuthAccount {
+            id: account_id,
+            provider,
+            account_identity: bundle.account_identity.clone(),
+            chatgpt_account_id: bundle.chatgpt_account_id.clone(),
+            access_token: bundle.access_token.clone(),
+            refresh_token: bundle.refresh_token.clone(),
+            id_token: bundle.id_token.clone(),
+            expires_at_ms,
+            last_refresh_ms: now,
+            entry_id: Some(entry_id),
+            is_default,
+            requires_reauth: false,
+            authenticated_at: OffsetDateTime::now_utc(),
+        };
+        let outcome = match provider {
+            OAuthProvider::Codex => native_write::sync_codex_auth_json(
+                &bundle.access_token,
+                &bundle.refresh_token,
+                bundle.id_token.as_deref(),
+                bundle.chatgpt_account_id.as_deref().unwrap_or_default(),
+                None,
+                now,
+            ),
+            OAuthProvider::Grok => native_write::sync_grok_auth_json(
+                &bundle.access_token,
+                &bundle.refresh_token,
+                None,
+                expires_at_ms,
+                bundle.account_identity.as_deref(),
+            ),
+        }
+        .map_err(ServiceError::internal)?;
+        match outcome {
+            NativeSyncOutcome::Adopted {
+                access_token,
+                refresh_token,
+                id_token,
+                last_refresh_ms,
+                expires_at_ms: adopted_expires_at_ms,
+            } => {
+                // The CLI already had a newer generation; keep it and mirror the
+                // adopted access token into the entry secret the proxy reads.
+                account.refresh_token = refresh_token;
+                if id_token.is_some() {
+                    account.id_token = id_token;
+                }
+                account.last_refresh_ms = last_refresh_ms;
+                // Keep the stored expiry describing the stored (adopted) token.
+                if let Some(adopted_expires_at_ms) = adopted_expires_at_ms {
+                    account.expires_at_ms = adopted_expires_at_ms;
+                }
+                if access_token != account.access_token {
+                    if let Ok(summary) = vault.get_provider_summary(entry_id) {
+                        if let Some(secret) = primary_secret_ref(&summary.secret_refs) {
+                            vault
+                                .update_secret(
+                                    entry_id,
+                                    &secret.id,
+                                    &secret.label,
+                                    Some(access_token.clone()),
+                                )
+                                .map_err(map_vault_error)?;
+                        }
+                    }
+                    account.access_token = access_token;
+                }
+            }
+            NativeSyncOutcome::Skipped(reason) => {
+                write_component_log(
+                    AGENT_LOG,
+                    "WARN",
+                    &format!("oauth native write-back skipped: {reason}"),
+                );
+            }
+            NativeSyncOutcome::Written => {}
+        }
+        if is_update {
+            vault
+                .update_oauth_account(account.clone())
+                .map_err(map_vault_error)?;
+        } else {
+            vault
+                .add_oauth_account(account.clone())
+                .map_err(map_vault_error)?;
+        }
+        refresh_proxy_provider_credentials(state, vault, entry_id)?;
+        Ok(oauth_account_summary(&account))
+    })
 }
 
 /// One grant per stored key, so a relay entry holding a key per gateway group

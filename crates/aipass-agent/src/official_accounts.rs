@@ -122,6 +122,44 @@ pub(crate) fn persist_official_accounts(
     Ok(results)
 }
 
+/// Persist an in-app OAuth login through the same path as a CLI import, so a
+/// logged-in account and a discovered one produce identical provider entries.
+/// Does no network I/O (it runs inside the vault lock); the usage snapshot is
+/// enriched later by the background refresh / usage-probe paths.
+pub(crate) fn persist_login_account(
+    vault: &Vault,
+    provider_id: &'static str,
+    identity: Option<String>,
+    account_id: Option<String>,
+    token: String,
+    credential_expires_at: Option<String>,
+) -> anyhow::Result<uuid::Uuid> {
+    let account = DiscoveredAccount {
+        provider_id,
+        identity,
+        account_id,
+        token,
+        credential_expires_at: credential_expires_at.clone(),
+        plan: None,
+    };
+    let snapshot = Some(SubscriptionSnapshot {
+        credential_expires_at,
+        observed_at: now_rfc3339(),
+        source: format!("{provider_id}-oauth-login"),
+        ..Default::default()
+    });
+    let mut existing = vault.list_provider_summaries()?;
+    existing.extend(vault.list_archived_provider_summaries()?);
+    let mut batch_imported = HashSet::new();
+    let (_result, entry_id) = persist_account(
+        vault,
+        &mut existing,
+        &mut batch_imported,
+        CollectedAccount { account, snapshot },
+    )?;
+    entry_id.ok_or_else(|| anyhow::anyhow!("login did not produce a provider entry"))
+}
+
 fn persist_account(
     vault: &Vault,
     existing: &mut Vec<aipass_vault::EntrySummary>,
@@ -298,7 +336,7 @@ pub(crate) fn refresh_account_secret(
 fn primary_secret_ref(
     summary: &aipass_vault::EntrySummary,
 ) -> anyhow::Result<&aipass_provider_registry::SecretRef> {
-    summary.secret_refs.first().ok_or_else(|| {
+    aipass_provider_registry::primary_secret_ref(&summary.secret_refs).ok_or_else(|| {
         anyhow::anyhow!(
             "provider entry {} has no stored secret to refresh",
             summary.id

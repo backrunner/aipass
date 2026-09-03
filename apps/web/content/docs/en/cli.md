@@ -55,11 +55,14 @@ Required flags for `add`: `--title`, `--interface`, `--auth`, `--api-key`. Optio
 
 - `--provider <id>` — registry provider id (for example `anthropic`). If omitted, AIPass guesses it from the first `--domain`.
 - `--domain <host>` (repeatable) and `--console-url <url>` (repeatable) — used by the browser extension to recognize consoles.
-- `--endpoint <url>` — the API base URL.
+- `--endpoint <url>` (repeatable) — API endpoints. Repeat the option for multiple values; each is stored as an `api` endpoint. `--console-url` values are stored as `console` endpoints.
+- `--credential-kind api|oauth` and `--account-identity <value>` — identify API versus official OAuth credentials and the associated account.
+- `--secret-label <label>` — label the primary key (for example `production`).
 - `--favicon-url <url>`, `--notes <text>`, `--tag <tag>` (repeatable).
 - `--default-model <model>` and `--model-alias alias=model` (repeatable).
 - `--header name=value` (repeatable) — extra headers sent with requests.
 - `--quota-label`, `--quota-limit`, `--quota-remaining`, `--quota-reset-at` — quota display metadata.
+- `--group <name>`, `--billing-rate <rate>`, `--billing-currency <currency>`, `--billing-unit-price <price>` — per-key gateway group and billing metadata.
 
 `--interface` accepts `openai-compatible`, `anthropic-messages`, `gemini`, `azure-openai`, `bedrock`, `custom-http`. `--auth` accepts `bearer`, `x-api-key`, `google-api-key`, `azure-api-key`, `aws-profile`, `custom-header`.
 
