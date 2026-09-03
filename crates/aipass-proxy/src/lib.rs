@@ -1,5 +1,5 @@
 use aipass_proxy_conversion::{
-    BuiltinConversionPlugin, ConversionPlugin, ProxyProtocol, TokenUsage,
+    BuiltinConversionPlugin, ConversionPlugin, ProxyProtocol, StreamConverter, TokenUsage,
 };
 use bytes::Bytes;
 use futures_util::{stream, Stream, StreamExt};
@@ -26,7 +26,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-pub use aipass_proxy_conversion::{ConversionError, ProxyProtocol as Protocol};
+pub use aipass_proxy_conversion::{supports, ConversionError, ProxyProtocol as Protocol};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +84,17 @@ pub struct ProxyTargetConfig {
     #[serde(default = "default_weight")]
     pub weight: u32,
     pub enabled: bool,
+    /// Native wire protocol of this target's upstream. `None` means "use the
+    /// route-level `upstream_protocol`", which keeps configs written before
+    /// per-target protocols existed working unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<ProxyProtocol>,
+}
+
+impl ProxyTargetConfig {
+    pub fn effective_protocol(&self, route_fallback: ProxyProtocol) -> ProxyProtocol {
+        self.protocol.unwrap_or(route_fallback)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -992,13 +1003,25 @@ pub struct ProxyHandle {
 
 impl ProxyHandle {
     pub fn start(config: RuntimeConfig, usage: Arc<UsageStore>) -> Result<Self, ProxyError> {
-        if config.routes.iter().any(|route| {
-            route.config.conversion_enabled
-                || route.config.inbound_protocol != route.config.upstream_protocol
-        }) {
-            return Err(ProxyError::InvalidConfig(
-                "protocol conversion is not available in this release".into(),
-            ));
+        for route in &config.routes {
+            for target in &route.targets {
+                let target_protocol = target
+                    .config
+                    .effective_protocol(route.config.upstream_protocol);
+                let inbound = route.config.inbound_protocol;
+                if inbound != target_protocol && !route.config.conversion_enabled {
+                    return Err(ProxyError::InvalidConfig(format!(
+                        "route {} target {} speaks {target_protocol:?} but the route accepts {inbound:?}; enable protocol conversion for this route",
+                        route.config.name, target.config.label
+                    )));
+                }
+                if !aipass_proxy_conversion::supports(inbound, target_protocol) {
+                    return Err(ProxyError::InvalidConfig(format!(
+                        "route {} target {}: protocol conversion {inbound:?} -> {target_protocol:?} is not supported",
+                        route.config.name, target.config.label
+                    )));
+                }
+            }
         }
         let bind_addr = config.bind_addr.clone();
         let socket: SocketAddr = bind_addr
@@ -1534,7 +1557,9 @@ async fn handle_models_request(
             let headers = match build_upstream_headers(
                 &incoming_headers,
                 &target,
-                route.config.upstream_protocol,
+                target
+                    .config
+                    .effective_protocol(route.config.upstream_protocol),
             ) {
                 Ok(headers) => headers,
                 Err(err) => {
@@ -1773,8 +1798,13 @@ async fn handle_request(
         }
     };
     let request_json = if route.config.conversion_enabled
-        && route.config.inbound_protocol != route.config.upstream_protocol
-    {
+        && route.targets.iter().any(|target| {
+            target.config.enabled
+                && route.config.inbound_protocol
+                    != target
+                        .config
+                        .effective_protocol(route.config.upstream_protocol)
+        }) {
         body.json().await
     } else {
         None
@@ -1828,10 +1858,13 @@ async fn handle_request(
                     continue;
                 }
             };
+            let target_protocol = target
+                .config
+                .effective_protocol(route.config.upstream_protocol);
+            let conversion =
+                route.config.conversion_enabled && route.config.inbound_protocol != target_protocol;
             let mut rewritten_payload = None;
-            if route.config.conversion_enabled
-                && route.config.inbound_protocol != route.config.upstream_protocol
-            {
+            if conversion {
                 let Some(json_payload) = request_json.clone() else {
                     return Ok(error_response(
                         StatusCode::BAD_REQUEST,
@@ -1842,7 +1875,7 @@ async fn handle_request(
                     match BuiltinConversionPlugin
                         .convert_request(
                             route.config.inbound_protocol,
-                            route.config.upstream_protocol,
+                            target_protocol,
                             json_payload,
                         )
                         .and_then(|value| {
@@ -1861,28 +1894,21 @@ async fn handle_request(
                 );
             }
             if let Some(payload) = rewritten_payload.take().or_else(|| body.bytes().cloned()) {
-                let updated = request_stream_usage(
-                    route.config.upstream_protocol,
-                    streaming_request,
-                    payload.clone(),
-                );
+                let updated =
+                    request_stream_usage(target_protocol, streaming_request, payload.clone());
                 if updated != payload {
                     rewritten_payload = Some(updated);
-                } else if route.config.conversion_enabled
-                    && route.config.inbound_protocol != route.config.upstream_protocol
-                {
+                } else if conversion {
                     rewritten_payload = Some(payload);
                 }
             }
             let upstream_path = if target.config.auth_scheme == "azure_api_key" {
-                route
-                    .config
-                    .upstream_protocol
+                target_protocol
                     .path()
                     .strip_prefix("/v1")
-                    .unwrap_or(route.config.upstream_protocol.path())
+                    .unwrap_or(target_protocol.path())
             } else {
-                route.config.upstream_protocol.path()
+                target_protocol.path()
             };
             let url = match upstream_url_with_query(
                 &target.config.base_url,
@@ -1905,27 +1931,24 @@ async fn handle_request(
                     continue;
                 }
             };
-            let upstream_headers = match build_upstream_headers(
-                &incoming_headers,
-                &target,
-                route.config.upstream_protocol,
-            ) {
-                Ok(headers) => headers,
-                Err(err) => {
-                    last_error = Some(err);
-                    mark_failure(&state, target.config.id, &route.config.retry);
-                    persist_attempt(
-                        &state.usage,
-                        route.config.id,
-                        &target,
-                        model.as_deref(),
-                        attempt_started_at,
-                        attempt_started,
-                        AttemptOutcome::failure(None, None),
-                    );
-                    continue;
-                }
-            };
+            let upstream_headers =
+                match build_upstream_headers(&incoming_headers, &target, target_protocol) {
+                    Ok(headers) => headers,
+                    Err(err) => {
+                        last_error = Some(err);
+                        mark_failure(&state, target.config.id, &route.config.retry);
+                        persist_attempt(
+                            &state.usage,
+                            route.config.id,
+                            &target,
+                            model.as_deref(),
+                            attempt_started_at,
+                            attempt_started,
+                            AttemptOutcome::failure(None, None),
+                        );
+                        continue;
+                    }
+                };
             let payload_len = rewritten_payload
                 .as_ref()
                 .map_or_else(|| body.len(), |payload| payload.len() as u64);
@@ -2075,7 +2098,7 @@ async fn handle_request(
             let (first_chunk, first_token_observed) = if streaming_response && !buffer_streaming {
                 // Once this event is returned to the client, replaying on another target is unsafe.
                 match prefetch_sse_event(
-                    route.config.upstream_protocol,
+                    target_protocol,
                     first_chunk,
                     &mut upstream_stream,
                     first_event_deadline,
@@ -2119,9 +2142,7 @@ async fn handle_request(
             };
             let first_token_ms =
                 first_token_observed.then(|| attempt_started.elapsed().as_millis() as u64);
-            let conversion = route.config.conversion_enabled
-                && route.config.inbound_protocol != route.config.upstream_protocol;
-            let upstream_protocol = route.config.upstream_protocol;
+            let upstream_protocol = target_protocol;
             let inbound_protocol = route.config.inbound_protocol;
             let model = model.clone();
             let model_pricing = model.as_deref().and_then(|model| {
@@ -2182,7 +2203,7 @@ async fn handle_request(
                 };
                 if buffer_streaming
                     && (stream_reports_error(&buffered)
-                        || !stream_reports_completion(route.config.upstream_protocol, &buffered))
+                        || !stream_reports_completion(target_protocol, &buffered))
                 {
                     last_error = Some("upstream stream ended before protocol completion".into());
                     mark_failure(&state, target.config.id, &route.config.retry);
@@ -2771,27 +2792,37 @@ fn convert_sse_stream<S>(
 where
     S: Stream<Item = Result<Bytes, BoxError>> + Send + 'static,
 {
+    let converter = match StreamConverter::new(from, to) {
+        Ok(converter) => converter,
+        Err(err) => return Box::pin(stream::once(async move { Err(Box::new(err) as BoxError) })),
+    };
     let source = Box::pin(source);
     Box::pin(stream::unfold(
-        (source, Vec::<u8>::new(), VecDeque::<Bytes>::new(), false),
-        move |(mut source, mut buffer, mut pending, mut done)| async move {
+        (
+            source,
+            Vec::<u8>::new(),
+            VecDeque::<Bytes>::new(),
+            converter,
+            false,
+        ),
+        move |(mut source, mut buffer, mut pending, mut converter, mut done)| async move {
             loop {
                 if let Some(value) = pending.pop_front() {
-                    return Some((Ok(value), (source, buffer, pending, done)));
+                    return Some((Ok(value), (source, buffer, pending, converter, done)));
                 }
                 if done {
                     return None;
                 }
-                if let Some(index) = buffer.windows(2).position(|window| window == b"\n\n") {
-                    let event = String::from_utf8_lossy(&buffer[..index + 2]).to_string();
-                    buffer.drain(..index + 2);
-                    match BuiltinConversionPlugin.convert_stream_event(from, to, &event) {
+                if let Some(end) = sse_event_boundary_end(&buffer) {
+                    let event = String::from_utf8_lossy(&buffer[..end]).to_string();
+                    buffer.drain(..end);
+                    match converter.push_event(&event) {
                         Ok(events) => pending.extend(events.into_iter().map(Bytes::from)),
                         Err(err) => {
                             done = true;
                             return Some((
                                 Err(Box::new(err) as BoxError),
-                                (source, buffer, pending, done),
+                                (source, buffer, pending, converter, done),
                             ));
                         }
                     }
@@ -2801,19 +2832,19 @@ where
                     Some(Ok(chunk)) => buffer.extend_from_slice(&chunk),
                     Some(Err(err)) => {
                         done = true;
-                        return Some((Err(err), (source, buffer, pending, done)));
+                        return Some((Err(err), (source, buffer, pending, converter, done)));
                     }
                     None => {
                         done = true;
                         if !buffer.is_empty() {
                             let event = String::from_utf8_lossy(&buffer).to_string();
                             buffer.clear();
-                            match BuiltinConversionPlugin.convert_stream_event(from, to, &event) {
+                            match converter.push_event(&event) {
                                 Ok(events) => pending.extend(events.into_iter().map(Bytes::from)),
                                 Err(err) => {
                                     return Some((
                                         Err(Box::new(err) as BoxError),
-                                        (source, buffer, pending, done),
+                                        (source, buffer, pending, converter, done),
                                     ));
                                 }
                             }
@@ -3208,8 +3239,14 @@ fn build_upstream_headers(
     protocol: ProxyProtocol,
 ) -> Result<HeaderMap, String> {
     let incoming_hop_headers = connection_header_names(incoming);
+    let anthropic_upstream = protocol == ProxyProtocol::AnthropicMessages;
     let mut headers = HeaderMap::new();
     for (name, value) in incoming.iter() {
+        // Anthropic-specific headers are meaningless (and leaking them is
+        // confusing) to an OpenAI-wire upstream after conversion.
+        if !anthropic_upstream && (name == "anthropic-version" || name == ANTHROPIC_BETA_HEADER) {
+            continue;
+        }
         if !is_hop_header(name)
             && !incoming_hop_headers.contains(name)
             && name != header::AUTHORIZATION
@@ -3480,6 +3517,7 @@ mod tests {
                 priority,
                 weight: 1,
                 enabled: true,
+                protocol: None,
             },
             api_key: "upstream-secret".into(),
         }
@@ -5436,6 +5474,7 @@ mod tests {
                 priority,
                 weight: 1,
                 enabled: true,
+                protocol: None,
             },
             api_key: "upstream-secret".into(),
         };
@@ -5847,5 +5886,500 @@ mod tests {
         assert_eq!(stats.request_count, 101);
         assert_eq!(stats.success_rate_bps(), 9_901);
         assert_eq!(stats.average_first_token_ms(), Some(50));
+    }
+
+    // --- cross-protocol conversion end-to-end ------------------------------
+
+    fn conversion_target(
+        base_url: String,
+        priority: u16,
+        protocol: ProxyProtocol,
+    ) -> ResolvedTarget {
+        let mut target = test_target(base_url, priority);
+        target.config.protocol = Some(protocol);
+        target
+    }
+
+    fn conversion_route(
+        token: &str,
+        inbound: ProxyProtocol,
+        upstream_fallback: ProxyProtocol,
+        targets: Vec<ResolvedTarget>,
+        max_attempts: u8,
+    ) -> ResolvedRoute {
+        ResolvedRoute {
+            config: ProxyRouteConfig {
+                id: Uuid::new_v4(),
+                name: "conversion".into(),
+                token: String::new(),
+                inbound_protocol: inbound,
+                upstream_protocol: upstream_fallback,
+                conversion_enabled: true,
+                strategy: RouteStrategy::Fallback,
+                targets: Vec::new(),
+                retry: RetryPolicy {
+                    max_attempts,
+                    ..RetryPolicy::default()
+                },
+                enabled: true,
+            },
+            local_token: token.into(),
+            targets,
+        }
+    }
+
+    /// Runs a mock upstream that captures one request and replies with the
+    /// given status, content type, and body.
+    fn mock_upstream(
+        status: &str,
+        content_type: &str,
+        body: String,
+    ) -> (SocketAddr, std::thread::JoinHandle<(String, Vec<u8>)>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let status = status.to_string();
+        let content_type = content_type.to_string();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let captured = read_http_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            captured
+        });
+        (addr, handle)
+    }
+
+    fn start_proxy(bind_addr: SocketAddr, route: ResolvedRoute) -> ProxyHandle {
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn anthropic_client_to_chat_completions_upstream_non_streaming() {
+        let (upstream_addr, upstream) = mock_upstream(
+            "200 OK",
+            "application/json",
+            serde_json::json!({
+                "id": "chatcmpl_1", "object": "chat.completion", "model": "gpt-test",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi there"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3}
+            })
+            .to_string(),
+        );
+        let bind_addr = available_addr();
+        let token = "aipass_conv_am_cc_test";
+        let route = conversion_route(
+            token,
+            ProxyProtocol::AnthropicMessages,
+            ProxyProtocol::AnthropicMessages,
+            vec![conversion_target(
+                format!("http://{upstream_addr}/v1"),
+                0,
+                ProxyProtocol::OpenAiChatCompletions,
+            )],
+            1,
+        );
+        let _proxy = start_proxy(bind_addr, route);
+
+        let request = serde_json::json!({
+            "model": "claude-test",
+            "system": "Be terse.",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            "max_tokens": 64
+        });
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/messages"))
+            .bearer_auth(token)
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", "fine-grained-tool-results-2025-05-14")
+            .json(&request)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().unwrap();
+        assert_eq!(payload["type"], "message");
+        assert_eq!(payload["role"], "assistant");
+        assert_eq!(
+            payload["content"][0],
+            serde_json::json!({"type": "text", "text": "Hi there"})
+        );
+        assert_eq!(payload["stop_reason"], "end_turn");
+        assert_eq!(payload["usage"]["input_tokens"], 12);
+        assert_eq!(payload["usage"]["output_tokens"], 3);
+
+        let (headers, body) = upstream.join().unwrap();
+        // The upstream saw a converted Chat Completions request at the CC path.
+        let sent: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            sent["messages"][0],
+            serde_json::json!({"role": "system", "content": "Be terse."})
+        );
+        assert_eq!(
+            sent["messages"][1],
+            serde_json::json!({"role": "user", "content": "Hello"})
+        );
+        assert_eq!(sent["max_tokens"], 64);
+        assert!(sent.get("system").is_none());
+        assert!(sent.get("thinking").is_none());
+        assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+        // Anthropic-only headers must not leak to the OpenAI-wire upstream.
+        assert!(!headers.lines().any(|line| line
+            .to_ascii_lowercase()
+            .starts_with("anthropic-version:")
+            || line.to_ascii_lowercase().starts_with("anthropic-beta:")));
+    }
+
+    #[test]
+    fn anthropic_client_to_chat_completions_upstream_streaming_tool_call() {
+        let sse = concat!(
+            "data: {\"id\":\"chatcmpl_1\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Let me check.\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\"\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\":\\\"Paris\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":9}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (upstream_addr, upstream) =
+            mock_upstream("200 OK", "text/event-stream", sse.to_string());
+        let bind_addr = available_addr();
+        let token = "aipass_conv_am_cc_stream_test";
+        let route = conversion_route(
+            token,
+            ProxyProtocol::AnthropicMessages,
+            ProxyProtocol::AnthropicMessages,
+            vec![conversion_target(
+                format!("http://{upstream_addr}/v1"),
+                0,
+                ProxyProtocol::OpenAiChatCompletions,
+            )],
+            1,
+        );
+        let _proxy = start_proxy(bind_addr, route);
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/messages"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "model": "claude-test",
+                "messages": [{"role": "user", "content": "weather?"}],
+                "max_tokens": 64,
+                "stream": true
+            }))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.text().unwrap();
+
+        for expected in [
+            "event: message_start",
+            "event: content_block_start",
+            "event: content_block_delta",
+            "event: content_block_stop",
+            "event: message_delta",
+            "event: message_stop",
+        ] {
+            assert!(body.contains(expected), "missing {expected} in:\n{body}");
+        }
+        assert!(!body.contains("[DONE]"));
+        // serde_json emits object keys in sorted order.
+        assert!(
+            body.contains("\"text\":\"Let me check.\",\"type\":\"text_delta\""),
+            "{body}"
+        );
+        assert!(
+            body.contains("\"id\":\"call_1\",\"name\":\"lookup\",\"type\":\"tool_use\""),
+            "{body}"
+        );
+        assert!(
+            body.contains("\"partial_json\":\"{\\\"city\\\"\""),
+            "{body}"
+        );
+        assert!(
+            body.contains("\"partial_json\":\":\\\"Paris\\\"}\""),
+            "{body}"
+        );
+        assert!(body.contains("\"stop_reason\":\"tool_use\""), "{body}");
+        assert!(body.contains("\"output_tokens\":9"), "{body}");
+
+        let (headers, body) = upstream.join().unwrap();
+        let sent: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(sent["stream"], true);
+        // Usage reporting is requested on the converted CC stream.
+        assert_eq!(sent["stream_options"]["include_usage"], true);
+        assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn chat_completions_client_to_anthropic_upstream_non_streaming() {
+        let (upstream_addr, upstream) = mock_upstream(
+            "200 OK",
+            "application/json",
+            serde_json::json!({
+                "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-test",
+                "content": [
+                    {"type": "text", "text": "Checking."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"city": "Paris"}}
+                ],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 10, "output_tokens": 8}
+            })
+            .to_string(),
+        );
+        let bind_addr = available_addr();
+        let token = "aipass_conv_cc_am_test";
+        let route = conversion_route(
+            token,
+            ProxyProtocol::OpenAiChatCompletions,
+            ProxyProtocol::OpenAiChatCompletions,
+            vec![conversion_target(
+                format!("http://{upstream_addr}/v1"),
+                0,
+                ProxyProtocol::AnthropicMessages,
+            )],
+            1,
+        );
+        let _proxy = start_proxy(bind_addr, route);
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/chat/completions"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "model": "gpt-test",
+                "messages": [
+                    {"role": "system", "content": "Be terse."},
+                    {"role": "user", "content": "weather?"}
+                ]
+            }))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().unwrap();
+        assert_eq!(payload["object"], "chat.completion");
+        assert_eq!(payload["choices"][0]["message"]["content"], "Checking.");
+        assert_eq!(
+            payload["choices"][0]["message"]["tool_calls"][0],
+            serde_json::json!({"id": "toolu_1", "type": "function", "function": {"name": "lookup", "arguments": "{\"city\":\"Paris\"}"}})
+        );
+        assert_eq!(payload["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(payload["usage"]["prompt_tokens"], 10);
+        assert_eq!(payload["usage"]["completion_tokens"], 8);
+
+        let (headers, body) = upstream.join().unwrap();
+        let sent: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(sent["system"], "Be terse.");
+        // max_tokens is required by the Anthropic API and defaults when absent.
+        assert_eq!(sent["max_tokens"], 4096);
+        assert_eq!(
+            sent["messages"][0],
+            serde_json::json!({"role": "user", "content": [{"type": "text", "text": "weather?"}]})
+        );
+        assert!(headers.starts_with("POST /v1/messages HTTP/1.1\r\n"));
+        // The Anthropic upstream gets the required version header.
+        assert!(headers
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("anthropic-version: 2023-06-01")));
+    }
+
+    #[test]
+    fn anthropic_client_to_responses_upstream_non_streaming() {
+        let (upstream_addr, upstream) = mock_upstream(
+            "200 OK",
+            "application/json",
+            serde_json::json!({
+                "id": "resp_1", "status": "completed", "model": "gpt-test",
+                "output": [
+                    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hi there"}]}
+                ],
+                "usage": {"input_tokens": 12, "output_tokens": 3}
+            })
+            .to_string(),
+        );
+        let bind_addr = available_addr();
+        let token = "aipass_conv_am_rs_test";
+        let route = conversion_route(
+            token,
+            ProxyProtocol::AnthropicMessages,
+            ProxyProtocol::AnthropicMessages,
+            vec![conversion_target(
+                format!("http://{upstream_addr}/v1"),
+                0,
+                ProxyProtocol::OpenAiResponses,
+            )],
+            1,
+        );
+        let _proxy = start_proxy(bind_addr, route);
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/messages"))
+            .bearer_auth(token)
+            .header("anthropic-version", "2023-06-01")
+            .json(&serde_json::json!({
+                "model": "claude-test",
+                "system": "Be terse.",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "max_tokens": 64
+            }))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().unwrap();
+        assert_eq!(payload["type"], "message");
+        assert_eq!(
+            payload["content"][0],
+            serde_json::json!({"type": "text", "text": "Hi there"})
+        );
+        assert_eq!(payload["stop_reason"], "end_turn");
+
+        let (headers, body) = upstream.join().unwrap();
+        let sent: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(sent["instructions"], "Be terse.");
+        assert_eq!(sent["max_output_tokens"], 64);
+        assert_eq!(
+            sent["input"][0],
+            serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]})
+        );
+        assert!(headers.starts_with("POST /v1/responses HTTP/1.1\r\n"));
+        assert!(!headers
+            .lines()
+            .any(|line| line.to_ascii_lowercase().starts_with("anthropic-version:")));
+    }
+
+    #[test]
+    fn mixed_protocol_route_passes_native_through_and_converts_on_failover() {
+        // Target 0 is Anthropic-native and fails; target 1 is Chat
+        // Completions-native and must receive a converted request.
+        let (native_addr, native) = mock_upstream(
+            "503 Service Unavailable",
+            "application/json",
+            r#"{"error":{"message":"down"}}"#.to_string(),
+        );
+        let (foreign_addr, foreign) = mock_upstream(
+            "200 OK",
+            "application/json",
+            serde_json::json!({
+                "id": "chatcmpl_2", "object": "chat.completion", "model": "gpt-test",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "from fallback"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 2}
+            })
+            .to_string(),
+        );
+        let bind_addr = available_addr();
+        let token = "aipass_conv_mixed_test";
+        let route = conversion_route(
+            token,
+            ProxyProtocol::AnthropicMessages,
+            ProxyProtocol::AnthropicMessages,
+            vec![
+                conversion_target(
+                    format!("http://{native_addr}/v1"),
+                    0,
+                    ProxyProtocol::AnthropicMessages,
+                ),
+                conversion_target(
+                    format!("http://{foreign_addr}/v1"),
+                    1,
+                    ProxyProtocol::OpenAiChatCompletions,
+                ),
+            ],
+            2,
+        );
+        let _proxy = start_proxy(bind_addr, route);
+
+        let request = serde_json::json!({
+            "model": "claude-test",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 32
+        });
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/messages"))
+            .bearer_auth(token)
+            .json(&request)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().unwrap();
+        assert_eq!(
+            payload["content"][0],
+            serde_json::json!({"type": "text", "text": "from fallback"})
+        );
+
+        // The native target received the request bytes losslessly.
+        let (_, native_body) = native.join().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&native_body).unwrap(),
+            request
+        );
+        // The foreign target received a converted Chat Completions request.
+        let (_, foreign_body) = foreign.join().unwrap();
+        let converted: serde_json::Value = serde_json::from_slice(&foreign_body).unwrap();
+        assert_eq!(
+            converted["messages"][0],
+            serde_json::json!({"role": "user", "content": "Hello"})
+        );
+        assert!(converted.get("max_tokens").is_some());
+    }
+
+    #[test]
+    fn start_gate_rejects_unsupported_pairs_and_accepts_supported_conversion() {
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+
+        // Chat Completions <-> Responses conversion is not implemented.
+        let mut unsupported = conversion_route(
+            "aipass_gate_unsupported",
+            ProxyProtocol::OpenAiChatCompletions,
+            ProxyProtocol::OpenAiChatCompletions,
+            vec![conversion_target(
+                "http://127.0.0.1:1/v1".into(),
+                0,
+                ProxyProtocol::OpenAiResponses,
+            )],
+            1,
+        );
+        assert!(matches!(
+            ProxyHandle::start(
+                RuntimeConfig::from_routes(available_addr().to_string(), vec![unsupported.clone()]),
+                usage.clone(),
+            ),
+            Err(ProxyError::InvalidConfig(_))
+        ));
+
+        // A protocol mismatch without conversion enabled is a misconfiguration.
+        unsupported.config.conversion_enabled = false;
+        unsupported.targets[0].config.protocol = Some(ProxyProtocol::AnthropicMessages);
+        assert!(matches!(
+            ProxyHandle::start(
+                RuntimeConfig::from_routes(available_addr().to_string(), vec![unsupported]),
+                usage.clone(),
+            ),
+            Err(ProxyError::InvalidConfig(_))
+        ));
+
+        // Anthropic <-> Chat Completions conversion starts fine.
+        let supported = conversion_route(
+            "aipass_gate_supported",
+            ProxyProtocol::AnthropicMessages,
+            ProxyProtocol::AnthropicMessages,
+            vec![conversion_target(
+                "http://127.0.0.1:1/v1".into(),
+                0,
+                ProxyProtocol::OpenAiChatCompletions,
+            )],
+            1,
+        );
+        assert!(ProxyHandle::start(
+            RuntimeConfig::from_routes(available_addr().to_string(), vec![supported]),
+            usage,
+        )
+        .is_ok());
     }
 }

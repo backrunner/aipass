@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+mod request;
+mod response;
+mod stream;
+
+pub use stream::StreamConverter;
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ProxyProtocol {
@@ -66,6 +72,9 @@ pub trait ConversionPlugin: Send + Sync {
         to: ProxyProtocol,
         payload: Value,
     ) -> Result<Value, ConversionError>;
+    /// Stateless same-protocol passthrough only. Cross-protocol SSE
+    /// conversion is stateful and lives in [`StreamConverter`]; calling this
+    /// for a cross-protocol pair returns [`ConversionError::Unsupported`].
     fn convert_stream_event(
         &self,
         from: ProxyProtocol,
@@ -75,11 +84,28 @@ pub trait ConversionPlugin: Send + Sync {
     fn extract_usage(&self, protocol: ProxyProtocol, payload: &Value) -> TokenUsage;
 }
 
-/// Cross-protocol conversion is deliberately gated off until every supported
-/// pair has a complete request, response, tool-call, and SSE state machine.
-/// Same-protocol forwarding remains lossless and is used by the proxy today.
+/// Same-protocol forwarding is lossless. Cross-protocol conversion covers
+/// Anthropic Messages ↔ OpenAI Chat Completions and Anthropic Messages ↔
+/// OpenAI Responses for requests and non-streaming responses; streaming
+/// conversion for those pairs is provided by [`StreamConverter`]. Use
+/// [`supports`] to check a pair before routing.
 #[derive(Clone, Default)]
 pub struct BuiltinConversionPlugin;
+
+impl BuiltinConversionPlugin {
+    pub fn supports(from: ProxyProtocol, to: ProxyProtocol) -> bool {
+        supports(from, to)
+    }
+}
+
+/// True for same-protocol pairs and every implemented cross-protocol pair
+/// (Anthropic Messages ↔ either OpenAI wire format).
+pub fn supports(from: ProxyProtocol, to: ProxyProtocol) -> bool {
+    use ProxyProtocol::{
+        AnthropicMessages as AM, OpenAiChatCompletions as CC, OpenAiResponses as RS,
+    };
+    from == to || matches!((from, to), (AM, CC) | (CC, AM) | (AM, RS) | (RS, AM))
+}
 
 impl ConversionPlugin for BuiltinConversionPlugin {
     fn convert_request(
@@ -88,7 +114,11 @@ impl ConversionPlugin for BuiltinConversionPlugin {
         to: ProxyProtocol,
         payload: Value,
     ) -> Result<Value, ConversionError> {
-        same_protocol(from, to, payload)
+        if from == to {
+            Ok(payload)
+        } else {
+            request::convert(from, to, payload)
+        }
     }
 
     fn convert_response(
@@ -97,7 +127,11 @@ impl ConversionPlugin for BuiltinConversionPlugin {
         to: ProxyProtocol,
         payload: Value,
     ) -> Result<Value, ConversionError> {
-        same_protocol(from, to, payload)
+        if from == to {
+            Ok(payload)
+        } else {
+            response::convert(from, to, payload)
+        }
     }
 
     fn convert_stream_event(
@@ -118,19 +152,14 @@ impl ConversionPlugin for BuiltinConversionPlugin {
     }
 }
 
-fn same_protocol(
-    from: ProxyProtocol,
-    to: ProxyProtocol,
-    payload: Value,
-) -> Result<Value, ConversionError> {
-    if from == to {
-        Ok(payload)
-    } else {
-        Err(ConversionError::Unsupported(from, to))
+pub(crate) fn invalid(protocol: ProxyProtocol, message: impl Into<String>) -> ConversionError {
+    ConversionError::InvalidPayload {
+        protocol,
+        message: message.into(),
     }
 }
 
-fn number(value: Option<&Value>) -> u64 {
+pub(crate) fn number(value: Option<&Value>) -> u64 {
     value.and_then(Value::as_u64).unwrap_or_default()
 }
 
@@ -186,15 +215,40 @@ mod tests {
     }
 
     #[test]
-    fn cross_protocol_conversion_is_explicitly_unavailable() {
+    fn unimplemented_pairs_are_explicitly_unavailable() {
         assert!(matches!(
             BuiltinConversionPlugin.convert_request(
                 ProxyProtocol::OpenAiChatCompletions,
-                ProxyProtocol::AnthropicMessages,
+                ProxyProtocol::OpenAiResponses,
                 serde_json::json!({})
             ),
             Err(ConversionError::Unsupported(_, _))
         ));
+        assert!(matches!(
+            BuiltinConversionPlugin.convert_stream_event(
+                ProxyProtocol::AnthropicMessages,
+                ProxyProtocol::OpenAiChatCompletions,
+                "data: {}\n\n"
+            ),
+            Err(ConversionError::Unsupported(_, _))
+        ));
+    }
+
+    #[test]
+    fn supports_covers_same_protocol_and_anthropic_openai_pairs() {
+        use ProxyProtocol::{
+            AnthropicMessages as AM, OpenAiChatCompletions as CC, OpenAiResponses as RS,
+        };
+        for protocol in [AM, CC, RS] {
+            assert!(supports(protocol, protocol));
+            assert!(BuiltinConversionPlugin::supports(protocol, protocol));
+        }
+        for (from, to) in [(AM, CC), (CC, AM), (AM, RS), (RS, AM)] {
+            assert!(supports(from, to), "{from:?} -> {to:?}");
+        }
+        for (from, to) in [(CC, RS), (RS, CC)] {
+            assert!(!supports(from, to), "{from:?} -> {to:?}");
+        }
     }
 
     #[test]
