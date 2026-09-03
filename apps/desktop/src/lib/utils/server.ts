@@ -15,10 +15,31 @@ export function defaultRetryPolicy(): RetryPolicy {
   };
 }
 
-export function routeProtocolFor(entry: ProviderEntry, secret?: SecretRef): ProxyProtocol {
+export function nativeProtocolForEntry(
+  entry: ProviderEntry,
+  secret?: SecretRef
+): ProxyProtocol | null {
   const interfaceType = secretInterfaceType(secret, entry.interfaceType);
   if (interfaceType === "anthropic_messages") return "anthropic_messages";
-  return entry.providerId === "openai" ? "open_ai_responses" : "open_ai_chat_completions";
+  if (interfaceType !== "openai_compatible" && interfaceType !== "azure_openai") return null;
+  return entry.providerId === "openai" ||
+    (entry.providerId === "codex" && entry.credentialKind === "oauth")
+    ? "open_ai_responses"
+    : "open_ai_chat_completions";
+}
+
+export function routeProtocolFor(entry: ProviderEntry, secret?: SecretRef): ProxyProtocol {
+  return nativeProtocolForEntry(entry, secret) ?? "open_ai_chat_completions";
+}
+
+export function routeNeedsConversion(
+  inboundProtocol: ProxyProtocol,
+  members: ReadonlyArray<{ entry: ProviderEntry; secret?: SecretRef }>
+): boolean {
+  return members.some((member) => {
+    const native = nativeProtocolForEntry(member.entry, member.secret);
+    return native !== null && native !== inboundProtocol;
+  });
 }
 
 export function apiBaseUrl(entry: ProviderEntry): string | undefined {
@@ -85,4 +106,15 @@ export function advertisedProxyAddress(bindAddr: string): string {
   if (bindAddr.startsWith("0.0.0.0:")) return `127.0.0.1:${bindAddr.slice("0.0.0.0:".length)}`;
   if (bindAddr.startsWith("[::]:")) return `[::1]:${bindAddr.slice("[::]:".length)}`;
   return bindAddr;
+}
+
+/** Move the item at `from` to position `to`, returning a new array. */
+export function reorderItems<T>(items: readonly T[], from: number, to: number): T[] {
+  if (from < 0 || from >= items.length || to < 0 || to >= items.length || from === to) {
+    return [...items];
+  }
+  const next = [...items];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
 }

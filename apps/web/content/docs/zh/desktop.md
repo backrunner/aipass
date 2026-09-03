@@ -33,6 +33,12 @@ order: 5
 
 服务商详情面板显示端点、控制台 URL、掩码密钥、模型别名、配额、标签和备注，并提供复制、显示、探测、配置、归档和删除操作。每条记录可以持有多个带标签的密钥。
 
+外部工具可以使用 AIPass 原生 deep link 打开添加服务商表单：
+
+`aipass-provider://v1/add?title=Relay&providerId=custom_http&domain=relay.example.com&endpoint=https%3A%2F%2Frelay.example.com%2Fv1&interfaceType=openai_compatible&authScheme=bearer&apiKey=...`
+
+路径 `v1/add` 已版本化。多个 `domain`、`endpoint`、`consoleEndpoint` 和 `tag` 可重复传入；`modelAliases`、`headers`、`quota` 使用 JSON 查询参数并进行 URL 编码。链接只会打开现有添加表单，最终记录仍由 Rust agent 负责持久化。
+
 ## 集成
 
 Integrations 区域可将 AI 工具配置为使用已保存的凭据，写入前会显示预览对话框。支持的工具：
@@ -47,9 +53,10 @@ Integrations 区域可将 AI 工具配置为使用已保存的凭据，写入前
 **Server** 区域运行一个本地 HTTP 代理，让工具共享保险库凭据而无需持有真实密钥。要点：
 
 - 默认绑定 `127.0.0.1:8787`，地址可配置。
-- 路由定义入站协议（OpenAI Responses、OpenAI Chat Completions 或 Anthropic Messages）、出站协议，以及两者之间的可选协议转换。
+- 路由定义入站协议（OpenAI Responses、OpenAI Chat Completions 或 Anthropic Messages）。目标可以是任意受支持格式的服务商：当目标格式与入站协议不一致时，代理会自动进行协议格式转换（例如让 Claude Code 使用 OpenAI 格式的服务商）。
 - 每条路由有自己的 bearer 令牌、策略（fallback 或 round-robin）和指向保险库记录的加权目标——某个服务商失败时会自动切换到下一个目标。
 - 每条路由的重试策略：最大尝试次数、失败阈值、熔断秒数、连接 / 首字节 / 流空闲超时。
+- 格式转换的已知限制：不转换 `/v1/messages/count_tokens`；跨协议时丢弃 `thinking` 与 `cache_control` 字段；`anthropic-beta` 特性头不会透传给 OpenAI 上游。
 - 按服务商和模型统计用量——请求数、令牌数、基于你的定价表估算的成本、成功率、首 token 耗时——存储在本地 SQLite 中。
 
 由于目标引用的是保险库记录，在保险库中轮换密钥后代理自动生效，无需改动工具配置。

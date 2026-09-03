@@ -2,18 +2,18 @@
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
   import { Button, IconButton, SelectField } from "@aipass/ui";
   import { Dialog, Switch } from "bits-ui";
-  import { ChevronDown, ChevronUp, KeyRound, Trash2, X } from "lucide-svelte";
+  import { ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyTargetConfig } from "../../types";
-  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, proxySupportedEntry, routeProtocolFor } from "../../utils/server";
+  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, proxySupportedEntry, reorderItems, routeNeedsConversion, routeProtocolFor } from "../../utils/server";
 
   export let route: ProxyRouteConfig | undefined = undefined;
   export let entries: ProviderEntry[] = [];
   export let onSave: (route: ProxyRouteConfig) => MaybePromise<boolean | void> = () => {};
   export let onClose: () => MaybePromise = () => {};
 
-  type Member = { entry: ProviderEntry; secret: SecretRef; weight: number };
+  type Member = { entry: ProviderEntry; secret: SecretRef; weight: number; enabled: boolean };
 
   let dialogOpen = true;
   let closing = false;
@@ -28,19 +28,15 @@
   let members: Member[] = (route?.targets ?? []).flatMap((target) => {
     const entry = entries.find((item) => item.id === target.providerEntryId);
     const secret = entry?.secretRefs.find((item) => item.id === target.secretId);
-    return entry && secret ? [{ entry, secret, weight: Math.max(1, target.weight || 1) }] : [];
+    return entry && secret ? [{ entry, secret, weight: Math.max(1, target.weight || 1), enabled: target.enabled !== false }] : [];
   });
+  let dragIndex: number | null = null;
 
   $: credentialOptions = entries
     .filter((entry) => Boolean(apiBaseUrl(entry)))
     .flatMap((entry) =>
       entry.secretRefs
         .filter((secret) => proxySupportedEntry(entry, secret))
-        .filter(
-          (secret) =>
-            members.length === 0 ||
-            routeProtocolFor(entry, secret) === routeProtocolFor(members[0].entry, members[0].secret)
-        )
         .map((secret) => ({
         value: `${entry.id}::${secret.id}`,
         label: `${entry.title} · ${secret.label}`,
@@ -52,9 +48,11 @@
     { value: "round_robin", label: $t("server.strategyRoundRobin") }
   ];
   $: protocolOptions = [
+    { value: "anthropic_messages", label: "Anthropic Messages" },
     { value: "open_ai_responses", label: "OpenAI Responses" },
     { value: "open_ai_chat_completions", label: "OpenAI Chat Completions" }
   ];
+  $: conversionNeeded = members.length > 0 && routeNeedsConversion(protocol, members);
 
   function handleOpenChange(next: boolean) {
     if (next) {
@@ -78,7 +76,7 @@
     if (!entry || !secret) return;
     if (!proxySupportedEntry(entry, secret)) return;
     if (members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)) return;
-    members = [...members, { entry, secret, weight: 1 }];
+    members = [...members, { entry, secret, weight: 1, enabled: true }];
     name ||= entry.title;
     if (members.length === 1) protocol = routeProtocolFor(entry, secret);
   }
@@ -87,12 +85,31 @@
     members = members.filter((_, itemIndex) => itemIndex !== index);
   }
 
+  function toggleMember(index: number, enabled: boolean) {
+    members = members.map((member, itemIndex) => (itemIndex === index ? { ...member, enabled } : member));
+  }
+
   function moveMember(index: number, direction: -1 | 1) {
-    const target = index + direction;
-    if (target < 0 || target >= members.length) return;
-    const next = [...members];
-    [next[index], next[target]] = [next[target], next[index]];
-    members = next;
+    members = reorderItems(members, index, index + direction);
+  }
+
+  function startDrag(event: DragEvent, index: number) {
+    dragIndex = index;
+    event.dataTransfer?.setData("text/plain", String(index));
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  }
+
+  function dragOverMember(event: DragEvent, index: number) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    // Live-reorder as the pointer crosses rows so the list stays WYSIWYG.
+    if (dragIndex === null || dragIndex === index) return;
+    members = reorderItems(members, dragIndex, index);
+    dragIndex = index;
+  }
+
+  function endDrag() {
+    dragIndex = null;
   }
 
   async function save() {
@@ -108,20 +125,20 @@
         id: existing?.id ?? base.id,
         priority: index,
         weight: Math.max(1, Math.round(member.weight) || 1),
-        enabled: existing?.enabled ?? true
+        enabled: member.enabled
       };
     }).filter((target): target is ProxyTargetConfig => Boolean(target));
     if (targets.length === 0) return;
-    if (routeProtocolFor(members[0].entry, members[0].secret) === "anthropic_messages") {
-      protocol = "anthropic_messages";
-    }
+    const upstreamProtocol = routeProtocolFor(members[0].entry, members[0].secret);
+    const conversionEnabled = routeNeedsConversion(protocol, members);
     const nextRoute: ProxyRouteConfig = route
       ? {
           ...route,
           name: name.trim(),
           strategy,
           inboundProtocol: protocol,
-          upstreamProtocol: protocol,
+          upstreamProtocol,
+          conversionEnabled,
           targets,
           retry: {
             ...route.retry,
@@ -135,8 +152,8 @@
         token: "",
         strategy,
         inboundProtocol: protocol,
-        upstreamProtocol: protocol,
-        conversionEnabled: false,
+        upstreamProtocol,
+        conversionEnabled,
         targets,
         retry: defaultRetryPolicy(),
         enabled: true
@@ -183,14 +200,15 @@
                 bind:value={strategy}
                 options={strategyOptions}
               />
-              {#if members.length > 0 && routeProtocolFor(members[0].entry, members[0].secret) !== "anthropic_messages"}
-                <SelectField
-                  label={$t("server.protocol")}
-                  bind:value={protocol}
-                  options={protocolOptions}
-                />
-              {/if}
+              <SelectField
+                label={$t("routeGroup.inboundProtocol")}
+                bind:value={protocol}
+                options={protocolOptions}
+              />
             </div>
+            {#if conversionNeeded}
+              <p class="conversion-hint">{$t("routeGroup.autoConversion")}</p>
+            {/if}
           </div>
 
           <section class="advanced-settings">
@@ -248,11 +266,30 @@
             </div>
 
             {#each members as member, index (`${member.entry.id}::${member.secret.id}`)}
-              <div class="member-row">
+              <div
+                class="member-row"
+                class:member-disabled={!member.enabled}
+                class:dragging={dragIndex === index}
+                role="listitem"
+                on:dragover={(event) => dragOverMember(event, index)}
+                on:drop={(event) => event.preventDefault()}
+              >
+                <span
+                  class="drag-handle"
+                  role="button"
+                  tabindex="0"
+                  draggable="true"
+                  aria-label={$t("server.dragToReorder")}
+                  title={$t("server.dragToReorder")}
+                  on:dragstart={(event) => startDrag(event, index)}
+                  on:dragend={endDrag}
+                >
+                  <GripVertical size={14} />
+                </span>
                 <span class="member-icon" aria-hidden="true"><KeyRound size={15} /></span>
                 <div class="member-main">
                   <strong>{member.entry.title}</strong>
-                  <span>{member.secret.label}</span>
+                  <span>{member.secret.label}{#if !member.enabled} · {$t("server.memberDisabled")}{/if}</span>
                 </div>
                 <div class="member-controls">
                   {#if strategy === "round_robin"}
@@ -261,6 +298,14 @@
                       <input type="number" min="1" step="1" bind:value={member.weight} />
                     </label>
                   {/if}
+                  <Switch.Root
+                    checked={member.enabled}
+                    onCheckedChange={(enabled) => toggleMember(index, enabled)}
+                    class="member-switch"
+                    aria-label={`${member.entry.title}: ${$t("server.enabled")}`}
+                  >
+                    <Switch.Thumb class="member-switch-thumb" />
+                  </Switch.Root>
                   <div class="member-actions">
                     <IconButton size="sm" label={$t("server.moveUp")} disabled={index === 0} on:click={() => moveMember(index, -1)}>
                       <ChevronUp size={14} />
@@ -495,6 +540,13 @@
     gap: 12px;
   }
 
+  .conversion-hint {
+    margin: 0;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   .field {
     display: flex;
     flex-direction: column;
@@ -550,7 +602,7 @@
 
   .member-row {
     display: grid;
-    grid-template-columns: 32px minmax(0, 1fr) auto;
+    grid-template-columns: auto 32px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
     min-height: 56px;
@@ -558,6 +610,68 @@
     background: var(--surface-raised);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    transition: opacity 120ms ease, border-color 120ms ease;
+
+    &.dragging {
+      opacity: 0.55;
+      border-color: var(--accent);
+    }
+
+    &.member-disabled {
+      .member-icon,
+      .member-main {
+        opacity: 0.5;
+      }
+    }
+  }
+
+  .drag-handle {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 28px;
+    margin-inline-start: -4px;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    cursor: grab;
+    touch-action: none;
+
+    &:hover {
+      color: var(--text-secondary);
+      background: var(--surface-2);
+    }
+
+    &:active {
+      cursor: grabbing;
+    }
+  }
+
+  :global(.member-switch) {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 20px;
+    padding: 2px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface-strong);
+    cursor: pointer;
+  }
+
+  :global(.member-switch[data-state="checked"]) {
+    background: var(--accent);
+  }
+
+  :global(.member-switch-thumb) {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: white;
+    transition: transform 160ms ease;
+  }
+
+  :global(.member-switch[data-state="checked"] .member-switch-thumb) {
+    transform: translateX(16px);
   }
 
   .member-icon {
@@ -635,11 +749,11 @@
 
   @media (max-width: 520px) {
     .member-row {
-      grid-template-columns: 32px minmax(0, 1fr);
+      grid-template-columns: auto 32px minmax(0, 1fr);
     }
 
     .member-controls {
-      grid-column: 2;
+      grid-column: 3;
       justify-content: space-between;
     }
   }

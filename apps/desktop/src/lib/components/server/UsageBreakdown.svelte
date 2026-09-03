@@ -145,6 +145,17 @@
       white-space: nowrap;
     }
 
+    // Align the first/last columns with the card's content edges.
+    th:first-child,
+    td:first-child {
+      padding-inline-start: 0;
+    }
+
+    th:last-child,
+    td:last-child {
+      padding-inline-end: 0;
+    }
+
     .col-name {
       min-width: 88px;
       width: 88px;

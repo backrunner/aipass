@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { authLabel, initials, interfaceLabel } from "./helpers";
+import { authLabel, encodeListValues, encodePairValues, initials, interfaceLabel } from "./helpers";
 
 describe("@aipass/ui labels", () => {
   it("labels provider-native protocols", () => {
@@ -11,5 +11,10 @@ describe("@aipass/ui labels", () => {
   it("derives initials", () => {
     expect(initials("Google Gemini")).toBe("G");
     expect(initials("天梯 API")).toBe("天");
+  });
+
+  it("encodes structured form values without losing delimiters", () => {
+    expect(encodeListValues(["relay,internal", "C:\\keys\\primary"])).toBe("relay\\,internal, C:\\\\keys\\\\primary");
+    expect(encodePairValues([["fast,cheap", "gpt-5=latest"]])).toBe("fast\\,cheap=gpt-5\\=latest");
   });
 });

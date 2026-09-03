@@ -14,6 +14,8 @@
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
   export let onInferDraftFromEndpoint: () => MaybePromise = () => {};
   export let onProviderChanged: () => MaybePromise = () => {};
+  export let onInterfaceChanged: () => MaybePromise = () => {};
+  export let onAuthChanged: () => MaybePromise = () => {};
   export let compactProviderSelect = false;
   export let showSecretLabel = true;
   // Set when editing an official OAuth entry: the proxy sends the OAuth token
@@ -345,6 +347,7 @@
         label={$t("providerForm.interface")}
         bind:value={draft.interfaceType}
         options={interfaceOptions}
+        onValueChange={() => onInterfaceChanged()}
       />
     </div>
     <div class="protocol-field">
@@ -352,6 +355,7 @@
         label={$t("providerForm.auth")}
         bind:value={draft.authScheme}
         options={authOptions}
+        onValueChange={() => onAuthChanged()}
       />
     </div>
     {#if visibleFields.has("consoleUrl")}

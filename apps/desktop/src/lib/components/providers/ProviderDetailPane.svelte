@@ -97,6 +97,8 @@
   export let onCopyValue: (label: string, value: string) => MaybePromise = () => {};
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
   export let onProviderChanged: () => MaybePromise = () => {};
+  export let onInterfaceChanged: () => MaybePromise = () => {};
+  export let onAuthChanged: () => MaybePromise = () => {};
   export let onPreviewToolConfig: (request: {
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
@@ -469,6 +471,8 @@
           bind:draft
           {onInferDraftFromDomain}
           {onProviderChanged}
+          {onInterfaceChanged}
+          {onAuthChanged}
           {isOfficialOauth}
         />
 

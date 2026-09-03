@@ -69,7 +69,6 @@ function endpointCanBelongToProvider(provider: ProviderDefinition, endpoint: URL
 
 function normalizeEndpoint(endpoint: URL, addOpenAiVersion: boolean): string {
   endpoint.hash = "";
-  endpoint.search = "";
   if (addOpenAiVersion && (endpoint.pathname === "/" || endpoint.pathname === "")) {
     endpoint.pathname = "/v1";
   } else if (endpoint.pathname.length > 1) {

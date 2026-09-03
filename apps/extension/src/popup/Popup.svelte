@@ -1,5 +1,7 @@
 <script lang="ts">
   import {
+    authSchemeCompatibleWithInterface,
+    defaultAuthSchemeForInterface,
     detectAuthFromProvider,
     detectInterfaceFromProvider,
     inferProviderFromEndpoint,
@@ -17,6 +19,8 @@
     billingPatchFromDraft,
     Brand,
     Button,
+    encodeListValues,
+    encodePairValues,
     emptyDraft,
     groupFromDraft,
     IconButton,
@@ -32,7 +36,19 @@
   import { desktopDeepLink, friendlyNativeError, isNativeLaunchFailure } from "../native-error";
   import { endpointForProvider, parseHttpEndpoint, providerForEndpoint } from "../provider-endpoint";
   import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
-  import type { DraftItem, DraftPreview, Entry, FaviconBackfillResult, Grant, LookupData, NativeResponse, SafeDraft } from "./types";
+  import {
+    fullyTouchedProtocol,
+    untouchedProtocol,
+    type DraftItem,
+    type DraftPreview,
+    type Entry,
+    type FaviconBackfillResult,
+    type Grant,
+    type LookupData,
+    type NativeResponse,
+    type ProtocolTouched,
+    type SafeDraft
+  } from "./types";
 
   type Connection = "checking" | "connected" | "locked" | "missing";
 
@@ -99,6 +115,9 @@
   let showAddForm = false;
   let addBusy = false;
   let addDraft: Draft = emptyDraft();
+  // Protocol fields the user picked by hand in the add/edit form. Endpoint and
+  // domain inference must not overwrite an explicit selection.
+  let addProtocolTouched: ProtocolTouched = untouchedProtocol();
   let editingDraftId = "";
   let editingEntryId = "";
   let detailEditMode = false;
@@ -583,7 +602,8 @@
         preview: null,
         previewLoading: false,
         saving: false,
-        saved: false
+        saved: false,
+        protocolTouched: untouchedProtocol()
       };
     });
     lastDraftKey = key;
@@ -600,12 +620,13 @@
     next.domain = hostFromOrigin(pending.origin);
     next.consoleUrl = pending.url ?? "";
     next.apiKey = pending.apiKey ?? "";
-    next.endpoint = endpointForProvider(definition, pending.endpoint, pending.origin);
+    const endpoint = endpointForProvider(definition, pending.endpoint, pending.origin);
+    next.endpoint = endpoint ? encodeListValues([endpoint]) : "";
     next.faviconUrl = pending.faviconUrl ?? "";
     next.faviconUrl = resolvedDraftFaviconUrl(next) ?? "";
     next.interfaceType = pending.interfaceType ?? definition?.interfaces[0] ?? "custom_http";
-    next.authScheme = pending.authScheme ?? definition?.authSchemes[0] ?? "custom_header";
-    next.tag = (pending.tags ?? []).join(", ");
+    next.authScheme = pending.authScheme ?? definition?.authSchemes[0] ?? defaultAuthSchemeForInterface(next.interfaceType);
+    next.tag = encodeListValues(pending.tags ?? []);
     applyBillingToDraft(
       next,
       pending.group ?? pending.gateway?.group,
@@ -618,22 +639,28 @@
     const next = emptyDraft();
     next.providerId = entry.providerId ?? "custom_http";
     next.title = entry.title;
-    next.domain = entry.domains.join(", ");
-    next.consoleUrl = entry.endpoints
-      .filter((endpoint) => endpoint.kind === "console")
-      .map((endpoint) => endpoint.url)
-      .filter((url): url is string => Boolean(url))
-      .join(", ");
+    next.domain = encodeListValues(entry.domains);
+    next.consoleUrl = encodeListValues(
+      entry.endpoints
+        .filter((endpoint) => endpoint.kind === "console")
+        .map((endpoint) => endpoint.url)
+        .filter((url): url is string => Boolean(url))
+    );
     next.apiKey = "";
     next.secretLabel = entrySecrets(entry)[0]?.label ?? "";
-    next.endpoint = entry.endpoints.find((endpoint) => endpoint.kind === "api" && endpoint.url)?.url ?? "";
+    next.endpoint = encodeListValues(
+      entry.endpoints
+        .filter((endpoint) => endpoint.kind === "api")
+        .map((endpoint) => endpoint.url)
+        .filter((url): url is string => Boolean(url))
+    );
     next.faviconUrl = entry.faviconUrl ?? "";
     next.faviconUrl = resolvedDraftFaviconUrl(next) ?? "";
     next.interfaceType = entry.interfaceType;
     next.authScheme = entry.authScheme;
     next.defaultModel = entry.defaultModel ?? "";
-    next.modelAlias = (entry.modelAliases ?? []).map(([alias, model]) => `${alias}=${model}`).join(", ");
-    next.tag = displayTags(entry).join(", ");
+    next.modelAlias = encodePairValues(entry.modelAliases ?? []);
+    next.tag = encodeListValues(displayTags(entry));
     // Group and billing live on the key; fall back to the entry's legacy
     // gateway blob for records written before that move.
     const primaryKey = entrySecrets(entry)[0];
@@ -654,6 +681,7 @@
 
   function openAddFormFromPending(pending: SafeDraft) {
     addDraft = draftFromPending(pending);
+    addProtocolTouched = untouchedProtocol();
     editingDraftId = pending.draftId;
     editingEntryId = "";
     statusText = "";
@@ -661,10 +689,19 @@
     showAddForm = true;
   }
 
+  function markProtocolTouched(item: DraftItem, patch: Partial<ProtocolTouched>) {
+    item.protocolTouched = { ...item.protocolTouched, ...patch };
+    draftItems = draftItems.map((draftItem) =>
+      draftItem.draftId === item.draftId ? { ...draftItem, protocolTouched: item.protocolTouched } : draftItem
+    );
+  }
+
   function onProviderChanged(item: DraftItem) {
     const current = item.draft;
     const definition = providerDefinitions.find((item) => item.id === current.providerId);
     if (definition) {
+      // Picking a provider is an explicit choice for the whole protocol group.
+      markProtocolTouched(item, fullyTouchedProtocol());
       current.interfaceType = detectInterfaceFromProvider(definition.id);
       current.authScheme = detectAuthFromProvider(definition.id);
       current.endpoint = endpointForProvider(definition, current.endpoint, item.safe.origin || currentOrigin);
@@ -677,14 +714,28 @@
     schedulePreview();
   }
 
+  function onInterfaceChanged(item: DraftItem) {
+    // Follow the interface with its default auth scheme unless the current
+    // scheme still works for the new interface — an incompatible scheme would
+    // hide every auth-filtered quick integration and produce broken configs.
+    if (!item.protocolTouched.authScheme || !authSchemeCompatibleWithInterface(item.draft.authScheme, item.draft.interfaceType)) {
+      item.draft.authScheme = defaultAuthSchemeForInterface(item.draft.interfaceType);
+    }
+    markProtocolTouched(item, { interfaceType: true });
+  }
+
+  function onAuthChanged(item: DraftItem) {
+    markProtocolTouched(item, { authScheme: true });
+  }
+
   function onInferDraftFromEndpoint(item: DraftItem) {
     const current = item.draft;
     const match = providerForEndpoint(current.endpoint.trim(), current.providerId);
     if (match) {
-      current.providerId = match.id;
+      if (!item.protocolTouched.providerId) current.providerId = match.id;
       current.title ||= match.displayName;
-      current.interfaceType = match.interfaces[0] ?? current.interfaceType;
-      current.authScheme = match.authSchemes[0] ?? current.authScheme;
+      if (!item.protocolTouched.interfaceType) current.interfaceType = match.interfaces[0] ?? current.interfaceType;
+      if (!item.protocolTouched.authScheme) current.authScheme = match.authSchemes[0] ?? current.authScheme;
     }
     applyFaviconFromEndpoint(current);
     draftItems = draftItems.map((draftItem) =>
@@ -745,14 +796,11 @@
   }
 
   function draftPatchFromDraft(draft: Draft, includeApiKey = false) {
-    const tags = draft.tag
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const tags = splitCsv(draft.tag);
     const definition = providerDefinitions.find((provider) => provider.id === draft.providerId);
     const endpoint = endpointForProvider(
       definition,
-      splitCsv(draft.endpoint)[0] ?? draft.endpoint,
+      splitEndpointValues(draft.endpoint)[0] ?? draft.endpoint,
       currentOrigin || currentUrl
     );
     return {
@@ -909,7 +957,7 @@
   }
 
   function faviconUrlFromEndpoint(endpoint: string | undefined): string | undefined {
-    for (const value of splitCsv(endpoint ?? "")) {
+    for (const value of splitEndpointValues(endpoint ?? "")) {
       const parsed = parseHttpUrl(value);
       if (parsed) return `${parsed.origin}/favicon.ico`;
     }
@@ -1142,6 +1190,7 @@
 
   function openAddForm() {
     addDraft = draftFromCurrentContext();
+    addProtocolTouched = untouchedProtocol();
     editingDraftId = "";
     editingEntryId = "";
     statusText = "";
@@ -1162,7 +1211,7 @@
     next.endpoint = endpointForProvider(definition, "", origin);
     next.faviconUrl = origin ? `${origin}/favicon.ico` : "";
     next.interfaceType = definition?.interfaces[0] ?? "openai_compatible";
-    next.authScheme = definition?.authSchemes[0] ?? "bearer";
+    next.authScheme = definition?.authSchemes[0] ?? defaultAuthSchemeForInterface(next.interfaceType);
     applyFaviconFromEndpoint(next);
     return next;
   }
@@ -1215,6 +1264,9 @@
   function openEditEntry(entry: Entry) {
     closeEntryMenu();
     addDraft = draftFromEntry(entry);
+    // A stored entry's protocol is already an explicit choice; never let
+    // domain/endpoint inference silently rewrite it while editing.
+    addProtocolTouched = fullyTouchedProtocol();
     editingDraftId = "";
     editingEntryId = entry.id;
     detailEditMode = true;
@@ -1233,6 +1285,13 @@
 
   async function submitDetailEdit() {
     if (addBusy || !editingEntryId) return;
+    const endpointValues = splitEndpointValues(addDraft.endpoint);
+    const consoleEndpointValues = splitEndpointValues(addDraft.consoleUrl);
+    if ([...endpointValues, ...consoleEndpointValues].some((value) => !parseHttpEndpoint(value))) {
+      statusText = $t("ext.invalidEndpoint");
+      statusError = true;
+      return;
+    }
     addBusy = true;
     statusText = "";
     statusError = false;
@@ -1244,9 +1303,9 @@
         providerId: addDraft.providerId || undefined,
         domain: splitCsv(addDraft.domain),
         faviconUrl: resolvedDraftFaviconUrl(addDraft),
-        endpoint: addDraft.endpoint || undefined,
-        endpoints: [],
-        consoleEndpoints: splitCsv(addDraft.consoleUrl),
+        endpoint: undefined,
+        endpoints: endpointValues,
+        consoleEndpoints: consoleEndpointValues,
         interfaceType: addDraft.interfaceType,
         authScheme: addDraft.authScheme,
         apiKey: addDraft.apiKey.trim() || undefined,
@@ -1286,42 +1345,62 @@
   function addProviderChanged() {
     const definition = providerDefinitions.find((item) => item.id === addDraft.providerId);
     if (!definition) return;
+    // Picking a provider is an explicit choice for the whole protocol group.
+    addProtocolTouched = fullyTouchedProtocol();
     addDraft.interfaceType = detectInterfaceFromProvider(definition.id);
     addDraft.authScheme = detectAuthFromProvider(definition.id);
-    addDraft.endpoint = endpointForProvider(
+    const existingEndpoints = splitEndpointValues(addDraft.endpoint);
+    const primaryEndpoint = endpointForProvider(
       definition,
-      splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint,
+      existingEndpoints[0] ?? addDraft.endpoint,
       httpOriginFromUrl(currentUrl)
     );
+    addDraft.endpoint = encodeListValues([primaryEndpoint, ...existingEndpoints.slice(1)].filter(Boolean));
     applyFaviconFromEndpoint(addDraft);
     addDraft.title ||= draftTitleFromCurrentContext(definition, currentSiteName(definition), hostFromOrigin(currentOrigin || currentUrl));
+  }
+
+  function addInterfaceChanged() {
+    // Follow the interface with its default auth scheme unless the current
+    // scheme still works for the new interface — an incompatible scheme would
+    // hide every auth-filtered quick integration and produce broken configs.
+    if (!addProtocolTouched.authScheme || !authSchemeCompatibleWithInterface(addDraft.authScheme, addDraft.interfaceType)) {
+      addDraft.authScheme = defaultAuthSchemeForInterface(addDraft.interfaceType);
+    }
+    addProtocolTouched = { ...addProtocolTouched, interfaceType: true };
+  }
+
+  function addAuthChanged() {
+    addProtocolTouched = { ...addProtocolTouched, authScheme: true };
   }
 
   function addInferFromDomain() {
     const match = matchProviderByDomain(splitCsv(addDraft.domain)[0] ?? addDraft.domain);
     if (!match) return;
-    addDraft.providerId = match.id;
+    if (!addProtocolTouched.providerId) addDraft.providerId = match.id;
     addDraft.title ||= match.displayName;
-    addDraft.endpoint = endpointForProvider(
+    const existingEndpoints = splitEndpointValues(addDraft.endpoint);
+    const primaryEndpoint = endpointForProvider(
       match,
-      splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint,
+      existingEndpoints[0] ?? addDraft.endpoint,
       httpOriginFromUrl(currentUrl)
     );
+    addDraft.endpoint = encodeListValues([primaryEndpoint, ...existingEndpoints.slice(1)].filter(Boolean));
     applyFaviconFromEndpoint(addDraft);
-    addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
-    addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
+    if (!addProtocolTouched.interfaceType) addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
+    if (!addProtocolTouched.authScheme) addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
   }
 
   function addInferFromEndpoint() {
     const match = providerForEndpoint(
-      splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint,
+      splitEndpointValues(addDraft.endpoint)[0] ?? addDraft.endpoint,
       addDraft.providerId
     );
     if (match) {
-      addDraft.providerId = match.id;
+      if (!addProtocolTouched.providerId) addDraft.providerId = match.id;
       addDraft.title ||= match.displayName;
-      addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
-      addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
+      if (!addProtocolTouched.interfaceType) addDraft.interfaceType = match.interfaces[0] ?? addDraft.interfaceType;
+      if (!addProtocolTouched.authScheme) addDraft.authScheme = match.authSchemes[0] ?? addDraft.authScheme;
     }
     applyFaviconFromEndpoint(addDraft);
   }
@@ -1333,14 +1412,19 @@
       statusError = true;
       return;
     }
-    const primaryEndpoint = splitCsv(addDraft.endpoint)[0] ?? addDraft.endpoint;
-    if (primaryEndpoint.trim() && !parseHttpEndpoint(primaryEndpoint)) {
+    const endpointValues = splitEndpointValues(addDraft.endpoint);
+    const consoleEndpointValues = splitEndpointValues(addDraft.consoleUrl);
+    if ([...endpointValues, ...consoleEndpointValues].some((value) => !parseHttpEndpoint(value))) {
       statusText = $t("ext.invalidEndpoint");
       statusError = true;
       return;
     }
     const selectedDefinition = providerDefinitions.find((item) => item.id === addDraft.providerId);
-    addDraft.endpoint = endpointForProvider(selectedDefinition, primaryEndpoint, currentOrigin || currentUrl);
+    const primaryEndpoint = endpointValues[0] ?? "";
+    const normalizedPrimary = endpointForProvider(selectedDefinition, primaryEndpoint, currentOrigin || currentUrl);
+    const normalizedEndpoints = normalizedPrimary
+      ? [normalizedPrimary, ...endpointValues.slice(1)]
+      : endpointValues;
     addBusy = true;
     statusText = "";
     statusError = false;
@@ -1373,9 +1457,9 @@
         providerId: addDraft.providerId || definition?.id,
         domain: splitCsv(addDraft.domain),
         faviconUrl: resolvedDraftFaviconUrl(addDraft),
-        endpoint: addDraft.endpoint || undefined,
-        endpoints: [],
-        consoleEndpoints: splitCsv(addDraft.consoleUrl),
+        endpoint: undefined,
+        endpoints: normalizedEndpoints,
+        consoleEndpoints: consoleEndpointValues,
         interfaceType: addDraft.interfaceType,
         authScheme: addDraft.authScheme,
         apiKey: addDraft.apiKey,
@@ -1449,7 +1533,59 @@
   }
 
   function splitCsv(value: string): string[] {
-    return value.split(",").map((item) => item.trim()).filter(Boolean);
+    return splitCsvParts(value).map(decodeCsvPart).filter(Boolean);
+  }
+
+  function splitEndpointValues(value: string): string[] {
+    const values: string[] = [];
+    let start = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index] === "\\" && index + 1 < value.length && value[index + 1] === ",") {
+        index += 1;
+        continue;
+      }
+      if (value[index] !== ",") continue;
+      if (!/^https?:\/\//i.test(value.slice(index + 1).trimStart())) continue;
+      const item = decodeCsvPart(value.slice(start, index));
+      if (item) values.push(item);
+      start = index + 1;
+    }
+    const last = decodeCsvPart(value.slice(start));
+    if (last) values.push(last);
+    return values;
+  }
+
+  function splitCsvParts(value: string): string[] {
+    const values: string[] = [];
+    let current = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (character === "\\" && index + 1 < value.length && "\\,=".includes(value[index + 1])) {
+        current += character + value[index + 1];
+        index += 1;
+      } else if (character === ",") {
+        if (current.trim()) values.push(current.trim());
+        current = "";
+      } else {
+        current += character;
+      }
+    }
+    if (current.trim()) values.push(current.trim());
+    return values;
+  }
+
+  function decodeCsvPart(value: string): string {
+    let decoded = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (character === "\\" && index + 1 < value.length && "\\,=".includes(value[index + 1])) {
+        decoded += value[index + 1];
+        index += 1;
+      } else {
+        decoded += character;
+      }
+    }
+    return decoded.trim();
   }
 
   function hostFromOrigin(origin: string): string {
@@ -1461,10 +1597,23 @@
   }
 
   function pairsFromCsv(value: string): Array<[string, string]> {
-    return splitCsv(value)
-      .map((item) => item.split("="))
-      .filter(([key, val]) => key && val !== undefined)
-      .map(([key, val]) => [key.trim(), val.trim()] as [string, string]);
+    return splitCsvParts(value)
+      .map((item) => {
+        let separator = -1;
+        for (let index = 0; index < item.length; index += 1) {
+          if (item[index] === "\\" && index + 1 < item.length && "\\,=".includes(item[index + 1])) {
+            index += 1;
+          } else if (item[index] === "=") {
+            separator = index;
+            break;
+          }
+        }
+        if (separator <= 0) return undefined;
+        const key = decodeCsvPart(item.slice(0, separator));
+        if (!key) return undefined;
+        return [key, decodeCsvPart(item.slice(separator + 1))] as [string, string];
+      })
+      .filter((pair): pair is [string, string] => pair !== undefined);
   }
 
   function quotaFrom(draft: Draft) {
@@ -1603,6 +1752,8 @@
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
           onProviderChanged={addProviderChanged}
+          onInterfaceChanged={addInterfaceChanged}
+          onAuthChanged={addAuthChanged}
         />
       </div>
       {/key}
@@ -1833,6 +1984,8 @@
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
           onProviderChanged={addProviderChanged}
+          onInterfaceChanged={addInterfaceChanged}
+          onAuthChanged={addAuthChanged}
         />
         <div class="add-actions">
           <Button variant="ghost" size="sm" on:click={closeAddForm}>{$t("common.cancel")}</Button>
@@ -1901,6 +2054,8 @@
       onIgnoreOrigin={ignoreCurrentOrigin}
       onInferDraftFromEndpoint={onInferDraftFromEndpoint}
       onProviderChanged={onProviderChanged}
+      onInterfaceChanged={onInterfaceChanged}
+      onAuthChanged={onAuthChanged}
       onSaveSelected={saveSelectedDrafts}
       onSchedulePreview={schedulePreview}
       onToggleSelection={toggleDraftSelection}

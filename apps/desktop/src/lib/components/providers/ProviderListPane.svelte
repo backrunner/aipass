@@ -2,7 +2,7 @@
   import type { ProviderEntry } from "@aipass/schemas";
   import { Badge, Button, ProviderIcon } from "@aipass/ui";
   import { ContextMenu, DropdownMenu } from "bits-ui";
-  import { ChevronRight, KeyRound, Plus, RefreshCw, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
+  import { ChevronRight, KeyRound, Plug, Plus, RefreshCw, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderFilter } from "../../types";
@@ -18,6 +18,7 @@
   export let routeGroups: Array<{ id: string; name: string }> = [];
   export let onSearch: () => MaybePromise = () => {};
   export let onAdd: () => MaybePromise = () => {};
+  export let onConnectOAuth: () => MaybePromise = () => {};
   export let onRefreshAccounts: () => MaybePromise = () => {};
   export let refreshAccountsBusy = false;
   export let officialAccountsImport = false;
@@ -124,6 +125,9 @@
           <RefreshCw size={14} />
         </button>
       {/if}
+      <button type="button" class="icon-btn" on:click={() => onConnectOAuth()} aria-label={$t("oauthConnect.title")} title={$t("oauthConnect.title")}>
+        <Plug size={14} />
+      </button>
       <button type="button" class="cta-btn primary" on:click={() => onAdd()}>
         <Plus size={14} />
         <span>{$t("providerList.add")}</span>
@@ -166,9 +170,14 @@
           {/if}
         </span>
         {#if !showArchived && !showTrash && !showFavorites}
-          <Button variant="primary" size="sm" on:click={() => onAdd()}>
-            <Plus size={14} /> {$t("providerList.addProvider")}
-          </Button>
+          <div class="empty-actions">
+            <Button variant="primary" size="sm" on:click={() => onAdd()}>
+              <Plus size={14} /> {$t("providerList.addProvider")}
+            </Button>
+            <Button variant="secondary" size="sm" on:click={() => onConnectOAuth()}>
+              <Plug size={14} /> {$t("oauthConnect.title")}
+            </Button>
+          </div>
         {/if}
       </div>
     {/if}
@@ -409,6 +418,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    position: relative;
   }
 
   .entry {
@@ -494,6 +504,14 @@
       font-size: 12px;
       line-height: 1.4;
     }
+  }
+
+  .empty-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .empty-icon {

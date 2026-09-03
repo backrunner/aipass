@@ -641,7 +641,10 @@ async function patchCachedEntryFromUpdate(request: ProviderUpdateRequest) {
             defaultModel: request.defaultModel,
             modelAliases: request.modelAliases,
             quota: request.quota,
-            gateway: request.gateway ?? entry.gateway,
+            // Provider updates replace the entry's legacy gateway blob. The
+            // per-key group/billing fields are patched separately below, so an
+            // omitted gateway must not resurrect stale metadata from the cache.
+            gateway: request.gateway,
             secretRefs: patchedSecretRefs(entry, request),
             tags: request.tags,
             notes: request.notes,

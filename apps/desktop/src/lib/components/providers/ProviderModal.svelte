@@ -14,6 +14,8 @@
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
   export let onInferDraftFromEndpoint: () => MaybePromise = () => {};
   export let onProviderChanged: () => MaybePromise = () => {};
+  export let onInterfaceChanged: () => MaybePromise = () => {};
+  export let onAuthChanged: () => MaybePromise = () => {};
 
   let dialogOpen = true;
   let closing = false;
@@ -59,6 +61,8 @@
             {onInferDraftFromDomain}
             {onInferDraftFromEndpoint}
             {onProviderChanged}
+            {onInterfaceChanged}
+            {onAuthChanged}
           />
 
           {#if error}<Banner tone="danger">{error}</Banner>{/if}
@@ -76,80 +80,6 @@
 </Dialog.Root>
 
 <style lang="scss">
-  :global(.provider-dialog-overlay) {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-    background: rgba(15, 17, 16, 0.45);
-    backdrop-filter: blur(4px);
-    animation: dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  :global(.provider-dialog-overlay[data-state="closed"]) {
-    animation: dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  :global(.provider-dialog-content) {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    z-index: 201;
-    transform: translate(-50%, -50%);
-    width: min(540px, calc(100vw - 32px));
-    max-height: calc(100vh - 32px);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-modal);
-    overflow: hidden;
-    animation: dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  :global(.provider-dialog-content[data-state="closed"]) {
-    animation: dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4);
-  }
-
-  @keyframes dialog-overlay-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-
-  @keyframes dialog-overlay-out {
-    from { opacity: 1; }
-    to { opacity: 0; }
-  }
-
-  @keyframes dialog-content-in {
-    from {
-      opacity: 0;
-      transform: translate(-50%, -46%) scale(0.96);
-    }
-    to {
-      opacity: 1;
-      transform: translate(-50%, -50%) scale(1);
-    }
-  }
-
-  @keyframes dialog-content-out {
-    from {
-      opacity: 1;
-      transform: translate(-50%, -50%) scale(1);
-    }
-    to {
-      opacity: 0;
-      transform: translate(-50%, -48%) scale(0.97);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    :global(.provider-dialog-overlay),
-    :global(.provider-dialog-content),
-    :global(.provider-dialog-overlay[data-state="closed"]),
-    :global(.provider-dialog-content[data-state="closed"]) {
-      animation: none !important;
-    }
-  }
-
   .modal {
     display: flex;
     flex-direction: column;
@@ -163,11 +93,6 @@
     gap: 12px;
     padding: 16px 20px;
     border-bottom: 1px solid var(--divider);
-  }
-
-  :global(.provider-dialog-title) {
-    font-size: 15px;
-    font-weight: 600;
   }
 
   .close-btn {

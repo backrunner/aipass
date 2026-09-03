@@ -110,6 +110,24 @@ export type DraftPreview = {
   };
 };
 
+export type ProtocolTouched = {
+  providerId: boolean;
+  interfaceType: boolean;
+  authScheme: boolean;
+};
+
+export const untouchedProtocol = (): ProtocolTouched => ({
+  providerId: false,
+  interfaceType: false,
+  authScheme: false
+});
+
+export const fullyTouchedProtocol = (): ProtocolTouched => ({
+  providerId: true,
+  interfaceType: true,
+  authScheme: true
+});
+
 export type DraftItem = {
   draftId: string;
   safe: SafeDraft;
@@ -119,4 +137,5 @@ export type DraftItem = {
   previewLoading: boolean;
   saving: boolean;
   saved: boolean;
+  protocolTouched: ProtocolTouched;
 };

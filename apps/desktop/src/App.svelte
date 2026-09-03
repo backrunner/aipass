@@ -5,13 +5,15 @@
   import {
     detectAuthFromProvider,
     detectInterfaceFromProvider,
+    authSchemeCompatibleWithInterface,
+    defaultAuthSchemeForInterface,
     inferProviderFromEndpoint,
     matchProviderByDomain,
     providerDefinitions,
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
-  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Brand, Button, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
+  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Brand, Button, encodeListValues, encodePairValues, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
@@ -21,6 +23,7 @@
   import ProviderDetailPane from "./lib/components/providers/ProviderDetailPane.svelte";
   import ProviderListPane from "./lib/components/providers/ProviderListPane.svelte";
   import ProviderModal from "./lib/components/providers/ProviderModal.svelte";
+  import OAuthConnectDialog from "./lib/components/providers/OAuthConnectDialog.svelte";
   import RouteListPane from "./lib/components/server/RouteListPane.svelte";
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
@@ -53,7 +56,11 @@
     CcSwitchDetection,
     CcSwitchProviderImportError,
     CcSwitchProviderLink,
+    AipassProviderImportError,
+    AipassProviderLink,
+    PendingDeepLink,
     OfficialAccountRefreshResult,
+    OAuthAccountSummary,
     SyncConflict,
     SyncSettings,
     SyncMode,
@@ -73,8 +80,8 @@
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { emptyDraft, isExpiringSoon, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
-  import { ccSwitchLinkToDraft, findCcSwitchDuplicate } from "./lib/utils/deeplink";
-  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry, routeProtocolFor } from "./lib/utils/server";
+  import { aipassProviderLinkToDraft, ccSwitchLinkToDraft, findAipassProviderDuplicate, findCcSwitchDuplicate, splitEndpointList } from "./lib/utils/deeplink";
+  import { buildRouteTarget, buildSingleEntryRoute, nativeProtocolForEntry, proxySupportedEntry, routeNeedsConversion } from "./lib/utils/server";
   import { checkForUpdates, downloadUpdate, getStoredUpdateChannel, inferUpdateChannel, installPendingUpdate, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
@@ -124,6 +131,8 @@
   let unlistenUpdateProgress: (() => void) | undefined;
   let unlistenCcSwitchImport: (() => void) | undefined;
   let unlistenCcSwitchImportError: (() => void) | undefined;
+  let unlistenAipassProviderImport: (() => void) | undefined;
+  let unlistenAipassProviderImportError: (() => void) | undefined;
   let sessionPollTimer: ReturnType<typeof setInterval> | undefined;
   let usageRefreshTimer: ReturnType<typeof setInterval> | undefined;
   let usageRefreshInFlight = false;
@@ -234,6 +243,7 @@
   let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
   let selectedId = "";
   let showForm = false;
+  let showOAuthConnect = false;
   let formMode: FormMode = "add";
   let detailEditMode = false;
   let showArchived = false;
@@ -241,10 +251,11 @@
   let showFavorites = false;
   let showServer = false;
   let pendingServerView = false;
-  let pendingCcSwitchLink: CcSwitchProviderLink | null = null;
+  let pendingDeepLinks: PendingDeepLink[] = [];
   let ccSwitchDuplicateLink: CcSwitchProviderLink | null = null;
   let ccSwitchDuplicateOpen = false;
   let ccSwitchDuplicateName = "";
+  let aipassProviderDuplicateLink: AipassProviderLink | null = null;
   let showSettings = false;
   let settingsInitialTab = "general";
   let providerFilter: ProviderFilter = "all";
@@ -269,6 +280,10 @@
   let webdavPassword = "";
   let hasSavedWebdavPassword = false;
   let draft: Draft = emptyDraft();
+  // Tracks which protocol fields the user has chosen by hand. Endpoint/domain
+  // inference must not overwrite an explicit selection (e.g. Anthropic Messages
+  // picked for a relay URL that would otherwise infer as Custom HTTP).
+  let protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
   let entries: ProviderEntry[] = [];
   // Keep sidebar counts based on the complete active vault list, even while
   // the visible pane is showing favorites, archive, trash, or search results.
@@ -541,7 +556,22 @@
       if (next.exists === status.exists && next.locked === status.locked) return;
       status = next;
       if (wasUnlocked && !nowUnlocked) {
+        clearSensitiveUnlockedState();
         password = "";
+        createPassword = "";
+        createPasswordConfirm = "";
+        recoveryKeyInput = "";
+        recoveryPassword = "";
+        recoveryPasswordConfirm = "";
+        pendingRecoveryKey = "";
+        showCreatePassword = false;
+        showUnlockPassword = false;
+        showRecoveryPassword = false;
+        newPassword = "";
+        exportPassword = "";
+        importPassword = "";
+        webdavPassword = "";
+        hasSavedWebdavPassword = false;
         setAuthMode("unlock");
         return;
       }
@@ -554,7 +584,7 @@
         await loadServer();
         void loadPricing();
         await openPendingServerView();
-        openPendingCcSwitchLink();
+        openPendingDeepLink();
       }
     } catch (err) {
       console.warn("vault status reconciliation failed", err);
@@ -573,26 +603,7 @@
     void (async () => {
       try {
         if (hasTauriRuntime()) {
-          // The native window starts hidden; reveal it as soon as the first
-          // frontend frame is mounted while data continues loading below.
           await tick();
-          try {
-            await invokeTauri<void>("desktop_ready");
-            logStartupStage("window_revealed");
-          } catch (err) {
-            console.error("failed to reveal desktop window", err);
-          }
-          // A package left for later is rechecked and installed after the
-          // window is visible, so an offline feed cannot hide the app at launch.
-          try {
-            const version = await getVersion();
-            const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
-            await installPendingUpdate(channel);
-          } catch (err) {
-            console.error("failed to install pending desktop update", err);
-          }
-        }
-        if (hasTauriRuntime()) {
           unlistenVaultAuth = await listen<VaultAuthTaskStatus>("vault-auth-finished", ({ payload }) => {
             settleVaultAuthTask(payload);
           });
@@ -623,7 +634,34 @@
               handleCcSwitchImportError(payload);
             }
           );
+          unlistenAipassProviderImport = await listen<AipassProviderLink>(
+            "aipass-provider-add",
+            ({ payload }) => handleAipassProviderImport(payload)
+          );
+          unlistenAipassProviderImportError = await listen<AipassProviderImportError>(
+            "aipass-provider-add-error",
+            ({ payload }) => handleAipassProviderImportError(payload)
+          );
           logStartupStage("listeners_ready");
+
+          // Register listeners before marking the frontend ready. Deep links
+          // received during this startup window stay in Rust and are drained
+          // below, so they cannot be emitted into a listener gap.
+          try {
+            await invokeTauri<void>("desktop_ready");
+            logStartupStage("window_revealed");
+          } catch (err) {
+            console.error("failed to reveal desktop window", err);
+          }
+          // A package left for later is rechecked and installed after the
+          // window is visible, so an offline feed cannot hide the app at launch.
+          try {
+            const version = await getVersion();
+            const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+            await installPendingUpdate(channel);
+          } catch (err) {
+            console.error("failed to install pending desktop update", err);
+          }
         }
         await Promise.all([loadPreferences(), refreshStatus()]);
         logStartupStage("preferences_status_finished");
@@ -648,19 +686,21 @@
           await loadServer();
           logStartupStage("server_finished");
           void loadPricing();
-          await openPendingServerView();
-          openPendingCcSwitchLink();
         }
         if (hasTauriRuntime()) {
-          // Drain a `ccswitch://` link buffered while the app was cold-starting.
+          // Merge links buffered while the app was cold-starting ahead of links
+          // received after the frontend became ready. The local queue is FIFO
+          // for events delivered directly to this window.
           try {
-            const pendingLink = await invokeTauri<CcSwitchProviderLink | null>(
-              "take_pending_ccswitch_link"
-            );
-            if (pendingLink) handleCcSwitchImport(pendingLink);
+            const pendingLinks = await invokeTauri<PendingDeepLink[]>("take_pending_deep_links");
+            pendingDeepLinks = [...(pendingLinks ?? []), ...pendingDeepLinks];
           } catch (err) {
-            console.warn("failed to drain pending ccswitch link", err);
+            console.warn("failed to drain pending deep links", err);
           }
+        }
+        if (!status.locked && status.exists) {
+          await openPendingServerView();
+          openPendingDeepLink();
         }
         logStartupStage("complete");
       } catch (err) {
@@ -699,6 +739,8 @@
     unlistenUpdateProgress?.();
     unlistenCcSwitchImport?.();
     unlistenCcSwitchImportError?.();
+    unlistenAipassProviderImport?.();
+    unlistenAipassProviderImportError?.();
     pendingVaultAuthTasks.clear();
     finishedVaultAuthTasks.clear();
     const activityEvents = ["mousedown", "keydown", "touchstart", "input", "scroll"];
@@ -767,7 +809,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
-      openPendingCcSwitchLink();
+      openPendingDeepLink();
     } catch (err) {
       error = String(err);
     } finally {
@@ -801,7 +843,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
-      openPendingCcSwitchLink();
+      openPendingDeepLink();
     } catch (err) {
       error = err instanceof Error ? err.message : localizedMessage("error.unlockFailed");
     } finally {
@@ -846,7 +888,7 @@
       await loadServer();
       void loadPricing();
       await openPendingServerView();
-      openPendingCcSwitchLink();
+      openPendingDeepLink();
     } catch (err) {
       error = String(err);
     } finally {
@@ -882,17 +924,14 @@
         return;
       }
       status = { exists: false, locked: true };
+      clearSensitiveUnlockedState();
       password = "";
       recoveryKeyInput = "";
       recoveryPassword = "";
       recoveryPasswordConfirm = "";
       resetOpen = false;
       resetConfirm = "";
-      entries = [];
-      countEntries = [];
-      entriesLoadRequestId++;
-      selectedId = "";
-      setAuthMode("unlock");
+      setAuthMode("create");
     } catch (err) {
       error = String(err);
     } finally {
@@ -926,7 +965,10 @@
     lockCovered = false;
 
     // Fire the vault_lock IPC in parallel; don't block the animation on it.
-    const lockPromise = invokeTauri("vault_lock").catch((err) => {
+    let lockStatus: VaultStatus | undefined;
+    const lockPromise = invokeTauri<VaultStatus>("vault_lock").then((next) => {
+      lockStatus = next;
+    }).catch((err) => {
       error = String(err);
     });
 
@@ -943,7 +985,12 @@
     await waitForCover;
     await lockPromise;
 
-    status = { exists: true, locked: true };
+    // Keep the workspace usable when the agent rejected the lock request. The
+    // cover still finishes its animation, but local state must reflect the
+    // actual session rather than assuming the IPC succeeded.
+    if (!lockStatus) return;
+
+    status = lockStatus;
     clearSensitiveUnlockedState();
     password = "";
     createPassword = "";
@@ -959,6 +1006,7 @@
     exportPassword = "";
     importPassword = "";
     webdavPassword = "";
+    newSecretKey = "";
     hasSavedWebdavPassword = false;
     setAuthMode("unlock");
     // Locking is exactly when a copied secret must not linger, so wipe it now
@@ -972,6 +1020,7 @@
     countEntries = [];
     entriesLoadRequestId++;
     selectedId = "";
+    activeDetailId = "";
     pricingConfig = { groups: [], assignments: [] };
     revealedSecrets = {};
     probeResult = undefined;
@@ -983,6 +1032,34 @@
     serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
     serverUsageSeries = [];
     selectedRouteId = "";
+    pendingServerView = false;
+    detailEditMode = false;
+    formMode = "add";
+    pendingDeepLinks = [];
+    newSecretKey = "";
+    ccSwitchDuplicateLink = null;
+    aipassProviderDuplicateLink = null;
+    ccSwitchDuplicateOpen = false;
+    ccSwitchDuplicateName = "";
+    showForm = false;
+    draft = emptyDraft();
+    protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
+    pendingRecoveryKey = "";
+    password = "";
+    createPassword = "";
+    createPasswordConfirm = "";
+    recoveryKeyInput = "";
+    recoveryPassword = "";
+    recoveryPasswordConfirm = "";
+    showCreatePassword = false;
+    showUnlockPassword = false;
+    showRecoveryPassword = false;
+    newPassword = "";
+    exportPassword = "";
+    importPassword = "";
+    webdavPassword = "";
+    hasSavedWebdavPassword = false;
+    void clearCopiedSecretFromClipboard();
   }
 
   async function loadEntries(
@@ -1174,68 +1251,111 @@
   }
 
   function inferDraftFromDomain() {
-    const firstDomain = splitCsv(draft.domain)[0] ?? draft.domain;
+    const firstDomain = listValues(draft.domain)[0] ?? draft.domain;
     const match = matchProviderByDomain(firstDomain);
     if (!match) return;
-    draft.providerId = match.id;
+    if (!protocolTouched.providerId) draft.providerId = match.id;
     draft.title ||= match.displayName;
     draft.endpoint ||= match.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
-    draft.interfaceType = match.interfaces[0] ?? draft.interfaceType;
-    draft.authScheme = match.authSchemes[0] ?? draft.authScheme;
+    if (!protocolTouched.interfaceType) draft.interfaceType = match.interfaces[0] ?? draft.interfaceType;
+    if (!protocolTouched.authScheme) draft.authScheme = match.authSchemes[0] ?? draft.authScheme;
     draft.faviconUrl ||= firstDomain ? `https://${firstDomain.replace(/^https?:\/\//, "").split("/")[0]}/favicon.ico` : "";
   }
 
   function inferDraftFromEndpoint() {
-    const firstEndpoint = splitCsv(draft.endpoint)[0] ?? draft.endpoint;
+    const firstEndpoint = splitEndpointList(draft.endpoint)[0] ?? draft.endpoint;
     const match = inferProviderFromEndpoint(firstEndpoint);
     if (!match) return;
-    draft.providerId = match.id;
+    if (!protocolTouched.providerId) draft.providerId = match.id;
     draft.title ||= match.displayName;
-    draft.interfaceType = match.interfaces[0] ?? draft.interfaceType;
-    draft.authScheme = match.authSchemes[0] ?? draft.authScheme;
+    if (!protocolTouched.interfaceType) draft.interfaceType = match.interfaces[0] ?? draft.interfaceType;
+    if (!protocolTouched.authScheme) draft.authScheme = match.authSchemes[0] ?? draft.authScheme;
   }
 
   function providerChanged() {
     const provider = providerDefinitions.find((item) => item.id === draft.providerId);
     if (!provider) return;
+    // Picking a provider is an explicit choice for the whole protocol group.
+    protocolTouched = { providerId: true, interfaceType: true, authScheme: true };
     draft.interfaceType = detectInterfaceFromProvider(provider.id);
     draft.authScheme = detectAuthFromProvider(provider.id);
     draft.endpoint ||= provider.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
     draft.title ||= provider.displayName;
   }
 
+  function interfaceChanged() {
+    // Follow the interface with its default auth scheme unless the current
+    // scheme still works for the new interface — an incompatible scheme would
+    // hide every auth-filtered quick integration and produce broken configs.
+    if (!protocolTouched.authScheme || !authSchemeCompatibleWithInterface(draft.authScheme, draft.interfaceType)) {
+      draft.authScheme = defaultAuthSchemeForInterface(draft.interfaceType);
+    }
+    protocolTouched.interfaceType = true;
+  }
+
+  function authChanged() {
+    protocolTouched.authScheme = true;
+  }
+
   function openAdd() {
     error = "";
     formMode = "add";
     draft = emptyDraft();
+    protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
     showForm = true;
+  }
+
+  function openOAuthConnect() {
+    error = "";
+    showOAuthConnect = true;
+  }
+
+  async function onOAuthConnected(account: OAuthAccountSummary) {
+    showOAuthConnect = false;
+    await loadEntries();
+    if (account.entryId) {
+      selectProvider(account.entryId);
+    }
+    notice = localizedMessage("oauthConnect.connected", {
+      provider:
+        account.accountIdentity ||
+        $t(account.provider === "codex" ? "oauthConnect.providerCodex" : "oauthConnect.providerGrok")
+    });
+    setTimeout(() => (notice = ""), 2200);
   }
 
   function openEdit(entry: ProviderEntry) {
     error = "";
     formMode = "edit";
+    // An existing entry's protocol is already an explicit choice; never let
+    // domain/endpoint inference silently rewrite it during editing.
+    protocolTouched = { providerId: true, interfaceType: true, authScheme: true };
     draft = {
       title: entry.title,
-      domain: entry.domains.join(", "),
-      endpoint: entry.endpoints
-        .filter((endpoint) => endpoint.kind === "api")
-        .map((endpoint) => endpoint.url)
-        .filter(Boolean)
-        .join(", "),
-      consoleUrl: entry.endpoints
-        .filter((endpoint) => endpoint.kind === "console")
-        .map((endpoint) => endpoint.url)
-        .filter(Boolean)
-        .join(", "),
+      domain: encodeListValues(entry.domains),
+      endpoint: encodeListValues(
+        entry.endpoints
+          .filter((endpoint) => endpoint.kind === "api")
+          .map((endpoint) => endpoint.url)
+          .filter((value): value is string => Boolean(value))
+      ),
+      consoleUrl: encodeListValues(
+        entry.endpoints
+          .filter((endpoint) => endpoint.kind === "console")
+          .map((endpoint) => endpoint.url)
+          .filter((value): value is string => Boolean(value))
+      ),
       faviconUrl: entry.faviconUrl ?? "",
       providerId: entry.providerId ?? "custom_http",
+      credentialKind: entry.credentialKind ?? "api",
+      accountIdentity: entry.accountIdentity ?? "",
       interfaceType: entry.interfaceType,
       authScheme: entry.authScheme,
       apiKey: "",
       secretLabel: entry.secretRefs[0]?.label ?? "",
       defaultModel: entry.defaultModel ?? "",
-      modelAlias: (entry.modelAliases ?? []).map(([alias, model]) => `${alias}=${model}`).join(", "),
-      tag: entry.tags.join(", "),
+      modelAlias: encodePairValues(entry.modelAliases ?? []),
+      tag: encodeListValues(entry.tags),
       header: "",
       quotaLabel: entry.quota?.label ?? "",
       quotaLimit: entry.quota?.limit ?? "",
@@ -1262,6 +1382,8 @@
 
   function cancelDetailEdit() {
     detailEditMode = false;
+    draft = emptyDraft();
+    protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
     error = "";
   }
 
@@ -1276,7 +1398,7 @@
     if (formMode === "add" && providerFilter === "all") {
       inferDraftFromEndpoint();
     }
-    const endpointValues = [...splitCsv(draft.endpoint), ...splitCsv(draft.consoleUrl)];
+    const endpointValues = [...splitEndpointList(draft.endpoint), ...splitEndpointList(draft.consoleUrl)];
     if (endpointValues.some((value) => !parseHttpEndpoint(value))) {
       error = localizedMessage("providers.invalidEndpoint");
       return;
@@ -1285,19 +1407,24 @@
     const request = {
       title: draft.title || provider?.displayName || $t("providerList.customProvider"),
       providerId: draft.providerId || provider?.id,
-      domain: splitCsv(draft.domain),
-      endpoints: splitCsv(draft.endpoint),
-      consoleEndpoints: splitCsv(draft.consoleUrl),
+      domain: listValues(draft.domain),
+      endpoints: splitEndpointList(draft.endpoint),
+      consoleEndpoints: splitEndpointList(draft.consoleUrl),
       faviconUrl: draft.faviconUrl || undefined,
       interfaceType: draft.interfaceType,
       authScheme: draft.authScheme,
+      credentialKind: formMode === "add" ? draft.credentialKind || "api" : draft.credentialKind,
+      // On edits, an empty value explicitly clears the stored identity;
+      // `undefined` is reserved for fields that were not supplied.
+      accountIdentity:
+        formMode === "add" ? draft.accountIdentity?.trim() || undefined : draft.accountIdentity?.trim(),
       apiKey: draft.apiKey || undefined,
       secretLabel: draft.secretLabel.trim() || undefined,
       defaultModel: draft.defaultModel || undefined,
       modelAliases: modelAliasPairs(draft.modelAlias),
       headers: headerPairs(draft.header),
       quota: quotaFromDraft(),
-      tags: splitCsv(draft.tag),
+      tags: listValues(draft.tag),
       notes: draft.notes || undefined
     };
     const secretMetadata = secretMetadataFromDraft();
@@ -1316,23 +1443,17 @@
           request: {
             ...request,
             id: selected.id,
-            headers: draft.header.trim() ? headerPairs(draft.header) : undefined
+            headers: draft.header.trim() ? headerPairs(draft.header) : undefined,
+            secretMetadata
           }
         });
-        // provider_update rewrites the entry; the key's own group / format /
-        // billing are set separately so other keys keep theirs.
-        const secretId = selected.secretRefs[0]?.id;
-        if (secretId) {
-          await invokeTauri("secret_metadata_set", {
-            id: selected.id,
-            secretId,
-            metadata: secretMetadata
-          });
-        }
       }
       draft.apiKey = "";
       showForm = false;
+      draft = emptyDraft();
+      protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
       await loadEntries();
+      openPendingDeepLink();
     } catch (err) {
       error = String(err);
     }
@@ -1725,15 +1846,49 @@
   function openCcSwitchForm(link: CcSwitchProviderLink) {
     error = "";
     formMode = "add";
-    draft = { ...emptyDraft(), ...ccSwitchLinkToDraft(link) };
+    const mapped = ccSwitchLinkToDraft(link);
+    draft = { ...emptyDraft(), ...mapped };
+    protocolTouched = {
+      providerId: Boolean(mapped.providerId),
+      interfaceType: Boolean(mapped.interfaceType),
+      authScheme: Boolean(mapped.authScheme)
+    };
     showForm = true;
+  }
+
+  function openAipassProviderForm(link: AipassProviderLink) {
+    error = "";
+    formMode = "add";
+    const mapped = aipassProviderLinkToDraft(link);
+    protocolTouched = {
+      providerId: Boolean(link.providerId),
+      interfaceType: Boolean(link.interfaceType),
+      authScheme: Boolean(link.authScheme)
+    };
+    draft = { ...emptyDraft(), ...mapped };
+    showForm = true;
+  }
+
+  function handleAipassProviderImport(link: AipassProviderLink) {
+    if (!statusReady || !status.exists || status.locked || showForm || ccSwitchDuplicateOpen) {
+      pendingDeepLinks = [...pendingDeepLinks, { kind: "aipassProvider", payload: link }];
+      return;
+    }
+    const duplicate = findAipassProviderDuplicate(entries, link);
+    if (duplicate) {
+      aipassProviderDuplicateLink = link;
+      ccSwitchDuplicateName = duplicate.title;
+      ccSwitchDuplicateOpen = true;
+      return;
+    }
+    openAipassProviderForm(link);
   }
 
   function handleCcSwitchImport(link: CcSwitchProviderLink) {
     // The auth screen is already shown while locked; stash the link until the
-    // vault unlocks, then openPendingCcSwitchLink picks it up.
-    if (!statusReady || !status.exists || status.locked) {
-      pendingCcSwitchLink = link;
+    // vault unlocks, then openPendingDeepLink picks it up.
+    if (!statusReady || !status.exists || status.locked || showForm || ccSwitchDuplicateOpen) {
+      pendingDeepLinks = [...pendingDeepLinks, { kind: "ccSwitch", payload: link }];
       return;
     }
     const duplicate = findCcSwitchDuplicate(entries, link);
@@ -1746,19 +1901,6 @@
     openCcSwitchForm(link);
   }
 
-  function openPendingCcSwitchLink() {
-    if (!pendingCcSwitchLink || !statusReady || !status.exists || status.locked) return;
-    const link = pendingCcSwitchLink;
-    pendingCcSwitchLink = null;
-    handleCcSwitchImport(link);
-  }
-
-  function confirmCcSwitchDuplicate() {
-    const link = ccSwitchDuplicateLink;
-    ccSwitchDuplicateLink = null;
-    if (link) openCcSwitchForm(link);
-  }
-
   function handleCcSwitchImportError(payload: CcSwitchProviderImportError) {
     if (payload.unsupported) {
       notice = localizedMessage("deepLink.unsupportedResource", { type: payload.unsupported });
@@ -1766,6 +1908,54 @@
       return;
     }
     error = localizedMessage("deepLink.importFailed", { message: payload.message });
+  }
+
+  function handleAipassProviderImportError(payload: AipassProviderImportError) {
+    error = localizedMessage("deepLink.importFailed", { message: payload.message });
+  }
+
+  function handlePendingDeepLink(pending: PendingDeepLink) {
+    switch (pending.kind) {
+      case "ccSwitch":
+        handleCcSwitchImport(pending.payload);
+        break;
+      case "aipassProvider":
+        handleAipassProviderImport(pending.payload);
+        break;
+      case "ccSwitchError":
+        handleCcSwitchImportError(pending.payload);
+        break;
+      case "aipassProviderError":
+        handleAipassProviderImportError(pending.payload);
+        break;
+    }
+  }
+
+  function openPendingDeepLink() {
+    while (
+      pendingDeepLinks.length > 0 &&
+      statusReady &&
+      status.exists &&
+      !status.locked &&
+      !showForm &&
+      !ccSwitchDuplicateOpen
+    ) {
+      const [pending, ...remaining] = pendingDeepLinks;
+      pendingDeepLinks = remaining;
+      if (pending) handlePendingDeepLink(pending);
+    }
+  }
+
+  function confirmCcSwitchDuplicate() {
+    if (aipassProviderDuplicateLink) {
+      const link = aipassProviderDuplicateLink;
+      aipassProviderDuplicateLink = null;
+      openAipassProviderForm(link);
+      return;
+    }
+    const link = ccSwitchDuplicateLink;
+    ccSwitchDuplicateLink = null;
+    if (link) openCcSwitchForm(link);
   }
 
   async function saveServerConfig(config: ProxyConfig): Promise<boolean> {
@@ -1924,9 +2114,9 @@
     if (groupId) {
       const group = serverConfig.routes.find((route) => route.id === groupId);
       if (!group) return;
-      const protocol = routeProtocolFor(entry, secret);
-      if (protocol !== group.inboundProtocol) {
-        error = localizedMessage("providers.routeProtocolMismatch");
+      const protocol = nativeProtocolForEntry(entry, secret);
+      if (!protocol) {
+        error = localizedMessage("providers.routeUnsupportedInterface");
         return;
       }
       if (
@@ -1939,10 +2129,21 @@
       }
       const target = buildRouteTarget(entry, secret, group.targets.length);
       if (!target) return;
+      const members = [
+        ...group.targets.flatMap((member) => {
+          const memberEntry = entries.find((item) => item.id === member.providerEntryId);
+          const memberSecret = memberEntry?.secretRefs.find((item) => item.id === member.secretId);
+          return memberEntry && memberSecret ? [{ entry: memberEntry, secret: memberSecret }] : [];
+        }),
+        { entry, secret }
+      ];
+      const conversionEnabled = routeNeedsConversion(group.inboundProtocol, members);
       const saved = await saveServerConfig({
         ...serverConfig,
         routes: serverConfig.routes.map((route) =>
-          route.id === groupId ? { ...route, targets: [...route.targets, target] } : route
+          route.id === groupId
+            ? { ...route, targets: [...route.targets, target], conversionEnabled }
+            : route
         )
       });
       if (!saved) return;
@@ -1997,6 +2198,9 @@
 
   function closeProviderForm() {
     showForm = false;
+    draft = emptyDraft();
+    protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
+    openPendingDeepLink();
   }
 
   function selectProvider(id: string) {
@@ -2410,10 +2614,40 @@
   }
 
   function splitCsv(value: string): string[] {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const values: string[] = [];
+    let current = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (character === "\\" && index + 1 < value.length && "\\,=".includes(value[index + 1])) {
+        current += character + value[index + 1];
+        index += 1;
+      } else if (character === ",") {
+        if (current.trim()) values.push(current.trim());
+        current = "";
+      } else {
+        current += character;
+      }
+    }
+    if (current.trim()) values.push(current.trim());
+    return values;
+  }
+
+  function decodeCsvPart(value: string): string {
+    let decoded = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (character === "\\" && index + 1 < value.length && "\\,=".includes(value[index + 1])) {
+        decoded += value[index + 1];
+        index += 1;
+      } else {
+        decoded += character;
+      }
+    }
+    return decoded.trim();
+  }
+
+  function listValues(value: string): string[] {
+    return splitCsv(value).map(decodeCsvPart).filter(Boolean);
   }
 
   function headerPairs(value: string): Array<[string, string]> {
@@ -2429,11 +2663,19 @@
   }
 
   function parseAssignment(value: string): [string, string] | undefined {
-    const separator = value.indexOf("=");
+    let separator = -1;
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index] === "\\" && index + 1 < value.length && "\\,=".includes(value[index + 1])) {
+        index += 1;
+      } else if (value[index] === "=") {
+        separator = index;
+        break;
+      }
+    }
     if (separator <= 0) return undefined;
-    const name = value.slice(0, separator).trim();
+    const name = decodeCsvPart(value.slice(0, separator));
     if (!name) return undefined;
-    return [name, value.slice(separator + 1).trim()];
+    return [name, decodeCsvPart(value.slice(separator + 1))];
   }
 
   function quotaFromDraft(): QuotaInfo | undefined {
@@ -2758,6 +3000,7 @@
         routeGroups={serverConfig.routes.map((route) => ({ id: route.id, name: route.name }))}
         onSearch={runSearch}
         onAdd={openAdd}
+        onConnectOAuth={openOAuthConnect}
         onRefreshAccounts={refreshOfficialAccounts}
         refreshAccountsBusy={officialAccountsBusy}
         {officialAccountsImport}
@@ -2805,6 +3048,8 @@
         onCopyValue={copyValue}
         onInferDraftFromDomain={inferDraftFromDomain}
         onProviderChanged={providerChanged}
+        onInterfaceChanged={interfaceChanged}
+        onAuthChanged={authChanged}
         onPreviewToolConfig={previewToolConfig}
         onApplyToolConfig={applyToolConfig}
         pricingGroups={pricingConfig.groups}
@@ -2869,7 +3114,13 @@
   cancelLabel={$t("common.cancel")}
   tone="warning"
   onOpenChange={(open) => {
-    if (!open) ccSwitchDuplicateLink = null;
+    if (!open) {
+      ccSwitchDuplicateLink = null;
+      aipassProviderDuplicateLink = null;
+      ccSwitchDuplicateOpen = false;
+      ccSwitchDuplicateName = "";
+      openPendingDeepLink();
+    }
   }}
   onConfirm={confirmCcSwitchDuplicate}
 />
@@ -2938,6 +3189,17 @@
     onInferDraftFromDomain={inferDraftFromDomain}
     onInferDraftFromEndpoint={inferDraftFromEndpoint}
     onProviderChanged={providerChanged}
+    onInterfaceChanged={interfaceChanged}
+    onAuthChanged={authChanged}
+  />
+{/if}
+
+{#if showOAuthConnect}
+  <OAuthConnectDialog
+    {invokeTauri}
+    onClose={() => { showOAuthConnect = false; }}
+    onConnected={onOAuthConnected}
+    onImportCli={refreshOfficialAccounts}
   />
 {/if}
 

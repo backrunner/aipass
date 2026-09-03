@@ -45,6 +45,21 @@ export function classNames(...values: Array<string | false | null | undefined>):
   return values.filter(Boolean).join(" ");
 }
 
+/** Encode list values for the comma-separated provider form fields. */
+export function encodeListValues(values: string[]): string {
+  return values.map((value) => value.replaceAll("\\", "\\\\").replaceAll(",", "\\,")).join(", ");
+}
+
+/** Encode key/value pairs for the comma-separated provider form fields. */
+export function encodePairValues(values: Array<readonly [string, string]>): string {
+  return values
+    .map(([name, value]) => {
+      const encode = (part: string) => part.replaceAll("\\", "\\\\").replaceAll(",", "\\,").replaceAll("=", "\\=");
+      return `${encode(name)}=${encode(value)}`;
+    })
+    .join(", ");
+}
+
 /** 解析 http(s) 端点；空值、非 http(s) 协议或非法 URL 返回 undefined。 */
 export function parseHttpEndpoint(value: string | undefined): URL | undefined {
   const trimmed = value?.trim();

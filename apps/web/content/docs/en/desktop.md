@@ -33,6 +33,12 @@ The sidebar organizes your entries:
 
 The provider detail pane shows endpoints, console URLs, masked keys, model aliases, quota, tags, and notes, and offers copy, reveal, probe, configure, archive, and delete actions. Each entry can hold multiple labeled keys.
 
+External tools can open the provider form with the AIPass-native deep link scheme:
+
+`aipass-provider://v1/add?title=Relay&providerId=custom_http&domain=relay.example.com&endpoint=https%3A%2F%2Frelay.example.com%2Fv1&interfaceType=openai_compatible&authScheme=bearer&apiKey=...`
+
+The `v1/add` path is versioned. Repeat `domain`, `endpoint`, `consoleEndpoint`, and `tag` for multiple values; encode `modelAliases`, `headers`, and `quota` as JSON query values. The link opens the normal add form, and the Rust agent remains the only component that persists the provider record.
+
 ## Integrations
 
 The Integrations section configures AI tools to use a stored credential, with a preview dialog before anything is written. Supported tools:
@@ -47,9 +53,10 @@ Compatibility is checked per entry: for example Codex requires an OpenAI-compati
 The **Server** section runs a local HTTP proxy that lets tools share vault credentials without holding real keys. Highlights:
 
 - Binds to `127.0.0.1:8787` by default; the address is configurable.
-- Routes define an inbound protocol (OpenAI Responses, OpenAI Chat Completions, or Anthropic Messages), an upstream protocol, and optional protocol conversion between them.
+- Routes define an inbound protocol (OpenAI Responses, OpenAI Chat Completions, or Anthropic Messages). Targets can use any supported provider format: when a target's format differs from the inbound protocol, the proxy converts between protocols automatically (e.g. Claude Code can run on OpenAI-format providers).
 - Each route has its own bearer token, a strategy (fallback or round-robin), and weighted targets pointing at vault entries — so a failed provider falls over to the next target automatically.
 - Retry policy per route: max attempts, failure threshold, circuit-open seconds, connect / first-byte / stream-idle timeouts.
+- Known conversion limits: `/v1/messages/count_tokens` is not converted; `thinking` and `cache_control` fields are dropped across protocols; `anthropic-beta` feature headers are not forwarded to OpenAI upstreams.
 - Usage statistics per provider and model — request counts, tokens, estimated cost from your pricing table, success rate, time to first token — stored locally in SQLite.
 
 Because targets reference vault entries, rotating a key in the vault updates the proxy without touching your tools.

@@ -14,6 +14,30 @@ import type { LocalePreference } from "@aipass/ui";
 
 export type { CcSwitchDetection, OfficialAccountRefreshResult };
 
+/** Payload of the `aipass-provider://v1/add` deep link. */
+export type AipassProviderLink = {
+  title: string;
+  providerId?: string;
+  credentialKind?: import("@aipass/schemas").CredentialKind;
+  accountIdentity?: string;
+  domains: string[];
+  endpoints: string[];
+  consoleEndpoints: string[];
+  faviconUrl?: string;
+  interfaceType?: import("@aipass/schemas").InterfaceType;
+  authScheme?: import("@aipass/schemas").AuthScheme;
+  apiKey?: string;
+  secretLabel?: string;
+  defaultModel?: string;
+  modelAliases: Array<[string, string]>;
+  headers: Array<[string, string]>;
+  quota?: import("@aipass/schemas").QuotaInfo;
+  tags: string[];
+  notes?: string;
+};
+
+export type AipassProviderImportError = { message: string };
+
 /** Payload of the `ccswitch-provider-import` deep-link event / buffered command. */
 export type CcSwitchProviderLink = {
   name: string;
@@ -34,6 +58,13 @@ export type CcSwitchProviderImportError = {
   message: string;
   unsupported?: string;
 };
+
+/** Deep-link payload buffered by Rust before the frontend is ready. */
+export type PendingDeepLink =
+  | { kind: "ccSwitch"; payload: CcSwitchProviderLink }
+  | { kind: "aipassProvider"; payload: AipassProviderLink }
+  | { kind: "ccSwitchError"; payload: CcSwitchProviderImportError }
+  | { kind: "aipassProviderError"; payload: AipassProviderImportError };
 
 export type {
   Draft,
@@ -284,6 +315,39 @@ export type VaultAuthTaskStatus = {
   recoveryKit?: RecoveryKit;
   errorCode?: AgentErrorCode;
   error?: string;
+};
+
+export type OAuthProvider = "codex" | "grok";
+
+export type OAuthDeviceStart = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type OAuthLoginStatus = "pending" | "authorized" | "expired" | "error";
+
+export type OAuthAccountSummary = {
+  id: string;
+  provider: OAuthProvider;
+  accountIdentity?: string;
+  chatgptAccountId?: string;
+  entryId?: string;
+  isDefault: boolean;
+  authenticatedAt: number;
+  credentialExpiresAt?: string;
+  requiresReauth: boolean;
+};
+
+export type OAuthLoginPoll = {
+  status: OAuthLoginStatus;
+  account?: OAuthAccountSummary;
+  message?: string;
+  /** Current server-side poll interval; preferred over the device interval when present. */
+  intervalSecs?: number;
 };
 
 export type SyncReport = {

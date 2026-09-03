@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { providerDefinitions, type InterfaceType, type ProviderKind } from "@aipass/schemas";
-  import { Banner, Button, IconButton, interfaceLabel, ProviderIcon } from "@aipass/ui";
+  import { providerDefinitions, type AuthScheme, type InterfaceType, type ProviderKind } from "@aipass/schemas";
+  import { authLabel, Banner, Button, IconButton, interfaceLabel, ProviderIcon } from "@aipass/ui";
   import { t } from "@aipass/ui/i18n";
   import { Ban, X } from "lucide-svelte";
 
@@ -14,6 +14,14 @@
     "bedrock",
     "custom_http"
   ];
+  const authValues: AuthScheme[] = [
+    "bearer",
+    "x_api_key",
+    "google_api_key",
+    "azure_api_key",
+    "aws_profile",
+    "custom_header"
+  ];
 
   export let visibleDraftItems: DraftItem[] = [];
   export let selectedDraftCount = 0;
@@ -22,6 +30,8 @@
   export let onIgnoreOrigin: () => void | Promise<void> = () => {};
   export let onInferDraftFromEndpoint: (item: DraftItem) => void | Promise<void> = () => {};
   export let onProviderChanged: (item: DraftItem) => void | Promise<void> = () => {};
+  export let onInterfaceChanged: (item: DraftItem) => void | Promise<void> = () => {};
+  export let onAuthChanged: (item: DraftItem) => void | Promise<void> = () => {};
   export let onSaveSelected: () => void | Promise<void> = () => {};
   export let onSchedulePreview: () => void = () => {};
   export let onToggleSelection: (draftId: string) => void = () => {};
@@ -114,9 +124,17 @@
             </label>
             <label>
               <span>{$t("providerForm.interface")}</span>
-              <select bind:value={item.draft.interfaceType} on:change={onSchedulePreview}>
+              <select bind:value={item.draft.interfaceType} on:change={() => { onInterfaceChanged(item); onSchedulePreview(); }}>
                 {#each interfaceValues as value}
                   <option {value}>{interfaceLabel[value]}</option>
+                {/each}
+              </select>
+            </label>
+            <label>
+              <span>{$t("providerForm.auth")}</span>
+              <select bind:value={item.draft.authScheme} on:change={() => { onAuthChanged(item); onSchedulePreview(); }}>
+                {#each authValues as value}
+                  <option {value}>{authLabel[value]}</option>
                 {/each}
               </select>
             </label>

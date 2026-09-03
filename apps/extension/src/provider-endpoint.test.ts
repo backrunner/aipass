@@ -45,4 +45,11 @@ describe("provider endpoints", () => {
     assert.equal(parseHttpEndpoint("api.example.test/v1"), undefined);
     assert.equal(parseHttpEndpoint("javascript:alert(1)"), undefined);
   });
+
+  it("preserves endpoint query parameters while normalizing", () => {
+    assert.equal(
+      endpointForProvider(provider("custom_http"), "https://relay.example.test/v1?tenant=a,b", ""),
+      "https://relay.example.test/v1?tenant=a,b"
+    );
+  });
 });
