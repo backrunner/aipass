@@ -661,3 +661,42 @@ export function detectInterfaceFromProvider(providerId?: string): InterfaceType 
 export function detectAuthFromProvider(providerId?: string): AuthScheme {
   return providerDefinitions.find((provider) => provider.id === providerId)?.authSchemes[0] ?? "custom_header";
 }
+
+/** Sensible auth scheme for an interface when no provider definition is known. */
+export function defaultAuthSchemeForInterface(interfaceType: InterfaceType): AuthScheme {
+  switch (interfaceType) {
+    case "anthropic_messages":
+      return "x_api_key";
+    case "openai_compatible":
+      return "bearer";
+    case "azure_openai":
+      return "azure_api_key";
+    case "gemini":
+      return "google_api_key";
+    case "bedrock":
+      return "aws_profile";
+    case "custom_http":
+      return "custom_header";
+  }
+}
+
+/**
+ * Auth schemes a tool/proxy integration can actually honor for an interface.
+ * Custom HTTP accepts anything; the native protocols each support a fixed set.
+ */
+export function authSchemeCompatibleWithInterface(authScheme: AuthScheme, interfaceType: InterfaceType): boolean {
+  switch (interfaceType) {
+    case "anthropic_messages":
+      return authScheme === "x_api_key" || authScheme === "bearer";
+    case "openai_compatible":
+      return authScheme === "bearer";
+    case "azure_openai":
+      return authScheme === "azure_api_key" || authScheme === "bearer";
+    case "gemini":
+      return authScheme === "google_api_key";
+    case "bedrock":
+      return authScheme === "aws_profile";
+    case "custom_http":
+      return true;
+  }
+}

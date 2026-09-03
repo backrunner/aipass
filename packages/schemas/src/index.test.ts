@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authSchemeCompatibleWithInterface,
+  defaultAuthSchemeForInterface,
   detectAuthFromProvider,
   detectInterfaceFromProvider,
   inferProviderFromEndpoint,
@@ -19,6 +21,26 @@ test("keeps native provider semantics", () => {
   assert.equal(detectAuthFromProvider("gemini"), "google_api_key");
   assert.equal(detectInterfaceFromProvider("replicate"), "custom_http");
   assert.equal(detectAuthFromProvider("replicate"), "bearer");
+});
+
+test("defaults auth scheme from interface when no provider is known", () => {
+  assert.equal(defaultAuthSchemeForInterface("anthropic_messages"), "x_api_key");
+  assert.equal(defaultAuthSchemeForInterface("openai_compatible"), "bearer");
+  assert.equal(defaultAuthSchemeForInterface("azure_openai"), "azure_api_key");
+  assert.equal(defaultAuthSchemeForInterface("gemini"), "google_api_key");
+  assert.equal(defaultAuthSchemeForInterface("bedrock"), "aws_profile");
+  assert.equal(defaultAuthSchemeForInterface("custom_http"), "custom_header");
+});
+
+test("checks auth scheme compatibility with an interface", () => {
+  assert.equal(authSchemeCompatibleWithInterface("x_api_key", "anthropic_messages"), true);
+  assert.equal(authSchemeCompatibleWithInterface("bearer", "anthropic_messages"), true);
+  assert.equal(authSchemeCompatibleWithInterface("custom_header", "anthropic_messages"), false);
+  assert.equal(authSchemeCompatibleWithInterface("bearer", "openai_compatible"), true);
+  assert.equal(authSchemeCompatibleWithInterface("x_api_key", "openai_compatible"), false);
+  assert.equal(authSchemeCompatibleWithInterface("google_api_key", "gemini"), true);
+  assert.equal(authSchemeCompatibleWithInterface("bearer", "gemini"), false);
+  assert.equal(authSchemeCompatibleWithInterface("custom_header", "custom_http"), true);
 });
 
 test("infers providers from endpoint hosts", () => {
