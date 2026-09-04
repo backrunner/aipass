@@ -375,8 +375,13 @@ fn clean_secret_label(value: Option<&str>) -> Option<String> {
 
 fn normalize_user_secret_label(value: &str) -> Option<String> {
     let value = value.trim();
-    (!value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control))
-        .then(|| value.to_string())
+    // "primary" is reserved for the first-key selector; a user label with
+    // that name could never be addressed by `reveal_secret_field`.
+    (!value.is_empty()
+        && value.len() <= 64
+        && !value.chars().any(char::is_control)
+        && !value.eq_ignore_ascii_case(PRIMARY_SECRET_FIELD))
+    .then(|| value.to_string())
 }
 
 /// Resolve a `label_or_id` selector deterministically: an exact id match
@@ -3096,6 +3101,23 @@ mod tests {
         // Label lookup still works when no id matches the selector.
         let removed = vault.remove_secret(id, &primary_id).unwrap();
         assert_eq!(removed, impostor_id);
+    }
+
+    #[test]
+    fn primary_label_is_reserved_for_the_first_key_selector() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-primary")).unwrap();
+        assert!(matches!(
+            vault.add_secret(id, "primary", "sk-ant-api03-extra"),
+            Err(VaultError::InvalidSecretLabel)
+        ));
+        assert!(matches!(
+            vault.add_secret(id, "Primary", "sk-ant-api03-extra"),
+            Err(VaultError::InvalidSecretLabel)
+        ));
+        assert!(vault.add_secret(id, "primary-2", "sk-ant-api03-extra").is_ok());
     }
 
     #[test]
