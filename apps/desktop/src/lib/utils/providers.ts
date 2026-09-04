@@ -2,31 +2,9 @@ import type { ProviderEntry, QuotaInfo, SubscriptionSnapshot } from "@aipass/sch
 
 import type { EntrySummary, ProviderCounts } from "../types";
 
-export { emptyDraft } from "@aipass/ui";
+export { emptyDraft, mergeHeaderPairs } from "@aipass/ui";
 
 const EXPIRING_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-
-/**
- * Merge user-entered header pairs into the headers already stored for a
- * provider. HTTP header names are case-insensitive, so an incoming pair whose
- * name matches a stored one (ignoring case) replaces that stored pair in
- * place; genuinely new names are appended in input order.
- */
-export function mergeHeaderPairs(
-  existing: Array<[string, string]>,
-  incoming: Array<[string, string]>
-): Array<[string, string]> {
-  const merged = [...existing];
-  for (const [name, value] of incoming) {
-    const index = merged.findIndex(([storedName]) => storedName.toLowerCase() === name.toLowerCase());
-    if (index >= 0) {
-      merged[index] = [name, value];
-    } else {
-      merged.push([name, value]);
-    }
-  }
-  return merged;
-}
 
 /**
  * Matches credentials whose earliest expiry/reset timestamp falls within the

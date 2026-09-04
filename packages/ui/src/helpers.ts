@@ -60,6 +60,28 @@ export function encodePairValues(values: Array<readonly [string, string]>): stri
     .join(", ");
 }
 
+/**
+ * Merge user-entered header pairs into the headers already stored for a
+ * provider. HTTP header names are case-insensitive, so an incoming pair whose
+ * name matches a stored one (ignoring case) replaces that stored pair in
+ * place; genuinely new names are appended in input order.
+ */
+export function mergeHeaderPairs(
+  existing: Array<[string, string]>,
+  incoming: Array<[string, string]>
+): Array<[string, string]> {
+  const merged = [...existing];
+  for (const [name, value] of incoming) {
+    const index = merged.findIndex(([storedName]) => storedName.toLowerCase() === name.toLowerCase());
+    if (index >= 0) {
+      merged[index] = [name, value];
+    } else {
+      merged.push([name, value]);
+    }
+  }
+  return merged;
+}
+
 /** 解析 http(s) 端点；空值、非 http(s) 协议或非法 URL 返回 undefined。 */
 export function parseHttpEndpoint(value: string | undefined): URL | undefined {
   const trimmed = value?.trim();
