@@ -482,6 +482,86 @@ describe("service worker pending drafts", () => {
     assert.equal(listed.data?.entries?.[0]?.title, "After Mutation");
   });
 
+  it("preserves cached quota when a provider update omits it", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    const quota = { label: "pro", limit: "10", remaining: "7.5" };
+    nativeListResponses.push(listResponse([providerEntry({ quota })]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+
+    nativeListResponses.push(listResponse([providerEntry({ quota })]));
+    const updated = (await dispatchMessage({
+      type: "aipass.providerUpdate",
+      request: {
+        id: "entry-1",
+        title: "OpenRouter",
+        providerId: "openrouter",
+        domain: ["openrouter.ai"],
+        endpoint: "https://openrouter.ai/api/v1",
+        endpoints: [],
+        consoleEndpoints: [],
+        interfaceType: "openai_compatible",
+        authScheme: "bearer",
+        modelAliases: [],
+        headers: [],
+        tags: ["browser"]
+      }
+    })) as { ok?: boolean };
+    assert.equal(updated.ok, true);
+    await settleAsyncWork();
+
+    const cached = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
+      data?: { entries?: Array<{ id?: string; quota?: { remaining?: string } }> };
+    };
+    assert.equal(cached.data?.entries?.[0]?.quota?.remaining, "7.5");
+  });
+
+  it("does not consume the automatic usage refresh slot when the probe fails", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+
+    const addRequest = {
+      title: "Relay",
+      providerId: "new_api",
+      domain: ["relay.example.test"],
+      endpoints: [],
+      consoleEndpoints: [],
+      interfaceType: "openai_compatible",
+      authScheme: "bearer",
+      apiKey: "sk-relay-secret-1234567890",
+      modelAliases: [],
+      headers: [],
+      tags: []
+    };
+
+    nativeUsageProbeResponses.push({ id: "1", ok: false, error: "probe down", data: {} });
+    nativeProviderAddResponses.push({ id: "1", ok: true, data: { entryId: "entry-usage" } });
+    const added = (await dispatchMessage({
+      type: "aipass.providerAdd",
+      request: addRequest
+    })) as { ok?: boolean };
+    assert.equal(added.ok, true);
+    await settleAsyncWork();
+    assert.equal(
+      nativeMessages.filter((message) => message.type === "provider.usageProbe").length,
+      1
+    );
+
+    // The failed probe must not consume the five-minute slot: the next
+    // automatic refresh for the same entry probes again.
+    nativeProviderAddResponses.push({ id: "1", ok: true, data: { entryId: "entry-usage" } });
+    await dispatchMessage({ type: "aipass.providerAdd", request: addRequest });
+    await settleAsyncWork();
+    assert.equal(
+      nativeMessages.filter((message) => message.type === "provider.usageProbe").length,
+      2
+    );
+  });
+
   it("patches cached entries after provider update and delete mutations", async () => {
     await import("./service-worker");
 

@@ -508,8 +508,13 @@ function refreshProviderUsage(entryId: string, force: boolean): Promise<UsageRef
   if (!force && Date.now() - lastRefresh < AUTOMATIC_USAGE_REFRESH_INTERVAL_MS) {
     return Promise.resolve({ ok: true, data: {} });
   }
-  automaticUsageRefreshAt.set(entryId, Date.now());
   const refresh = refreshProviderUsageInner(entryId)
+    .then((result) => {
+      // Only a successful probe consumes the automatic-refresh slot; a failed
+      // probe must not suppress follow-up auto-refreshes for five minutes.
+      if (result.ok) automaticUsageRefreshAt.set(entryId, Date.now());
+      return result;
+    })
     .catch(
       (err): UsageRefreshResponse => ({
         ok: false,
@@ -654,7 +659,10 @@ async function patchCachedEntryFromUpdate(request: ProviderUpdateRequest) {
             authScheme: request.authScheme,
             defaultModel: request.defaultModel,
             modelAliases: request.modelAliases,
-            quota: request.quota,
+            // Quota is agent-maintained (usage probes), so an update that
+            // doesn't carry it must not wipe the cached value while the
+            // scheduled refresh is still pending.
+            quota: request.quota ?? entry.quota,
             // Provider updates replace the entry's legacy gateway blob. The
             // per-key group/billing fields are patched separately below, so an
             // omitted gateway must not resurrect stale metadata from the cache.
