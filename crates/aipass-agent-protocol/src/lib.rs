@@ -598,6 +598,8 @@ pub enum AgentRequest {
     TrashEmpty,
     #[serde(rename = "secret.reveal_field")]
     SecretRevealField { id: Uuid, field: String },
+    #[serde(rename = "secret.reveal_headers")]
+    SecretRevealHeaders { id: Uuid },
     #[serde(rename = "secret.add")]
     SecretAdd {
         id: Uuid,
@@ -1033,6 +1035,14 @@ pub struct SecretValue {
     pub secret: SensitiveString,
 }
 
+/// Full name/value pairs of a provider entry's custom headers. Values stay
+/// encrypted at rest and only leave the agent on explicit user request.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderHeaderValues {
+    pub headers: Vec<(String, SensitiveString)>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerTokenResponse {
@@ -1358,6 +1368,27 @@ mod tests {
     fn usage_clear_request_has_a_stable_wire_name() {
         let value = serde_json::to_value(AgentRequest::ServerUsageClear).unwrap();
         assert_eq!(value["type"], "server.usage.clear");
+    }
+
+    #[test]
+    fn reveal_headers_round_trips_with_a_stable_wire_name() {
+        let request = AgentRequest::SecretRevealHeaders { id: Uuid::nil() };
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["type"], "secret.reveal_headers");
+        assert!(matches!(
+            serde_json::from_value::<AgentRequest>(value).unwrap(),
+            AgentRequest::SecretRevealHeaders { id } if id == Uuid::nil()
+        ));
+
+        let payload = ProviderHeaderValues {
+            headers: vec![("x-version".to_string(), SensitiveString::new("1".to_string()))],
+        };
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value["headers"][0][0], "x-version");
+        assert_eq!(value["headers"][0][1], "1");
+        let parsed: ProviderHeaderValues = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.headers[0].0, "x-version");
+        assert_eq!(parsed.headers[0].1.expose(), "1");
     }
 
     #[test]

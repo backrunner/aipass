@@ -542,6 +542,17 @@ fn dispatch_request(
                 secret: secret.into(),
             })
         }),
+        AgentRequest::SecretRevealHeaders { id } => with_vault(state, true, |vault| {
+            vault.reveal_provider_headers(id).map_err(map_vault_error)
+        })
+        .map(|headers| {
+            AgentResponse::success(ProviderHeaderValues {
+                headers: headers
+                    .into_iter()
+                    .map(|(name, value)| (name, SensitiveString::from(value)))
+                    .collect(),
+            })
+        }),
         AgentRequest::SecretAdd { id, label, secret } => with_vault(state, false, |vault| {
             let secret_id = vault
                 .add_secret(id, label, secret.into_inner())
