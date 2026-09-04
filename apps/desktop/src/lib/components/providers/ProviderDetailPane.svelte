@@ -142,6 +142,7 @@
   let codexIntegrationMode: CodexIntegrationMode = "auth_json";
   let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
   let lastIntegrationEntryId = "";
+  let lastDialogEntryId = "";
   let pricingDialogOpen = false;
   let pricingDialogGroupId: string | undefined;
   let pricingDialogAssign: { entryId: string; secretId: string } | undefined;
@@ -271,7 +272,11 @@
     codexIntegrationMode = "auth_json";
   }
 
-  $: if (selected?.id) {
+  // Close the dialogs only when the selected entry actually changes. Background
+  // reloads swap the `selected` reference for the same id and must not interrupt
+  // an open dialog; the usage dialog re-renders from the refreshed props anyway.
+  $: if ((selected?.id ?? "") !== lastDialogEntryId) {
+    lastDialogEntryId = selected?.id ?? "";
     usageDialogOpen = false;
     pricingDialogOpen = false;
   }
