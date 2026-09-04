@@ -979,7 +979,7 @@ const zhCN: Record<string, string> = {
   "providers.routeChecking": "正在检查凭据可用性…",
   "providers.routeProbeFailed": "端点探测失败（{error}），仍要添加吗？",
   "providers.invalidEndpoint": "请输入有效的 HTTP 或 HTTPS 端点",
-  "providers.headersMergeFailed": "无法读取已保存的请求头，提供商未更新:{message}",
+  "providers.headersMergeFailed": "无法读取已保存的请求头，提供商未更新：{message}",
   "pricing.group": "计费模式",
   "pricing.multiplier": "倍率",
   "pricing.advanced": "高级设置",

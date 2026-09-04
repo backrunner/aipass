@@ -24,6 +24,7 @@
     emptyDraft,
     groupFromDraft,
     IconButton,
+    mergeHeaderPairs,
     ProviderFormFields,
     ProviderIcon,
     type Draft
@@ -699,6 +700,9 @@
     next.quotaUsed = entry.quota?.used ?? "";
     next.quotaRemaining = entry.quota?.remaining ?? "";
     next.quotaResetAt = entry.quota?.resetAt ?? "";
+    // Display-only: stored header names whose values stay redacted, so the
+    // edit form can show what a new header input would merge into.
+    next.existingHeaderNames = entry.headerNames ?? [];
     next.notes = entry.notes ?? "";
     return next;
   }
@@ -1319,6 +1323,30 @@
     addBusy = true;
     statusText = "";
     statusError = false;
+    // An empty header input preserves the stored headers; a non-empty one is
+    // merged into them (new names appended, same-named updated). Without the
+    // stored values a save would silently drop every existing header, so a
+    // failed reveal aborts the update instead of falling back to replace.
+    let headers: Array<[string, string]> | undefined;
+    if (addDraft.header.trim()) {
+      const incoming = pairsFromCsv(addDraft.header);
+      const editingEntry = entries.find((entry) => entry.id === editingEntryId);
+      if (editingEntry?.headerNames?.length) {
+        const stored = await sendToWorker<{ headers?: Array<[string, string]> }>({
+          type: "aipass.revealHeaders",
+          entryId: editingEntryId
+        });
+        if (!stored?.ok) {
+          addBusy = false;
+          statusText = $t("providers.headersMergeFailed", { message: stored?.error ?? "unknown" });
+          statusError = true;
+          return;
+        }
+        headers = mergeHeaderPairs(stored.data?.headers ?? [], incoming);
+      } else {
+        headers = incoming;
+      }
+    }
     const response = await sendToWorker<{ entryId?: string }>({
       type: "aipass.providerUpdate",
       request: {
@@ -1335,7 +1363,7 @@
         apiKey: addDraft.apiKey.trim() || undefined,
         defaultModel: addDraft.defaultModel || undefined,
         modelAliases: pairsFromCsv(addDraft.modelAlias),
-        headers: addDraft.header.trim() ? pairsFromCsv(addDraft.header) : undefined,
+        headers,
         quota: quotaFrom(addDraft),
         group: addDraft.gatewayGroup.trim(),
         billing: billingPatchFromDraft(addDraft),

@@ -676,6 +676,14 @@ export function updateProvider(request: ProviderUpdateRequest): Promise<NativeRe
   });
 }
 
+export function revealProviderHeaders(entryId: string): Promise<NativeResponse<{ headers: Array<[string, string]> }>> {
+  return nativeRequest({
+    id: crypto.randomUUID(),
+    type: "secret.revealHeaders",
+    entry_id: entryId
+  });
+}
+
 export function probeProviderUsage(entryId: string, mode: UsageProbeMode = "auto", timeoutSeconds = 15): Promise<NativeResponse<UsageProbeResult>> {
   return nativeRequest({
     id: crypto.randomUUID(),

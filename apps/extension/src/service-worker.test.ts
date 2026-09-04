@@ -164,6 +164,14 @@ function installChromeStub() {
           });
           return;
         }
+        if (type === "secret.revealHeaders") {
+          callback({
+            id: "1",
+            ok: true,
+            data: { headers: [["x-version", "1"], ["authorization", "Bearer stored-token"]] }
+          });
+          return;
+        }
         callback({ id: "1", ok: true, data: {} });
       })
     },
@@ -611,6 +619,17 @@ describe("service worker pending drafts", () => {
       cached.data?.entries?.some((entry) => entry.id === "entry-1"),
       false
     );
+  });
+
+  it("forwards header reveal requests to the native host", async () => {
+    await import("./service-worker");
+
+    const response = (await dispatchMessage({
+      type: "aipass.revealHeaders",
+      entryId: "entry-1"
+    })) as { ok?: boolean; data?: { headers?: Array<[string, string]> } };
+    assert.equal(response.ok, true);
+    assert.deepEqual(response.data?.headers, [["x-version", "1"], ["authorization", "Bearer stored-token"]]);
   });
 
   it("rejects drafts from excluded pages before queueing, filtering, or saving", async () => {

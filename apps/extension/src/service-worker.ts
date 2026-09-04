@@ -15,6 +15,7 @@ import {
   probeProviderUsage,
   previewDetectedSecret,
   recoverNativeHost,
+  revealProviderHeaders,
   saveDetectedSecret as saveDetectedSecretNative,
   searchEntries,
   setNativeSessionStatusListener,
@@ -352,6 +353,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (typed.type === "aipass.providerUpdate" && typed.request) {
     updateProviderAndRefreshCache(typed.request as ProviderUpdateRequest).then(sendResponse);
+    return true;
+  }
+
+  if (typed.type === "aipass.revealHeaders" && typed.entryId) {
+    revealProviderHeaders(typed.entryId as string).then(sendResponse);
     return true;
   }
 
