@@ -9,7 +9,8 @@ const config: ProxyConfig = {
   enabled: false,
   bindAddr: "127.0.0.1:8787",
   routes: [],
-  pricing: []
+  pricing: [],
+  upstreamProxy: { mode: "system" }
 };
 
 const status: ProxyStatus = {

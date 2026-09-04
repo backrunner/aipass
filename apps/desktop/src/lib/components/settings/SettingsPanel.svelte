@@ -19,9 +19,10 @@
     SyncConflict,
     SyncMode,
     SyncReport,
-    ThemePreference
+    ThemePreference,
+    UpstreamProxyMode
   } from "../../types";
-  import { checkForUpdates, clearPendingUpdate, getStoredUpdateChannel, inferUpdateChannel, installUpdate, persistUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
+  import { checkForUpdates, clearPendingUpdate, installUpdate, persistUpdateChannel, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
   import { buildTimeLabel } from "../../build";
   import { Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
@@ -57,7 +58,7 @@
   export let devices: DeviceRecord[] = [];
   export let devicesLoading = false;
   export let initialTab: string = "general";
-  export let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+  export let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [], upstreamProxy: { mode: "system" } };
   export let serverBusy = "";
   export let onClose: () => MaybePromise = () => {};
   export let proxyRunning = false;
@@ -202,6 +203,24 @@
     return `${summary.maskedSecret} · ${summary.fingerprint.slice(0, 12)}`;
   }
 
+  const upstreamProxyModeOptions: UpstreamProxyMode[] = ["system", "direct", "environment", "custom"];
+
+  $: localizedUpstreamProxyOptions = upstreamProxyModeOptions.map((value) => ({
+    value,
+    label:
+      value === "system"
+        ? $t("settings.upstreamProxySystem")
+        : value === "direct"
+          ? $t("settings.upstreamProxyDirect")
+          : value === "environment"
+            ? $t("settings.upstreamProxyEnvironment")
+            : $t("settings.upstreamProxyCustom")
+  }));
+
+  function updateUpstreamProxy(patch: Partial<ProxyConfig["upstreamProxy"]>) {
+    serverConfig = { ...serverConfig, upstreamProxy: { ...serverConfig.upstreamProxy, ...patch } };
+  }
+
   function updateRouteRetry(routeId: string, key: keyof ProxyConfig["routes"][number]["retry"], value: number) {
     serverConfig = {
       ...serverConfig,
@@ -265,10 +284,10 @@
     void (async () => {
       try {
         appVersion = await getVersion();
-        updateChannel = getStoredUpdateChannel() ?? inferUpdateChannel(appVersion);
       } catch {
         appVersion = "";
       }
+      updateChannel = resolveUpdateChannel(appVersion);
     })();
   });
 
@@ -661,6 +680,38 @@
                 {:else}
                   <p class="hint">{$t("settings.noServerRoutes")}</p>
                 {/each}
+              </div>
+            </Card>
+
+            <Card title={$t("settings.upstreamProxy")}>
+              <div class="rows">
+                <p class="hint">{$t("settings.upstreamProxyDesc")}</p>
+                <div class="row">
+                  <div class="row-text">
+                    <span class="row-label">{$t("settings.upstreamProxyMode")}</span>
+                    {#if serverConfig.upstreamProxy.mode === "environment"}
+                      <span class="row-desc">{$t("settings.upstreamProxyEnvironmentDesc")}</span>
+                    {/if}
+                  </div>
+                  <SegmentedControl
+                    ariaLabel={$t("settings.upstreamProxyMode")}
+                    value={serverConfig.upstreamProxy.mode}
+                    options={localizedUpstreamProxyOptions}
+                    onChange={(mode) => updateUpstreamProxy({ mode })}
+                  />
+                </div>
+                {#if serverConfig.upstreamProxy.mode === "custom"}
+                  <Field label={$t("settings.upstreamProxyUrl")}>
+                    <input
+                      value={serverConfig.upstreamProxy.customUrl ?? ""}
+                      placeholder="http://user:pass@127.0.0.1:7890"
+                      on:change={(event) => updateUpstreamProxy({ customUrl: event.currentTarget.value.trim() })}
+                    />
+                  </Field>
+                {/if}
+                <div class="button-row">
+                  <Button variant="primary" on:click={() => onSaveServerConfig(serverConfig)} disabled={Boolean(serverBusy)}><Check size={14} /> {$t("server.save")}</Button>
+                </div>
               </div>
             </Card>
 

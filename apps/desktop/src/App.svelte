@@ -82,7 +82,7 @@
   import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
   import { aipassProviderLinkToDraft, ccSwitchLinkToDraft, findAipassProviderDuplicate, findCcSwitchDuplicate, splitEndpointList } from "./lib/utils/deeplink";
   import { buildRouteTarget, buildSingleEntryRoute, nativeProtocolForEntry, proxySupportedEntry, routeNeedsConversion } from "./lib/utils/server";
-  import { checkForUpdates, downloadUpdate, getStoredUpdateChannel, inferUpdateChannel, installPendingUpdate, installUpdate, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
+  import { checkForUpdates, downloadUpdate, installPendingUpdate, installUpdate, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
   import type { MessageValue } from "./lib/types";
@@ -279,6 +279,8 @@
   let webdavUsername = "";
   let webdavPassword = "";
   let hasSavedWebdavPassword = false;
+  /** Last sync settings confirmed by the agent; closing Settings only saves when the user changed something. */
+  let loadedSyncSettings: { mode: SyncMode; syncFolder: string; webdavUrl: string; webdavUsername: string } | undefined;
   let draft: Draft = emptyDraft();
   // Tracks which protocol fields the user has chosen by hand. Endpoint/domain
   // inference must not overwrite an explicit selection (e.g. Anthropic Messages
@@ -318,7 +320,7 @@
   let serverBusy = "";
   let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
   let serverUsageSeries: UsageTimeseriesPoint[] = [];
-  let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+  let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [], upstreamProxy: { mode: "system" } };
   let serverStatus: ProxyStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0, successRateBps: 0 };
   let selectedRouteId = "";
   let pricingConfig: PricingConfig = { groups: [], assignments: [] };
@@ -458,7 +460,7 @@
     updatePreparing = true;
     try {
       const version = await getVersion();
-      const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+      const channel = resolveUpdateChannel(version);
       const result = await checkForUpdates(channel);
       // Stamp the 24h cadence only after a check actually reached the feed,
       // so a transient failure (offline, rate limit) retries on next launch.
@@ -469,7 +471,7 @@
         return;
       }
       const downloadedVersion = await downloadUpdate(channel);
-      const currentChannel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+      const currentChannel = resolveUpdateChannel(version);
       if (currentChannel !== channel) return;
       localStorage.setItem(UPDATE_LAST_CHECK_KEY, String(Date.now()));
       updateProgress = undefined;
@@ -513,7 +515,7 @@
     updateInstallError = "";
     try {
       const version = await getVersion();
-      const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+      const channel = resolveUpdateChannel(version);
       await installUpdate(channel);
     } catch (err) {
       updateInstallError = isLocalizedMessage(err) ? err : String(err);
@@ -657,7 +659,7 @@
           // window is visible, so an offline feed cannot hide the app at launch.
           try {
             const version = await getVersion();
-            const channel = getStoredUpdateChannel() ?? inferUpdateChannel(version);
+            const channel = resolveUpdateChannel(version);
             await installPendingUpdate(channel);
           } catch (err) {
             console.error("failed to install pending desktop update", err);
@@ -1027,7 +1029,7 @@
     usageProbeResult = undefined;
     showSettings = false;
     showServer = false;
-    serverConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+    serverConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [], upstreamProxy: { mode: "system" } };
     serverStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0, successRateBps: 0 };
     serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
     serverUsageSeries = [];
@@ -1673,7 +1675,7 @@
         ]);
         if (serverMutationInFlight || refreshVersion !== serverMutationVersion) return;
         serverStatus = nextStatus;
-        serverConfig = nextConfig;
+        serverConfig = { ...nextConfig, upstreamProxy: nextConfig.upstreamProxy ?? { mode: "system" } };
         // Older agents may omit the newer breakdown arrays; default them so the
         // UI never has to deal with undefined.
         serverUsage = {
@@ -2192,7 +2194,9 @@
   }
 
   async function closeSettings() {
-    if (!(await saveSyncSettings())) return;
+    // Only persist explicit user changes; an untouched close must not write
+    // the placeholder defaults over the agent's platform default sync mode.
+    if (syncSettingsDirty() && !(await saveSyncSettings())) return;
     showSettings = false;
   }
 
@@ -2776,9 +2780,21 @@
       webdavUsername = settings.webdavUsername ?? "";
       webdavPassword = "";
       hasSavedWebdavPassword = settings.hasWebdavPassword;
+      loadedSyncSettings = { mode: syncMode, syncFolder, webdavUrl, webdavUsername };
     } catch (err) {
       error = String(err);
     }
+  }
+
+  function syncSettingsDirty(): boolean {
+    if (!loadedSyncSettings) return false;
+    return (
+      syncMode !== loadedSyncSettings.mode ||
+      syncFolder !== loadedSyncSettings.syncFolder ||
+      webdavUrl !== loadedSyncSettings.webdavUrl ||
+      webdavUsername !== loadedSyncSettings.webdavUsername ||
+      webdavPassword !== ""
+    );
   }
 
   async function saveSyncSettings(options: { clearWebdavPassword?: boolean } = {}) {
@@ -2799,6 +2815,7 @@
       webdavUsername = settings.webdavUsername ?? "";
       webdavPassword = "";
       hasSavedWebdavPassword = settings.hasWebdavPassword;
+      loadedSyncSettings = { mode: syncMode, syncFolder, webdavUrl, webdavUsername };
       return true;
     } catch (err) {
       error = String(err);

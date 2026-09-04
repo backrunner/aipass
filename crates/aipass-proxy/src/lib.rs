@@ -28,6 +28,8 @@ use zeroize::Zeroize;
 
 pub use aipass_proxy_conversion::{supports, ConversionError, ProxyProtocol as Protocol};
 
+mod shell_env;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RetryPolicy {
@@ -122,6 +124,30 @@ pub struct ProxyRouteConfig {
     pub enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum UpstreamProxyMode {
+    /// Follow the OS system proxy settings (and process env vars).
+    #[default]
+    System,
+    /// Bypass all proxies.
+    Direct,
+    /// Use proxy env vars, including ones captured from the user's login
+    /// shell (e.g. ~/.zshrc) which GUI-launched apps do not inherit.
+    Environment,
+    /// Use an explicit proxy URL (http/https/socks5, optional user:pass@).
+    Custom,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamProxyConfig {
+    #[serde(default)]
+    pub mode: UpstreamProxyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_url: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyConfig {
@@ -130,6 +156,8 @@ pub struct ProxyConfig {
     pub routes: Vec<ProxyRouteConfig>,
     #[serde(default)]
     pub pricing: Vec<ModelPricing>,
+    #[serde(default)]
+    pub upstream_proxy: UpstreamProxyConfig,
 }
 
 impl Default for ProxyConfig {
@@ -139,6 +167,7 @@ impl Default for ProxyConfig {
             bind_addr: "127.0.0.1:8787".into(),
             routes: Vec::new(),
             pricing: Vec::new(),
+            upstream_proxy: UpstreamProxyConfig::default(),
         }
     }
 }
@@ -953,6 +982,7 @@ pub struct RuntimeConfig {
     pub bind_addr: String,
     pub routes: Vec<ResolvedRoute>,
     pub pricing: Vec<ModelPricing>,
+    pub upstream_proxy: UpstreamProxyConfig,
 }
 
 impl RuntimeConfig {
@@ -962,6 +992,7 @@ impl RuntimeConfig {
             bind_addr: bind_addr.into(),
             routes,
             pricing: Vec::new(),
+            upstream_proxy: UpstreamProxyConfig::default(),
         }
     }
 }
@@ -973,7 +1004,7 @@ struct RuntimeState {
     usage: Arc<UsageStore>,
     health: Arc<Mutex<HashMap<Uuid, TargetHealth>>>,
     rr_counters: Arc<Mutex<HashMap<Uuid, AtomicU64>>>,
-    clients: Arc<Mutex<HashMap<u64, reqwest::Client>>>,
+    clients: Arc<Mutex<HashMap<(u64, UpstreamProxyConfig), reqwest::Client>>>,
 }
 
 #[derive(Default)]
@@ -1253,20 +1284,79 @@ fn upstream_client(
     connect_timeout_ms: u64,
 ) -> Result<reqwest::Client, String> {
     let connect_timeout_ms = connect_timeout_ms.max(1);
+    let upstream_proxy = state
+        .config
+        .read()
+        .map_err(|_| "proxy config lock poisoned".to_string())?
+        .upstream_proxy
+        .clone();
+    let cache_key = (connect_timeout_ms, upstream_proxy.clone());
     let mut clients = state
         .clients
         .lock()
         .map_err(|_| "proxy HTTP client cache lock poisoned".to_string())?;
-    if let Some(client) = clients.get(&connect_timeout_ms) {
+    if let Some(client) = clients.get(&cache_key) {
         return Ok(client.clone());
     }
-    let client = reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(connect_timeout_ms))
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::none());
+    let client = apply_upstream_proxy(builder, &upstream_proxy)?
         .build()
         .map_err(|err| err.to_string())?;
-    clients.insert(connect_timeout_ms, client.clone());
+    clients.insert(cache_key, client.clone());
     Ok(client)
+}
+
+fn apply_upstream_proxy(
+    builder: reqwest::ClientBuilder,
+    config: &UpstreamProxyConfig,
+) -> Result<reqwest::ClientBuilder, String> {
+    match config.mode {
+        UpstreamProxyMode::System => Ok(builder),
+        UpstreamProxyMode::Direct => Ok(builder.no_proxy()),
+        UpstreamProxyMode::Custom => {
+            let url = config
+                .custom_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .ok_or_else(|| {
+                    "upstream proxy mode is custom but no proxy URL is configured".to_string()
+                })?;
+            let proxy = reqwest::Proxy::all(url)
+                .map_err(|err| format!("invalid upstream proxy URL: {err}"))?;
+            Ok(builder.no_proxy().proxy(proxy))
+        }
+        UpstreamProxyMode::Environment => {
+            let vars = shell_env::proxy_env();
+            let no_proxy = shell_env::lookup(&vars, &["NO_PROXY", "no_proxy"])
+                .map(reqwest::NoProxy::from_string);
+            let mut builder = builder.no_proxy();
+            type ProxyCtor = fn(&str) -> reqwest::Result<reqwest::Proxy>;
+            let constructors: [(&[&str], ProxyCtor); 3] = [
+                (&["HTTPS_PROXY", "https_proxy"][..], |url| {
+                    reqwest::Proxy::https(url)
+                }),
+                (&["HTTP_PROXY", "http_proxy"][..], |url| {
+                    reqwest::Proxy::http(url)
+                }),
+                (&["ALL_PROXY", "all_proxy"][..], |url| reqwest::Proxy::all(url)),
+            ];
+            for (keys, ctor) in constructors {
+                let Some(url) = shell_env::lookup(&vars, keys) else {
+                    continue;
+                };
+                if let Ok(proxy) = ctor(url) {
+                    builder = builder.proxy(match no_proxy.clone() {
+                        Some(no_proxy) => proxy.no_proxy(no_proxy),
+                        None => proxy,
+                    });
+                }
+            }
+            Ok(builder)
+        }
+    }
 }
 
 type BoxError = Box<dyn StdError + Send + Sync>;
@@ -3476,6 +3566,130 @@ fn local_day_start(timestamp: i64, timezone_offset_seconds: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[test]
+    fn proxy_config_defaults_upstream_proxy_to_system_for_legacy_json() {
+        let config: ProxyConfig = serde_json::from_str(
+            r#"{"enabled":true,"bindAddr":"127.0.0.1:8787","routes":[],"pricing":[]}"#,
+        )
+        .expect("legacy config without upstreamProxy still deserializes");
+        assert_eq!(config.upstream_proxy.mode, UpstreamProxyMode::System);
+        assert_eq!(config.upstream_proxy.custom_url, None);
+    }
+
+    #[test]
+    fn upstream_proxy_config_serde_roundtrip() {
+        let config = UpstreamProxyConfig {
+            mode: UpstreamProxyMode::Custom,
+            custom_url: Some("http://user:pass@127.0.0.1:7890".into()),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert_eq!(
+            json,
+            r#"{"mode":"custom","customUrl":"http://user:pass@127.0.0.1:7890"}"#
+        );
+        let parsed: UpstreamProxyConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, config);
+    }
+
+    #[test]
+    fn apply_upstream_proxy_rejects_custom_mode_without_url() {
+        let builder = reqwest::Client::builder();
+        let result = apply_upstream_proxy(
+            builder,
+            &UpstreamProxyConfig {
+                mode: UpstreamProxyMode::Custom,
+                custom_url: None,
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn apply_upstream_proxy_rejects_invalid_custom_url() {
+        let builder = reqwest::Client::builder();
+        let result = apply_upstream_proxy(
+            builder,
+            &UpstreamProxyConfig {
+                mode: UpstreamProxyMode::Custom,
+                custom_url: Some("not a url".into()),
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn apply_upstream_proxy_accepts_valid_modes() {
+        for config in [
+            UpstreamProxyConfig::default(),
+            UpstreamProxyConfig {
+                mode: UpstreamProxyMode::Direct,
+                custom_url: None,
+            },
+            UpstreamProxyConfig {
+                mode: UpstreamProxyMode::Environment,
+                custom_url: None,
+            },
+            UpstreamProxyConfig {
+                mode: UpstreamProxyMode::Custom,
+                custom_url: Some("socks5://127.0.0.1:1080".into()),
+            },
+        ] {
+            let builder = reqwest::Client::builder();
+            let builder = apply_upstream_proxy(builder, &config).expect("valid proxy config");
+            builder.build().expect("client builds");
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_upstream_proxy_routes_http_traffic_through_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+        let capture = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = socket.read(&mut chunk).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&request).to_string()
+        });
+
+        let builder = apply_upstream_proxy(
+            reqwest::Client::builder(),
+            &UpstreamProxyConfig {
+                mode: UpstreamProxyMode::Custom,
+                custom_url: Some(format!("http://{proxy_addr}")),
+            },
+        )
+        .expect("custom proxy config");
+        let body = builder
+            .build()
+            .unwrap()
+            .get("http://example.com/upstream")
+            .send()
+            .await
+            .expect("request through proxy")
+            .text()
+            .await
+            .unwrap();
+        assert_eq!(body, "ok");
+        let request = capture.await.unwrap();
+        assert!(
+            request.starts_with("GET http://example.com/upstream"),
+            "proxy received an absolute-URI request, got: {request:?}"
+        );
+    }
 
     fn available_addr() -> SocketAddr {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

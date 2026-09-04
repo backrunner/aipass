@@ -178,6 +178,12 @@ impl ProxyService {
         self.handle.take();
         self.load_config(vault)?;
         validate_config(&self.config)?;
+        if !self.config.routes.iter().any(|route| route.enabled) {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                "enable at least one proxy route group before starting the proxy",
+            ));
+        }
         if self
             .config
             .routes
@@ -730,6 +736,30 @@ impl ProxyService {
         result
     }
 
+    /// Rebuild the runtime credential snapshot from the current vault state
+    /// when the proxy is running. A stopped proxy is a no-op: it reads fresh
+    /// credentials from the vault on its next start.
+    pub fn reload_if_running(&mut self, vault: &Vault) -> ServiceResult<()> {
+        let running = self
+            .handle
+            .as_ref()
+            .is_some_and(|handle| handle.status().running);
+        if !running {
+            return Ok(());
+        }
+        let result = self
+            .load_config(vault)
+            .and_then(|_| self.restart(vault).map(|_| ()));
+        if result.is_err() {
+            // Synced vault changes have already committed. Never keep serving
+            // the previous credential snapshot when the replacement fails.
+            self.handle.take();
+            self.config.enabled = false;
+            let _ = self.save_config(vault);
+        }
+        result
+    }
+
     fn remove_pricing_assignments(
         &self,
         vault: &Vault,
@@ -874,6 +904,7 @@ impl ProxyService {
         }
         let mut runtime = RuntimeConfig::from_routes(self.config.bind_addr.clone(), routes);
         runtime.pricing = self.config.pricing.clone();
+        runtime.upstream_proxy = self.config.upstream_proxy.clone();
         Ok(runtime)
     }
 }
@@ -978,6 +1009,26 @@ fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
             aipass_agent_protocol::AgentErrorCode::ValidationFailed,
             "proxy bind port must be greater than zero",
         ));
+    }
+    if config.upstream_proxy.mode == aipass_proxy::UpstreamProxyMode::Custom {
+        let url = config
+            .upstream_proxy
+            .custom_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                ServiceError::new(
+                    aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                    "custom upstream proxy mode requires a proxy URL",
+                )
+            })?;
+        reqwest::Proxy::all(url).map_err(|err| {
+            ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                format!("custom upstream proxy URL is invalid: {err}"),
+            )
+        })?;
     }
     for route in &config.routes {
         // `upstream_protocol` is the legacy route-level fallback; targets

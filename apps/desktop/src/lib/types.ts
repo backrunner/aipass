@@ -141,11 +141,19 @@ export type ModelPricing = {
   cacheCreationMicrosPerMillion: number;
 };
 
+export type UpstreamProxyMode = "system" | "direct" | "environment" | "custom";
+
+export type UpstreamProxyConfig = {
+  mode: UpstreamProxyMode;
+  customUrl?: string;
+};
+
 export type ProxyConfig = {
   enabled: boolean;
   bindAddr: string;
   routes: ProxyRouteConfig[];
   pricing: ModelPricing[];
+  upstreamProxy: UpstreamProxyConfig;
 };
 
 export type ProxyStatus = {
