@@ -6,7 +6,7 @@
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyTargetConfig } from "../../types";
-  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, proxySupportedEntry, reorderItems, routeNeedsConversion, routeProtocolFor } from "../../utils/server";
+  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, proxySupportedEntry, reorderItems, routeNeedsConversion, routeProtocolFor } from "../../utils/server";
 
   export let route: ProxyRouteConfig | undefined = undefined;
   export let entries: ProviderEntry[] = [];
@@ -127,7 +127,7 @@
 
   async function save() {
     if (saving || !name.trim() || (members.length === 0 && missingMembers.length === 0)) return;
-    const targets: ProxyTargetConfig[] = members.map((member, index) => {
+    const editableTargets: ProxyTargetConfig[] = members.map((member, index) => {
       const existing = route?.targets.find(
         (target) => target.providerEntryId === member.entry.id && target.secretId === member.secret.id
       );
@@ -141,11 +141,9 @@
         enabled: member.enabled
       };
     }).filter((target): target is ProxyTargetConfig => Boolean(target));
-    // Unresolvable targets survive the save unchanged, appended after the
-    // editable members, unless the user explicitly removed their rows.
-    targets.push(
-      ...missingMembers.map((target, index) => ({ ...target, priority: targets.length + index }))
-    );
+    // Unresolvable targets survive the save unchanged, re-inserted at their
+    // original priority, unless the user explicitly removed their rows.
+    const targets = mergeRouteTargets(editableTargets, missingMembers);
     if (targets.length === 0) return;
     const upstreamProtocol = members.length > 0
       ? routeProtocolFor(members[0].entry, members[0].secret)

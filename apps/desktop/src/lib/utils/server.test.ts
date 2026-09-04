@@ -1,10 +1,13 @@
 import type { ProviderEntry } from "@aipass/schemas";
 import { describe, expect, it } from "vitest";
 
+import type { ProxyTargetConfig } from "../types";
+
 import {
   advertisedProxyAddress,
   buildRouteTarget,
   buildSingleEntryRoute,
+  mergeRouteTargets,
   nativeProtocolForEntry,
   proxySupportedEntry,
   reorderItems,
@@ -110,6 +113,26 @@ describe("local proxy route helpers", () => {
     expect(reorderItems(["a", "b", "c"], 1, 1)).toEqual(["a", "b", "c"]);
     expect(reorderItems(["a", "b", "c"], -1, 1)).toEqual(["a", "b", "c"]);
     expect(reorderItems(["a", "b", "c"], 1, 5)).toEqual(["a", "b", "c"]);
+  });
+
+  it("reinserts missing route targets at their original priority", () => {
+    const target = (id: string, priority: number) =>
+      ({ id, priority }) as unknown as ProxyTargetConfig;
+    const merged = mergeRouteTargets(
+      [target("a", 0), target("b", 1)],
+      [target("m1", 1), target("m3", 3)]
+    );
+    expect(merged.map((item) => item.id)).toEqual(["a", "m1", "b", "m3"]);
+    expect(merged.map((item) => item.priority)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("clamps missing route targets that outlast the editable list", () => {
+    const target = (id: string, priority: number) =>
+      ({ id, priority }) as unknown as ProxyTargetConfig;
+    const merged = mergeRouteTargets([target("a", 0)], [target("m", 5)]);
+    expect(merged.map((item) => item.id)).toEqual(["a", "m"]);
+    expect(merged.map((item) => item.priority)).toEqual([0, 1]);
+    expect(mergeRouteTargets([], [target("m", 2)]).map((item) => item.id)).toEqual(["m"]);
   });
 
 });

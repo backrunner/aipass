@@ -118,3 +118,21 @@ export function reorderItems<T>(items: readonly T[], from: number, to: number): 
   next.splice(to, 0, moved);
   return next;
 }
+
+/**
+ * Combine editable route targets with targets whose provider could not be
+ * resolved. Missing targets are re-inserted at their original priority so a
+ * save does not silently demote them to the end of a fallback chain; the
+ * result is renumbered sequentially.
+ */
+export function mergeRouteTargets(
+  members: readonly ProxyTargetConfig[],
+  missingMembers: readonly ProxyTargetConfig[]
+): ProxyTargetConfig[] {
+  const combined = [...members];
+  const missing = [...missingMembers].sort((a, b) => a.priority - b.priority);
+  for (const target of missing) {
+    combined.splice(Math.min(Math.max(0, target.priority), combined.length), 0, target);
+  }
+  return combined.map((target, index) => ({ ...target, priority: index }));
+}
