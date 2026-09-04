@@ -127,6 +127,7 @@
   let usingEntryId = "";
   let usageRefreshEntryId = "";
   let entriesLoading = false;
+  let entriesStale = false;
   let filteredEntries: Entry[] = [];
   let selectedEntry: Entry | undefined;
 
@@ -178,6 +179,7 @@
     }
     if (connection !== "connected") {
       entriesLoading = false;
+      entriesStale = false;
       entries = [];
       siteEntries = [];
       siteEntryIds = new Set();
@@ -198,13 +200,21 @@
         : Promise.resolve(undefined);
     const draftRequest = sendToWorker<{ drafts: SafeDraft[] }>({ type: "aipass.pendingDrafts" });
     const [list, lookup, draftResponse] = await Promise.all([listRequest, lookupRequest, draftRequest]);
+    // On a list failure keep the previous entries but flag them as stale and
+    // surface the error instead of silently presenting old data as fresh.
+    const listFailed = !list?.ok;
     const listedEntries = list?.ok ? list.data?.entries ?? [] : [];
     const contextEntries = lookup?.ok ? lookup.data?.entries ?? [] : [];
     const contextGrants = lookup?.ok ? lookup.data?.grants ?? [] : [];
     siteEntries = contextEntries;
     siteEntryIds = new Set(siteEntries.map((entry) => entry.id));
     entries = mergeEntries(list?.ok ? listedEntries : entries, contextEntries);
-    grants = contextGrants;
+    entriesStale = listFailed;
+    grants = contextGrants.filter((grant) => !grant.entryId || entries.some((entry) => entry.id === grant.entryId));
+    if (listFailed) {
+      statusText = friendlyNativeError(list?.error, $t) || $t("ext.fillFailed");
+      statusError = true;
+    }
     if (!entries.some((entry) => entry.id === selectedEntryId)) {
       selectedEntryId = siteEntries[0]?.id ?? entries[0]?.id ?? "";
     }
@@ -291,6 +301,8 @@
     const cachedEntries = cached?.ok ? cached.data?.entries ?? [] : [];
     if (!cachedEntries.length) return;
     entries = mergeEntries(cachedEntries, entries);
+    // Cache data predates the live list; flag it until the live list arrives.
+    entriesStale = cached?.data?.stale ?? false;
     if (!entries.some((entry) => entry.id === selectedEntryId)) {
       selectedEntryId = entries[0]?.id ?? "";
     }
@@ -2000,6 +2012,12 @@
       <aside class="vault-list-pane">
         <div class="vault-list-head">
           <strong>{$t("ext.vaultList")}</strong>
+          {#if entriesStale}
+            <span class="stale-capsule">
+              <RefreshCw class="spin" size={10} />
+              {$t("providerDetail.snapshotStale")}
+            </span>
+          {/if}
           <span class="count-capsule">{$t("ext.itemCount", { count: entries.length })}</span>
         </div>
         <form class="search-box" on:submit|preventDefault={searchSavedEntries}>
@@ -2280,6 +2298,19 @@
     line-height: 1.35;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stale-capsule {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.35;
     white-space: nowrap;
   }
 
