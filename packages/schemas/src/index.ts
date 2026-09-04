@@ -427,10 +427,10 @@ export const providerDefinitions: ProviderDefinition[] = [
     displayName: "MiniMax",
     kind: "third_party",
     domains: ["platform.minimaxi.com", "api.minimaxi.com"],
-    interfaces: ["custom_http"],
+    interfaces: ["openai_compatible", "custom_http"],
     authSchemes: ["bearer"],
     endpoints: [
-      { id: "api", kind: "api", url: "https://api.minimaxi.com" },
+      { id: "api", kind: "api", url: "https://api.minimaxi.com/v1" },
       { id: "console", kind: "console", url: "https://platform.minimaxi.com" }
     ],
     envKeys: ["MINIMAX_API_KEY"]
@@ -612,6 +612,17 @@ export function matchProviderByDomain(domain: string): ProviderDefinition | unde
   );
 }
 
+/**
+ * Endpoint evidence shared by provider inference below, the extension's
+ * interface inference, and the Rust agent, so every surface classifies the
+ * same URL identically. `/v\d` covers versioned API paths such as /v2,
+ * /api/paas/v4, and /v1beta.
+ */
+export const GEMINI_ENDPOINT_PATTERN = /generativelanguage|gemini/i;
+export const ANTHROPIC_ENDPOINT_PATTERN = /anthropic|claude/i;
+export const OPENAI_COMPATIBLE_ENDPOINT_PATTERN =
+  /openai|\/v\d|chat\/completions|messages|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|openrouter|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|volces|ark|together|fireworks|groq|x\.ai|mistral|perplexity|cerebras|nvidia|nim|novita|huggingface|hugging\s*face/i;
+
 export function inferProviderFromEndpoint(endpoint: string): ProviderDefinition | undefined {
   const host = hostFromEndpoint(endpoint);
   if (!host) return undefined;
@@ -639,8 +650,13 @@ export function inferProviderFromEndpoint(endpoint: string): ProviderDefinition 
   if (normalizedHost.includes("novita")) return providerById("novita");
   if (normalizedHost.includes("minimax")) return providerById("minimax");
 
-  const lowerEndpoint = endpoint.toLowerCase();
-  if (/\/v1\b|openai|gateway|siliconflow|mistral|perplexity|cerebras|novita|nvidia|huggingface/.test(lowerEndpoint)) return providerById("custom_openai_compatible");
+  if (
+    OPENAI_COMPATIBLE_ENDPOINT_PATTERN.test(endpoint) ||
+    ANTHROPIC_ENDPOINT_PATTERN.test(endpoint) ||
+    GEMINI_ENDPOINT_PATTERN.test(endpoint)
+  ) {
+    return providerById("custom_openai_compatible");
+  }
   return providerById("custom_http");
 }
 

@@ -1049,6 +1049,41 @@ describe("content detector", () => {
     assert.equal(draft?.interfaceType, "openai_compatible");
   });
 
+  it("infers MiniMax's OpenAI-compatible /v1 endpoint instead of custom_http", async () => {
+    setLocation("docs.example.test", "/settings/keys");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<h1>API Keys</h1><label>Base URL</label><input value="https://api.minimaxi.com/v1" /><label>API Key</label><input value="sk-minimaxEndpointSecret1234567890" />`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, "minimax");
+    assert.equal(draft?.endpoint, "https://api.minimaxi.com/v1");
+    assert.equal(draft?.interfaceType, "openai_compatible");
+    assert.equal(draft?.authScheme, "bearer");
+  });
+
+  it("infers Anthropic and versioned interfaces from custom-domain endpoints", async () => {
+    setLocation("relay.example.test", "/settings/tokens");
+    const { detectFromDocument } = await import("./detector");
+
+    let doc = new DOMParser().parseFromString(
+      `<h1>API Keys</h1><label>Base URL</label><input value="https://claude-relay.example.test/v1/messages" /><label>API Key</label><input value="sk-claudeRelaySecret1234567890" />`,
+      "text/html"
+    );
+    let draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, undefined);
+    assert.equal(draft?.interfaceType, "anthropic_messages");
+
+    doc = new DOMParser().parseFromString(
+      `<h1>API Keys</h1><label>Base URL</label><input value="https://llm.example.test/api/paas/v4" /><label>API Key</label><input value="sk-paasVersionSecret1234567890" />`,
+      "text/html"
+    );
+    draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, undefined);
+    assert.equal(draft?.interfaceType, "openai_compatible");
+  });
+
   it("does not show a watching hint before a secret is detected", async () => {
     setLocation("one.example.test", "/token");
     document.title = "One API";

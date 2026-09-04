@@ -1,4 +1,7 @@
 import {
+  ANTHROPIC_ENDPOINT_PATTERN,
+  GEMINI_ENDPOINT_PATTERN,
+  OPENAI_COMPATIBLE_ENDPOINT_PATTERN,
   inferProviderFromEndpoint,
   matchProviderByDomain,
   maskSecret,
@@ -48,7 +51,7 @@ export interface DetectedSecretDraft {
 }
 
 const ENDPOINT_PATTERN =
-  /\/(?:v1|v2|v3)(?:\/|$)|chat\/completions|messages|embeddings|models|anthropic|generativelanguage|openrouter|openai|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|replicate|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|together|fireworks|groq|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face/i;
+  /\/v\d+|chat\/completions|messages|embeddings|models|anthropic|generativelanguage|openrouter|openai|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|replicate|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|together|fireworks|groq|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face/i;
 const ENDPOINT_CONTEXT_PATTERN =
   /(?:api\s*(?:base|endpoint|url)|base\s*url|endpoint|接口(?:地址|端点)|端点|中转地址|请求地址|入口地址)/i;
 const HTTP_URL_PATTERN = /https?:\/\/[^\s"'<>`)\]}]+/gi;
@@ -689,10 +692,9 @@ function hasAiEndpointEvidence(endpoint: string): boolean {
 
 function inferInterfaceFromEndpoint(endpoint?: string): InterfaceType | undefined {
   if (!endpoint) return undefined;
-  if (/replicate|cohere|minimax/i.test(endpoint)) return "custom_http";
-  if (/generativelanguage|gemini/i.test(endpoint)) return "gemini";
-  if (/anthropic/i.test(endpoint)) return "anthropic_messages";
-  if (/openai|\/v1\b|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|openrouter|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|ark|together|fireworks|groq|x\.ai|mistral|perplexity|cerebras|nvidia|nim|novita|huggingface|hugging\s*face/i.test(endpoint)) return "openai_compatible";
+  if (GEMINI_ENDPOINT_PATTERN.test(endpoint)) return "gemini";
+  if (ANTHROPIC_ENDPOINT_PATTERN.test(endpoint)) return "anthropic_messages";
+  if (OPENAI_COMPATIBLE_ENDPOINT_PATTERN.test(endpoint)) return "openai_compatible";
   return "custom_http";
 }
 

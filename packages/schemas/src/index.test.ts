@@ -58,6 +58,21 @@ test("infers providers from endpoint hosts", () => {
   assert.equal(inferProviderFromEndpoint("https://gateway.example.test/v1")?.id, "custom_openai_compatible");
 });
 
+test("infers custom OpenAI-compatible providers from AI endpoint evidence", () => {
+  assert.equal(inferProviderFromEndpoint("https://llm.example.test/api/paas/v4")?.id, "custom_openai_compatible");
+  assert.equal(inferProviderFromEndpoint("https://llm.example.test/v2/models")?.id, "custom_openai_compatible");
+  assert.equal(inferProviderFromEndpoint("https://llm.example.test/v1beta/models")?.id, "custom_openai_compatible");
+  assert.equal(inferProviderFromEndpoint("https://claude-relay.example.test/v1/messages")?.id, "custom_openai_compatible");
+  assert.equal(inferProviderFromEndpoint("https://gemini-proxy.example.test/v1beta/models")?.id, "custom_openai_compatible");
+  assert.equal(inferProviderFromEndpoint("https://api.minimaxi.com/v1")?.id, "minimax");
+  assert.equal(inferProviderFromEndpoint("https://api.minimaxi.com/v1")?.interfaces[0], "openai_compatible");
+});
+
+test("falls back to custom_http only when an endpoint has no AI evidence", () => {
+  assert.equal(inferProviderFromEndpoint("https://example.test/hooks/deploy")?.id, "custom_http");
+  assert.equal(inferProviderFromEndpoint("https://status.example.test/healthz")?.id, "custom_http");
+});
+
 test("masks secrets", () => {
   assert.equal(maskSecret("sk-ant-api03-fake-1234"), "sk-ant...1234");
 });

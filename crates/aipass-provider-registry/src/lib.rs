@@ -666,10 +666,10 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
             display_name: "MiniMax",
             kind: ProviderKind::ThirdParty,
             domains: &["platform.minimaxi.com", "api.minimaxi.com"],
-            interfaces: &[InterfaceType::CustomHttp],
+            interfaces: &[InterfaceType::OpenAiCompatible, InterfaceType::CustomHttp],
             auth_schemes: &[AuthScheme::Bearer],
             endpoints: &[
-                ("api", EndpointKind::Api, "https://api.minimaxi.com"),
+                ("api", EndpointKind::Api, "https://api.minimaxi.com/v1"),
                 (
                     "console",
                     EndpointKind::Console,
