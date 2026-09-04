@@ -3,6 +3,8 @@ mod commands;
 mod deeplink;
 mod logging;
 mod models;
+#[cfg(target_os = "macos")]
+mod self_install;
 mod singleton;
 mod tray;
 #[cfg(target_os = "macos")]
@@ -2090,6 +2092,10 @@ pub fn run() {
     let version = env!("CARGO_PKG_VERSION");
     let launch_target = launch_window_target();
     logging::init();
+    #[cfg(target_os = "macos")]
+    if self_install::install_from_dmg_if_needed() {
+        return;
+    }
     let _ = logging::log_event(
         "desktop.startup.begin",
         &[("version", version), ("target", &launch_target)],
@@ -2214,6 +2220,7 @@ pub fn run() {
             trash_purge_expired,
             trash_empty,
             secret_reveal_field,
+            secret_reveal_headers,
             secret_add,
             secret_update,
             secret_metadata_set,
