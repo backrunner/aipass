@@ -18,11 +18,10 @@ use crate::models::{
 use aipass_agent_protocol::{
     AgentRequest, CcSwitchDetection, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
     OAuthAccountSummary, OAuthDeviceStart, OAuthLoginPoll, OfficialAccountRefreshResult,
-    PricingApplyScope, PricingConfig, PricingGroup,
-    ProbeResult as AgentProbeResult, SecretValue, SensitiveString, ServerTokenResponse,
-    ServerUsageSummary, SessionPolicy, SessionStatus, SessionUnlockMode,
-    SyncConflictResponse as AgentSyncConflictResponse, SyncSettings as AgentSyncSettings,
-    ToolConfigApplyResponse as AgentToolConfigApplyResponse,
+    PricingApplyScope, PricingConfig, PricingGroup, ProbeResult as AgentProbeResult, SecretValue,
+    SensitiveString, ServerTokenResponse, ServerUsageSummary, SessionPolicy, SessionStatus,
+    SessionUnlockMode, SyncConflictResponse as AgentSyncConflictResponse,
+    SyncSettings as AgentSyncSettings, ToolConfigApplyResponse as AgentToolConfigApplyResponse,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
     ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageProbeMode,
     UsageProbeResult as AgentUsageProbeResult, UsageTimeseriesPoint,
@@ -591,7 +590,14 @@ pub(crate) async fn oauth_login_poll(
     provider: OAuthProvider,
     device_code: String,
 ) -> Result<OAuthLoginPoll, String> {
-    agent_request_async(app, AgentRequest::OAuthLoginPoll { provider, device_code }).await
+    agent_request_async(
+        app,
+        AgentRequest::OAuthLoginPoll {
+            provider,
+            device_code,
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -600,7 +606,14 @@ pub(crate) async fn oauth_login_cancel(
     provider: OAuthProvider,
     device_code: String,
 ) -> Result<bool, String> {
-    agent_request_async(app, AgentRequest::OAuthLoginCancel { provider, device_code }).await
+    agent_request_async(
+        app,
+        AgentRequest::OAuthLoginCancel {
+            provider,
+            device_code,
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -617,8 +630,14 @@ pub(crate) async fn oauth_accounts_remove(
     provider: OAuthProvider,
     account_id: Uuid,
 ) -> Result<(), String> {
-    let _: serde_json::Value =
-        agent_request_async(app, AgentRequest::OAuthAccountsRemove { provider, account_id }).await?;
+    let _: serde_json::Value = agent_request_async(
+        app,
+        AgentRequest::OAuthAccountsRemove {
+            provider,
+            account_id,
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -630,7 +649,10 @@ pub(crate) async fn oauth_accounts_set_default(
 ) -> Result<(), String> {
     let _: serde_json::Value = agent_request_async(
         app,
-        AgentRequest::OAuthAccountsSetDefault { provider, account_id },
+        AgentRequest::OAuthAccountsSetDefault {
+            provider,
+            account_id,
+        },
     )
     .await?;
     Ok(())

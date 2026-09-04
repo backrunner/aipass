@@ -1341,7 +1341,9 @@ fn apply_upstream_proxy(
                 (&["HTTP_PROXY", "http_proxy"][..], |url| {
                     reqwest::Proxy::http(url)
                 }),
-                (&["ALL_PROXY", "all_proxy"][..], |url| reqwest::Proxy::all(url)),
+                (&["ALL_PROXY", "all_proxy"][..], |url| {
+                    reqwest::Proxy::all(url)
+                }),
             ];
             for (keys, ctor) in constructors {
                 let Some(url) = shell_env::lookup(&vars, keys) else {

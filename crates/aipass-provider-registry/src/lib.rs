@@ -212,7 +212,10 @@ pub fn primary_secret_ref(refs: &[SecretRef]) -> Option<&SecretRef> {
 
 /// Mutable variant of [`primary_secret_ref`].
 pub fn primary_secret_ref_mut(refs: &mut [SecretRef]) -> Option<&mut SecretRef> {
-    if refs.iter().any(|secret| secret.label == PRIMARY_SECRET_LABEL) {
+    if refs
+        .iter()
+        .any(|secret| secret.label == PRIMARY_SECRET_LABEL)
+    {
         refs.iter_mut()
             .find(|secret| secret.label == PRIMARY_SECRET_LABEL)
     } else {
