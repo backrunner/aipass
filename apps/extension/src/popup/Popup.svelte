@@ -538,6 +538,18 @@
   }
 
   function handleSaveRequiresUnlock(data: SavePendingData) {
+    // Drafts the worker already saved before hitting the lock are cleared
+    // server-side; drop them locally too so a re-save can't fail with
+    // "No pending API key draft".
+    const savedIds = new Set(
+      (data.saved ?? [])
+        .map((item) => item.draftId)
+        .filter((draftId): draftId is string => Boolean(draftId))
+    );
+    if (savedIds.size) {
+      draftItems = draftItems.filter((item) => !savedIds.has(item.draftId));
+      pendingDrafts = pendingDrafts.filter((item) => !savedIds.has(item.draftId));
+    }
     draftItems = draftItems.map((item) => ({ ...item, saving: false }));
     addBusy = false;
     connection = "locked";
