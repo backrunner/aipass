@@ -18,9 +18,9 @@ use crate::models::{
 use aipass_agent_protocol::{
     AgentRequest, CcSwitchDetection, FaviconBackfillRequest, FaviconBackfillResponse, LockReason,
     OAuthAccountSummary, OAuthDeviceStart, OAuthLoginPoll, OfficialAccountRefreshResult,
-    PricingApplyScope, PricingConfig, PricingGroup, ProbeResult as AgentProbeResult, SecretValue,
-    SensitiveString, ServerTokenResponse, ServerUsageSummary, SessionPolicy, SessionStatus,
-    SessionUnlockMode, SyncConflictResponse as AgentSyncConflictResponse,
+    PricingApplyScope, PricingConfig, PricingGroup, ProbeResult as AgentProbeResult,
+    ProviderHeaderValues, SecretValue, SensitiveString, ServerTokenResponse, ServerUsageSummary,
+    SessionPolicy, SessionStatus, SessionUnlockMode, SyncConflictResponse as AgentSyncConflictResponse,
     SyncSettings as AgentSyncSettings, ToolConfigApplyResponse as AgentToolConfigApplyResponse,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
     ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageProbeMode,
@@ -776,6 +776,20 @@ pub(crate) async fn secret_reveal_field(
     let secret: SecretValue =
         agent_request_async(app, AgentRequest::SecretRevealField { id, field }).await?;
     Ok(secret.secret.into_inner())
+}
+
+#[tauri::command]
+pub(crate) async fn secret_reveal_headers(
+    app: AppHandle,
+    id: Uuid,
+) -> Result<Vec<(String, String)>, String> {
+    let headers: ProviderHeaderValues =
+        agent_request_async(app, AgentRequest::SecretRevealHeaders { id }).await?;
+    Ok(headers
+        .headers
+        .into_iter()
+        .map(|(name, value)| (name, value.into_inner()))
+        .collect())
 }
 
 #[tauri::command]

@@ -78,7 +78,7 @@
     VaultStatus
   } from "./lib/types";
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
-  import { emptyDraft, isExpiringSoon, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { emptyDraft, isExpiringSoon, mergeHeaderPairs, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
   import { aipassProviderLinkToDraft, ccSwitchLinkToDraft, findAipassProviderDuplicate, findCcSwitchDuplicate, splitEndpointList } from "./lib/utils/deeplink";
   import { buildRouteTarget, buildSingleEntryRoute, nativeProtocolForEntry, proxySupportedEntry, routeNeedsConversion } from "./lib/utils/server";
@@ -1359,6 +1359,9 @@
       modelAlias: encodePairValues(entry.modelAliases ?? []),
       tag: encodeListValues(entry.tags),
       header: "",
+      // Display-only: stored header names whose values stay redacted, so the
+      // edit form can show what a new header input would replace.
+      existingHeaderNames: entry.headerNames ?? [],
       quotaLabel: entry.quota?.label ?? "",
       quotaLimit: entry.quota?.limit ?? "",
       quotaUsed: entry.quota?.used ?? "",
@@ -1441,11 +1444,30 @@
         });
         selectedId = id;
       } else if (selected) {
+        // An empty header input preserves the stored headers; a non-empty one
+        // is merged into them (new names appended, same-named updated).
+        let headers: Array<[string, string]> | undefined;
+        if (draft.header.trim()) {
+          const incoming = headerPairs(draft.header);
+          if (selected.headerNames?.length) {
+            try {
+              const stored = await invokeTauri<Array<[string, string]>>("secret_reveal_headers", { id: selected.id });
+              headers = mergeHeaderPairs(stored, incoming);
+            } catch (err) {
+              // Without the stored values a save would silently drop every
+              // existing header, so abort instead of falling back to replace.
+              error = localizedMessage("providers.headersMergeFailed", { message: String(err) });
+              return;
+            }
+          } else {
+            headers = incoming;
+          }
+        }
         await invokeTauri("provider_update", {
           request: {
             ...request,
             id: selected.id,
-            headers: draft.header.trim() ? headerPairs(draft.header) : undefined,
+            headers,
             secretMetadata
           }
         });

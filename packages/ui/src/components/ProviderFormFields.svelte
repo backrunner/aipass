@@ -97,7 +97,13 @@
     },
     { id: "consoleUrl", label: "providerForm.consoleUrl", section: "advanced", hasValue: () => Boolean(draft.consoleUrl), clear: () => (draft.consoleUrl = "") },
     { id: "modelAlias", label: "providerForm.modelAliases", section: "advanced", hasValue: () => Boolean(draft.modelAlias), clear: () => (draft.modelAlias = "") },
-    { id: "header", label: "providerForm.customHeaders", section: "advanced", hasValue: () => Boolean(draft.header), clear: () => (draft.header = "") },
+    {
+      id: "header",
+      label: "providerForm.customHeaders",
+      section: "advanced",
+      hasValue: () => Boolean(draft.header || (formMode === "edit" && draft.existingHeaderNames?.length)),
+      clear: () => (draft.header = "")
+    },
     {
       id: "group",
       label: "providerForm.group",
@@ -389,6 +395,19 @@
           <X size={13} />
         </button>
       </div>
+      {#if formMode === "edit" && draft.existingHeaderNames?.length}
+        <div class="existing-headers">
+          <span class="existing-headers-label">{$t("providerForm.existingHeaders")}</span>
+          <div class="existing-headers-chips">
+            {#each draft.existingHeaderNames as name}
+              <span class="existing-header-chip">{name}</span>
+            {/each}
+          </div>
+          <p class="existing-headers-hint">
+            {$t(draft.header.trim() ? "providerForm.headersMergeHint" : "providerForm.headersKeepHint")}
+          </p>
+        </div>
+      {/if}
     {/if}
     {#if visibleFields.has("group")}
       <div class="removable-field" data-provider-field="group">
@@ -520,6 +539,42 @@
   .oauth-endpoint-warning {
     margin: -4px 2px 0;
     color: var(--warning);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .existing-headers {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: -4px 2px 0;
+  }
+
+  .existing-headers-label {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .existing-headers-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .existing-header-chip {
+    padding: 2px 8px;
+    border: 1px solid var(--divider);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .existing-headers-hint {
+    margin: 0;
+    color: var(--text-tertiary);
     font-size: 11px;
     line-height: 1.4;
   }

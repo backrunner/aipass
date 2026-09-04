@@ -33,6 +33,12 @@ export type Draft = {
   modelAlias: string;
   tag: string;
   header: string;
+  /**
+   * Display-only, edit mode: names of the headers already stored on the
+   * entry. Values stay redacted, so the form shows them as read-only chips
+   * and notes that a non-empty `header` input is merged into the stored set.
+   */
+  existingHeaderNames?: string[];
   quotaLabel: string;
   quotaLimit: string;
   quotaUsed: string;

@@ -1,7 +1,7 @@
 import type { ProviderEntry, ProviderKind } from "@aipass/schemas";
 import { describe, expect, it } from "vitest";
 
-import { isExpiringSoon, providerCounts } from "./providers";
+import { isExpiringSoon, mergeHeaderPairs, providerCounts } from "./providers";
 
 function entry(
   id: string,
@@ -69,5 +69,49 @@ describe("isExpiringSoon", () => {
   it("returns false without any parseable timestamps", () => {
     expect(isExpiringSoon(undefined, undefined, now)).toBe(false);
     expect(isExpiringSoon({ resetAt: "not-a-date" }, undefined, now)).toBe(false);
+  });
+});
+
+describe("mergeHeaderPairs", () => {
+  it("appends new headers after the stored ones", () => {
+    expect(
+      mergeHeaderPairs(
+        [["x-version", "1"]],
+        [["x-trace", "abc"]]
+      )
+    ).toEqual([
+      ["x-version", "1"],
+      ["x-trace", "abc"],
+    ]);
+  });
+
+  it("updates a stored header in place on a case-insensitive name match", () => {
+    expect(
+      mergeHeaderPairs(
+        [
+          ["X-Version", "1"],
+          ["x-trace", "abc"],
+        ],
+        [["x-version", "2"]]
+      )
+    ).toEqual([
+      ["x-version", "2"],
+      ["x-trace", "abc"],
+    ]);
+  });
+
+  it("lets later incoming pairs win over earlier ones", () => {
+    expect(
+      mergeHeaderPairs([], [
+        ["X-Key", "a"],
+        ["x-key", "b"],
+      ])
+    ).toEqual([["x-key", "b"]]);
+  });
+
+  it("returns the stored set untouched when nothing is entered", () => {
+    const existing: Array<[string, string]> = [["x-version", "1"]];
+    expect(mergeHeaderPairs(existing, [])).toEqual([["x-version", "1"]]);
+    expect(mergeHeaderPairs([], [["x-version", "1"]])).toEqual([["x-version", "1"]]);
   });
 });
