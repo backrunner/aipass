@@ -319,6 +319,12 @@
   let trashCount = 0;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchRequestId = 0;
+  // Bumped every time loadEntries commits, so a search issued before a
+  // mutation cannot overwrite the fresher list the mutation just loaded.
+  let entriesDataVersion = 0;
+  // Query whose server-side search results are currently held in `entries`;
+  // the narrower client-side haystack must not re-filter that set.
+  let searchResultQuery = "";
   let faviconBackfillBusy = false;
   let serverBusy = "";
   let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
@@ -366,9 +372,15 @@
     }
   }
 
+  // When `entries` holds the vault's server-side matches for the current
+  // query, trust them: the server matcher covers fields the client haystack
+  // cannot see (gateway group/rate, endpoint metadata, key fingerprints), so
+  // re-filtering here would hide valid matches.
+  $: serverSearchActive = searchResultQuery.trim() !== "" && query === searchResultQuery;
   $: filtered = entries
     .filter((entry) => {
       if (!entryMatchesFilter(entry, providerFilter)) return false;
+      if (serverSearchActive) return true;
       const haystack = [
         entry.title,
         entry.providerId ?? "",
@@ -1025,6 +1037,8 @@
     countEntries = [];
     archivedEntries = [];
     entriesLoadRequestId++;
+    entriesDataVersion++;
+    searchResultQuery = "";
     selectedId = "";
     activeDetailId = "";
     pricingConfig = { groups: [], assignments: [] };
@@ -1099,6 +1113,8 @@
     }
 
     beforeCommit?.();
+    entriesDataVersion++;
+    searchResultQuery = "";
     entries = summaries.map(summaryToEntry);
     countEntries = countSummaries.map(summaryToEntry);
     if (!entries.some((entry) => entry.id === selectedId)) {
@@ -1143,14 +1159,24 @@
 
   function mergeBackfilledEntries(summaries: EntrySummary[]) {
     if (!summaries.length) return;
-    const currentIds = new Set(entries.map((entry) => entry.id));
-    const updatedById = new Map(
-      summaries
-        .filter((summary) => currentIds.has(summary.id))
-        .map((summary) => [summary.id, summaryToEntry(summary)] as const)
-    );
-    if (!updatedById.size) return;
-    entries = entries.map((entry) => updatedById.get(entry.id) ?? entry);
+    const backfilledById = new Map(summaries.map((summary) => [summary.id, summary] as const));
+    const mergeInto = (list: ProviderEntry[]) =>
+      list.map((entry) => {
+        const summary = backfilledById.get(entry.id);
+        if (!summary?.faviconUrl) return entry;
+        // A concurrent loadEntries may have refreshed this entry while the
+        // backfill was in flight; never merge into a newer in-memory copy.
+        const backfilledAt = Date.parse(summary.updatedAt ?? "");
+        const currentAt = Date.parse(entry.updatedAt ?? "");
+        if (Number.isFinite(backfilledAt) && Number.isFinite(currentAt) && backfilledAt < currentAt) {
+          return entry;
+        }
+        // Merge only the backfilled favicon instead of replacing the whole
+        // entry, so fresher in-memory fields are never clobbered.
+        return { ...entry, faviconUrl: summary.faviconUrl };
+      });
+    entries = mergeInto(entries);
+    countEntries = mergeInto(countEntries);
   }
 
   async function runSearch() {
@@ -1167,9 +1193,14 @@
       await loadEntries();
       return;
     }
-    const summaries = await invokeTauri<EntrySummary[]>("entries_search", { query });
-    if (requestId !== searchRequestId) return;
+    const searchQuery = query;
+    const dataVersion = entriesDataVersion;
+    const summaries = await invokeTauri<EntrySummary[]>("entries_search", { query: searchQuery });
+    // Discard when a newer search superseded this one, or a mutation's
+    // loadEntries committed fresher data while the request was in flight.
+    if (requestId !== searchRequestId || dataVersion !== entriesDataVersion) return;
     entries = summaries.map(summaryToEntry);
+    searchResultQuery = searchQuery;
     selectedId ||= entries[0]?.id ?? "";
   }
 
@@ -1400,7 +1431,22 @@
       primaryKey?.group ?? entry.gateway?.group,
       primaryKey?.billing ?? (entry.gateway?.rate ? { rate: entry.gateway.rate } : undefined)
     );
+    editQuotaSnapshot = quotaDraftState();
     detailEditMode = true;
+  }
+
+  // Snapshot of the draft's quota fields taken when the edit form opened, so
+  // saveProvider can tell a deliberate edit apart from a stale snapshot.
+  let editQuotaSnapshot = "";
+
+  function quotaDraftState(): string {
+    return JSON.stringify([
+      draft.quotaLabel,
+      draft.quotaLimit,
+      draft.quotaUsed,
+      draft.quotaRemaining,
+      draft.quotaResetAt
+    ]);
   }
 
   function cancelDetailEdit() {
@@ -1446,7 +1492,14 @@
       defaultModel: draft.defaultModel || undefined,
       modelAliases: modelAliasPairs(draft.modelAlias),
       headers: headerPairs(draft.header),
-      quota: quotaFromDraft(),
+      // The vault replaces quota wholesale on update (an omitted value clears
+      // it), so an edit the user never touched must re-send the freshest
+      // in-memory quota — not the snapshot taken when the form opened, which
+      // a usage probe may have superseded meanwhile.
+      quota:
+        formMode === "edit" && quotaDraftState() === editQuotaSnapshot
+          ? selected?.quota
+          : quotaFromDraft(),
       tags: listValues(draft.tag),
       notes: draft.notes || undefined
     };
