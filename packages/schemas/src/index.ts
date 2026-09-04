@@ -698,7 +698,8 @@ export function defaultAuthSchemeForInterface(interfaceType: InterfaceType): Aut
 
 /**
  * Auth schemes a tool/proxy integration can actually honor for an interface.
- * Custom HTTP accepts anything; the native protocols each support a fixed set.
+ * Custom HTTP accepts the header-based schemes the proxy can inject; the
+ * native protocols each support a fixed set.
  */
 export function authSchemeCompatibleWithInterface(authScheme: AuthScheme, interfaceType: InterfaceType): boolean {
   switch (interfaceType) {
@@ -713,6 +714,11 @@ export function authSchemeCompatibleWithInterface(authScheme: AuthScheme, interf
     case "bedrock":
       return authScheme === "aws_profile";
     case "custom_http":
-      return true;
+      return (
+        authScheme === "bearer" ||
+        authScheme === "custom_header" ||
+        authScheme === "x_api_key" ||
+        authScheme === "azure_api_key"
+      );
   }
 }

@@ -41,6 +41,11 @@ test("checks auth scheme compatibility with an interface", () => {
   assert.equal(authSchemeCompatibleWithInterface("google_api_key", "gemini"), true);
   assert.equal(authSchemeCompatibleWithInterface("bearer", "gemini"), false);
   assert.equal(authSchemeCompatibleWithInterface("custom_header", "custom_http"), true);
+  assert.equal(authSchemeCompatibleWithInterface("bearer", "custom_http"), true);
+  assert.equal(authSchemeCompatibleWithInterface("x_api_key", "custom_http"), true);
+  assert.equal(authSchemeCompatibleWithInterface("azure_api_key", "custom_http"), true);
+  assert.equal(authSchemeCompatibleWithInterface("google_api_key", "custom_http"), false);
+  assert.equal(authSchemeCompatibleWithInterface("aws_profile", "custom_http"), false);
 });
 
 test("infers providers from endpoint hosts", () => {

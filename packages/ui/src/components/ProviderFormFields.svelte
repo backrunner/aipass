@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
-  import { providerDefinitions } from "@aipass/schemas";
+  import { authSchemeCompatibleWithInterface, providerDefinitions } from "@aipass/schemas";
   import { Eye, EyeOff, Plus, X } from "lucide-svelte";
   import { onMount, tick } from "svelte";
 
@@ -61,7 +61,9 @@
   ];
 
   $: interfaceOptions = interfaceValues.map((value) => ({ value, label: $t(interfaceLabelKey(value)) }));
-  $: authOptions = authValues.map((value) => ({ value, label: $t(authLabelKey(value)) }));
+  $: authOptions = authValues
+    .filter((value) => value === draft.authScheme || authSchemeCompatibleWithInterface(value, draft.interfaceType))
+    .map((value) => ({ value, label: $t(authLabelKey(value)) }));
 
   $: providerOptions = providerDefinitions.map((provider) => ({
     value: provider.id,

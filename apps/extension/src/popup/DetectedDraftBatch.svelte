@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { providerDefinitions, type AuthScheme, type InterfaceType, type ProviderKind } from "@aipass/schemas";
+  import { authSchemeCompatibleWithInterface, providerDefinitions, type AuthScheme, type InterfaceType, type ProviderKind } from "@aipass/schemas";
   import { authLabel, Banner, Button, IconButton, interfaceLabel, ProviderIcon } from "@aipass/ui";
   import { t } from "@aipass/ui/i18n";
   import { Ban, X } from "lucide-svelte";
@@ -133,7 +133,7 @@
             <label>
               <span>{$t("providerForm.auth")}</span>
               <select bind:value={item.draft.authScheme} on:change={() => { onAuthChanged(item); onSchedulePreview(); }}>
-                {#each authValues as value}
+                {#each authValues.filter((value) => value === item.draft.authScheme || authSchemeCompatibleWithInterface(value, item.draft.interfaceType)) as value}
                   <option {value}>{authLabel[value]}</option>
                 {/each}
               </select>
