@@ -379,6 +379,15 @@ fn normalize_user_secret_label(value: &str) -> Option<String> {
         .then(|| value.to_string())
 }
 
+/// Resolve a `label_or_id` selector deterministically: an exact id match
+/// always wins, and a label match is only used when no secret owns that id.
+fn find_secret_ref_position(secret_refs: &[SecretRef], label_or_id: &str) -> Option<usize> {
+    secret_refs
+        .iter()
+        .position(|secret| secret.id == label_or_id)
+        .or_else(|| secret_refs.iter().position(|secret| secret.label == label_or_id))
+}
+
 pub struct VaultCreation {
     pub vault: Vault,
     pub recovery_kit: RecoveryKit,
@@ -994,7 +1003,8 @@ impl Vault {
     /// Overlay group / wire format / billing onto an existing key. Fields left
     /// unset in `metadata` keep their stored value. `label_or_id` accepts a
     /// secret id, a label, or `"primary"` for the entry's first key — the same
-    /// convention as [`Self::reveal_secret_field`].
+    /// convention as [`Self::reveal_secret_field`]. An exact id match wins over
+    /// a label match.
     pub fn set_secret_metadata(
         &self,
         id: Uuid,
@@ -1003,21 +1013,10 @@ impl Vault {
     ) -> Result<bool, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
-        let matched = plaintext
-            .entry
-            .secret_refs
-            .iter()
-            .any(|secret| secret.id == label_or_id || secret.label == label_or_id);
-        let secret = if matched {
-            plaintext
-                .entry
-                .secret_refs
-                .iter_mut()
-                .find(|secret| secret.id == label_or_id || secret.label == label_or_id)
-        } else if label_or_id == PRIMARY_SECRET_FIELD {
-            plaintext.entry.secret_refs.first_mut()
-        } else {
-            None
+        let secret = match find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id) {
+            Some(index) => plaintext.entry.secret_refs.get_mut(index),
+            None if label_or_id == PRIMARY_SECRET_FIELD => plaintext.entry.secret_refs.first_mut(),
+            None => None,
         }
         .ok_or(VaultError::RecordNotFound)?;
         if !metadata.apply_to(secret) {
@@ -1045,6 +1044,9 @@ impl Vault {
             .map(|item| item.id.clone()))
     }
 
+    /// Remove a key from an entry. `label_or_id` accepts a secret id or a
+    /// label; an exact id match wins over a label match, so callers passing an
+    /// id can never hit a different key that merely shares the label.
     pub fn remove_secret(&self, id: Uuid, label_or_id: &str) -> Result<String, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
@@ -1052,12 +1054,8 @@ impl Vault {
             return Err(VaultError::LastSecret);
         }
         let before = plaintext.entry.secret_refs.len();
-        let removed = plaintext
-            .entry
-            .secret_refs
-            .iter()
-            .find(|secret| secret.id == label_or_id || secret.label == label_or_id)
-            .map(|secret| secret.id.clone())
+        let removed = find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
+            .map(|index| plaintext.entry.secret_refs[index].id.clone())
             .ok_or(VaultError::RecordNotFound)?;
         plaintext
             .entry
@@ -1410,12 +1408,8 @@ impl Vault {
                 .first()
                 .map(|secret| secret.id.clone())
         } else {
-            plaintext
-                .entry
-                .secret_refs
-                .iter()
-                .find(|secret| secret.id == label_or_id || secret.label == label_or_id)
-                .map(|secret| secret.id.clone())
+            find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
+                .map(|index| plaintext.entry.secret_refs[index].id.clone())
         }
         .ok_or(VaultError::RecordNotFound)?;
         let secret = plaintext
@@ -3072,6 +3066,36 @@ mod tests {
             vault.remove_secret(id, "primary"),
             Err(VaultError::LastSecret)
         ));
+    }
+
+    #[test]
+    fn remove_secret_prefers_id_over_colliding_label() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-primary")).unwrap();
+        let primary_id = vault.get_provider_summary(id).unwrap().secret_refs[0]
+            .id
+            .clone();
+
+        // A secondary key whose label equals the primary key's id: an id-based
+        // removal must still target the id owner, not the labelled key.
+        let impostor_id = vault
+            .add_secret(id, &primary_id, "sk-ant-api03-impostor")
+            .unwrap();
+        vault.add_secret(id, "extra", "sk-ant-api03-extra").unwrap();
+        let removed = vault.remove_secret(id, &primary_id).unwrap();
+        assert_eq!(removed, primary_id);
+        let summary = vault.get_provider_summary(id).unwrap();
+        assert_eq!(summary.secret_refs.len(), 2);
+        assert!(summary
+            .secret_refs
+            .iter()
+            .any(|secret| secret.id == impostor_id));
+
+        // Label lookup still works when no id matches the selector.
+        let removed = vault.remove_secret(id, &primary_id).unwrap();
+        assert_eq!(removed, impostor_id);
     }
 
     #[test]
