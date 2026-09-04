@@ -606,7 +606,9 @@ fn start_proxy_async(app: AppHandle, feedback: TrayFeedback) {
             }
             Err(err) => {
                 eprintln!("failed to start proxy server from tray: {err}");
-                feedback.proxy_transient("Status: start failed");
+                // Surface the agent's validation message (e.g. no enabled
+                // route group) instead of a bare "start failed".
+                feedback.proxy_transient(&format!("Status: start failed: {}", short_error(&err)));
             }
         }
         refresh_status(&app, &feedback);
@@ -875,6 +877,8 @@ impl TraySnapshot {
     }
 
     fn can_start_proxy(&self) -> bool {
+        // Mirror the agent-side validation: starting without an enabled route
+        // group is rejected, so do not offer the action.
         matches!(
             (&self.agent, &self.proxy),
             (
@@ -885,7 +889,7 @@ impl TraySnapshot {
                 }),
                 ProxyTrayStatus::Available(ProxyStatus { running: false, .. })
             )
-        )
+        ) && self.routes.iter().any(|route| route.active)
     }
 
     fn can_open_proxy(&self) -> bool {
@@ -1098,6 +1102,23 @@ mod tests {
         assert!(!unavailable.can_stop_proxy());
     }
 
+    #[test]
+    fn proxy_start_requires_an_enabled_route_group() {
+        // No route groups at all: nothing to serve.
+        let mut no_routes = snapshot(false, available_proxy(false, 0));
+        no_routes.routes.clear();
+        assert!(!no_routes.can_start_proxy());
+
+        // Route groups exist but every one is disabled: the agent would
+        // reject the start, so the tray must not offer it.
+        let mut all_inactive = snapshot(false, available_proxy(false, 0));
+        all_inactive.routes[0].active = false;
+        assert!(!all_inactive.can_start_proxy());
+
+        let one_active = snapshot(false, available_proxy(false, 0));
+        assert!(one_active.can_start_proxy());
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn dto_mirrors_snapshot_state() {
@@ -1144,9 +1165,14 @@ mod tests {
                 policy: SessionPolicy::default(),
                 last_lock_reason: None,
                 vault_namespace: Some("test".to_string()),
+                initial_sync_pending: false,
             }),
             proxy,
-            routes: Vec::new(),
+            routes: vec![TrayRoute {
+                id: uuid::Uuid::new_v4(),
+                name: "default".to_string(),
+                active: true,
+            }],
         }
     }
 
