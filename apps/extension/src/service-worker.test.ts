@@ -14,6 +14,7 @@ const nativeListResponses: unknown[] = [];
 const nativeMessages: Array<Record<string, unknown>> = [];
 const storageSessionData = new Map<string, unknown>();
 let nativePingLocked = false;
+let nativePingFails = false;
 let onNativeListMessage: (() => void) | undefined;
 
 function installChromeStub() {
@@ -28,6 +29,10 @@ function installChromeStub() {
         nativeMessages.push(message);
         const type = String(message.type ?? "");
         if (type === "ping") {
+          if (nativePingFails) {
+            callback({ id: "1", ok: false, error: "native host unavailable" });
+            return;
+          }
           callback({
             id: "1",
             ok: true,
@@ -268,6 +273,7 @@ describe("service worker pending drafts", () => {
     nativeMessages.length = 0;
     storageSessionData.clear();
     nativePingLocked = false;
+    nativePingFails = false;
     onNativeListMessage = undefined;
     installChromeStub();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
@@ -489,6 +495,69 @@ describe("service worker pending drafts", () => {
     assert.equal(listed.ok, true);
     assert.equal(listed.data?.entries?.[0]?.title, "After Mutation");
   });
+
+  it("flags the list as stale when mutations keep landing during a refresh", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry({ title: "Before Mutation" })]));
+    nativeListResponses.push(listResponse([providerEntry({ title: "Still Before Mutation" })]));
+
+    // Bump the mutation version during both fetches, so even the retried
+    // response predates the current data and must be flagged stale.
+    let mutationCount = 0;
+    onNativeListMessage = () => {
+      mutationCount += 1;
+      if (mutationCount > 2) return;
+      void dispatchMessage({
+        type: "aipass.providerAdd",
+        request: {
+          title: `New Provider ${mutationCount}`,
+          domain: [],
+          endpoints: [],
+          consoleEndpoints: [],
+          interfaceType: "openai_compatible",
+          authScheme: "bearer",
+          apiKey: `sk-new-provider-secret-${mutationCount}`,
+          modelAliases: [],
+          headers: [],
+          tags: []
+        }
+      });
+    };
+
+    const listed = (await dispatchMessage({ type: "aipass.entriesList" })) as {
+      ok?: boolean;
+      data?: { entries?: Array<{ title?: string }>; stale?: boolean };
+    };
+
+    assert.equal(listed.ok, true);
+    assert.equal(listed.data?.stale, true);
+    assert.equal(listed.data?.entries?.[0]?.title, "Still Before Mutation");
+  });
+
+  it(
+    "keeps serving the entry cache when a monitor ping fails transiently",
+    { timeout: 15000 },
+    async () => {
+      await import("./service-worker");
+
+      await dispatchMessage({ type: "aipass.ping" });
+      nativeListResponses.push(listResponse([providerEntry()]));
+      await dispatchMessage({ type: "aipass.entriesList" });
+
+      // A failed ping (and the failed recovery that follows) must not lock
+      // out the last known session state.
+      nativePingFails = true;
+      const failed = (await dispatchMessage({ type: "aipass.ping" })) as { ok?: boolean };
+      assert.equal(failed.ok, false);
+
+      const cached = (await dispatchMessage({ type: "aipass.cachedEntriesList" })) as {
+        data?: { entries?: Array<{ id?: string }> };
+      };
+      assert.equal(cached.data?.entries?.[0]?.id, "entry-1");
+    }
+  );
 
   it("preserves cached quota when a provider update omits it", async () => {
     await import("./service-worker");

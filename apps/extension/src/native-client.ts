@@ -135,6 +135,8 @@ export interface FillGrant {
 export interface ContextLookupData {
   entries: ProviderSummary[];
   grants: FillGrant[];
+  /** Set when the data is known to predate a concurrent mutation. */
+  stale?: boolean;
 }
 
 export interface FaviconBackfillResult {

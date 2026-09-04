@@ -53,7 +53,7 @@ export type Entry = {
 
 export type Grant = { id: string; entryId?: string; secretId?: string; expiresAt: string };
 
-export type LookupData = { entries: Entry[]; grants: Grant[] };
+export type LookupData = { entries: Entry[]; grants: Grant[]; stale?: boolean };
 
 export type FaviconBackfillResult = {
   checked: number;

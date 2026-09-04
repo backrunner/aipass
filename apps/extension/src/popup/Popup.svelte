@@ -210,7 +210,8 @@
     siteEntries = contextEntries;
     siteEntryIds = new Set(siteEntries.map((entry) => entry.id));
     entries = mergeEntries(list?.ok ? listedEntries : entries, contextEntries);
-    entriesStale = listFailed;
+    // A list that predates a concurrent mutation arrives flagged stale.
+    entriesStale = listFailed || Boolean(list?.data?.stale);
     grants = contextGrants.filter((grant) => !grant.entryId || entries.some((entry) => entry.id === grant.entryId));
     if (listFailed) {
       statusText = friendlyNativeError(list?.error, $t) || $t("ext.fillFailed");

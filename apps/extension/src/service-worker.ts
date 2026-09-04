@@ -389,8 +389,9 @@ async function unlockWithPasswordWithSessionTracking(password: string) {
 }
 
 function rememberSessionStatus(response: NativeResponse<{ locked?: boolean; vaultNamespace?: string }>) {
+  // A failed ping carries no session information; keep the last known state
+  // instead of locking out the cached view until the next successful ping.
   if (!response.ok) {
-    activeVaultUnlocked = false;
     return;
   }
   const vaultNamespace = response.data?.vaultNamespace;
@@ -444,21 +445,29 @@ async function refreshEntryCacheInner(reason: string, retried = false): Promise<
   // the session before keying the cache by namespace — otherwise the current
   // vault's entries can be written under a stale namespace.
   await pingWithSessionTracking();
+  const namespace = activeVaultNamespace;
   const refreshVersion = entryCacheMutationVersion;
   const response = await listEntries();
-  if (response.ok && activeVaultUnlocked && activeVaultNamespace) {
-    if (refreshVersion !== entryCacheMutationVersion) {
-      // A mutation landed mid-flight and this response predates it; re-fetch
-      // once so the caller gets post-mutation data instead of the stale list.
-      if (!retried) return refreshEntryCacheInner(reason, true);
-    } else {
-      await writeEntryCache(activeVaultNamespace, response.data?.entries ?? []);
-      debugLog("entry cache refreshed", {
-        reason,
-        count: response.data?.entries?.length ?? 0
-      });
-    }
+  if (!response.ok || !activeVaultUnlocked || !activeVaultNamespace) {
+    return response;
   }
+  // Re-checked after the await: a vault switch mid-flight would write this
+  // vault's entries under the previous namespace's cache key, and a mutation
+  // landing mid-flight makes this response predate the current data.
+  const sessionMoved = activeVaultNamespace !== namespace;
+  const mutationAhead = refreshVersion !== entryCacheMutationVersion;
+  if (sessionMoved || mutationAhead) {
+    if (!retried) return refreshEntryCacheInner(reason, true);
+    // Still unstable after one retry: repair the cache in the background and
+    // flag the data so the caller does not present it as fresh.
+    scheduleEntryCacheRefresh("entries.list.settle");
+    return { ...response, data: { ...response.data, stale: true } };
+  }
+  await writeEntryCache(activeVaultNamespace, response.data?.entries ?? []);
+  debugLog("entry cache refreshed", {
+    reason,
+    count: response.data?.entries?.length ?? 0
+  });
   return response;
 }
 
