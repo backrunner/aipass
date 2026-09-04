@@ -39,6 +39,7 @@ hyper = { version = "1.9.0", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1.20", features = ["server-auto", "service", "tokio"] }
 futures-util = "0.3.31"
 json5 = "0.4.1"
+notify = "8.2.0"
 quick-xml = "0.39.4"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 reqwest = { version = "0.13.3", features = ["blocking", "json", "stream", "socks"] }

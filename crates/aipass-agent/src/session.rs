@@ -67,6 +67,13 @@ pub enum SessionState {
     Unlocked(Box<SessionInfo>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitialSyncState {
+    Pending,
+    Done,
+    Failed,
+}
+
 pub struct AgentState {
     pub vault_dir: PathBuf,
     pub namespace: String,
@@ -78,6 +85,8 @@ pub struct AgentState {
     pub proxy: Mutex<crate::proxy_service::ProxyService>,
     pub favicon_backfill: Mutex<()>,
     pub sync_lock: Mutex<()>,
+    pub initial_sync: Mutex<InitialSyncState>,
+    pub sync_watcher: Mutex<Option<crate::sync_watch::SyncWatcher>>,
     pub shutdown: AtomicBool,
 }
 
@@ -138,6 +147,12 @@ pub fn session_status(state: &Arc<AgentState>) -> ServiceResult<SessionStatus> {
             .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "lock reason poisoned"))?
             .clone(),
         vault_namespace: Some(state.namespace.clone()),
+        initial_sync_pending: matches!(
+            *state.initial_sync.lock().map_err(|_| {
+                ServiceError::new(AgentErrorCode::Internal, "initial sync lock poisoned")
+            })?,
+            InitialSyncState::Pending
+        ),
     })
 }
 
@@ -606,7 +621,25 @@ pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
             webdav_password: persisted.webdav_password.map(StoredSyncSecret::Encrypted),
         });
     }
-    Ok(StoredSyncSettings::default())
+    Ok(StoredSyncSettings {
+        mode: default_sync_mode(),
+        ..StoredSyncSettings::default()
+    })
+}
+
+/// Fresh installs on macOS default to iCloud Drive sync; other platforms keep
+/// the protocol's local-folder default. Only applied when no sync settings
+/// file exists, so a user's persisted choice always wins.
+fn default_sync_mode() -> SyncMode {
+    default_sync_mode_for_os(std::env::consts::OS)
+}
+
+fn default_sync_mode_for_os(os: &str) -> SyncMode {
+    if os == "macos" {
+        SyncMode::ICloud
+    } else {
+        SyncMode::Local
+    }
 }
 
 pub fn sync_settings_view(settings: &StoredSyncSettings) -> SyncSettings {
@@ -864,6 +897,8 @@ mod tests {
             ),
             favicon_backfill: Mutex::new(()),
             sync_lock: Mutex::new(()),
+            initial_sync: Mutex::new(InitialSyncState::Done),
+            sync_watcher: Mutex::new(None),
             shutdown: AtomicBool::new(false),
         })
     }
@@ -997,6 +1032,18 @@ mod tests {
     }
 
     #[test]
+    fn missing_sync_settings_default_to_icloud_only_on_macos() {
+        assert_eq!(default_sync_mode_for_os("macos"), SyncMode::ICloud);
+        assert_eq!(default_sync_mode_for_os("linux"), SyncMode::Local);
+        assert_eq!(default_sync_mode_for_os("windows"), SyncMode::Local);
+
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let loaded = load_sync_settings(&vault_dir).expect("default settings");
+        assert_eq!(loaded.mode, default_sync_mode());
+    }
+
+    #[test]
     fn reset_vault_removes_vault_and_locks_session() {
         let temp = tempdir().expect("tempdir");
         let vault_dir = temp.path().join("vault");
@@ -1013,6 +1060,8 @@ mod tests {
             ),
             favicon_backfill: Mutex::new(()),
             sync_lock: Mutex::new(()),
+            initial_sync: Mutex::new(InitialSyncState::Done),
+            sync_watcher: Mutex::new(None),
             shutdown: AtomicBool::new(false),
         });
 

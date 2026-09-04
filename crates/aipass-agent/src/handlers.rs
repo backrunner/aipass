@@ -431,6 +431,13 @@ fn dispatch_request(
                 }
                 return Err(map_vault_error(err));
             }
+            // The proxy runtime snapshot was resolved from the pre-import
+            // vault. Stop it before locking so stale credentials cannot serve
+            // while locked; the next unlock rebuilds it from the imported
+            // vault (start_if_enabled only short-circuits on a live handle).
+            if let Ok(mut proxy) = state.proxy.lock() {
+                let _ = proxy.stop();
+            }
             lock_session(state, LockReason::Import);
             Ok(AgentResponse::success(json!({ "imported": true })))
         }
@@ -475,11 +482,15 @@ fn dispatch_request(
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderArchive { id } => with_vault(state, false, |vault| {
-            vault.archive_provider(id).map_err(map_vault_error)
+            vault.archive_provider(id).map_err(map_vault_error)?;
+            refresh_proxy_provider_credentials(state, vault, id)?;
+            Ok(())
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderRestore { id } => with_vault(state, false, |vault| {
-            vault.restore_provider(id).map_err(map_vault_error)
+            vault.restore_provider(id).map_err(map_vault_error)?;
+            refresh_proxy_provider_credentials(state, vault, id)?;
+            Ok(())
         })
         .map(|_| AgentResponse::empty()),
         AgentRequest::ProviderTrash { id } => with_vault(state, false, |vault| {
@@ -674,7 +685,12 @@ fn dispatch_request(
             Ok(AgentResponse::success(crate::ccswitch::detect_ccswitch()))
         }
         AgentRequest::CcSwitchImport => with_vault(state, false, |vault| {
-            crate::ccswitch::import_ccswitch_providers(vault).map_err(ServiceError::internal)
+            let results =
+                crate::ccswitch::import_ccswitch_providers(vault).map_err(ServiceError::internal)?;
+            // The import can add or refresh many credentials at once; rebuild
+            // the running proxy snapshot rather than refreshing entry by entry.
+            reload_running_proxy(state, vault)?;
+            Ok(results)
         })
         .map(AgentResponse::success),
         AgentRequest::OAuthLoginStart { provider } => {
@@ -866,12 +882,14 @@ fn dispatch_request(
         AgentRequest::SyncSettingsSet { settings } => {
             let current = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
             let updated = apply_sync_settings_update(current, settings);
-            with_vault(state, true, |vault| {
-                let saved = save_sync_settings(&state.vault_dir, vault, &updated)
-                    .map_err(ServiceError::internal)?;
-                Ok(sync_settings_view(&saved))
-            })
-            .map(AgentResponse::success)
+            let saved = with_vault(state, true, |vault| {
+                save_sync_settings(&state.vault_dir, vault, &updated)
+                    .map_err(ServiceError::internal)
+            })?;
+            // The sync folder may have moved; point the filesystem watcher at
+            // the new target (or drop it when the backend is not folder-based).
+            crate::sync_watch::restart_sync_watcher(state, &saved);
+            Ok(AgentResponse::success(sync_settings_view(&saved)))
         }
         AgentRequest::SyncConfigured => {
             let settings = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
@@ -989,8 +1007,14 @@ fn dispatch_request(
         })
         .map(AgentResponse::success),
         AgentRequest::BrowserSaveDetected { fields } => {
-            with_vault(state, false, |vault| save_detected_secret(vault, fields))
-                .map(AgentResponse::success)
+            with_vault(state, false, |vault| {
+                let result = save_detected_secret(vault, fields)?;
+                // Covers every write path inside save_detected_secret: new
+                // entries, adopted keys, and metadata/group-only updates.
+                refresh_proxy_provider_credentials(state, vault, result.entry_id)?;
+                Ok(result)
+            })
+            .map(AgentResponse::success)
         }
         AgentRequest::BrowserIgnoreOrigin { origin } => {
             let ignored_origins = ignore_origin(&state.vault_dir, &origin)?;
@@ -1083,6 +1107,21 @@ fn refresh_proxy_provider_credentials(
     };
     proxy.refresh_provider_credentials(vault, entry_id)?;
     Ok(())
+}
+
+fn reload_running_proxy(state: &Arc<AgentState>, vault: &Vault) -> ServiceResult<()> {
+    let mut proxy = match state.proxy.lock() {
+        Ok(proxy) => proxy,
+        Err(poisoned) => {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                "recovering poisoned proxy lock while reloading the runtime",
+            );
+            poisoned.into_inner()
+        }
+    };
+    proxy.reload_if_running(vault)
 }
 
 fn oauth_account_summary(account: &ManagedOAuthAccount) -> OAuthAccountSummary {

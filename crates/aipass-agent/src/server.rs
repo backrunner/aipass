@@ -7,7 +7,8 @@ use crate::session::{
     lock_if_idle, lock_session, map_vault_error, native_host_settings_path, reset_vault,
     save_policy, save_sync_settings, session_status, shutdown_requested, sync_settings_password,
     sync_settings_view, touch_session, unlock_with_password, wait_for_unlock, with_vault,
-    with_vault_mut, AgentState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
+    with_vault_mut, AgentState, InitialSyncState, NativeHostSettings, ServiceError, ServiceResult,
+    SessionState,
 };
 use aipass_agent_protocol::{
     endpoint_url as protocol_endpoint_url, AgentErrorCode, AgentRequest, AgentResponse,
@@ -148,6 +149,8 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         proxy: Mutex::new(crate::proxy_service::ProxyService::new(&vault_dir.clone())?),
         favicon_backfill: Mutex::new(()),
         sync_lock: Mutex::new(()),
+        initial_sync: Mutex::new(InitialSyncState::Pending),
+        sync_watcher: Mutex::new(None),
         shutdown: AtomicBool::new(false),
     });
     run_server_with_state(state, listener, launch_desktop_tray)
@@ -167,6 +170,8 @@ fn run_server_with_state(
     crate::session::spawn_power_watcher(state.clone());
     crate::pricing::spawn_list_price_refresh(state.clone());
     crate::oauth::spawn_token_refresh(state.clone());
+    spawn_initial_sync(state.clone());
+    crate::sync_watch::start_sync_watcher_for_current_settings(&state);
     if launch_desktop_tray {
         ensure_desktop_tray_companion_async(state.vault_dir.clone());
     }
@@ -395,6 +400,61 @@ fn spawn_idle_lock_watcher(state: Arc<AgentState>) {
         let _ = lock_if_idle(&state);
         thread::sleep(Duration::from_secs(1));
     });
+}
+
+/// Run one sync at agent startup against the configured folder backend so a
+/// freshly launched agent serves synced data. SessionStatus reports
+/// initial_sync_pending until this settles; a failure clears the flag too —
+/// readiness must never be blocked by an unreachable sync folder.
+fn spawn_initial_sync(state: Arc<AgentState>) {
+    thread::spawn(move || {
+        let outcome = run_initial_sync(&state);
+        match state.initial_sync.lock() {
+            Ok(mut slot) => *slot = outcome,
+            Err(poisoned) => *poisoned.into_inner() = outcome,
+        }
+    });
+}
+
+fn run_initial_sync(state: &Arc<AgentState>) -> InitialSyncState {
+    if !crate::session::manifest_path(&state.vault_dir).exists() {
+        return InitialSyncState::Done;
+    }
+    let settings = match load_sync_settings(&state.vault_dir) {
+        Ok(settings) => settings,
+        Err(err) => {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                &format!("initial sync skipped: failed to load sync settings: {err}"),
+            );
+            return InitialSyncState::Failed;
+        }
+    };
+    let Some(dir) = crate::sync_watch::folder_sync_dir(&settings) else {
+        return InitialSyncState::Done;
+    };
+    match run_sync_local(state, &dir) {
+        Ok(report) => {
+            write_component_log(
+                AGENT_LOG,
+                "INFO",
+                &format!(
+                    "initial sync finished: uploaded={} downloaded={} conflicts={}",
+                    report.uploaded, report.downloaded, report.conflicts
+                ),
+            );
+            InitialSyncState::Done
+        }
+        Err(err) => {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                &format!("initial sync failed: {}", err.message),
+            );
+            InitialSyncState::Failed
+        }
+    }
 }
 
 fn create_vault(state: &Arc<AgentState>, password: String) -> ServiceResult<VaultCreateResponse> {
@@ -911,29 +971,66 @@ fn provider_guess_interface(origin: &str) -> Option<InterfaceType> {
 
 fn infer_interface_from_endpoint(endpoint: &str) -> Option<InterfaceType> {
     let endpoint = endpoint.to_lowercase();
+    // Keep in sync with OPENAI_COMPATIBLE_ENDPOINT_PATTERN in
+    // packages/schemas/src/index.ts. `/v\d` covers versioned API paths such
+    // as /v2, /api/paas/v4, and /v1beta.
+    const OPENAI_COMPATIBLE_EVIDENCE: &[&str] = &[
+        "openai",
+        "chat/completions",
+        "messages",
+        "gateway",
+        "one-api",
+        "one_api",
+        "one api",
+        "oneapi",
+        "new-api",
+        "new_api",
+        "new api",
+        "newapi",
+        "litellm",
+        "sub2api",
+        "openrouter",
+        "veloera",
+        "omniroute",
+        "metapi",
+        "onehub",
+        "donehub",
+        "anyrouter",
+        "siliconflow",
+        "deepseek",
+        "moonshot",
+        "dashscope",
+        "qwen",
+        "bigmodel",
+        "zhipu",
+        "volcengine",
+        "volces",
+        "ark",
+        "together",
+        "fireworks",
+        "groq",
+        "x.ai",
+        "mistral",
+        "perplexity",
+        "cerebras",
+        "nvidia",
+        "nim",
+        "novita",
+        "huggingface",
+        "hugging face",
+    ];
+    let has_versioned_api_path = endpoint
+        .as_bytes()
+        .windows(3)
+        .any(|window| window[0] == b'/' && window[1] == b'v' && window[2].is_ascii_digit());
     if endpoint.contains("generativelanguage") || endpoint.contains("gemini") {
         Some(InterfaceType::Gemini)
-    } else if endpoint.contains("anthropic") {
+    } else if endpoint.contains("anthropic") || endpoint.contains("claude") {
         Some(InterfaceType::AnthropicMessages)
-    } else if endpoint.contains("replicate.com")
-        || endpoint.contains("cohere.com")
-        || endpoint.contains("minimaxi.com")
-    {
-        Some(InterfaceType::CustomHttp)
-    } else if endpoint.contains("openai")
-        || endpoint.contains("/v1")
-        || endpoint.contains("gateway")
-        || endpoint.contains("one-api")
-        || endpoint.contains("new-api")
-        || endpoint.contains("litellm")
-        || endpoint.contains("sub2api")
-        || endpoint.contains("siliconflow")
-        || endpoint.contains("mistral")
-        || endpoint.contains("perplexity")
-        || endpoint.contains("cerebras")
-        || endpoint.contains("nvidia")
-        || endpoint.contains("novita")
-        || endpoint.contains("huggingface")
+    } else if has_versioned_api_path
+        || OPENAI_COMPATIBLE_EVIDENCE
+            .iter()
+            .any(|keyword| endpoint.contains(keyword))
     {
         Some(InterfaceType::OpenAiCompatible)
     } else {
@@ -1978,106 +2075,165 @@ fn home_dir() -> ServiceResult<PathBuf> {
 }
 
 pub(crate) fn run_sync_local(state: &Arc<AgentState>, dir: &Path) -> ServiceResult<SyncReport> {
+    // Lock order is sync_lock -> session -> proxy everywhere: a sync in flight
+    // and its follow-up vault/proxy reloads stay atomic against vault writes,
+    // which all go through the session lock.
     let _guard = state
         .sync_lock
         .lock()
         .map_err(|_| ServiceError::internal(anyhow::anyhow!("sync lock poisoned")))?;
-    let session = state
-        .session
-        .lock()
-        .map_err(|_| ServiceError::internal(anyhow::anyhow!("session lock poisoned")))?;
-    match &*session {
-        SessionState::Locked => {
-            let vault_id =
-                Vault::vault_id_from_manifest(&state.vault_dir).map_err(ServiceError::internal)?;
-            sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
-                validate_sync_object_bytes_for_vault(bytes, vault_id)
-            })
-            .map_err(ServiceError::internal)
+    let report = {
+        let mut session = state
+            .session
+            .lock()
+            .map_err(|_| ServiceError::internal(anyhow::anyhow!("session lock poisoned")))?;
+        match &mut *session {
+            SessionState::Locked => {
+                let vault_id = Vault::vault_id_from_manifest(&state.vault_dir)
+                    .map_err(ServiceError::internal)?;
+                sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
+                    validate_sync_object_bytes_for_vault(bytes, vault_id)
+                })
+                .map_err(ServiceError::internal)?
+            }
+            SessionState::Unlocked(info) => {
+                let report = sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
+                    info.vault
+                        .validate_sync_object_bytes(bytes)
+                        .map_err(Into::into)
+                })
+                .map_err(ServiceError::internal)?;
+                if report.downloaded > 0 {
+                    // The sync may have replaced records (and key wrapping) on
+                    // disk; refresh the in-memory vault before any later write
+                    // can persist stale state over the downloaded files.
+                    info.vault.reload_from_disk().map_err(map_vault_error)?;
+                }
+                report
+            }
         }
-        SessionState::Unlocked(info) => {
-            sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
-                info.vault
-                    .validate_sync_object_bytes(bytes)
-                    .map_err(Into::into)
-            })
-            .map_err(ServiceError::internal)
-        }
+    };
+    if report.downloaded > 0 {
+        reload_proxy_after_sync_download(state);
     }
+    Ok(report)
 }
 
 pub(crate) fn run_sync_webdav(state: &Arc<AgentState>, client: &impl WebDavClient) -> SyncReport {
+    let sync_error = |message: &str| SyncReport {
+        uploaded: 0,
+        downloaded: 0,
+        conflicts: 0,
+        quarantined: 0,
+        status: SyncStatus::ServerError,
+        message: Some(message.to_string()),
+    };
     let Ok(_guard) = state.sync_lock.lock() else {
-        return SyncReport {
-            uploaded: 0,
-            downloaded: 0,
-            conflicts: 0,
-            quarantined: 0,
-            status: SyncStatus::ServerError,
-            message: Some("sync lock poisoned".to_string()),
-        };
+        return sync_error("sync lock poisoned");
     };
-    let Ok(session) = state.session.lock() else {
-        return SyncReport {
-            uploaded: 0,
-            downloaded: 0,
-            conflicts: 0,
-            quarantined: 0,
-            status: SyncStatus::ServerError,
-            message: Some("session lock poisoned".to_string()),
+    let report = {
+        let Ok(mut session) = state.session.lock() else {
+            return sync_error("session lock poisoned");
         };
-    };
-    match &*session {
-        SessionState::Locked => {
-            let Ok(vault_id) = Vault::vault_id_from_manifest(&state.vault_dir) else {
-                return SyncReport {
-                    uploaded: 0,
-                    downloaded: 0,
-                    conflicts: 0,
-                    quarantined: 0,
-                    status: SyncStatus::ServerError,
-                    message: Some("vault manifest unavailable".to_string()),
+        match &mut *session {
+            SessionState::Locked => {
+                let Ok(vault_id) = Vault::vault_id_from_manifest(&state.vault_dir) else {
+                    return sync_error("vault manifest unavailable");
                 };
-            };
-            match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
-                validate_sync_object_bytes_for_vault(bytes, vault_id)
-            }) {
-                Ok(report) => report,
-                Err(err) => {
-                    let message = err.to_string();
-                    let status = classify_webdav_error(&err);
-                    SyncReport {
-                        uploaded: 0,
-                        downloaded: 0,
-                        conflicts: 0,
-                        quarantined: 0,
-                        status,
-                        message: Some(message),
+                match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
+                    validate_sync_object_bytes_for_vault(bytes, vault_id)
+                }) {
+                    Ok(report) => report,
+                    Err(err) => {
+                        let message = err.to_string();
+                        let status = classify_webdav_error(&err);
+                        SyncReport {
+                            uploaded: 0,
+                            downloaded: 0,
+                            conflicts: 0,
+                            quarantined: 0,
+                            status,
+                            message: Some(message),
+                        }
+                    }
+                }
+            }
+            SessionState::Unlocked(info) => {
+                match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
+                    info.vault
+                        .validate_sync_object_bytes(bytes)
+                        .map_err(Into::into)
+                }) {
+                    Ok(report) => {
+                        if report.downloaded > 0 {
+                            if let Err(err) = info.vault.reload_from_disk() {
+                                write_component_log(
+                                    AGENT_LOG,
+                                    "WARN",
+                                    &format!("vault reload after webdav sync failed: {err}"),
+                                );
+                            }
+                        }
+                        report
+                    }
+                    Err(err) => {
+                        let message = err.to_string();
+                        let status = classify_webdav_error(&err);
+                        SyncReport {
+                            uploaded: 0,
+                            downloaded: 0,
+                            conflicts: 0,
+                            quarantined: 0,
+                            status,
+                            message: Some(message),
+                        }
                     }
                 }
             }
         }
-        SessionState::Unlocked(info) => {
-            match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
-                info.vault
-                    .validate_sync_object_bytes(bytes)
-                    .map_err(Into::into)
-            }) {
-                Ok(report) => report,
-                Err(err) => {
-                    let message = err.to_string();
-                    let status = classify_webdav_error(&err);
-                    SyncReport {
-                        uploaded: 0,
-                        downloaded: 0,
-                        conflicts: 0,
-                        quarantined: 0,
-                        status,
-                        message: Some(message),
-                    }
-                }
-            }
+    };
+    if report.downloaded > 0 {
+        reload_proxy_after_sync_download(state);
+    }
+    report
+}
+
+/// Downloaded sync objects can carry changed provider credentials; rebuild the
+/// running proxy's runtime snapshot so it does not keep serving stale keys.
+/// Failures are logged rather than failing the sync: reload_if_running has
+/// already stopped the proxy safely when the new snapshot cannot load.
+fn reload_proxy_after_sync_download(state: &Arc<AgentState>) {
+    let session = match state.session.lock() {
+        Ok(session) => session,
+        Err(_) => {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                "proxy reload after sync skipped: session lock poisoned",
+            );
+            return;
         }
+    };
+    let SessionState::Unlocked(info) = &*session else {
+        return;
+    };
+    let mut proxy = match state.proxy.lock() {
+        Ok(proxy) => proxy,
+        Err(poisoned) => {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                "recovering poisoned proxy lock after sync download",
+            );
+            poisoned.into_inner()
+        }
+    };
+    if let Err(err) = proxy.reload_if_running(&info.vault) {
+        write_component_log(
+            AGENT_LOG,
+            "WARN",
+            &format!("proxy reload after sync download failed: {}", err.message),
+        );
     }
 }
 
@@ -2221,6 +2377,38 @@ mod tests {
         assert!(!constant_time_eq(b"same", b"some"));
         assert!(!constant_time_eq(b"same", b"same-longer"));
         assert!(!constant_time_eq(b"same-longer", b"same"));
+    }
+
+    #[test]
+    fn endpoint_interface_inference_follows_shared_ai_evidence() {
+        assert_eq!(
+            infer_interface_from_endpoint("https://llm.example.test/api/paas/v4"),
+            Some(InterfaceType::OpenAiCompatible)
+        );
+        assert_eq!(
+            infer_interface_from_endpoint("https://llm.example.test/v1beta/models"),
+            Some(InterfaceType::OpenAiCompatible)
+        );
+        assert_eq!(
+            infer_interface_from_endpoint("https://claude-relay.example.test/v1/messages"),
+            Some(InterfaceType::AnthropicMessages)
+        );
+        assert_eq!(
+            infer_interface_from_endpoint("https://gemini-proxy.example.test/v1beta/models"),
+            Some(InterfaceType::Gemini)
+        );
+        assert_eq!(
+            infer_interface_from_endpoint("https://api.minimaxi.com/v1"),
+            Some(InterfaceType::OpenAiCompatible)
+        );
+        assert_eq!(
+            infer_interface_from_endpoint("https://example.test/hooks/deploy"),
+            None
+        );
+        assert_eq!(
+            infer_interface_from_endpoint("https://api.replicate.com"),
+            None
+        );
     }
 
     #[test]

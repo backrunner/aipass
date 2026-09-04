@@ -12,6 +12,7 @@ pub mod pricing;
 pub mod proxy_service;
 pub mod server;
 pub mod session;
+pub(crate) mod sync_watch;
 pub(crate) mod usage_probe;
 pub mod windows_service;
 

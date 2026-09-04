@@ -16,6 +16,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const AGENT_READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// The first sync after launch can legitimately outlast the boot timeout;
+/// readiness waits for it, but only within this extra bounded grace window.
+const INITIAL_SYNC_READY_GRACE: Duration = Duration::from_secs(120);
 const AGENT_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(target_os = "macos")]
 const AUTOSTART_RECOVERY_GRACE: Duration = Duration::from_secs(3);
@@ -165,7 +168,13 @@ impl AgentClient {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let initial_connection_error =
             match self.request::<SessionStatus>(&AgentRequest::SessionStatus) {
-                Ok(_) => return Ok(()),
+                Ok(status) if !status.initial_sync_pending => return Ok(()),
+                Ok(_) => {
+                    // The agent is already up but still running its first
+                    // sync: wait for readiness without launching a second
+                    // instance underneath it.
+                    return self.wait_for_ready(None, &[], "agent initial sync pending", false);
+                }
                 Err(err) => err.to_string(),
             };
         #[cfg(target_os = "windows")]
@@ -232,13 +241,38 @@ impl AgentClient {
                 (Some(launch.binary), launch.candidates)
             }
         };
-        let deadline = Instant::now() + AGENT_READY_TIMEOUT;
+        self.wait_for_ready(
+            launched_binary,
+            &binary_candidates,
+            &initial_connection_error,
+            mode.install_autostart(),
+        )
+    }
+
+    fn wait_for_ready(
+        &self,
+        launched_binary: Option<PathBuf>,
+        binary_candidates: &[PathBuf],
+        initial_connection_error: &str,
+        repair_autostart: bool,
+    ) -> Result<()> {
+        #[cfg(not(target_os = "macos"))]
+        let _ = repair_autostart;
+        let started = Instant::now();
+        let mut deadline = ready_deadline(started, false);
         #[cfg(target_os = "macos")]
-        let mut force_repair_at = mode
-            .install_autostart()
-            .then(|| Instant::now() + AUTOSTART_RECOVERY_GRACE);
+        let mut force_repair_at =
+            repair_autostart.then(|| Instant::now() + AUTOSTART_RECOVERY_GRACE);
         let last_connection_error = loop {
             match self.request::<SessionStatus>(&AgentRequest::SessionStatus) {
+                Ok(status) if status.initial_sync_pending => {
+                    // A pending first sync is not readiness, but it does earn
+                    // a bounded extension over the plain boot timeout.
+                    deadline = ready_deadline(started, true);
+                    if Instant::now() >= deadline {
+                        break "agent initial sync did not finish in time".to_string();
+                    }
+                }
                 Ok(_) => return Ok(()),
                 Err(err) => {
                     let message = err.to_string();
@@ -263,8 +297,8 @@ impl AgentClient {
             &self.config.vault_dir,
             &self.config.namespace,
             launched_binary.as_deref(),
-            &binary_candidates,
-            &initial_connection_error,
+            binary_candidates,
+            initial_connection_error,
             Some(&last_connection_error),
         )))
     }
@@ -300,9 +334,21 @@ impl AgentStartupMode {
     }
 }
 
+/// How long to keep waiting for agent readiness based on the latest status
+/// poll: a pending first sync extends the base boot deadline by a bounded
+/// grace window; once the sync settles (or never started) the base timeout
+/// applies again.
+fn ready_deadline(started: Instant, initial_sync_pending: bool) -> Instant {
+    let base = started + AGENT_READY_TIMEOUT;
+    if initial_sync_pending {
+        base + INITIAL_SYNC_READY_GRACE
+    } else {
+        base
+    }
+}
+
 impl AgentCommandError {
-    fn internal(err: impl Into<anyhow::Error>) -> Self {
-        Self {
+    fn internal(err: impl Into<anyhow::Error>) -> Self {        Self {
             code: Some(AgentErrorCode::Internal),
             message: err.into().to_string(),
         }
@@ -400,5 +446,38 @@ mod tests {
         let error = decode_response::<SessionStatus>(response).unwrap_err();
 
         assert_eq!(error.code, Some(AgentErrorCode::ValidationFailed));
+    }
+
+    #[test]
+    fn initial_sync_pending_extends_the_ready_deadline_within_a_cap() {
+        let started = Instant::now();
+
+        assert_eq!(
+            ready_deadline(started, false),
+            started + AGENT_READY_TIMEOUT
+        );
+        assert_eq!(
+            ready_deadline(started, true),
+            started + AGENT_READY_TIMEOUT + INITIAL_SYNC_READY_GRACE
+        );
+        // The grace window stays bounded: pending sync can never push
+        // readiness beyond 15s + 120s from the wait start.
+        assert!(INITIAL_SYNC_READY_GRACE <= Duration::from_secs(120));
+    }
+
+    #[test]
+    fn legacy_status_without_initial_sync_field_decodes_as_ready() {
+        let status: SessionStatus = serde_json::from_value(serde_json::json!({
+            "exists": true,
+            "locked": false,
+            "policy": {
+                "idleLockMinutes": 60,
+                "lockOnSleep": true,
+                "lockOnScreenLock": true
+            }
+        }))
+        .expect("decode legacy status");
+
+        assert!(!status.initial_sync_pending);
     }
 }

@@ -39,6 +39,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                         policy: Default::default(),
                         last_lock_reason: Some(LockReason::AgentRestart),
                         vault_namespace: None,
+                        initial_sync_pending: false,
                     });
                 output(
                     json,
@@ -236,6 +237,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                         policy: Default::default(),
                         last_lock_reason: Some(LockReason::AgentRestart),
                         vault_namespace: None,
+                        initial_sync_pending: false,
                     });
                 output(
                     json,

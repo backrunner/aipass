@@ -660,32 +660,10 @@ impl Vault {
         root_key: VaultRootKey,
         error: VaultError,
     ) -> Result<Self, VaultError> {
-        let mut epoch_bytes = decrypt_bytes(
-            root_key.as_bytes(),
-            header_key_aad(header.vault_id, "epoch").as_bytes(),
-            &header.wrapped_epoch_key,
-        )
-        .map_err(|_| error.clone_like())?;
-        let mut index_bytes = decrypt_bytes(
-            root_key.as_bytes(),
-            header_key_aad(header.vault_id, "index").as_bytes(),
-            &header.wrapped_index_key,
-        )
-        .map_err(|_| error.clone_like())?;
-        if epoch_bytes.len() != KEY_LEN || index_bytes.len() != KEY_LEN {
-            epoch_bytes.zeroize();
-            index_bytes.zeroize();
-            return Err(error);
-        }
-        let mut epoch_key_bytes = [0_u8; KEY_LEN];
-        epoch_key_bytes.copy_from_slice(&epoch_bytes);
-        let mut index_key = [0_u8; KEY_LEN];
-        index_key.copy_from_slice(&index_bytes);
-        epoch_bytes.zeroize();
-        index_bytes.zeroize();
+        let (epoch_key, index_key) = unwrap_epoch_and_index_keys(&root_key, &header, error)?;
         Ok(Self {
             root,
-            epoch_key: VaultEpochKey::from_parts(header.current_epoch.clone(), epoch_key_bytes),
+            epoch_key,
             header,
             root_key,
             index_key,
@@ -703,6 +681,26 @@ impl Vault {
 
     pub fn current_epoch(&self) -> VaultEpoch {
         self.header.current_epoch.clone()
+    }
+
+    /// Re-read the manifest and re-derive the epoch and index keys with the
+    /// root key already held in memory. A sync download can replace the
+    /// manifest with a newer epoch; without reloading, this session would
+    /// keep writing records other devices can no longer read and could
+    /// overwrite freshly downloaded data with stale key material.
+    pub fn reload_from_disk(&mut self) -> Result<(), VaultError> {
+        let header: VaultHeader = read_json(self.root.join("manifest.aipmanifest"))?;
+        validate_header(&header)?;
+        if header.vault_id != self.header.vault_id {
+            return Err(VaultError::UnlockFailed);
+        }
+        let (epoch_key, index_key) =
+            unwrap_epoch_and_index_keys(&self.root_key, &header, VaultError::UnlockFailed)?;
+        self.index_key.zeroize();
+        self.header = header;
+        self.epoch_key = epoch_key;
+        self.index_key = index_key;
+        Ok(())
     }
 
     pub fn validate_sync_object_bytes(&self, bytes: &[u8]) -> Result<(), VaultError> {
@@ -2137,6 +2135,40 @@ fn validate_header(header: &VaultHeader) -> Result<(), VaultError> {
     Ok(())
 }
 
+fn unwrap_epoch_and_index_keys(
+    root_key: &VaultRootKey,
+    header: &VaultHeader,
+    error: VaultError,
+) -> Result<(VaultEpochKey, [u8; KEY_LEN]), VaultError> {
+    let mut epoch_bytes = decrypt_bytes(
+        root_key.as_bytes(),
+        header_key_aad(header.vault_id, "epoch").as_bytes(),
+        &header.wrapped_epoch_key,
+    )
+    .map_err(|_| error.clone_like())?;
+    let mut index_bytes = decrypt_bytes(
+        root_key.as_bytes(),
+        header_key_aad(header.vault_id, "index").as_bytes(),
+        &header.wrapped_index_key,
+    )
+    .map_err(|_| error.clone_like())?;
+    if epoch_bytes.len() != KEY_LEN || index_bytes.len() != KEY_LEN {
+        epoch_bytes.zeroize();
+        index_bytes.zeroize();
+        return Err(error);
+    }
+    let mut epoch_key_bytes = [0_u8; KEY_LEN];
+    epoch_key_bytes.copy_from_slice(&epoch_bytes);
+    let mut index_key = [0_u8; KEY_LEN];
+    index_key.copy_from_slice(&index_bytes);
+    epoch_bytes.zeroize();
+    index_bytes.zeroize();
+    Ok((
+        VaultEpochKey::from_parts(header.current_epoch.clone(), epoch_key_bytes),
+        index_key,
+    ))
+}
+
 fn decrypt_root_key(
     wrapping_key: &aipass_crypto::MasterKey,
     ciphertext: &Ciphertext,
@@ -3434,5 +3466,47 @@ mod tests {
         assert!(envelope.payload.is_none());
         assert!(envelope.wrapped_dek.is_none());
         assert!(vault.list_provider_summaries().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reload_from_disk_picks_up_epoch_advanced_by_another_writer() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let mut vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-reload-me")).unwrap();
+
+        // A second handle simulates another device that synced a newer
+        // manifest: it advances the epoch and rewraps every record on disk.
+        let mut other = Vault::open(dir.path(), &password).unwrap();
+        other.advance_epoch_and_rewrap("sync.download").unwrap();
+        let synced_epoch = other.current_epoch();
+        drop(other);
+
+        assert_ne!(vault.current_epoch().epoch, synced_epoch.epoch);
+        assert!(vault.reveal_secret(id).is_err());
+
+        vault.reload_from_disk().unwrap();
+        assert_eq!(vault.current_epoch().epoch, synced_epoch.epoch);
+        assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-reload-me");
+    }
+
+    #[test]
+    fn reload_from_disk_rejects_a_manifest_from_another_vault() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let mut vault = create_test_vault(dir.path(), &password);
+
+        let other_dir = tempdir().unwrap();
+        let _other = create_test_vault(other_dir.path(), &password);
+        fs::copy(
+            other_dir.path().join("manifest.aipmanifest"),
+            dir.path().join("manifest.aipmanifest"),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            vault.reload_from_disk(),
+            Err(VaultError::UnlockFailed)
+        ));
     }
 }

@@ -113,6 +113,10 @@ pub struct SessionStatus {
     pub last_lock_reason: Option<LockReason>,
     #[serde(default)]
     pub vault_namespace: Option<String>,
+    /// True while the agent is still running its first sync after launch.
+    /// Clients waiting for readiness must keep polling until this clears.
+    #[serde(default)]
+    pub initial_sync_pending: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -27,6 +27,7 @@ base64.workspace = true
 clap.workspace = true
 directories.workspace = true
 interprocess.workspace = true
+notify.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
