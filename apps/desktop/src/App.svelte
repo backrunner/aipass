@@ -1370,6 +1370,7 @@
     try {
       await loadEntries();
       await loadServer();
+      await loadArchivedEntries();
     } catch (err) {
       console.warn("refresh after OAuth account change failed", err);
     }
@@ -1672,6 +1673,7 @@
     await invokeTauri("provider_archive", { id: selected.id });
     await loadEntries();
     void loadServer();
+    void loadArchivedEntries();
   }
 
   async function toggleFavoriteSelected(favorite: boolean) {
@@ -1697,6 +1699,7 @@
     await invokeTauri("provider_restore", { id: selected.id });
     await loadEntries();
     void loadServer();
+    void loadArchivedEntries();
   }
 
   async function deleteSelected() {
@@ -1711,6 +1714,7 @@
     await invokeTauri("trash_empty");
     await loadEntries();
     void loadServer();
+    void loadArchivedEntries();
   }
 
   async function setArchiveView(value: boolean) {
