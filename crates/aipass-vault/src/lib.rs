@@ -3104,6 +3104,53 @@ mod tests {
     }
 
     #[test]
+    fn reveal_secret_field_prefers_id_over_colliding_label() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-primary")).unwrap();
+        let primary_id = vault.get_provider_summary(id).unwrap().secret_refs[0]
+            .id
+            .clone();
+        vault
+            .add_secret(id, &primary_id, "sk-ant-api03-impostor")
+            .unwrap();
+
+        let revealed = vault.reveal_secret_field(id, &primary_id).unwrap();
+        assert_eq!(revealed, "sk-ant-api03-primary");
+    }
+
+    #[test]
+    fn set_secret_metadata_prefers_id_over_colliding_label() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("correct horse battery staple");
+        let vault = create_test_vault(dir.path(), &password);
+        let id = vault.add_provider(input("sk-ant-api03-primary")).unwrap();
+        let primary_id = vault.get_provider_summary(id).unwrap().secret_refs[0]
+            .id
+            .clone();
+        let impostor_id = vault
+            .add_secret(id, &primary_id, "sk-ant-api03-impostor")
+            .unwrap();
+
+        let metadata = SecretMetadataInput {
+            group: Some("team-a".to_string()),
+            ..SecretMetadataInput::default()
+        };
+        assert!(vault.set_secret_metadata(id, &primary_id, &metadata).unwrap());
+        let summary = vault.get_provider_summary(id).unwrap();
+        let group_of = |secret_id: &str| {
+            summary
+                .secret_refs
+                .iter()
+                .find(|secret| secret.id == secret_id)
+                .and_then(|secret| secret.group.clone())
+        };
+        assert_eq!(group_of(&primary_id).as_deref(), Some("team-a"));
+        assert_eq!(group_of(&impostor_id), None);
+    }
+
+    #[test]
     fn primary_label_is_reserved_for_the_first_key_selector() {
         let dir = tempdir().unwrap();
         let password = SecretString::new("correct horse battery staple");
