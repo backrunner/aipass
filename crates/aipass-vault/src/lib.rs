@@ -1727,7 +1727,7 @@ impl Vault {
         let mut accounts = Vec::new();
         for path in self.oauth_record_paths()? {
             let account = self.decrypt_oauth_path(&path)?;
-            if provider.map_or(true, |want| account.provider == want) {
+            if provider.is_none_or(|want| account.provider == want) {
                 accounts.push(account);
             }
         }
@@ -2026,9 +2026,7 @@ impl Vault {
             .into_iter()
             .filter(|path| {
                 read_json::<ObjectEnvelope>(path)
-                    .map(|envelope| {
-                        !envelope.tombstone && envelope.object_type == "provider_entry"
-                    })
+                    .map(|envelope| !envelope.tombstone && envelope.object_type == "provider_entry")
                     .unwrap_or(true)
             })
             .collect())
@@ -2046,9 +2044,7 @@ impl Vault {
             .into_iter()
             .filter(|path| {
                 read_json::<ObjectEnvelope>(path)
-                    .map(|envelope| {
-                        !envelope.tombstone && envelope.object_type == "oauth_account"
-                    })
+                    .map(|envelope| !envelope.tombstone && envelope.object_type == "oauth_account")
                     .unwrap_or(false)
             })
             .collect())
@@ -2208,7 +2204,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
         favorite: entry.favorite,
         provider_id: entry.provider_id.clone(),
         provider_kind: entry.provider_kind.clone(),
-        credential_kind: entry.credential_kind.clone(),
+        credential_kind: entry.credential_kind,
         account_identity: entry.account_identity.clone(),
         domains: entry.domains.clone(),
         favicon_url: entry.favicon_url.clone(),
@@ -2652,7 +2648,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let password = SecretString::new("correct horse battery staple");
         let vault = create_test_vault(dir.path(), &password);
-        vault.add_provider(input("sk-ant-api03-fake-secret-1234")).unwrap();
+        vault
+            .add_provider(input("sk-ant-api03-fake-secret-1234"))
+            .unwrap();
 
         let codex_one = oauth_account(OAuthProvider::Codex, "refresh-codex-1", true);
         let grok = oauth_account(OAuthProvider::Grok, "refresh-grok", true);
@@ -2665,11 +2663,15 @@ mod tests {
 
         let all = reopened.list_oauth_accounts(None).unwrap();
         assert_eq!(all.len(), 2);
-        let codex_list = reopened.list_oauth_accounts(Some(OAuthProvider::Codex)).unwrap();
+        let codex_list = reopened
+            .list_oauth_accounts(Some(OAuthProvider::Codex))
+            .unwrap();
         assert_eq!(codex_list.len(), 1);
         assert_eq!(codex_list[0].refresh_token, "refresh-codex-1");
         assert!(codex_list[0].is_default);
-        let grok_list = reopened.list_oauth_accounts(Some(OAuthProvider::Grok)).unwrap();
+        let grok_list = reopened
+            .list_oauth_accounts(Some(OAuthProvider::Grok))
+            .unwrap();
         assert_eq!(grok_list.len(), 1);
         assert!(grok_list[0].is_default);
 
@@ -2677,16 +2679,23 @@ mod tests {
         let codex_two = oauth_account(OAuthProvider::Codex, "refresh-codex-2", true);
         let codex_two_id = codex_two.id;
         reopened.add_oauth_account(codex_two).unwrap();
-        let codex_after = reopened.list_oauth_accounts(Some(OAuthProvider::Codex)).unwrap();
+        let codex_after = reopened
+            .list_oauth_accounts(Some(OAuthProvider::Codex))
+            .unwrap();
         assert_eq!(codex_after.len(), 2);
         assert_eq!(
             codex_after.iter().filter(|a| a.is_default).count(),
             1,
             "exactly one Codex account stays default"
         );
-        assert!(codex_after.iter().any(|a| a.id == codex_two_id && a.is_default));
+        assert!(codex_after
+            .iter()
+            .any(|a| a.id == codex_two_id && a.is_default));
         assert!(
-            reopened.list_oauth_accounts(Some(OAuthProvider::Grok)).unwrap()[0].is_default,
+            reopened
+                .list_oauth_accounts(Some(OAuthProvider::Grok))
+                .unwrap()[0]
+                .is_default,
             "Grok default is untouched by a Codex default change"
         );
 

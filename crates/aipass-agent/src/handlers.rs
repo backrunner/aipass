@@ -685,8 +685,8 @@ fn dispatch_request(
             Ok(AgentResponse::success(crate::ccswitch::detect_ccswitch()))
         }
         AgentRequest::CcSwitchImport => with_vault(state, false, |vault| {
-            let results =
-                crate::ccswitch::import_ccswitch_providers(vault).map_err(ServiceError::internal)?;
+            let results = crate::ccswitch::import_ccswitch_providers(vault)
+                .map_err(ServiceError::internal)?;
             // The import can add or refresh many credentials at once; rebuild
             // the running proxy snapshot rather than refreshing entry by entry.
             reload_running_proxy(state, vault)?;

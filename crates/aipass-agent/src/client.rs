@@ -348,7 +348,8 @@ fn ready_deadline(started: Instant, initial_sync_pending: bool) -> Instant {
 }
 
 impl AgentCommandError {
-    fn internal(err: impl Into<anyhow::Error>) -> Self {        Self {
+    fn internal(err: impl Into<anyhow::Error>) -> Self {
+        Self {
             code: Some(AgentErrorCode::Internal),
             message: err.into().to_string(),
         }

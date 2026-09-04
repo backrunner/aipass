@@ -2221,4 +2221,185 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn start_rejects_config_without_any_enabled_route_group() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        let mut config = config_with_token("zero-group-token");
+        config.routes[0].enabled = false;
+        service
+            .set_config(&creation.vault, config)
+            .expect("save config");
+
+        let error = service
+            .start(&creation.vault)
+            .expect_err("start must fail without an enabled route group");
+        assert_eq!(
+            error.code,
+            aipass_agent_protocol::AgentErrorCode::ValidationFailed
+        );
+        assert!(!service.status().running);
+    }
+
+    #[test]
+    fn reload_if_running_is_a_noop_when_stopped() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        service.config = config_with_token("stopped-token");
+        service.save_config(&creation.vault).expect("save config");
+
+        service
+            .reload_if_running(&creation.vault)
+            .expect("reload on a stopped proxy is a no-op");
+        assert!(!service.status().running);
+    }
+
+    #[test]
+    fn reload_if_running_rebuilds_credentials_after_the_vault_changed() {
+        // Simulates the sync-download path: the vault changed underneath a
+        // running proxy, and reload_if_running must rebuild the runtime
+        // snapshot so the next request uses the new credential.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let upstream = TcpListener::bind("127.0.0.1:0").expect("bind upstream");
+        let upstream_addr = upstream.local_addr().expect("upstream address");
+        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        let upstream_thread = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = upstream.accept().expect("accept proxy request");
+                let mut request = vec![0_u8; 8192];
+                let count = stream.read(&mut request).expect("read proxy request");
+                request.truncate(count);
+                request_tx
+                    .send(String::from_utf8_lossy(&request).to_string())
+                    .expect("capture proxy request");
+                let body = r#"{"id":"response-test","status":"completed","output":[]}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .expect("write upstream response");
+            }
+        });
+
+        let provider_id = creation
+            .vault
+            .add_provider(provider_input(
+                "old-upstream-key",
+                format!("http://{upstream_addr}/v1"),
+                "old-header",
+            ))
+            .expect("add provider");
+        let secret_id = creation
+            .vault
+            .get_provider_summary(provider_id)
+            .expect("provider summary")
+            .secret_refs[0]
+            .id
+            .clone();
+        let proxy_probe = TcpListener::bind("127.0.0.1:0").expect("reserve proxy address");
+        let proxy_addr = proxy_probe.local_addr().expect("proxy address");
+        drop(proxy_probe);
+        let local_token = "aipass-reload-if-running";
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        service.config = config_with_token(local_token);
+        service.config.bind_addr = proxy_addr.to_string();
+        service.config.routes[0].targets = vec![ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: provider_id,
+            secret_id,
+            label: "primary".into(),
+            base_url: format!("http://{upstream_addr}/v1"),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            protocol: None,
+        }];
+        service
+            .save_config(&creation.vault)
+            .expect("save proxy config");
+        service.start(&creation.vault).expect("start proxy");
+
+        let request = || {
+            reqwest::blocking::Client::new()
+                .post(format!("http://{proxy_addr}/v1/responses"))
+                .bearer_auth(local_token)
+                .body("{}")
+                .send()
+                .expect("proxy request")
+                .error_for_status()
+                .expect("proxy status");
+        };
+        request();
+
+        // The vault write lands without any proxy call, as it would when a
+        // sync download refreshed the records on disk.
+        creation
+            .vault
+            .update_provider(
+                provider_id,
+                ProviderEntryUpdateInput {
+                    title: "Proxy upstream".into(),
+                    provider_kind: ProviderKind::Unknown,
+                    provider_id: Some("openai".into()),
+                    credential_kind: Default::default(),
+                    account_identity: None,
+                    domains: Vec::new(),
+                    favicon_url: None,
+                    endpoints: vec![ProviderEndpoint::api(format!("http://{upstream_addr}/v1"))],
+                    interface_type: InterfaceType::OpenAiCompatible,
+                    auth_scheme: AuthScheme::Bearer,
+                    api_key: Some("new-upstream-key".into()),
+                    secret_label: None,
+                    default_model: None,
+                    model_aliases: Vec::new(),
+                    headers: Some(vec![("x-provider-header".into(), "new-header".into())]),
+                    quota: None,
+                    subscription: None,
+                    gateway: None,
+                    tags: Vec::new(),
+                    notes: None,
+                    secret_metadata: Default::default(),
+                },
+            )
+            .expect("update provider");
+        service
+            .reload_if_running(&creation.vault)
+            .expect("reload running proxy");
+        assert!(service.status().running);
+        request();
+
+        let first = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first upstream request")
+            .to_ascii_lowercase();
+        let second = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second upstream request")
+            .to_ascii_lowercase();
+        assert!(first.contains("authorization: bearer old-upstream-key"));
+        assert!(second.contains("authorization: bearer new-upstream-key"));
+        assert!(second.contains("x-provider-header: new-header"));
+        upstream_thread.join().expect("upstream thread");
+    }
 }

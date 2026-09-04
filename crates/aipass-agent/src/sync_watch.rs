@@ -114,21 +114,20 @@ fn spawn_sync_watcher(state: Arc<AgentState>, dir: PathBuf) -> Option<SyncWatche
 
 fn watch_loop(state: Arc<AgentState>, dir: PathBuf, stop: Arc<AtomicBool>) {
     let (tx, rx) = mpsc::channel::<()>();
-    let mut watcher = match notify::recommended_watcher(
-        move |_event: notify::Result<notify::Event>| {
+    let mut watcher =
+        match notify::recommended_watcher(move |_event: notify::Result<notify::Event>| {
             let _ = tx.send(());
-        },
-    ) {
-        Ok(watcher) => watcher,
-        Err(err) => {
-            write_component_log(
-                AGENT_LOG,
-                "WARN",
-                &format!("sync watcher unavailable for {}: {err}", dir.display()),
-            );
-            return;
-        }
-    };
+        }) {
+            Ok(watcher) => watcher,
+            Err(err) => {
+                write_component_log(
+                    AGENT_LOG,
+                    "WARN",
+                    &format!("sync watcher unavailable for {}: {err}", dir.display()),
+                );
+                return;
+            }
+        };
     if let Err(err) = watcher.watch(&dir, RecursiveMode::Recursive) {
         write_component_log(
             AGENT_LOG,
@@ -166,7 +165,11 @@ fn watch_loop(state: Arc<AgentState>, dir: PathBuf, stop: Arc<AtomicBool>) {
                 Err(err) => write_component_log(
                     AGENT_LOG,
                     "WARN",
-                    &format!("sync watcher sync failed for {}: {}", dir.display(), err.message),
+                    &format!(
+                        "sync watcher sync failed for {}: {}",
+                        dir.display(),
+                        err.message
+                    ),
                 ),
             }
         }

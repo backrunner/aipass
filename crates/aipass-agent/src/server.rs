@@ -2240,7 +2240,7 @@ fn reload_proxy_after_sync_download(state: &Arc<AgentState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aipass_agent_protocol::SessionStatus;
+    use aipass_agent_protocol::{SessionPolicy, SessionStatus};
     use aipass_crypto::SecretString;
     use std::io::Write;
     use std::sync::{Mutex, OnceLock};
@@ -2325,6 +2325,7 @@ mod tests {
     }
 
     struct RunningAgent {
+        root: PathBuf,
         vault_dir: PathBuf,
         client: crate::AgentClient,
         handle: Option<thread::JoinHandle<()>>,
@@ -2333,12 +2334,29 @@ mod tests {
     impl RunningAgent {
         fn start() -> Self {
             let dir = tempdir().expect("tempdir");
+            let vault_dir = dir.path().join("vault");
             aipass_vault::Vault::create(
-                dir.path(),
+                &vault_dir,
                 &SecretString::new("correct horse battery staple"),
             )
             .expect("create vault");
-            let vault_dir = dir.keep();
+            // Pin sync to a temp folder: macOS defaults to iCloud when no
+            // sync settings file exists, and startup sync must never write
+            // into a real cloud directory on the host running the tests.
+            let settings = crate::session::PersistedSyncSettings {
+                mode: SyncMode::Local,
+                sync_folder: Some(dir.path().join("sync")),
+                ..Default::default()
+            };
+            let settings_path = crate::session::sync_settings_path(&vault_dir);
+            fs::create_dir_all(settings_path.parent().expect("settings parent"))
+                .expect("create settings dir");
+            atomic_write_bytes(
+                &settings_path,
+                &serde_json::to_vec_pretty(&settings).expect("encode settings"),
+            )
+            .expect("write sync settings");
+            let root = dir.keep();
             let server_vault_dir = vault_dir.clone();
             let handle = thread::spawn(move || {
                 run_server(ServerOptions::without_desktop_tray(server_vault_dir)).expect("server");
@@ -2354,6 +2372,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(50));
             }
             Self {
+                root,
                 vault_dir,
                 client,
                 handle: Some(handle),
@@ -2367,7 +2386,7 @@ mod tests {
             if let Some(handle) = self.handle.take() {
                 let _ = handle.join();
             }
-            let _ = fs::remove_dir_all(&self.vault_dir);
+            let _ = fs::remove_dir_all(&self.root);
         }
     }
 
@@ -2467,6 +2486,189 @@ mod tests {
         assert!(status.exists);
         assert!(status.locked);
         assert_eq!(status.last_lock_reason, Some(LockReason::AgentRestart));
+    }
+
+    #[test]
+    fn initial_sync_runs_at_startup_and_clears_the_pending_flag() {
+        let agent = RunningAgent::start();
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let status = agent
+                .client
+                .request::<SessionStatus>(&AgentRequest::SessionStatus)
+                .expect("status response");
+            if !status.initial_sync_pending {
+                break;
+            }
+            assert!(Instant::now() < deadline, "initial sync stuck pending");
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        // The vault was synced into the configured local folder. A fresh vault
+        // has no provider objects, but it always has a device record.
+        let sync_devices = agent.root.join("sync").join("devices");
+        assert!(sync_devices.is_dir());
+        assert!(fs::read_dir(sync_devices).expect("sync devices").count() > 0);
+    }
+
+    fn sync_test_state(vault_dir: PathBuf) -> Arc<AgentState> {
+        Arc::new(AgentState {
+            policy: Mutex::new(SessionPolicy::default()),
+            vault_dir: vault_dir.clone(),
+            namespace: "test".to_string(),
+            auth_token: SensitiveString::from("token"),
+            session: Mutex::new(SessionState::Locked),
+            session_changed: Condvar::new(),
+            last_lock_reason: Mutex::new(None),
+            proxy: Mutex::new(
+                crate::proxy_service::ProxyService::new(&vault_dir).expect("proxy service"),
+            ),
+            favicon_backfill: Mutex::new(()),
+            sync_lock: Mutex::new(()),
+            initial_sync: Mutex::new(InitialSyncState::Done),
+            sync_watcher: Mutex::new(None),
+            shutdown: AtomicBool::new(false),
+        })
+    }
+
+    fn sync_test_provider(title: &str, api_key: &str) -> ProviderEntryInput {
+        ProviderEntryInput {
+            title: title.to_string(),
+            provider_kind: ProviderKind::Unknown,
+            provider_id: Some("openai".to_string()),
+            credential_kind: Default::default(),
+            account_identity: None,
+            domains: Vec::new(),
+            favicon_url: None,
+            endpoints: vec![ProviderEndpoint::api("http://127.0.0.1:9/v1")],
+            interface_type: InterfaceType::OpenAiCompatible,
+            auth_scheme: AuthScheme::Bearer,
+            api_key: api_key.to_string(),
+            secret_label: None,
+            default_model: None,
+            model_aliases: Vec::new(),
+            headers: Vec::new(),
+            quota: None,
+            subscription: None,
+            gateway: None,
+            tags: Vec::new(),
+            notes: None,
+            secret_metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn sync_download_reloads_the_unlocked_vault_and_keeps_the_proxy_serving() {
+        let temp = tempdir().expect("tempdir");
+        let vault_dir = temp.path().join("vault");
+        let sync_dir = temp.path().join("sync");
+        let password = SecretString::new("correct horse battery staple");
+        let creation = Vault::create(&vault_dir, &password).expect("create vault");
+        let state = sync_test_state(vault_dir.clone());
+        crate::session::set_session_vault(&state, creation.vault);
+
+        // Provider A is wired into a running proxy route group.
+        let provider_a = with_vault(&state, false, |vault| {
+            vault
+                .add_provider(sync_test_provider("Upstream A", "key-a"))
+                .map_err(map_vault_error)
+        })
+        .expect("add provider A");
+        let secret_a = with_vault(&state, true, |vault| {
+            vault
+                .get_provider_summary(provider_a)
+                .map_err(map_vault_error)
+        })
+        .expect("provider A summary")
+        .secret_refs[0]
+            .id
+            .clone();
+        let proxy_probe =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("reserve proxy address");
+        let proxy_addr = proxy_probe.local_addr().expect("proxy address").to_string();
+        drop(proxy_probe);
+        with_vault(&state, false, |vault| {
+            let mut proxy = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned"))?;
+            proxy.set_config(
+                vault,
+                aipass_proxy::ProxyConfig {
+                    bind_addr: proxy_addr,
+                    routes: vec![aipass_proxy::ProxyRouteConfig {
+                        id: Uuid::new_v4(),
+                        name: "default".into(),
+                        token: "route-token".into(),
+                        inbound_protocol: aipass_proxy::Protocol::OpenAiResponses,
+                        upstream_protocol: aipass_proxy::Protocol::OpenAiResponses,
+                        conversion_enabled: false,
+                        strategy: aipass_proxy::RouteStrategy::Fallback,
+                        targets: vec![aipass_proxy::ProxyTargetConfig {
+                            id: Uuid::new_v4(),
+                            provider_entry_id: provider_a,
+                            secret_id: secret_a,
+                            label: "primary".into(),
+                            base_url: "http://127.0.0.1:9/v1".into(),
+                            auth_scheme: "bearer".into(),
+                            headers: Vec::new(),
+                            group: None,
+                            priority: 0,
+                            weight: 1,
+                            enabled: true,
+                            protocol: None,
+                        }],
+                        retry: aipass_proxy::RetryPolicy::default(),
+                        enabled: true,
+                    }],
+                    ..Default::default()
+                },
+            )?;
+            proxy.start(vault)?;
+            Ok(())
+        })
+        .expect("start proxy");
+
+        let first = run_sync_local(&state, &sync_dir).expect("initial sync");
+        assert_eq!(first.downloaded, 0);
+
+        // A second writer adds provider B; the object reaches the sync folder
+        // without the local vault copy, simulating a download from another
+        // device.
+        let provider_b = {
+            let other = Vault::open(&vault_dir, &password).expect("second vault handle");
+            other
+                .add_provider(sync_test_provider("Upstream B", "key-b"))
+                .expect("add provider B")
+        };
+        let object_b = vault_dir
+            .join("objects")
+            .join(format!("{provider_b}.aipobj"));
+        fs::create_dir_all(sync_dir.join("objects")).expect("sync objects dir");
+        fs::copy(
+            &object_b,
+            sync_dir
+                .join("objects")
+                .join(format!("{provider_b}.aipobj")),
+        )
+        .expect("seed remote object");
+        fs::remove_file(&object_b).expect("remove local object B");
+
+        let second = run_sync_local(&state, &sync_dir).expect("sync with download");
+        assert_eq!(second.downloaded, 1);
+
+        // The in-memory session vault sees the downloaded record, and the
+        // running proxy rebuilt its snapshot without going down.
+        let titles = with_vault(&state, true, |vault| {
+            vault.list_provider_summaries().map_err(map_vault_error)
+        })
+        .expect("list providers")
+        .into_iter()
+        .map(|entry| entry.title)
+        .collect::<Vec<_>>();
+        assert!(titles.iter().any(|title| title == "Upstream B"));
+        assert!(state.proxy.lock().expect("proxy lock").status().running);
     }
 
     #[test]
