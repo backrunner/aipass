@@ -25,11 +25,20 @@
   let silentRetry = route?.retry?.silentRetry ?? false;
   let maxSilentRetries = route?.retry?.maxSilentRetries ?? 3;
   let memberPickerValue = "";
-  let members: Member[] = (route?.targets ?? []).flatMap((target) => {
+  let members: Member[] = [];
+  // Targets whose provider entry or secret can no longer be resolved (archived,
+  // trashed or deleted). They stay visible as placeholder rows and are preserved
+  // on save unless the user explicitly removes them.
+  let missingMembers: ProxyTargetConfig[] = [];
+  for (const target of route?.targets ?? []) {
     const entry = entries.find((item) => item.id === target.providerEntryId);
     const secret = entry?.secretRefs.find((item) => item.id === target.secretId);
-    return entry && secret ? [{ entry, secret, weight: Math.max(1, target.weight || 1), enabled: target.enabled !== false }] : [];
-  });
+    if (entry && secret) {
+      members.push({ entry, secret, weight: Math.max(1, target.weight || 1), enabled: target.enabled !== false });
+    } else {
+      missingMembers.push(target);
+    }
+  }
   let dragIndex: number | null = null;
 
   $: credentialOptions = entries
@@ -85,6 +94,10 @@
     members = members.filter((_, itemIndex) => itemIndex !== index);
   }
 
+  function removeMissingMember(index: number) {
+    missingMembers = missingMembers.filter((_, itemIndex) => itemIndex !== index);
+  }
+
   function toggleMember(index: number, enabled: boolean) {
     members = members.map((member, itemIndex) => (itemIndex === index ? { ...member, enabled } : member));
   }
@@ -113,7 +126,7 @@
   }
 
   async function save() {
-    if (saving || !name.trim() || members.length === 0) return;
+    if (saving || !name.trim() || (members.length === 0 && missingMembers.length === 0)) return;
     const targets: ProxyTargetConfig[] = members.map((member, index) => {
       const existing = route?.targets.find(
         (target) => target.providerEntryId === member.entry.id && target.secretId === member.secret.id
@@ -128,9 +141,21 @@
         enabled: member.enabled
       };
     }).filter((target): target is ProxyTargetConfig => Boolean(target));
+    // Unresolvable targets survive the save unchanged, appended after the
+    // editable members, unless the user explicitly removed their rows.
+    targets.push(
+      ...missingMembers.map((target, index) => ({ ...target, priority: targets.length + index }))
+    );
     if (targets.length === 0) return;
-    const upstreamProtocol = routeProtocolFor(members[0].entry, members[0].secret);
-    const conversionEnabled = routeNeedsConversion(protocol, members);
+    const upstreamProtocol = members.length > 0
+      ? routeProtocolFor(members[0].entry, members[0].secret)
+      : route?.upstreamProtocol ?? protocol;
+    // Members that failed to resolve may still serve traffic with a different
+    // native protocol, so keep conversion on when the full target set cannot
+    // be inspected; otherwise a plain rename could silently disable it.
+    const conversionEnabled =
+      routeNeedsConversion(protocol, members) ||
+      (missingMembers.length > 0 && (route?.conversionEnabled ?? false));
     const nextRoute: ProxyRouteConfig = route
       ? {
           ...route,
@@ -250,7 +275,7 @@
           <div class="members-block">
             <div class="members-title">
               <span>{$t("server.members")}</span>
-              <span class="members-count">{$t("server.memberCount", { count: members.length })}</span>
+              <span class="members-count">{$t("server.memberCount", { count: members.length + missingMembers.length })}</span>
             </div>
             <div class="member-picker">
               <SelectField
@@ -320,12 +345,30 @@
                 </div>
               </div>
             {/each}
+
+            {#each missingMembers as missing, index (missing.id)}
+              <div class="member-row member-missing" role="listitem">
+                <span class="drag-handle placeholder" aria-hidden="true"></span>
+                <span class="member-icon" aria-hidden="true"><KeyRound size={15} /></span>
+                <div class="member-main">
+                  <strong>{missing.label || missing.providerEntryId}</strong>
+                  <span class="mono">{missing.providerEntryId} · {$t("server.memberMissing")}</span>
+                </div>
+                <div class="member-controls">
+                  <div class="member-actions">
+                    <IconButton size="sm" tone="danger" label={$t("server.removeTarget")} on:click={() => removeMissingMember(index)}>
+                      <Trash2 size={14} />
+                    </IconButton>
+                  </div>
+                </div>
+              </div>
+            {/each}
           </div>
         </div>
 
         <footer class="modal-footer">
           <Button variant="ghost" on:click={handleClose} disabled={saving}>{$t("common.cancel")}</Button>
-          <Button variant="primary" type="submit" disabled={saving || !name.trim() || members.length === 0}>
+          <Button variant="primary" type="submit" disabled={saving || !name.trim() || (members.length === 0 && missingMembers.length === 0)}>
             {$t("common.save")}
           </Button>
         </footer>
@@ -623,6 +666,27 @@
         opacity: 0.5;
       }
     }
+
+    &.member-missing {
+      border-style: dashed;
+
+      .member-icon,
+      .member-main {
+        opacity: 0.5;
+      }
+    }
+  }
+
+  .drag-handle.placeholder {
+    cursor: default;
+
+    &:hover {
+      background: transparent;
+    }
+  }
+
+  .mono {
+    font-family: var(--font-mono);
   }
 
   .drag-handle {

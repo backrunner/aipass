@@ -8,6 +8,9 @@
 
   export let usage: ServerUsageSummary;
   export let entries: ProviderEntry[] = [];
+  // Archived providers still serve proxy traffic, so their usage rows must
+  // resolve to real titles instead of the id-prefix fallback.
+  export let archivedEntries: ProviderEntry[] = [];
 
   type Row = {
     key: string;
@@ -25,7 +28,10 @@
   };
 
   function entryFor(providerEntryId: string): ProviderEntry | undefined {
-    return entries.find((entry) => entry.id === providerEntryId);
+    return (
+      entries.find((entry) => entry.id === providerEntryId) ??
+      archivedEntries.find((entry) => entry.id === providerEntryId)
+    );
   }
 
   function providerName(providerEntryId: string): string {

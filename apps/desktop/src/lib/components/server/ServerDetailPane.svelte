@@ -19,6 +19,9 @@
   export let series: UsageTimeseriesPoint[] = [];
   export let usage: ServerUsageSummary;
   export let entries: ProviderEntry[] = [];
+  // Archived providers still work in the proxy; resolve their labels and
+  // default models instead of treating them as missing.
+  export let archivedEntries: ProviderEntry[] = [];
   export let selectedRouteId = "";
   export let busy = "";
   export let toolDetections: ToolDetection[] = [];
@@ -54,11 +57,15 @@
   $: integrateEndpoint = integrateRoute
     ? `http://${advertisedProxyAddress(config.bindAddr)}${integrateRoute.inboundProtocol === "anthropic_messages" ? "" : "/v1"}`
     : "";
+  function entryById(id: string): ProviderEntry | undefined {
+    return entries.find((entry) => entry.id === id) ?? archivedEntries.find((entry) => entry.id === id);
+  }
+
   $: hasRouteDefaultModel = Boolean(
     integrateRoute?.targets.some(
       (target) =>
         target.enabled &&
-        Boolean(entries.find((entry) => entry.id === target.providerEntryId)?.defaultModel)
+        Boolean(entryById(target.providerEntryId)?.defaultModel)
     )
   );
   $: proxyIntegrationTools = integrateRoute
@@ -209,7 +216,7 @@
     </Card>
 
     <Card title={$t("server.usageBreakdown")} padded={false} collapsible>
-      <UsageBreakdown {usage} {entries} />
+      <UsageBreakdown {usage} {entries} {archivedEntries} />
     </Card>
 
     <IntegrationCard

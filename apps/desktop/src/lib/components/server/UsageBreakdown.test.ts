@@ -1,10 +1,26 @@
 // @vitest-environment happy-dom
+import type { ProviderEntry } from "@aipass/schemas";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test } from "vitest";
 
 import { setLocale } from "../../stores/i18n";
 import type { ServerUsageSummary } from "../../types";
 import UsageBreakdown from "./UsageBreakdown.svelte";
+
+function entry(id: string, title: string): ProviderEntry {
+  return {
+    id,
+    title,
+    favorite: false,
+    providerKind: "unknown",
+    domains: [],
+    endpoints: [],
+    interfaceType: "openai_compatible",
+    authScheme: "bearer",
+    secretRefs: [],
+    tags: [],
+  };
+}
 
 const usage: ServerUsageSummary = {
   requestCount: 1,
@@ -61,3 +77,25 @@ test("renders token cache rate from cache read and non-cached input", () => {
   expect(cacheRateColumn).toBeGreaterThanOrEqual(0);
   expect(cells[cacheRateColumn]?.textContent?.trim()).toBe("70.0%");
 });
+
+test("resolves archived provider titles instead of the id fallback", () => {
+  setLocale("en");
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  app = mount(UsageBreakdown, {
+    target,
+    props: {
+      usage: {
+        ...usage,
+        providers: [{ ...usage.providers[0], providerEntryId: "archived-1" }],
+      },
+      entries: [],
+      archivedEntries: [entry("archived-1", "Archived Relay")],
+    },
+  }) as never;
+  flushSync();
+
+  const label = document.querySelector(".row-label");
+  expect(label?.textContent?.trim()).toBe("Archived Relay");
+});
+

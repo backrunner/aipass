@@ -290,6 +290,9 @@
   // Keep sidebar counts based on the complete active vault list, even while
   // the visible pane is showing favorites, archive, trash, or search results.
   let countEntries: ProviderEntry[] = [];
+  // Archived summaries for the server view: archived providers still serve
+  // proxy traffic, so route/usage rows must resolve their titles and models.
+  let archivedEntries: ProviderEntry[] = [];
   let entriesLoadRequestId = 0;
   let devices: DeviceRecord[] = [];
   let devicesLoading = false;
@@ -1020,6 +1023,7 @@
   function clearSensitiveUnlockedState() {
     entries = [];
     countEntries = [];
+    archivedEntries = [];
     entriesLoadRequestId++;
     selectedId = "";
     activeDetailId = "";
@@ -1597,6 +1601,7 @@
     if (!selected) return;
     await invokeTauri("provider_archive", { id: selected.id });
     await loadEntries();
+    void loadServer();
   }
 
   async function toggleFavoriteSelected(favorite: boolean) {
@@ -1621,6 +1626,7 @@
     if (!selected) return;
     await invokeTauri("provider_restore", { id: selected.id });
     await loadEntries();
+    void loadServer();
   }
 
   async function deleteSelected() {
@@ -1634,6 +1640,7 @@
     if (!confirm($t("confirm.emptyTrash"))) return;
     await invokeTauri("trash_empty");
     await loadEntries();
+    void loadServer();
   }
 
   async function setArchiveView(value: boolean) {
@@ -1858,7 +1865,20 @@
     showTrash = false;
     showFavorites = false;
     showSettings = false;
-    await Promise.all([loadServer(), loadToolDetections()]);
+    await Promise.all([loadServer(), loadToolDetections(), loadArchivedEntries()]);
+  }
+
+  async function loadArchivedEntries() {
+    if (status.locked) {
+      archivedEntries = [];
+      return;
+    }
+    try {
+      const summaries = await invokeTauri<EntrySummary[]>("entries_list", { archived: true });
+      archivedEntries = summaries.map(summaryToEntry);
+    } catch (err) {
+      console.warn("archived entries load failed", err);
+    }
   }
 
   async function openPendingServerView() {
@@ -3016,6 +3036,7 @@
           series={serverUsageSeries}
           usage={serverUsage}
           entries={countEntries}
+          {archivedEntries}
           {selectedRouteId}
           busy={serverBusy}
           {toolDetections}
