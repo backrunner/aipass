@@ -65,10 +65,17 @@
     .filter((value) => value === draft.authScheme || authSchemeCompatibleWithInterface(value, draft.interfaceType))
     .map((value) => ({ value, label: $t(authLabelKey(value)) }));
 
-  $: providerOptions = providerDefinitions.map((provider) => ({
-    value: provider.id,
-    label: compactProviderSelect ? compactProviderLabel(provider.id, provider.displayName) : provider.displayName
-  }));
+  $: providerOptions = [
+    ...providerDefinitions.map((provider) => ({
+      value: provider.id,
+      label: compactProviderSelect ? compactProviderLabel(provider.id, provider.displayName) : provider.displayName
+    })),
+    // A stored/deep-linked id the registry does not know must still render a
+    // label; otherwise the select shows a blank value.
+    ...(draft.providerId && !providerDefinitions.some((provider) => provider.id === draft.providerId)
+      ? [{ value: draft.providerId, label: draft.providerId }]
+      : [])
+  ];
 
   function compactProviderLabel(providerId: string, displayName: string): string {
     if (providerId === "custom_openai_compatible") return "OpenAI-compatible";

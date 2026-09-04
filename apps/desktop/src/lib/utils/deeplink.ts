@@ -1,4 +1,4 @@
-import type { ProviderEntry } from "@aipass/schemas";
+import { providerDefinitions, type InterfaceType, type ProviderEntry } from "@aipass/schemas";
 import { encodeListValues, encodePairValues, type Draft } from "@aipass/ui";
 
 import type { AipassProviderLink, CcSwitchProviderLink } from "../types";
@@ -126,11 +126,22 @@ export function findCcSwitchDuplicate(
   });
 }
 
+/**
+ * Keep the form's provider select valid: an id the registry does not know
+ * would render as a blank option, so fall back to the matching custom
+ * definition the same way the app treats unknown providers elsewhere.
+ */
+export function knownProviderId(providerId: string | undefined, interfaceType?: InterfaceType): string {
+  if (!providerId) return "";
+  if (providerDefinitions.some((provider) => provider.id === providerId)) return providerId;
+  return interfaceType === "openai_compatible" ? "custom_openai_compatible" : "custom_http";
+}
+
 /** Map the storage-shaped `aipass-provider://` payload onto the add form. */
 export function aipassProviderLinkToDraft(link: AipassProviderLink): Partial<Draft> {
   const draft: Partial<Draft> = {
     title: link.title,
-    providerId: link.providerId ?? "",
+    providerId: knownProviderId(link.providerId, link.interfaceType),
     credentialKind: link.credentialKind ?? "api",
     accountIdentity: link.accountIdentity ?? "",
     domain: encodeListValues(link.domains),

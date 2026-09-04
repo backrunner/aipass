@@ -7,6 +7,7 @@ import {
   ccSwitchLinkToDraft,
   findAipassProviderDuplicate,
   findCcSwitchDuplicate,
+  knownProviderId,
   splitEndpointList,
 } from "./deeplink";
 
@@ -253,6 +254,48 @@ describe("aipassProviderLinkToDraft", () => {
     expect(draft.modelAlias).toBe("fast\\,cheap=gpt-5\\=latest");
     expect(draft.header).toBe("Accept=text/event-stream\\, application/json");
     expect(draft.tag).toBe("team\\,one");
+  });
+
+  it("keeps known provider ids untouched", () => {
+    const draft = aipassProviderLinkToDraft({
+      title: "Relay",
+      providerId: "openai",
+      domains: [],
+      endpoints: [],
+      consoleEndpoints: [],
+      modelAliases: [],
+      headers: [],
+      tags: [],
+    });
+    expect(draft.providerId).toBe("openai");
+  });
+
+  it("falls back to a custom definition for unknown provider ids", () => {
+    const base = {
+      title: "Relay",
+      providerId: "acme-router",
+      domains: [],
+      endpoints: [],
+      consoleEndpoints: [],
+      modelAliases: [],
+      headers: [],
+      tags: [],
+    };
+    expect(aipassProviderLinkToDraft({ ...base, interfaceType: "openai_compatible" }).providerId).toBe(
+      "custom_openai_compatible",
+    );
+    expect(aipassProviderLinkToDraft({ ...base, interfaceType: "anthropic_messages" }).providerId).toBe(
+      "custom_http",
+    );
+    expect(aipassProviderLinkToDraft(base).providerId).toBe("custom_http");
+  });
+});
+
+describe("knownProviderId", () => {
+  it("passes through registered ids and empty values", () => {
+    expect(knownProviderId("anthropic")).toBe("anthropic");
+    expect(knownProviderId("")).toBe("");
+    expect(knownProviderId(undefined)).toBe("");
   });
 });
 

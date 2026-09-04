@@ -1898,7 +1898,9 @@
       pendingDeepLinks = [...pendingDeepLinks, { kind: "aipassProvider", payload: link }];
       return;
     }
-    const duplicate = findAipassProviderDuplicate(entries, link);
+    // countEntries always holds the full active list; `entries` may be a
+    // favorites/archive/trash/search subset where a duplicate would be missed.
+    const duplicate = findAipassProviderDuplicate(countEntries, link);
     if (duplicate) {
       aipassProviderDuplicateLink = link;
       ccSwitchDuplicateName = duplicate.title;
@@ -1915,7 +1917,9 @@
       pendingDeepLinks = [...pendingDeepLinks, { kind: "ccSwitch", payload: link }];
       return;
     }
-    const duplicate = findCcSwitchDuplicate(entries, link);
+    // countEntries always holds the full active list; `entries` may be a
+    // favorites/archive/trash/search subset where a duplicate would be missed.
+    const duplicate = findCcSwitchDuplicate(countEntries, link);
     if (duplicate) {
       ccSwitchDuplicateLink = link;
       ccSwitchDuplicateName = duplicate.title;
