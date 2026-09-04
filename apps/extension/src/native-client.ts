@@ -47,6 +47,26 @@ export interface NativeSessionStatus {
   vaultNamespace?: string;
 }
 
+type NativeSessionStatusListener = (response: NativeResponse<NativeSessionStatus>) => void;
+
+let nativeSessionStatusListener: NativeSessionStatusListener | undefined;
+
+/**
+ * Lets the service worker mirror session state from monitor-driven pings
+ * (heartbeat, reconnect alarm), which otherwise bypass session tracking.
+ */
+export function setNativeSessionStatusListener(listener: NativeSessionStatusListener | undefined) {
+  nativeSessionStatusListener = listener;
+}
+
+function notifyNativeSessionStatus(response: NativeResponse<NativeSessionStatus>) {
+  try {
+    nativeSessionStatusListener?.(response);
+  } catch {
+    // Session tracking must never break the connection monitor.
+  }
+}
+
 export interface ProviderSummary {
   id: string;
   title: string;
@@ -224,9 +244,9 @@ export function startNativeConnectionMonitor() {
 export function handleNativeReconnectAlarm(alarmName: string) {
   if (alarmName !== RECONNECT_ALARM || !supportsNativePort()) return;
   if (nativePort) {
-    void pingNativeHost();
+    void pingNativeHost().then(notifyNativeSessionStatus);
   } else {
-    void recoverNativeHost();
+    void recoverNativeHost().then(notifyNativeSessionStatus);
   }
   scheduleNativeHeartbeat();
 }
@@ -351,7 +371,7 @@ function scheduleNativeHeartbeat() {
   heartbeatTimer = setTimeout(() => {
     heartbeatTimer = undefined;
     if (nativePort) {
-      void pingNativeHost();
+      void pingNativeHost().then(notifyNativeSessionStatus);
     } else {
       connectNativePort();
     }

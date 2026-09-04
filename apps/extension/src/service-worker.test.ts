@@ -9,10 +9,12 @@ const nativeSaveResponses: unknown[] = [];
 const nativePreviewResponses: unknown[] = [];
 const nativeUsageProbeResponses: unknown[] = [];
 const nativeUsageApplyResponses: unknown[] = [];
+const nativeProviderAddResponses: unknown[] = [];
 const nativeListResponses: unknown[] = [];
 const nativeMessages: Array<Record<string, unknown>> = [];
 const storageSessionData = new Map<string, unknown>();
 let nativePingLocked = false;
+let onNativeListMessage: (() => void) | undefined;
 
 function installChromeStub() {
   vi.stubGlobal("chrome", {
@@ -39,6 +41,7 @@ function installChromeStub() {
         }
         if (type === "entries.list") {
           const queued = nativeListResponses.shift();
+          onNativeListMessage?.();
           if (queued) {
             callback(queued);
             return;
@@ -105,6 +108,16 @@ function installChromeStub() {
             ok: true,
             data: { entryId: crypto.randomUUID() }
           });
+          return;
+        }
+        if (type === "provider.add") {
+          callback(
+            nativeProviderAddResponses.shift() ?? {
+              id: "1",
+              ok: true,
+              data: { entryId: "added-entry" }
+            }
+          );
           return;
         }
         if (type === "provider.usageProbe") {
@@ -242,10 +255,12 @@ describe("service worker pending drafts", () => {
     nativePreviewResponses.length = 0;
     nativeUsageProbeResponses.length = 0;
     nativeUsageApplyResponses.length = 0;
+    nativeProviderAddResponses.length = 0;
     nativeListResponses.length = 0;
     nativeMessages.length = 0;
     storageSessionData.clear();
     nativePingLocked = false;
+    onNativeListMessage = undefined;
     installChromeStub();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
   });
@@ -403,6 +418,68 @@ describe("service worker pending drafts", () => {
       data?: { entries?: Array<{ id?: string }> };
     };
     assert.equal(cached.data?.entries?.[0]?.id, "entry-1");
+  });
+
+  it("rehydrates session state for cached entries after a worker restart", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry()]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+
+    vi.resetModules();
+    listeners.length = 0;
+    await import("./service-worker");
+
+    // No ping this time: cachedEntriesList must rehydrate session state
+    // itself before serving the namespace-keyed cache.
+    const cached = (await dispatchMessage({
+      type: "aipass.cachedEntriesList"
+    })) as {
+      data?: { entries?: Array<{ id?: string }>; stale?: boolean };
+    };
+    assert.equal(cached.data?.entries?.[0]?.id, "entry-1");
+    assert.equal(cached.data?.stale, true);
+  });
+
+  it("re-fetches when a mutation lands during an entries refresh", async () => {
+    await import("./service-worker");
+
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry({ title: "Before Mutation" })]));
+    nativeListResponses.push(listResponse([providerEntry({ title: "After Mutation" })]));
+
+    // Fire the mutation while the first entries.list request is in flight so
+    // its (pre-mutation) response must not be returned to the caller.
+    let mutated = false;
+    onNativeListMessage = () => {
+      if (mutated) return;
+      mutated = true;
+      void dispatchMessage({
+        type: "aipass.providerAdd",
+        request: {
+          title: "New Provider",
+          domain: [],
+          endpoints: [],
+          consoleEndpoints: [],
+          interfaceType: "openai_compatible",
+          authScheme: "bearer",
+          apiKey: "sk-new-provider-secret1234567890",
+          modelAliases: [],
+          headers: [],
+          tags: []
+        }
+      });
+    };
+
+    const listed = (await dispatchMessage({ type: "aipass.entriesList" })) as {
+      ok?: boolean;
+      data?: { entries?: Array<{ title?: string }> };
+    };
+
+    assert.equal(mutated, true);
+    assert.equal(listed.ok, true);
+    assert.equal(listed.data?.entries?.[0]?.title, "After Mutation");
   });
 
   it("patches cached entries after provider update and delete mutations", async () => {

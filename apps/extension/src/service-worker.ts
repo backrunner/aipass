@@ -17,6 +17,7 @@ import {
   recoverNativeHost,
   saveDetectedSecret as saveDetectedSecretNative,
   searchEntries,
+  setNativeSessionStatusListener,
   startNativeConnectionMonitor,
   updateProvider,
   unlockWithPassword,
@@ -107,6 +108,7 @@ const usageRefreshPromises = new Map<string, Promise<UsageRefreshResponse>>();
 const automaticUsageRefreshAt = new Map<string, number>();
 const AUTOMATIC_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
+setNativeSessionStatusListener(rememberSessionStatus);
 startNativeConnectionMonitor();
 chrome.runtime.onStartup?.addListener(startNativeConnectionMonitor);
 chrome.runtime.onInstalled?.addListener(startNativeConnectionMonitor);
@@ -396,6 +398,11 @@ async function cachedEntriesList(): Promise<{
   ok: true;
   data: CachedEntriesData;
 }> {
+  if (!activeVaultNamespace) {
+    // Module state resets when the service worker restarts; rehydrate the
+    // session before deciding which namespace's cache to serve.
+    await pingWithSessionTracking();
+  }
   if (!activeVaultUnlocked || !activeVaultNamespace) {
     return cachedEntriesResponse();
   }
@@ -426,18 +433,25 @@ async function refreshEntryCache(reason: string): Promise<NativeResponse<Context
   return refreshEntryCachePromise;
 }
 
-async function refreshEntryCacheInner(reason: string): Promise<NativeResponse<ContextLookupData>> {
-  if (!activeVaultNamespace || !activeVaultUnlocked) {
-    await pingWithSessionTracking();
-  }
+async function refreshEntryCacheInner(reason: string, retried = false): Promise<NativeResponse<ContextLookupData>> {
+  // The vault may have been locked or switched outside the popup, so confirm
+  // the session before keying the cache by namespace — otherwise the current
+  // vault's entries can be written under a stale namespace.
+  await pingWithSessionTracking();
   const refreshVersion = entryCacheMutationVersion;
   const response = await listEntries();
-  if (response.ok && activeVaultUnlocked && activeVaultNamespace && refreshVersion === entryCacheMutationVersion) {
-    await writeEntryCache(activeVaultNamespace, response.data?.entries ?? []);
-    debugLog("entry cache refreshed", {
-      reason,
-      count: response.data?.entries?.length ?? 0
-    });
+  if (response.ok && activeVaultUnlocked && activeVaultNamespace) {
+    if (refreshVersion !== entryCacheMutationVersion) {
+      // A mutation landed mid-flight and this response predates it; re-fetch
+      // once so the caller gets post-mutation data instead of the stale list.
+      if (!retried) return refreshEntryCacheInner(reason, true);
+    } else {
+      await writeEntryCache(activeVaultNamespace, response.data?.entries ?? []);
+      debugLog("entry cache refreshed", {
+        reason,
+        count: response.data?.entries?.length ?? 0
+      });
+    }
   }
   return response;
 }

@@ -268,6 +268,41 @@ describe("native client connection monitor", () => {
     assert.equal(disconnect.mock.calls.length, 1);
   });
 
+  it("reports monitor-driven pings to the registered session status listener", async () => {
+    const successPort = makeRespondingPort({
+      protocolVersion: 1,
+      locked: false,
+      vaultNamespace: "test-vault"
+    });
+    const connectNative = vi.fn(() => successPort.port);
+    vi.stubGlobal("chrome", {
+      runtime: {
+        id: "test-extension-id",
+        lastError: undefined,
+        connectNative,
+        sendNativeMessage: vi.fn()
+      },
+      alarms: {
+        create: vi.fn(),
+        onAlarm: {
+          addListener: vi.fn()
+        }
+      }
+    });
+
+    const { setNativeSessionStatusListener, startNativeConnectionMonitor } = await import("./native-client");
+    const statuses: Array<unknown> = [];
+    setNativeSessionStatusListener((response) => statuses.push(response.data));
+    startNativeConnectionMonitor();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    assert.deepEqual(statuses.at(-1), {
+      protocolVersion: 1,
+      locked: false,
+      vaultNamespace: "test-vault"
+    });
+  });
+
   it("sends favicon backfill requests through the native host", async () => {
     const successPort = makeRespondingPort({
       checked: 1,
