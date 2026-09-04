@@ -1318,6 +1318,9 @@
 
   async function onOAuthConnected(account: OAuthAccountSummary) {
     showOAuthConnect = false;
+    // The new entry must be visible and selected; a filtered/archived/search
+    // view would hide it or select the wrong row.
+    resetProviderListView();
     await loadEntries();
     if (account.entryId) {
       selectProvider(account.entryId);
@@ -1457,6 +1460,9 @@
             secretMetadata
           }
         });
+        // Reset to the default view before selecting, so a filter, query, or
+        // favorites/archive view cannot hide the just-created entry.
+        resetProviderListView();
         selectedId = id;
       } else if (selected) {
         // An empty header input preserves the stored headers; a non-empty one
@@ -1698,6 +1704,18 @@
       providerFilter = "all";
       query = "";
     });
+  }
+
+  /** Back to the default all-providers list; used before selecting a just-created entry. */
+  function resetProviderListView() {
+    clearTimeout(searchTimer);
+    searchRequestId++;
+    showArchived = false;
+    showTrash = false;
+    showFavorites = false;
+    showServer = false;
+    providerFilter = "all";
+    query = "";
   }
 
   function loadServer(): Promise<void> {
