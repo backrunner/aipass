@@ -6,8 +6,8 @@ use aipass_agent::{AgentClient, AgentClientConfig, AgentCommandError};
 use aipass_agent_protocol::{
     AgentErrorCode, AgentRequest, BrowserContextLookupData, BrowserDetectedSecretFields,
     BrowserDetectedSecretPreview, BrowserFillResult, BrowserIgnoreOriginResult,
-    BrowserIgnoredStatus, FaviconBackfillRequest, FaviconBackfillResponse, SaveDetectedResult,
-    SessionStatus, SessionUnlockMode, UsageProbeResult,
+    BrowserIgnoredStatus, FaviconBackfillRequest, FaviconBackfillResponse, ProviderHeaderValues,
+    SaveDetectedResult, SessionStatus, SessionUnlockMode, UsageProbeResult,
 };
 use aipass_provider_registry::{provider_kind_for_id, ProviderEndpoint};
 use aipass_vault::{ProviderEntryInput, ProviderEntryUpdateInput};
@@ -480,6 +480,13 @@ fn handle_request_inner(
                 request_agent(config, &AgentRequest::ProviderDelete { id: entry_id })?;
             Ok(json!({ "entryId": entry_id, "deleted": true }))
         }
+        NativeRequest::SecretRevealHeaders { entry_id, .. } => {
+            // Header values stay encrypted at rest; the extension only
+            // receives them here so an edit can merge instead of replacing.
+            let result: ProviderHeaderValues =
+                request_agent(config, &AgentRequest::SecretRevealHeaders { id: entry_id })?;
+            Ok(serde_json::to_value(result)?)
+        }
     }
 }
 
@@ -506,6 +513,7 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::ProviderUsageApply { id, .. }
         | NativeRequest::ProviderFaviconBackfill { id, .. }
         | NativeRequest::ProviderDelete { id, .. }
+        | NativeRequest::SecretRevealHeaders { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
         | NativeRequest::SessionUnlock { id, .. }
         | NativeRequest::UiOpenMain { id, .. } => *id,
@@ -530,6 +538,7 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::ProviderUsageApply { extension_id, .. }
         | NativeRequest::ProviderFaviconBackfill { extension_id, .. }
         | NativeRequest::ProviderDelete { extension_id, .. }
+        | NativeRequest::SecretRevealHeaders { extension_id, .. }
         | NativeRequest::UnlockRequest { extension_id, .. }
         | NativeRequest::SessionUnlock { extension_id, .. }
         | NativeRequest::UiOpenMain { extension_id, .. } => extension_id.as_deref(),

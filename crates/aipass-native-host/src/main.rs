@@ -120,6 +120,7 @@ fn native_request_id(request: &NativeRequest) -> uuid::Uuid {
         | NativeRequest::ProviderUsageApply { id, .. }
         | NativeRequest::ProviderFaviconBackfill { id, .. }
         | NativeRequest::ProviderDelete { id, .. }
+        | NativeRequest::SecretRevealHeaders { id, .. }
         | NativeRequest::UnlockRequest { id, .. }
         | NativeRequest::SessionUnlock { id, .. }
         | NativeRequest::UiOpenMain { id, .. } => *id,
@@ -144,6 +145,7 @@ fn native_request_type(request: &NativeRequest) -> &'static str {
         NativeRequest::ProviderUsageApply { .. } => "provider.usageApply",
         NativeRequest::ProviderFaviconBackfill { .. } => "provider.faviconBackfill",
         NativeRequest::ProviderDelete { .. } => "provider.delete",
+        NativeRequest::SecretRevealHeaders { .. } => "secret.revealHeaders",
         NativeRequest::UnlockRequest { .. } => "unlock.request",
         NativeRequest::SessionUnlock { .. } => "session.unlock",
         NativeRequest::UiOpenMain { .. } => "ui.open_main",

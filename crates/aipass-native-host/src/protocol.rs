@@ -235,6 +235,12 @@ pub enum NativeRequest {
         extension_id: Option<String>,
         entry_id: Uuid,
     },
+    #[serde(rename = "secret.revealHeaders")]
+    SecretRevealHeaders {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+    },
     #[serde(rename = "unlock.request")]
     UnlockRequest {
         id: Uuid,
@@ -386,6 +392,24 @@ mod tests {
         match request {
             NativeRequest::EntriesList { id, .. } => {
                 assert_eq!(id.to_string(), "00000000-0000-0000-0000-000000000000");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn secret_reveal_headers_deserializes_entry_id() {
+        let request: NativeRequest = serde_json::from_str(
+            r#"{
+                "type": "secret.revealHeaders",
+                "id": "00000000-0000-0000-0000-000000000000",
+                "entry_id": "11111111-1111-1111-1111-111111111111"
+            }"#,
+        )
+        .unwrap();
+        match request {
+            NativeRequest::SecretRevealHeaders { entry_id, .. } => {
+                assert_eq!(entry_id.to_string(), "11111111-1111-1111-1111-111111111111");
             }
             other => panic!("unexpected variant: {other:?}"),
         }
