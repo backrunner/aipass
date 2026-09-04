@@ -49,6 +49,25 @@ export function persistUpdateChannel(channel: UpdateChannel): void {
   }
 }
 
+function clearStoredUpdateChannel(): void {
+  try {
+    localStorage.removeItem(UPDATE_CHANNEL_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures; the inferred channel still wins for this run.
+  }
+}
+
+export function resolveUpdateChannel(version: string): UpdateChannel {
+  if (!version) return getStoredUpdateChannel() ?? "official";
+  const inferred = inferUpdateChannel(version);
+  const stored = getStoredUpdateChannel();
+  // A manual override only survives within the same version family; once the
+  // build switches between beta and official, the stored value must not keep
+  // polling the wrong feed.
+  if (stored && stored !== inferred) clearStoredUpdateChannel();
+  return inferred;
+}
+
 export async function checkForUpdates(channel: UpdateChannel): Promise<UpdateCheckResult> {
   if (!hasTauri()) {
     return {
