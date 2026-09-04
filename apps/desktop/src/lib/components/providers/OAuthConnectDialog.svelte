@@ -17,6 +17,9 @@
   export let onClose: () => MaybePromise = () => {};
   export let onConnected: (account: OAuthAccountSummary) => MaybePromise = () => {};
   export let onImportCli: () => MaybePromise = () => {};
+  // Fired after an account is removed: the agent may have trashed the linked
+  // provider entry and stripped it from proxy routes, so the host refreshes.
+  export let onAccountsChanged: () => MaybePromise = () => {};
 
   type View = "choose" | "authorizing" | "manage";
 
@@ -230,6 +233,7 @@
         accountId: account.id
       });
       await loadAccounts();
+      void onAccountsChanged();
     } catch (err) {
       error = String(err);
     } finally {

@@ -1330,6 +1330,17 @@
     setTimeout(() => (notice = ""), 2200);
   }
 
+  async function onOAuthAccountsChanged() {
+    // Removing an OAuth account can trash the linked provider entry and strip
+    // it from proxy routes agent-side, so both views need a refresh.
+    try {
+      await loadEntries();
+      await loadServer();
+    } catch (err) {
+      console.warn("refresh after OAuth account change failed", err);
+    }
+  }
+
   function openEdit(entry: ProviderEntry) {
     error = "";
     formMode = "edit";
@@ -3263,6 +3274,7 @@
     {invokeTauri}
     onClose={() => { showOAuthConnect = false; }}
     onConnected={onOAuthConnected}
+    onAccountsChanged={onOAuthAccountsChanged}
     onImportCli={refreshOfficialAccounts}
   />
 {/if}
