@@ -99,3 +99,33 @@ test("resolves archived provider titles instead of the id fallback", () => {
   expect(label?.textContent?.trim()).toBe("Archived Relay");
 });
 
+test("renders an in-flight row's success rate as a dash, not 0%", () => {
+  setLocale("en");
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  app = mount(UsageBreakdown, {
+    target,
+    props: {
+      usage: {
+        ...usage,
+        providers: [
+          {
+            ...usage.providers[0],
+            requestCount: 3,
+            completedAttempts: 0,
+            successfulAttempts: 0,
+            successRateBps: 0,
+          },
+        ],
+      },
+      entries: [entry("provider-1", "Provider One")],
+    },
+  }) as never;
+  flushSync();
+
+  const headers = Array.from(document.querySelectorAll("th"));
+  const successColumn = headers.findIndex((header) => header.textContent?.trim() === "Success %");
+  const cells = document.querySelectorAll("tbody td");
+  expect(successColumn).toBeGreaterThanOrEqual(0);
+  expect(cells[successColumn]?.textContent?.trim()).toBe("-");
+});

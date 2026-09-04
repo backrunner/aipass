@@ -97,7 +97,7 @@
             <td>{formatCompact(row.outputTokens)}</td>
             <td>{formatCompact(row.cacheTokens)}</td>
             <td class="col-rate">{row.cacheRate}</td>
-            <td class="col-rate">{formatSuccessRate(row.successRateBps, row.requestCount)}</td>
+            <td class="col-rate">{formatSuccessRate(row.successRateBps, row.completedAttempts)}</td>
             <td>{row.averageFirstTokenMs == null ? "-" : `${formatCompact(row.averageFirstTokenMs)} ms`}</td>
             <td>{formatCostMicros(row.estimatedCostMicros)}</td>
           </tr>
