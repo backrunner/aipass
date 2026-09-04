@@ -1,4 +1,4 @@
-import type { AuthScheme, BillingRule, InterfaceType, ProviderKind } from "@aipass/schemas";
+import type { AuthScheme, BillingRule, CredentialKind, InterfaceType, ProviderKind, SubscriptionSnapshot } from "@aipass/schemas";
 import type { Draft } from "@aipass/ui";
 
 export type NativeResponse<T = unknown> = { ok?: boolean; protocolVersion?: number; error?: string; data?: T };
@@ -6,8 +6,11 @@ export type NativeResponse<T = unknown> = { ok?: boolean; protocolVersion?: numb
 export type Entry = {
   id: string;
   title: string;
+  favorite?: boolean;
   providerId?: string;
   providerKind?: ProviderKind;
+  credentialKind?: CredentialKind;
+  accountIdentity?: string;
   domains: string[];
   endpoints: Array<{ id: string; kind: string; url?: string }>;
   interfaceType: InterfaceType;
@@ -33,6 +36,7 @@ export type Entry = {
     remaining?: string;
     resetAt?: string;
   };
+  subscription?: SubscriptionSnapshot;
   gateway?: {
     group?: string;
     rate?: string;

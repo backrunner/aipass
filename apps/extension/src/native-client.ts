@@ -1,3 +1,5 @@
+import type { CredentialKind, SubscriptionSnapshot } from "@aipass/schemas";
+
 export const NATIVE_HOST = "dev.aipass.native";
 
 export interface NativeResponse<T = unknown> {
@@ -48,8 +50,11 @@ export interface NativeSessionStatus {
 export interface ProviderSummary {
   id: string;
   title: string;
+  favorite?: boolean;
   providerId?: string;
   providerKind: "official" | "third_party" | "self_hosted" | "unknown";
+  credentialKind?: CredentialKind;
+  accountIdentity?: string;
   domains: string[];
   faviconUrl?: string;
   endpoints: Array<{
@@ -82,6 +87,7 @@ export interface ProviderSummary {
     remaining?: string;
     resetAt?: string;
   };
+  subscription?: SubscriptionSnapshot;
   gateway?: {
     group?: string;
     rate?: string;
