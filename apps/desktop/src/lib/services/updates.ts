@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { localizedMessage } from "../stores/i18n";
 import type { MessageValue } from "../types";
 
-export type UpdateChannel = "official" | "beta";
+export type UpdateChannel = "official" | "beta" | "nightly";
 
 export type UpdateProgress = {
   phase: "downloading" | "installing";
@@ -28,13 +28,14 @@ const hasTauri = () =>
   Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
 export function inferUpdateChannel(version: string): UpdateChannel {
+  if (version.includes("nightly")) return "nightly";
   return version.includes("-") ? "beta" : "official";
 }
 
 export function getStoredUpdateChannel(): UpdateChannel | undefined {
   try {
     const stored = localStorage.getItem(UPDATE_CHANNEL_STORAGE_KEY);
-    if (stored === "official" || stored === "beta") return stored;
+    if (stored === "official" || stored === "beta" || stored === "nightly") return stored;
   } catch {
     // Ignore storage failures; fall back to the inferred channel.
   }
@@ -62,8 +63,8 @@ export function resolveUpdateChannel(version: string): UpdateChannel {
   const inferred = inferUpdateChannel(version);
   const stored = getStoredUpdateChannel();
   // A manual override only survives within the same version family; once the
-  // build switches between beta and official, the stored value must not keep
-  // polling the wrong feed.
+  // build itself switches channels (for example a nightly install on top of a
+  // stable one), the stored value must not keep polling the wrong feed.
   if (stored && stored !== inferred) clearStoredUpdateChannel();
   return inferred;
 }

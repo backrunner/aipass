@@ -127,7 +127,8 @@
 
   $: updateChannelOptions = [
     { value: "official" as UpdateChannel, label: $t("settings.updateChannelOfficial") },
-    { value: "beta" as UpdateChannel, label: $t("settings.updateChannelBeta") }
+    { value: "beta" as UpdateChannel, label: $t("settings.updateChannelBeta") },
+    { value: "nightly" as UpdateChannel, label: $t("settings.updateChannelNightly") }
   ];
 
   $: autoLockOptions = [

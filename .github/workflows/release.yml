@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing v-prefixed release tag, for example v1.2.3 or v1.2.3-beta.1"
+        description: "Existing v-prefixed release tag, for example v1.2.3, v1.2.3-beta.1 or v1.3.0-nightly.20260905"
         required: true
       channel:
         description: "Release channel (auto derives it from the tag version)"
@@ -15,6 +15,7 @@ on:
           - auto
           - official
           - beta
+          - nightly
   push:
     tags:
       - "v*.*.*"
@@ -56,7 +57,9 @@ jobs:
           fi
 
           if [[ "${channel}" == "auto" ]]; then
-            if [[ "${version}" == *-* ]]; then
+            if [[ "${version}" =~ -nightly([.]|$) ]]; then
+              channel="nightly"
+            elif [[ "${version}" == *-* ]]; then
               channel="beta"
             else
               channel="official"
@@ -70,6 +73,11 @@ jobs:
 
           if [[ "${channel}" == "beta" && ! "${version}" =~ -beta([.]|$) ]]; then
             echo "::error::Beta releases must use a -beta prerelease version: ${version}."
+            exit 1
+          fi
+
+          if [[ "${channel}" == "nightly" && ! "${version}" =~ -nightly\.[0-9]{8}$ ]]; then
+            echo "::error::Nightly releases must use a -nightly.<YYYYMMDD> prerelease version: ${version}."
             exit 1
           fi
 
@@ -414,9 +422,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Set extension release version
-        run: node scripts/set-extension-release-version.mjs "${{ needs.resolve-release.outputs.version }}"
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve-release.outputs.version }}"
+          if [[ "${{ needs.resolve-release.outputs.channel }}" == "nightly" ]]; then
+            # Browsers only accept 1-4 dot-separated integers (each <= 65535)
+            # as an extension manifest version, so nightly sideload builds use
+            # <base>.<run number>; the full semver stays in package metadata.
+            manifest_version="${version%%-*}.${GITHUB_RUN_NUMBER}"
+            node scripts/set-extension-release-version.mjs "${version}" "${manifest_version}"
+          else
+            node scripts/set-extension-release-version.mjs "${version}"
+          fi
 
       - run: pnpm --filter @aipass/extension... build
+        env:
+          AIPASS_EXTENSION_RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
 
       - name: Validate Edge Add-ons package
         run: pnpm --filter @aipass/extension edge:validate
@@ -595,6 +616,6 @@ jobs:
               repo: context.repo.repo,
               release_id: release.id,
               draft: false,
-              prerelease: process.env.CHANNEL === 'beta',
-              make_latest: process.env.CHANNEL === 'beta' ? 'false' : 'true',
+              prerelease: process.env.CHANNEL !== 'official',
+              make_latest: process.env.CHANNEL === 'official' ? 'true' : 'false',
             });

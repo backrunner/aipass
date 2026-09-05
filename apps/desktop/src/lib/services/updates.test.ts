@@ -34,6 +34,10 @@ describe("inferUpdateChannel", () => {
     expect(inferUpdateChannel("0.2.0-beta.1")).toBe("beta");
     expect(inferUpdateChannel("0.2.0")).toBe("official");
   });
+
+  it("treats nightly pre-release versions as nightly", () => {
+    expect(inferUpdateChannel("0.3.0-nightly.20260905")).toBe("nightly");
+  });
 });
 
 describe("resolveUpdateChannel", () => {
@@ -52,6 +56,17 @@ describe("resolveUpdateChannel", () => {
 
   it("ignores a stored beta override on official builds", () => {
     persistUpdateChannel("beta");
+    expect(resolveUpdateChannel("0.2.0")).toBe("official");
+  });
+
+  it("defaults nightly builds to the nightly channel and drops older overrides", () => {
+    persistUpdateChannel("official");
+    expect(resolveUpdateChannel("0.3.0-nightly.20260905")).toBe("nightly");
+    expect(localStorage.getItem(UPDATE_CHANNEL_STORAGE_KEY)).toBeNull();
+  });
+
+  it("ignores a stored nightly override on official builds", () => {
+    persistUpdateChannel("nightly");
     expect(resolveUpdateChannel("0.2.0")).toBe("official");
   });
 

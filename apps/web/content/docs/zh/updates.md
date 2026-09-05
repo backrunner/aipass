@@ -1,22 +1,29 @@
 ---
 title: 更新
-description: 自动更新行为、官方与 Beta 发布渠道，以及如何切换订阅源。
+description: 自动更新行为、官方 / Beta / Nightly 发布渠道，以及如何切换订阅源。
 navTitle: 更新
 order: 8
 ---
 
 # 更新
 
-AIPass 通过两个渠道发布，均经由 GitHub Releases 分发，并使用 Tauri updater 消费：
+AIPass 通过三个渠道发布，均经由 GitHub Releases 分发，并使用 Tauri updater 消费：
 
 - **官方（Official）** —— 标记为 `vX.Y.Z` 的稳定版本。更新订阅源：`https://github.com/backrunner/aipass/releases/latest/download/latest.json`，始终指向最新的稳定版本。
-- **Beta** —— 供早期测试的滚动预发布版本，以预发布形式发布在同一仓库。更新订阅源：`https://aipass.alkinum.io/api/updates/beta/latest.json`，由站点 Worker 解析为最新预发布版本的更新清单。Beta 构建可能包含未完成的功能。
+- **Beta** —— 供早期测试的滚动预发布版本，标记为 `vX.Y.Z-beta.N`，以预发布形式发布在同一仓库。更新订阅源：`https://aipass.alkinum.io/api/updates/beta/latest.json`，由站点 Worker 解析为最新 `-beta` 预发布版本的更新清单。Beta 构建可能包含未完成的功能。
+- **Nightly** —— 从 `main` 分支构建的日期快照，标记为 `vX.Y.Z-nightly.YYYYMMDD`（例如 `v0.3.0-nightly.20260905`），同样以预发布形式发布。更新订阅源：`https://aipass.alkinum.io/api/updates/nightly/latest.json`，解析为最新 `-nightly` 预发布版本的更新清单。Nightly 是三个渠道中测试最不充分的。
 
-每个订阅源都是随对应 GitHub Release 一起发布的更新清单；构建产物经过签名，应用在安装前会验证签名。
+每个订阅源都是随对应 GitHub Release 一起发布的更新清单；构建产物经过签名，应用在安装前会验证签名。订阅源按 tag 后缀互相隔离，一个渠道上的发布绝不会出现在另一个渠道的订阅源里。
+
+## Nightly 渠道的浏览器扩展
+
+Nightly 构建中的浏览器扩展**仅以 zip 包提供**，不会提交到 Edge Add-ons 商店。桌面端启动时会静默检测扩展是否已安装在浏览器的扩展目录中（会扫描 Chrome、Edge 及其他 Chromium 系浏览器）。如果随包携带了更新的构建，新文件会直接释放到浏览器扩展目录下作为一个新版本——无需手动重新安装——浏览器下次启动时自动生效。
+
+Nightly zip 内的扩展使用单调递增的四位纯数字版本号（`<基线>.<构建号>`，例如 `0.3.0.1045`），因为浏览器拒绝非数字的 manifest 版本；桌面端展示的仍是完整的 nightly semver 版本。只有当随包版本严格高于已安装版本时才会释放文件，商店安装的扩展副本绝不会被改动。
 
 ## 我在哪个渠道？
 
-默认渠道跟随当前安装的构建：版本号中包含连字符（例如 `0.9.0-beta.3`）的构建从 **Beta** 渠道开始，纯 `X.Y.Z` 版本从**官方**渠道开始。一旦你手动修改过，选择会按机器保存，应用更新后仍然保留。
+默认渠道跟随当前安装的构建：版本号包含 `nightly`（例如 `0.3.0-nightly.20260905`）的构建从 **Nightly** 渠道开始，其他包含连字符的版本（例如 `0.9.0-beta.3`）从 **Beta** 渠道开始，纯 `X.Y.Z` 版本从**官方**渠道开始。一旦你手动修改过，选择会按机器保存，应用更新后仍然保留——但覆盖安装其他渠道的构建会把选择重置为该构建的渠道，因此 nightly 安装包总是落在 nightly 订阅源上。
 
 ## 更新面板
 
@@ -24,7 +31,9 @@ AIPass 通过两个渠道发布，均经由 GitHub Releases 分发，并使用 T
 
 ## 切换渠道
 
-在桌面应用中：**设置 → 更新 → 更新渠道**提供**官方**和 **Beta** 两个选项。切换会保存选择，并立即在新渠道上重新检查更新——如果另一渠道有更新的构建，安装按钮会立刻出现。
+在桌面应用中：**设置 → 更新 → 更新渠道**提供**官方**、**Beta** 和 **Nightly** 三个选项。切换会保存选择，并立即在新渠道上重新检查更新——如果另一渠道有更新的构建，安装按钮会立刻出现。
+
+AIPass 绝不会把更旧或相同的版本覆盖安装到当前版本之上。同一基线版本内，semver 对预发布标识按字典序排序（beta < nightly < stable），且每个候选版本在安装前都会与当前运行版本比较——所以从较新的渠道构建切到较旧的构建时只会提示"已是最新"，而不会发生降级。这也保护了保险库数据（保险库没有降级迁移路径）。
 
 你也可以从[下载区](/)或 [GitHub Releases](https://github.com/backrunner/aipass/releases) 直接下载目标构建覆盖安装来切换渠道。无论哪种方式，保险库都不受影响。
 
@@ -40,4 +49,6 @@ AIPass 通过两个渠道发布，均经由 GitHub Releases 分发，并使用 T
 
 ## 面向发布维护者
 
-两个渠道都由随 GitHub Release 发布的 `latest.json` 更新清单驱动——官方订阅源借助 GitHub 的 `latest` 别名，Beta 订阅源由本站 Worker 读取最新预发布版本并返回其清单。发布新版本即会为该渠道的所有已安装应用更新订阅源；无需运行独立的更新服务器，也无需维护无版本号的 `beta` 标签。
+三个渠道都由随 GitHub Release 发布的 `latest.json` 更新清单驱动——官方订阅源借助 GitHub 的 `latest` 别名，Beta 和 Nightly 订阅源由本站 Worker 读取**匹配渠道 tag 后缀**（`-beta` / `-nightly.`）的最新预发布版本并返回其清单，两个预发布订阅源互不泄漏。发布新版本即会为该渠道的所有已安装应用更新订阅源；无需运行独立的更新服务器，也无需维护无版本号的渠道标签。
+
+Nightly 版本使用 `v<BASE>-nightly.<YYYYMMDD>` 形式的 tag（符合 semver，可直接复用现有 `v*.*.*` 触发器与发布校验；缺少日期后缀的 nightly tag 会被发布流水线拒绝）。`BASE` 必须**高于当前最新稳定版本**（例如稳定版在 0.2.x 时使用 `0.3.0`）：semver 排序由此保证 nightly > stable，官方渠道用户永远看不到 nightly 构建，而 nightly 用户切回官方或 Beta 时会被"绝不安装更旧或相同版本"的检查拦住，不会发生降级覆盖。macOS 安装包的 build 号取自全局单调递增的 workflow run number，跨渠道不会回退。

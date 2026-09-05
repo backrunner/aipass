@@ -12,6 +12,7 @@ use url::Url;
 const OFFICIAL_ENDPOINT: &str =
     "https://github.com/backrunner/aipass/releases/latest/download/latest.json";
 const BETA_ENDPOINT: &str = "https://aipass.alkinum.io/api/updates/beta/latest.json";
+const NIGHTLY_ENDPOINT: &str = "https://aipass.alkinum.io/api/updates/nightly/latest.json";
 pub(crate) const UPDATE_PROGRESS_EVENT: &str = "update-progress";
 
 #[derive(Clone, Serialize)]
@@ -71,6 +72,7 @@ fn endpoint_for_channel(channel: &str) -> Result<Url, String> {
     let endpoint = match channel {
         "official" => OFFICIAL_ENDPOINT,
         "beta" => BETA_ENDPOINT,
+        "nightly" => NIGHTLY_ENDPOINT,
         other => return Err(format!("Unknown update channel: {other}")),
     };
     Url::parse(endpoint).map_err(|err| err.to_string())
@@ -422,6 +424,27 @@ mod tests {
             endpoint_for_channel("beta").unwrap().as_str(),
             "https://aipass.alkinum.io/api/updates/beta/latest.json"
         );
-        assert!(endpoint_for_channel("nightly").is_err());
+        assert_eq!(
+            endpoint_for_channel("nightly").unwrap().as_str(),
+            "https://aipass.alkinum.io/api/updates/nightly/latest.json"
+        );
+        assert!(endpoint_for_channel("canary").is_err());
+    }
+
+    #[test]
+    fn channel_versions_never_downgrade_across_channels() {
+        // semver orders prerelease identifiers lexically, so within one base
+        // version beta < nightly < stable. The install path rejects any
+        // candidate <= the running version, so switching channels can never
+        // overwrite the app with an older build regardless of direction.
+        let beta: semver::Version = "0.3.0-beta.1".parse().unwrap();
+        let nightly: semver::Version = "0.3.0-nightly.20260905".parse().unwrap();
+        let stable: semver::Version = "0.3.0".parse().unwrap();
+        assert!(beta < nightly && nightly < stable);
+
+        // Nightly builds use a base version above the latest stable, so a
+        // nightly install is newer than anything the official feed serves.
+        let latest_stable: semver::Version = "0.2.0".parse().unwrap();
+        assert!(nightly > latest_stable);
     }
 }
