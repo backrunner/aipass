@@ -1381,7 +1381,10 @@ mod tests {
         ));
 
         let payload = ProviderHeaderValues {
-            headers: vec![("x-version".to_string(), SensitiveString::new("1".to_string()))],
+            headers: vec![(
+                "x-version".to_string(),
+                SensitiveString::new("1".to_string()),
+            )],
         };
         let value = serde_json::to_value(&payload).unwrap();
         assert_eq!(value["headers"][0][0], "x-version");

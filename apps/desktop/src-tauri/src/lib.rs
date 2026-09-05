@@ -834,7 +834,10 @@ fn sync_installed_browser_extensions_inner(app: &AppHandle) -> Result<(), String
         // browser; leave sideloaded copies untouched.
         let _ = logging::log_event(
             "desktop.extension_sync.skipped",
-            &[("reason", "bundled manifest version is not Chrome-compatible")],
+            &[(
+                "reason",
+                "bundled manifest version is not Chrome-compatible",
+            )],
         );
         return Ok(());
     };
@@ -863,7 +866,10 @@ fn sync_installed_browser_extensions_inner(app: &AppHandle) -> Result<(), String
             Err(err) => {
                 let _ = logging::log_event(
                     "desktop.extension_sync.extract_failed",
-                    &[("path", &version_dir.display().to_string()), ("error", &err)],
+                    &[
+                        ("path", &version_dir.display().to_string()),
+                        ("error", &err),
+                    ],
                 );
             }
         }
@@ -2477,11 +2483,21 @@ mod tests {
     #[test]
     fn latest_installed_extension_version_picks_highest_valid_version_dir() {
         let root = std::env::temp_dir().join(format!("aipass-ext-ver-{}", Uuid::new_v4()));
-        let extension_dir = root.join("Extensions").join("aabbccddeeffgghhiijjkkllmmnnoopp");
+        let extension_dir = root
+            .join("Extensions")
+            .join("aabbccddeeffgghhiijjkkllmmnnoopp");
         fs::create_dir_all(extension_dir.join("0.3.0.1044")).unwrap();
-        fs::write(extension_dir.join("0.3.0.1044").join("manifest.json"), b"{}").unwrap();
+        fs::write(
+            extension_dir.join("0.3.0.1044").join("manifest.json"),
+            b"{}",
+        )
+        .unwrap();
         fs::create_dir_all(extension_dir.join("0.3.0.1045")).unwrap();
-        fs::write(extension_dir.join("0.3.0.1045").join("manifest.json"), b"{}").unwrap();
+        fs::write(
+            extension_dir.join("0.3.0.1045").join("manifest.json"),
+            b"{}",
+        )
+        .unwrap();
         // Invalid names and manifest-less dirs are ignored.
         fs::create_dir_all(extension_dir.join("0.3.0-nightly.20260905")).unwrap();
         fs::create_dir_all(extension_dir.join("0.3.0.9999")).unwrap();
@@ -2490,7 +2506,10 @@ mod tests {
             latest_installed_extension_version(&extension_dir),
             Some([0, 3, 0, 1045])
         );
-        assert_eq!(latest_installed_extension_version(&root.join("missing")), None);
+        assert_eq!(
+            latest_installed_extension_version(&root.join("missing")),
+            None
+        );
 
         let _ = fs::remove_dir_all(root);
     }

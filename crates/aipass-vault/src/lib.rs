@@ -390,7 +390,11 @@ fn find_secret_ref_position(secret_refs: &[SecretRef], label_or_id: &str) -> Opt
     secret_refs
         .iter()
         .position(|secret| secret.id == label_or_id)
-        .or_else(|| secret_refs.iter().position(|secret| secret.label == label_or_id))
+        .or_else(|| {
+            secret_refs
+                .iter()
+                .position(|secret| secret.label == label_or_id)
+        })
 }
 
 pub struct VaultCreation {
@@ -3137,7 +3141,9 @@ mod tests {
             group: Some("team-a".to_string()),
             ..SecretMetadataInput::default()
         };
-        assert!(vault.set_secret_metadata(id, &primary_id, &metadata).unwrap());
+        assert!(vault
+            .set_secret_metadata(id, &primary_id, &metadata)
+            .unwrap());
         let summary = vault.get_provider_summary(id).unwrap();
         let group_of = |secret_id: &str| {
             summary
@@ -3164,7 +3170,9 @@ mod tests {
             vault.add_secret(id, "Primary", "sk-ant-api03-extra"),
             Err(VaultError::InvalidSecretLabel)
         ));
-        assert!(vault.add_secret(id, "primary-2", "sk-ant-api03-extra").is_ok());
+        assert!(vault
+            .add_secret(id, "primary-2", "sk-ant-api03-extra")
+            .is_ok());
     }
 
     #[test]

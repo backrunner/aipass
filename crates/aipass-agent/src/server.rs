@@ -17,10 +17,10 @@ use aipass_agent_protocol::{
     BrowserIgnoredStatus, CodexApiKeyMode, ConflictScope, FaviconBackfillError,
     FaviconBackfillRequest, FaviconBackfillResponse, LockReason, ProbeResult, ProviderHeaderValues,
     ProxyProtocol, SaveDetectedResult, SecretValue, SensitiveString, SessionUnlockMode,
-    SyncConflictActionRequest,
-    SyncConflictResponse, SyncMode, ToolConfigApplyResponse, ToolConfigMode, ToolConfigPreviewFile,
-    ToolConfigPreviewResponse, ToolConfigProxyRequest, ToolConfigRequest, ToolConfigTool,
-    VaultCreateResponse, AGENT_PROTOCOL_VERSION, MAX_FRAME_BYTES,
+    SyncConflictActionRequest, SyncConflictResponse, SyncMode, ToolConfigApplyResponse,
+    ToolConfigMode, ToolConfigPreviewFile, ToolConfigPreviewResponse, ToolConfigProxyRequest,
+    ToolConfigRequest, ToolConfigTool, VaultCreateResponse, AGENT_PROTOCOL_VERSION,
+    MAX_FRAME_BYTES,
 };
 use aipass_config_writers::{
     apply_plan_encrypted, config_backup_path, diff_preview_for_path, plan_claude_code,
