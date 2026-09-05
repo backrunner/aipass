@@ -27,7 +27,7 @@ type UpdateChannel = 'beta' | 'nightly';
 // vice versa.
 const CHANNEL_TAG_PATTERN: Record<UpdateChannel, RegExp> = {
   beta: /-beta([.]|$)/,
-  nightly: /-nightly\.\d{8}$/
+  nightly: /-nightly\.\d{8}(?:\.[1-9]\d*)?$/
 };
 
 export default {
