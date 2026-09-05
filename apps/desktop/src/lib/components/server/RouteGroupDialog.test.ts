@@ -133,6 +133,55 @@ test("keeps the editor open when persistence fails", async () => {
 
   expect(onSave).toHaveBeenCalledOnce();
   expect(document.body.querySelector(".route-dialog-content")).not.toBeNull();
+  expect(document.body.textContent).toContain("Could not save the route group");
+});
+
+test("preserves explicit target protocols when renaming a converted route", async () => {
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  const onSave = vi.fn().mockResolvedValue(true);
+  const convertedRoute: ProxyRouteConfig = {
+    ...route,
+    conversionEnabled: true,
+    targets: [{ ...route.targets[0], protocol: "open_ai_responses" }]
+  };
+  app = mount(RouteGroupDialog, { target, props: { route: convertedRoute, entries, onSave } }) as never;
+  flushSync();
+  document.body.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await Promise.resolve();
+  expect(onSave.mock.calls[0][0].targets[0].protocol).toBe("open_ai_responses");
+});
+
+test("rejects an invalid backoff and saves safely after holding is disabled", async () => {
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  const onSave = vi.fn().mockResolvedValue(false);
+  const holdRoute = { ...route, retry: { ...route.retry, holdOnFailure: true } };
+  app = mount(RouteGroupDialog, { target, props: { route: holdRoute, entries, onSave } }) as never;
+  flushSync();
+  const advanced = document.body.querySelector<HTMLButtonElement>('button[aria-label="Advanced settings"]')!;
+  advanced.click();
+  flushSync();
+  const initialDelay = document.body.querySelector<HTMLInputElement>('input[type="number"][min="1"]')!;
+  initialDelay.value = "20000";
+  initialDelay.dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
+  const submit = () => document.body.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  submit();
+  flushSync();
+  expect(onSave).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("Maximum backoff must be at least");
+  initialDelay.value = "";
+  initialDelay.dispatchEvent(new Event("input", { bubbles: true }));
+  document.body.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Hold on failure"]')!.click();
+  flushSync();
+  submit();
+  await Promise.resolve();
+  expect(onSave).toHaveBeenCalledOnce();
+  const saved = onSave.mock.calls[0][0] as ProxyRouteConfig;
+  expect(saved.retry.holdOnFailure).toBe(false);
+  expect(saved.retry.holdInitialDelayMs).toBe(500);
+  expect(saved.retry.holdMaxDelayMs).toBe(10_000);
 });
 
 test("keeps portaled selects above the dialog", () => {
@@ -195,14 +244,14 @@ test("offers credentials regardless of their native protocol", () => {
   expect(labels).toContain("OpenAI · Key");
 });
 
-test("writes inbound, upstream, and conversion fields for mixed-protocol groups", async () => {
+test("uses the selected route protocol for mixed-protocol groups", async () => {
   const target = document.createElement("div");
   document.body.appendChild(target);
   const onSave = vi.fn().mockResolvedValue(true);
   app = mount(RouteGroupDialog, { target, props: { route: mixedRoute, entries: mixedEntries, onSave } }) as never;
   flushSync();
 
-  expect(document.body.querySelector(".conversion-hint")).not.toBeNull();
+  expect(document.body.querySelector(".conversion-hint")).toBeNull();
 
   document.body
     .querySelector("form")
@@ -215,7 +264,7 @@ test("writes inbound, upstream, and conversion fields for mixed-protocol groups"
   const saved = onSave.mock.calls[0][0] as ProxyRouteConfig;
   expect(saved.inboundProtocol).toBe("anthropic_messages");
   expect(saved.upstreamProtocol).toBe("anthropic_messages");
-  expect(saved.conversionEnabled).toBe(true);
+  expect(saved.conversionEnabled).toBe(false);
   expect(saved.targets).toHaveLength(2);
 });
 

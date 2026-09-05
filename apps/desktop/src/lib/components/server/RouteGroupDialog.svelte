@@ -1,12 +1,13 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
-  import { Badge, Button, IconButton, SelectField } from "@aipass/ui";
+  import { Badge, Banner, Button, Field, IconButton, SelectField, SwitchField } from "@aipass/ui";
   import { Dialog, Switch } from "bits-ui";
   import { AlertTriangle, ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyStatus, ProxyTargetConfig, RetryPolicy } from "../../types";
-  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, proxySupportedEntry, reorderItems, routeNeedsConversion, routeProtocolFor } from "../../utils/server";
+  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, proxySupportedEntry, reorderItems } from "../../utils/server";
+  import Card from "../shared/Card.svelte";
 
   export let route: ProxyRouteConfig | undefined = undefined;
   export let entries: ProviderEntry[] = [];
@@ -19,6 +20,7 @@
   let dialogOpen = true;
   let closing = false;
   let saving = false;
+  let saveError = "";
   let name = route?.name ?? "";
   let strategy: ProxyRouteStrategy = route?.strategy ?? "fallback";
   let protocol: ProxyProtocol = route?.inboundProtocol ?? "open_ai_responses";
@@ -67,8 +69,6 @@
     { value: "open_ai_responses", label: "OpenAI Responses" },
     { value: "open_ai_chat_completions", label: "OpenAI Chat Completions" }
   ];
-  $: conversionNeeded = members.length > 0 && routeNeedsConversion(protocol, members);
-
   function handleOpenChange(next: boolean) {
     if (next) {
       dialogOpen = true;
@@ -93,7 +93,6 @@
     if (members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)) return;
     members = [...members, { entry, secret, weight: 1, enabled: true }];
     name ||= entry.title;
-    if (members.length === 1) protocol = routeProtocolFor(entry, secret);
   }
 
   function removeMember(index: number) {
@@ -133,6 +132,27 @@
 
   async function save() {
     if (saving || !name.trim() || (members.length === 0 && missingMembers.length === 0)) return;
+    saveError = "";
+    const numericFields = [
+      ...(silentRetry ? [{ value: maxSilentRetries, min: 1, max: 20, label: $t("server.maxSilentRetries") }] : []),
+      ...(holdOnFailure ? [
+        { value: holdInitialDelayMs, min: 1, max: Number.MAX_SAFE_INTEGER, label: $t("server.holdInitialDelayMs") },
+        { value: holdMaxDelayMs, min: 1, max: Number.MAX_SAFE_INTEGER, label: $t("server.holdMaxDelayMs") },
+        { value: holdMaxDurationMs, min: 0, max: Number.MAX_SAFE_INTEGER, label: $t("server.holdMaxDurationMs") }
+      ] : [])
+    ];
+    for (const field of numericFields) {
+      if (!Number.isSafeInteger(field.value) || field.value < field.min || field.value > field.max) {
+        advancedOpen = true;
+        saveError = $t("server.invalidRetryNumber", { field: field.label, min: field.min, max: field.max });
+        return;
+      }
+    }
+    if (holdOnFailure && holdMaxDelayMs < holdInitialDelayMs) {
+      advancedOpen = true;
+      saveError = $t("server.invalidHoldDelay");
+      return;
+    }
     const editableTargets: ProxyTargetConfig[] = members.map((member, index) => {
       const existing = route?.targets.find(
         (target) => target.providerEntryId === member.entry.id && target.secretId === member.secret.id
@@ -142,6 +162,7 @@
       return {
         ...base,
         id: existing?.id ?? base.id,
+        protocol: existing?.protocol,
         priority: index,
         weight: Math.max(1, Math.round(member.weight) || 1),
         enabled: member.enabled
@@ -151,23 +172,20 @@
     // original priority, unless the user explicitly removed their rows.
     const targets = mergeRouteTargets(editableTargets, missingMembers);
     if (targets.length === 0) return;
-    const upstreamProtocol = members.length > 0
-      ? routeProtocolFor(members[0].entry, members[0].secret)
-      : route?.upstreamProtocol ?? protocol;
-    // Members that failed to resolve may still serve traffic with a different
-    // native protocol, so keep conversion on when the full target set cannot
-    // be inspected; otherwise a plain rename could silently disable it.
-    const conversionEnabled =
-      routeNeedsConversion(protocol, members) ||
-      (missingMembers.length > 0 && (route?.conversionEnabled ?? false));
+    const upstreamProtocol = route?.conversionEnabled
+      ? route.upstreamProtocol
+      : protocol;
+    // Keep an explicitly saved conversion route working, but do not infer a
+    // transform from provider metadata when editing or creating a route.
+    const conversionEnabled = route?.conversionEnabled ?? false;
     const retry: RetryPolicy = {
       ...(route?.retry ?? defaultRetryPolicy()),
       silentRetry,
-      maxSilentRetries: Math.max(1, Math.min(20, Math.round(maxSilentRetries) || 1)),
+      maxSilentRetries: silentRetry ? maxSilentRetries : route?.retry?.maxSilentRetries ?? 3,
       holdOnFailure,
-      holdInitialDelayMs: Math.max(1, Math.round(holdInitialDelayMs) || 500),
-      holdMaxDelayMs: Math.max(1, Math.round(holdMaxDelayMs) || 10_000),
-      holdMaxDurationMs: Math.max(0, Math.round(holdMaxDurationMs) || 0)
+      holdInitialDelayMs: holdOnFailure ? holdInitialDelayMs : route?.retry?.holdInitialDelayMs ?? 500,
+      holdMaxDelayMs: holdOnFailure ? holdMaxDelayMs : route?.retry?.holdMaxDelayMs ?? 10_000,
+      holdMaxDurationMs: holdOnFailure ? holdMaxDurationMs : route?.retry?.holdMaxDurationMs ?? 300_000
     };
     const nextRoute: ProxyRouteConfig = route
       ? {
@@ -196,8 +214,9 @@
     try {
       const saved = await onSave(nextRoute);
       if (saved !== false) handleClose();
-    } catch {
-      // The owning view presents persistence errors and the dialog stays open.
+      else saveError = $t("server.saveGroupFailed");
+    } catch (error) {
+      saveError = error instanceof Error ? error.message : String(error);
     } finally {
       saving = false;
     }
@@ -208,7 +227,7 @@
   <Dialog.Portal>
     <Dialog.Overlay class="route-dialog-overlay" />
     <Dialog.Content class="route-dialog-content">
-      <form class="modal" on:submit|preventDefault={save}>
+      <form class="modal" novalidate on:submit|preventDefault={save}>
         <header class="modal-header">
           <Dialog.Title class="route-dialog-title">
             {route ? $t("server.editGroup") : $t("server.addGroup")}
@@ -224,10 +243,9 @@
 
         <div class="modal-body">
           <div class="form-block">
-            <label class="field">
-              <span>{$t("server.groupName")}</span>
-              <input bind:value={name} placeholder={$t("server.groupName")} />
-            </label>
+            <Field label={$t("server.groupName")}>
+              <input bind:value={name} placeholder={$t("server.groupName")} disabled={saving} />
+            </Field>
             <div class="form-grid">
               <SelectField
                 label={$t("server.strategy")}
@@ -240,74 +258,46 @@
                 options={protocolOptions}
               />
             </div>
-            {#if conversionNeeded}
-              <p class="conversion-hint">{$t("routeGroup.autoConversion")}</p>
-            {/if}
           </div>
 
-          <section class="advanced-settings">
-            <button
-              type="button"
-              class="advanced-toggle"
-              aria-expanded={advancedOpen}
-              on:click={() => (advancedOpen = !advancedOpen)}
-            >
-              <span>{$t("server.advancedSettings")}</span>
-              <ChevronDown size={16} class={advancedOpen ? "rotated" : ""} />
-            </button>
-            {#if advancedOpen}
-              <div class="advanced-content">
-                <div class="advanced-row">
-                  <div class="advanced-copy">
-                    <strong>{$t("server.silentRetry")}</strong>
-                    <span>{$t("server.silentRetryDesc")}</span>
-                  </div>
-                  <Switch.Root
-                    checked={silentRetry}
-                    onCheckedChange={(checked) => (silentRetry = checked)}
-                    class="silent-retry-switch"
-                    aria-label={$t("server.silentRetry")}
-                  >
-                    <Switch.Thumb class="silent-retry-thumb" />
-                  </Switch.Root>
-                </div>
+          <Card title={$t("server.advancedSettings")} collapsible bind:open={advancedOpen} padded={false}>
+              <div class="advanced-section">
+                <SwitchField
+                  label={$t("server.silentRetry")}
+                  description={$t("server.silentRetryDesc")}
+                  bind:checked={silentRetry}
+                  disabled={saving}
+                />
                 {#if silentRetry}
-                  <label class="field advanced-number-field">
-                    <span>{$t("server.maxSilentRetries")}</span>
-                    <input type="number" min="1" max="20" step="1" bind:value={maxSilentRetries} />
-                  </label>
-                {/if}
-                <div class="advanced-row">
-                  <div class="advanced-copy">
-                    <strong>{$t("server.holdOnFailure")}</strong>
-                    <span>{$t("server.holdOnFailureDesc")}</span>
+                  <div class="retry-count">
+                    <Field label={$t("server.maxSilentRetries")}>
+                      <input type="number" min="1" max="20" step="1" required bind:value={maxSilentRetries} disabled={saving} />
+                    </Field>
                   </div>
-                  <Switch.Root
-                    checked={holdOnFailure}
-                    onCheckedChange={(checked) => (holdOnFailure = checked)}
-                    class="silent-retry-switch"
-                    aria-label={$t("server.holdOnFailure")}
-                  >
-                    <Switch.Thumb class="silent-retry-thumb" />
-                  </Switch.Root>
-                </div>
-                {#if holdOnFailure}
-                  <label class="field advanced-number-field">
-                    <span>{$t("server.holdInitialDelayMs")}</span>
-                    <input type="number" min="1" step="1" bind:value={holdInitialDelayMs} />
-                  </label>
-                  <label class="field advanced-number-field">
-                    <span>{$t("server.holdMaxDelayMs")}</span>
-                    <input type="number" min="1" step="1" bind:value={holdMaxDelayMs} />
-                  </label>
-                  <label class="field advanced-number-field">
-                    <span>{$t("server.holdMaxDurationMs")}</span>
-                    <input type="number" min="0" step="1" bind:value={holdMaxDurationMs} />
-                  </label>
                 {/if}
               </div>
-            {/if}
-          </section>
+              <div class="advanced-section">
+                <SwitchField
+                  label={$t("server.holdOnFailure")}
+                  description={$t("server.holdOnFailureDesc")}
+                  bind:checked={holdOnFailure}
+                  disabled={saving}
+                />
+                {#if holdOnFailure}
+                  <div class="form-grid">
+                    <Field label={$t("server.holdInitialDelayMs")}>
+                      <input type="number" min="1" max={Number.MAX_SAFE_INTEGER} step="1" required bind:value={holdInitialDelayMs} disabled={saving} />
+                    </Field>
+                    <Field label={$t("server.holdMaxDelayMs")}>
+                      <input type="number" min={holdInitialDelayMs || 1} max={Number.MAX_SAFE_INTEGER} step="1" required bind:value={holdMaxDelayMs} disabled={saving} />
+                    </Field>
+                  </div>
+                  <Field label={$t("server.holdMaxDurationMs")}>
+                    <input type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" required bind:value={holdMaxDurationMs} disabled={saving} />
+                  </Field>
+                {/if}
+              </div>
+          </Card>
 
           <div class="members-block">
             <div class="members-title">
@@ -414,10 +404,13 @@
         </div>
 
         <footer class="modal-footer">
+          {#if saveError}<Banner tone="danger">{saveError}</Banner>{/if}
+          <div class="footer-actions">
           <Button variant="ghost" on:click={handleClose} disabled={saving}>{$t("common.cancel")}</Button>
           <Button variant="primary" type="submit" disabled={saving || !name.trim() || (members.length === 0 && missingMembers.length === 0)}>
             {$t("common.save")}
           </Button>
+          </div>
         </footer>
       </form>
     </Dialog.Content>
@@ -510,88 +503,19 @@
     font-weight: 600;
   }
 
-  .advanced-settings {
-    border-top: 1px solid var(--border-subtle);
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .advanced-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding: 12px 0;
-    border: 0;
-    background: transparent;
-    color: var(--text-primary);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  :global(.advanced-toggle svg) {
-    transition: transform 160ms ease;
-  }
-
-  :global(.advanced-toggle svg.rotated) {
-    transform: rotate(180deg);
-  }
-
-  .advanced-content {
+  .advanced-section {
     display: grid;
-    gap: 14px;
-    padding: 0 0 14px;
+    gap: 12px;
+    padding: 14px 16px;
   }
 
-  .advanced-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+  .advanced-section + .advanced-section {
+    border-top: 1px solid var(--divider);
   }
 
-  .advanced-copy {
-    display: grid;
-    gap: 3px;
-  }
-
-  .advanced-copy span {
-    color: var(--text-tertiary);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .advanced-number-field {
-    max-width: 220px;
-  }
-
-  :global(.silent-retry-switch) {
-    flex: 0 0 auto;
-    width: 36px;
-    height: 20px;
-    padding: 2px;
-    border: 0;
-    border-radius: 999px;
-    background: var(--surface-strong);
-    cursor: pointer;
-  }
-
-  :global(.silent-retry-switch[data-state="checked"]) {
-    background: var(--accent);
-  }
-
-  :global(.silent-retry-thumb) {
-    display: block;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: white;
-    transition: transform 160ms ease;
-  }
-
-  :global(.silent-retry-switch[data-state="checked"] .silent-retry-thumb) {
-    transform: translateX(16px);
+  .retry-count {
+    width: 220px;
+    max-width: 100%;
   }
 
   .close-btn {
@@ -616,6 +540,11 @@
     gap: 20px;
     padding: 20px;
     overflow: auto;
+    min-height: 0;
+  }
+
+  .modal-body > :global(*) {
+    flex-shrink: 0;
   }
 
   .form-block {
@@ -637,19 +566,7 @@
     line-height: 1.4;
   }
 
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-
-    > span {
-      color: var(--text-tertiary);
-      font-size: 11px;
-      font-weight: 600;
-    }
-  }
-
-  input {
+  .member-weight input {
     width: 100%;
     min-height: 34px;
     padding: 7px 9px;
@@ -858,11 +775,17 @@
   }
 
   .modal-footer {
-    display: flex;
-    justify-content: flex-end;
+    display: grid;
+    flex-shrink: 0;
     gap: 8px;
     padding: 14px 20px;
     border-top: 1px solid var(--divider);
+  }
+
+  .footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   @media (max-width: 520px) {

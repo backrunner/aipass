@@ -81,7 +81,7 @@
   import { emptyDraft, isExpiringSoon, mergeHeaderPairs, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
   import { aipassProviderLinkToDraft, ccSwitchLinkToDraft, findAipassProviderDuplicate, findCcSwitchDuplicate, splitEndpointList } from "./lib/utils/deeplink";
-  import { buildRouteTarget, buildSingleEntryRoute, nativeProtocolForEntry, proxySupportedEntry, routeNeedsConversion } from "./lib/utils/server";
+  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry } from "./lib/utils/server";
   import { checkForUpdates, downloadUpdate, installPendingUpdate, installUpdate, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { emptyServerUsage, loadServerUsage } from "./lib/services/serverUsage";
@@ -2185,7 +2185,8 @@
       ? serverConfig.routes.map((item) => (item.id === route.id ? route : item))
       : [...serverConfig.routes, route];
     const saved = await saveServerConfig({ ...serverConfig, routes: nextRoutes });
-    if (saved && !exists) selectedRouteId = route.id;
+    if (!saved) throw new Error(resolveMessage($t, error) || $t("server.saveGroupFailed"));
+    if (!exists) selectedRouteId = route.id;
     return saved;
   }
 
@@ -2234,11 +2235,6 @@
     if (groupId) {
       const group = serverConfig.routes.find((route) => route.id === groupId);
       if (!group) return;
-      const protocol = nativeProtocolForEntry(entry, secret);
-      if (!protocol) {
-        error = localizedMessage("providers.routeUnsupportedInterface");
-        return;
-      }
       if (
         group.targets.some(
           (target) => target.providerEntryId === entry.id && target.secretId === secret.id
@@ -2249,20 +2245,11 @@
       }
       const target = buildRouteTarget(entry, secret, group.targets.length);
       if (!target) return;
-      const members = [
-        ...group.targets.flatMap((member) => {
-          const memberEntry = entries.find((item) => item.id === member.providerEntryId);
-          const memberSecret = memberEntry?.secretRefs.find((item) => item.id === member.secretId);
-          return memberEntry && memberSecret ? [{ entry: memberEntry, secret: memberSecret }] : [];
-        }),
-        { entry, secret }
-      ];
-      const conversionEnabled = routeNeedsConversion(group.inboundProtocol, members);
       const saved = await saveServerConfig({
         ...serverConfig,
         routes: serverConfig.routes.map((route) =>
           route.id === groupId
-            ? { ...route, targets: [...route.targets, target], conversionEnabled }
+            ? { ...route, targets: [...route.targets, target] }
             : route
         )
       });

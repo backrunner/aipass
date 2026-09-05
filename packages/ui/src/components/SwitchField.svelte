@@ -17,6 +17,7 @@
   </div>
   <Switch.Root
     bind:checked
+    aria-label={label}
     {disabled}
     onCheckedChange={(v) => onCheckedChange(v)}
     class="switch-root"
