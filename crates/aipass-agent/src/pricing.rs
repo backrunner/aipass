@@ -1,5 +1,4 @@
-use crate::logging::{write_component_log, AGENT_LOG};
-use crate::session::{map_vault_error, with_vault, AgentState, ServiceError, ServiceResult};
+use crate::session::{map_vault_error, ServiceError, ServiceResult};
 use aipass_agent_protocol::{
     GroupPriceVersion, ModelPriceRule, OffPeakWindow, PricingConfig, PricingGroup,
 };
@@ -7,24 +6,21 @@ use aipass_crypto::Ciphertext;
 use aipass_proxy::ModelPricing;
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::Vault;
-use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+mod list_prices;
+pub use list_prices::{builtin_list_prices, load_list_prices, spawn_list_price_refresh};
 
 const NEWAPI_RATIO_MICROS_PER_UNIT: f64 = 2_000_000.0;
 
 const CONFIG_FILE: &str = "pricing.aipstate";
 const CONFIG_PURPOSE: &str = "proxy-pricing";
-const LIST_PRICES_FILE: &str = "list-prices.json";
-const LITELLM_PRICES_URL: &str =
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-const LIST_PRICE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PersistedPricingConfig {
@@ -35,7 +31,10 @@ struct PersistedPricingConfig {
 pub fn load_pricing_config(vault_dir: &Path, vault: &Vault) -> ServiceResult<PricingConfig> {
     let path = vault_dir.join(CONFIG_FILE);
     if !path.exists() {
-        return Ok(PricingConfig::default());
+        return Ok(PricingConfig {
+            list_price_updated_at: list_prices::updated_at(vault_dir),
+            ..Default::default()
+        });
     }
     let persisted: PersistedPricingConfig =
         serde_json::from_slice(&std::fs::read(path).map_err(ServiceError::internal)?)
@@ -43,7 +42,12 @@ pub fn load_pricing_config(vault_dir: &Path, vault: &Vault) -> ServiceResult<Pri
     let bytes = vault
         .decrypt_local_state(CONFIG_PURPOSE, &persisted.payload)
         .map_err(map_vault_error)?;
-    serde_json::from_slice(&bytes).map_err(ServiceError::internal)
+    let mut config: PricingConfig =
+        serde_json::from_slice(&bytes).map_err(ServiceError::internal)?;
+    // Public price updates run even while the vault is locked. Their timestamp
+    // belongs to the same public snapshot, not the encrypted user settings.
+    config.list_price_updated_at = list_prices::updated_at(vault_dir);
+    Ok(config)
 }
 
 pub fn save_pricing_config(
@@ -68,28 +72,6 @@ pub fn save_pricing_config(
         &serde_json::to_vec_pretty(&persisted).map_err(ServiceError::internal)?,
     )
     .map_err(ServiceError::internal)
-}
-
-/// Built-in list-price snapshot shipped with the app; used as fallback when no
-/// refreshed price table has been downloaded yet.
-pub fn builtin_list_prices() -> &'static [ModelPriceRule] {
-    static PRICES: OnceLock<Vec<ModelPriceRule>> = OnceLock::new();
-    PRICES.get_or_init(|| {
-        serde_json::from_str(include_str!("list_prices.json"))
-            .expect("built-in list price snapshot must be valid")
-    })
-}
-
-/// List prices effective for cost resolution: the refreshed snapshot written by
-/// the background updater when present, otherwise the built-in snapshot.
-pub fn load_list_prices(vault_dir: &Path) -> Vec<ModelPriceRule> {
-    let path = vault_dir.join(LIST_PRICES_FILE);
-    if let Ok(bytes) = std::fs::read(&path) {
-        if let Ok(rules) = serde_json::from_slice::<Vec<ModelPriceRule>>(&bytes) {
-            return rules;
-        }
-    }
-    builtin_list_prices().to_vec()
 }
 
 /// Best-effort synchronization of New API's public pricing table. New API's
@@ -617,93 +599,6 @@ fn tokens_cost(
         / 1_000_000
 }
 
-/// Refresh the official list-price table from LiteLLM in the background. Any
-/// failure is logged and silently falls back to the built-in snapshot.
-pub fn spawn_list_price_refresh(state: Arc<AgentState>) {
-    std::thread::spawn(move || {
-        if let Err(err) = refresh_list_prices(&state) {
-            write_component_log(
-                AGENT_LOG,
-                "WARN",
-                &format!("list price refresh failed, using built-in snapshot: {err:#}"),
-            );
-        }
-    });
-}
-
-fn refresh_list_prices(state: &Arc<AgentState>) -> anyhow::Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(LIST_PRICE_TIMEOUT)
-        .build()?;
-    let payload: serde_json::Value = client
-        .get(LITELLM_PRICES_URL)
-        .send()?
-        .error_for_status()?
-        .json()?;
-    let table = payload
-        .as_object()
-        .context("litellm price table is not a json object")?;
-    let mut merged = builtin_list_prices().to_vec();
-    let mut extra: Vec<ModelPriceRule> = Vec::new();
-    for (name, info) in table {
-        let Some(rule) = litellm_rule(name, info) else {
-            continue;
-        };
-        if let Some(existing) = merged.iter_mut().find(|item| item.model == *name) {
-            // Network values override the numbers; built-in off-peak windows
-            // (e.g. deepseek) stay in place.
-            existing.input_micros_per_million = rule.input_micros_per_million;
-            existing.output_micros_per_million = rule.output_micros_per_million;
-            existing.cache_read_micros_per_million = rule.cache_read_micros_per_million;
-            existing.cache_creation_micros_per_million = rule.cache_creation_micros_per_million;
-        } else {
-            extra.push(rule);
-        }
-    }
-    if extra.is_empty() && merged.is_empty() {
-        bail!("litellm price table produced no usable rules");
-    }
-    // Longer (more specific) model names first so prefix matching picks the
-    // most specific rule before the built-in generic prefixes.
-    extra.sort_by_key(|rule| std::cmp::Reverse(rule.model.len()));
-    extra.extend(merged);
-    atomic_write_bytes(
-        state.vault_dir.join(LIST_PRICES_FILE),
-        &serde_json::to_vec_pretty(&extra)?,
-    )?;
-    let updated_at = OffsetDateTime::now_utc().unix_timestamp();
-    // Best effort: when the vault is locked the refreshed table still lands on
-    // disk, only the encrypted timestamp update is skipped.
-    let _ = with_vault(state, false, |vault| {
-        let mut config = load_pricing_config(&state.vault_dir, vault)?;
-        config.list_price_updated_at = Some(updated_at);
-        save_pricing_config(&state.vault_dir, vault, &config)
-    });
-    Ok(())
-}
-
-fn litellm_rule(name: &str, info: &serde_json::Value) -> Option<ModelPriceRule> {
-    let rule = ModelPriceRule {
-        model: name.to_string(),
-        input_micros_per_million: litellm_micros(info.get("input_cost_per_token")),
-        output_micros_per_million: litellm_micros(info.get("output_cost_per_token")),
-        cache_read_micros_per_million: litellm_micros(info.get("cache_read_input_token_cost")),
-        cache_creation_micros_per_million: litellm_micros(
-            info.get("cache_creation_input_token_cost"),
-        ),
-        off_peak: None,
-    };
-    (rule.input_micros_per_million > 0 || rule.output_micros_per_million > 0).then_some(rule)
-}
-
-fn litellm_micros(value: Option<&serde_json::Value>) -> u64 {
-    match value.and_then(serde_json::Value::as_f64) {
-        // cost_per_token * 1e6 micros/USD * 1e6 tokens/million
-        Some(price) if price.is_finite() && price > 0.0 => (price * 1e12).round() as u64,
-        _ => 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1093,21 +988,6 @@ mod tests {
             100_000,
         );
         assert_eq!(cost, 400_000 * 3 + 500_000 * 3 / 10 + 100_000 * 15 / 4);
-    }
-
-    #[test]
-    fn litellm_entries_convert_to_micros_per_million() {
-        let info = serde_json::json!({
-            "input_cost_per_token": 0.0000025,
-            "output_cost_per_token": 0.00001,
-            "cache_read_input_token_cost": 0.00000125
-        });
-        let rule = litellm_rule("gpt-4o", &info).unwrap();
-        assert_eq!(rule.input_micros_per_million, 2_500_000);
-        assert_eq!(rule.output_micros_per_million, 10_000_000);
-        assert_eq!(rule.cache_read_micros_per_million, 1_250_000);
-        assert_eq!(rule.cache_creation_micros_per_million, 0);
-        assert!(litellm_rule("free-model", &serde_json::json!({})).is_none());
     }
 
     #[test]

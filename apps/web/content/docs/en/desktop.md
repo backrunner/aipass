@@ -61,6 +61,10 @@ The **Server** section runs a local HTTP proxy that lets tools share vault crede
 
 Because targets reference vault entries, rotating a key in the vault updates the proxy without touching your tools.
 
+The public model price table used for cost estimates updates independently of app releases. On startup, the background agent checks its local cache and downloads prices from LiteLLM if the cache is missing or at least 24 hours old. It refreshes daily while running and retries hourly after failures. Offline or invalid responses leave the last successful download in use; without a valid cache, built-in prices apply. Price downloads work while the vault is locked and require no proxy restart.
+
+Custom pricing groups, manual prices, and credential multipliers take precedence over the public table. Historical usage costs are recalculated when queried, so updating public prices can also change historical estimates that use those prices. Actual charges follow your provider's bill.
+
 ## Tray
 
 AIPass lives in the macOS menu bar. The tray menu shows agent and proxy status and offers:
