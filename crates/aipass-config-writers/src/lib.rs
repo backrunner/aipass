@@ -73,6 +73,12 @@ mod tests {
         let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
         apply_plan(&plan, &content).unwrap();
         let (_plan2, content2) = plan_codex(dir.path(), &entry).unwrap();
+        assert_eq!(content, content2);
+        let parsed = content2.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["supports_websockets"].as_bool(),
+            Some(true)
+        );
         assert!(content2.contains("model_providers"));
         assert!(content2.contains("model_provider = \"aipass\""));
         assert!(content2.contains("[model_providers.aipass]"));
@@ -90,7 +96,7 @@ mod tests {
         std::fs::create_dir_all(&codex_dir).unwrap();
         std::fs::write(
             codex_dir.join("config.toml"),
-            "model_provider = \"openai\"\nmodel = \"old-model\"\n\n[model_providers.openai]\nname = \"My OpenAI\"\nenv_key = \"OLD_KEY\"\ncustom_reasoning = true\n",
+            "model_provider = \"openai\"\nmodel = \"old-model\"\n\n[model_providers.openai]\nname = \"My OpenAI\"\nenv_key = \"OLD_KEY\"\nsupports_websockets = false\ncustom_reasoning = true\n",
         )
         .unwrap();
 
@@ -102,6 +108,11 @@ mod tests {
         entry.default_model = Some("openai/gpt-5".to_string());
 
         let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
+        let parsed = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["supports_websockets"].as_bool(),
+            Some(true)
+        );
         assert!(content.contains("[model_providers.aipass]"));
         assert!(!content.contains("[model_providers.openai]"));
         assert!(content.contains("name = \"My OpenAI\""));
@@ -139,6 +150,11 @@ mod tests {
             CodexApiKeyMode::ExperimentalBearerToken,
         )
         .unwrap();
+        let parsed = plaintext_content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["supports_websockets"].as_bool(),
+            Some(true)
+        );
         assert!(plaintext_content.contains("experimental_bearer_token = \"new-secret\""));
         assert!(!plaintext_plan.preview.contains("new-secret"));
         assert!(plaintext_plan.extra_writes.is_empty());
@@ -373,6 +389,11 @@ mod tests {
 
         let config_text = std::fs::read_to_string(&target).unwrap();
         let auth_text = std::fs::read_to_string(&auth_path).unwrap();
+        let parsed = config_text.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["supports_websockets"].as_bool(),
+            Some(true)
+        );
         assert!(config_text.contains("requires_openai_auth = true"));
         assert!(auth_text.contains("\"auth_mode\": \"apikey\""));
         assert!(auth_text.contains("OPENAI_API_KEY"));
@@ -381,6 +402,26 @@ mod tests {
         rollback_encrypted(&plan.backup_path, &[9_u8; aipass_crypto::KEY_LEN]).unwrap();
         assert!(!target.exists());
         assert!(!auth_path.exists());
+    }
+
+    #[test]
+    fn codex_local_proxy_writer_enables_websocket_transport() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.endpoint = Some("http://127.0.0.1:8787/v1".to_string());
+        entry.api_key = Some("local-proxy-token".to_string());
+
+        let (_plan, content) = plan_codex_plaintext(dir.path(), &entry).unwrap();
+        let parsed = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["supports_websockets"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["base_url"].as_str(),
+            Some("http://127.0.0.1:8787/v1")
+        );
     }
 
     #[test]
@@ -715,6 +756,10 @@ mod tests {
         let parsed = content.parse::<toml_edit::DocumentMut>().unwrap();
         assert_eq!(
             parsed["model_providers"]["aipass"]["requires_openai_auth"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["supports_websockets"].as_bool(),
             Some(true)
         );
         assert!(plan.extra_writes.is_empty());

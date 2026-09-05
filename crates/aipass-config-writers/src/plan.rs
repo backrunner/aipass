@@ -928,6 +928,7 @@ fn update_codex_provider(
         provider.remove("base_url");
     }
     provider["wire_api"] = value("responses");
+    provider["supports_websockets"] = value(true);
     match auth_mode {
         CodexAuthMode::ExperimentalBearer => {
             provider.remove("env_key");

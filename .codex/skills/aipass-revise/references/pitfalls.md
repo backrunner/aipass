@@ -49,6 +49,13 @@ Newest entries last within each section.
 - **Guardrail**: log every configuration operation's lifecycle and correlate apply/rollback failures by operation ID without logging config contents or secrets.
 - **Watch points**: `crates/aipass-agent/src/handlers.rs`, `crates/aipass-agent-protocol/src/lib.rs`, and `crates/aipass-config-writers/src/backup.rs`.
 
+### Codex provider writes omitted WebSocket support
+- **Symptom**: generated Codex configurations did not advertise Responses WebSocket support, including when pointing at the WS-capable local proxy.
+- **Root cause**: `crates/aipass-config-writers/src/plan.rs:930` managed `wire_api` but omitted the provider-level `supports_websockets` flag.
+- **Fix**: set `supports_websockets = true` in the shared provider updater for every auth mode, including existing provider blocks.
+- **Guardrail**: keep transport flags in the shared Codex provider updater; verify new configs, provider migration, and local proxy writes all enable WS while keeping HTTP base URLs. Covered by the Codex writer idempotence/migration tests and `codex_local_proxy_writer_enables_websocket_transport`.
+- **Watch points**: `plan_codex`, `plan_codex_official`, `plan_codex_plaintext_with_mode`, and agent `build_tool_config_proxy_plan`.
+
 ## Proxy credential snapshot (proxy_service / handlers)
 
 ### New or changed credentials invisible to the running proxy
