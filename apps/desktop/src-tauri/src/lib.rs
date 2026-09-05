@@ -3,6 +3,7 @@ mod commands;
 mod deeplink;
 mod logging;
 mod models;
+mod oauth_browser;
 #[cfg(target_os = "macos")]
 mod self_install;
 mod singleton;
@@ -2353,6 +2354,7 @@ pub fn run() {
             entries_list,
             entries_search,
             official_accounts_refresh,
+            oauth_browser::oauth_open_verification,
             oauth_login_start,
             oauth_login_poll,
             oauth_login_cancel,

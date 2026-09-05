@@ -3,7 +3,7 @@ import type { ProviderEntry } from "@aipass/schemas";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 
-import type { ProxyRouteConfig } from "../../types";
+import type { ProxyRouteConfig, ProxyStatus } from "../../types";
 import RouteListPane from "./RouteListPane.svelte";
 
 const retry = {
@@ -91,6 +91,57 @@ test("right click exposes the edit action", () => {
   flushSync();
 
   expect(document.body.textContent).toMatch(/编辑分组|Edit group/i);
+});
+
+test("double click selects the route and opens its existing editor", () => {
+  const onSelect = vi.fn();
+  mountList({ onSelect });
+  const rows = document.body.querySelectorAll<HTMLElement>("[role='option']");
+  rows[1].querySelector(".title")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  flushSync();
+
+  expect(onSelect).toHaveBeenCalledWith("route-2");
+  expect(document.body.querySelector("[role='dialog']")).not.toBeNull();
+  expect(document.body.querySelector<HTMLInputElement>(".route-dialog-content input")?.value).toBe("Secondary route");
+});
+
+test("double clicking the switch does not open the editor or select the route", () => {
+  const onSelect = vi.fn();
+  mountList({ onSelect });
+  document.body.querySelector(".route-switch-thumb")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  flushSync();
+
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(document.body.querySelector("[role='dialog']")).toBeNull();
+});
+
+test("double click respects the busy state", () => {
+  mountList({ busy: "saving" });
+  document.body.querySelector("[role='option']")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  flushSync();
+
+  expect(document.body.querySelector("[role='dialog']")).toBeNull();
+});
+
+test.each([true, false])("marks only affected enabled groups while running=%s", (running) => {
+  const target = { id: "target-1", enabled: true };
+  const status: ProxyStatus = {
+    running, enabled: true, bindAddr: "127.0.0.1:8787", activeRoutes: 3,
+    requests: 1, failures: 0, recentRequests: 1, recentTokens: 0, successRateBps: 10_000,
+    degraded: true, degradedTargetIds: [target.id]
+  };
+  mountList({
+    status,
+    routes: [
+      { ...routes[0], targets: [target] },
+      { ...routes[1], targets: [target] },
+      { ...routes[0], id: "healthy", targets: [{ ...target, id: "target-healthy" }] },
+      { ...routes[0], id: "disabled-member", targets: [{ ...target, enabled: false }] }
+    ]
+  });
+  const rows = document.body.querySelectorAll("[role='option']");
+  expect(rows[0].querySelector(".tone-warning") !== null).toBe(running);
+  for (const row of [...rows].slice(1)) expect(row.querySelector(".tone-warning")).toBeNull();
 });
 
 test("route switch does not depend on opening the editor", () => {

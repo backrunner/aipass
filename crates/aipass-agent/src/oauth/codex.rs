@@ -50,6 +50,7 @@ struct OAuthTokenResponse {
 fn client() -> Result<reqwest::blocking::Client, OAuthError> {
     reqwest::blocking::Client::builder()
         .timeout(OAUTH_HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| OAuthError::Network(e.to_string()))
 }
@@ -80,9 +81,7 @@ pub(crate) fn start_device_flow() -> Result<DeviceChallenge, OAuthError> {
             oauth_error_code(&text).as_deref(),
         ));
     }
-    let device: DeviceCodeResponse = response
-        .json()
-        .map_err(|e| OAuthError::Parse(e.to_string()))?;
+    let device: DeviceCodeResponse = super::read_json_response(response)?;
     Ok(DeviceChallenge {
         device_code: device.device_auth_id,
         user_code: device.user_code,
@@ -112,6 +111,9 @@ pub(crate) fn poll_for_token(
     if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND {
         return Err(OAuthError::AuthorizationPending);
     }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(OAuthError::SlowDown);
+    }
     if status == reqwest::StatusCode::GONE {
         return Err(OAuthError::ExpiredDeviceCode);
     }
@@ -123,9 +125,7 @@ pub(crate) fn poll_for_token(
             oauth_error_code(&text).as_deref(),
         ));
     }
-    let success: DevicePollSuccess = response
-        .json()
-        .map_err(|e| OAuthError::Parse(e.to_string()))?;
+    let success: DevicePollSuccess = super::read_json_response(response)?;
     let tokens = exchange_code_for_tokens(&success.authorization_code, &success.code_verifier)?;
     bundle_from_tokens(tokens, true)
 }
@@ -155,9 +155,7 @@ fn exchange_code_for_tokens(
             oauth_error_code(&text).as_deref(),
         ));
     }
-    response
-        .json()
-        .map_err(|e| OAuthError::Parse(e.to_string()))
+    super::read_json_response(response)
 }
 
 pub(crate) fn refresh_with_token(refresh_token: &str) -> Result<OAuthTokenBundle, OAuthError> {
@@ -179,7 +177,10 @@ pub(crate) fn refresh_with_token(refresh_token: &str) -> Result<OAuthTokenBundle
             || matches!(
                 extract_error_code(&text).as_deref(),
                 Some(
-                    "refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated"
+                    "invalid_grant"
+                        | "refresh_token_expired"
+                        | "refresh_token_reused"
+                        | "refresh_token_invalidated"
                 )
             )
         {
@@ -191,9 +192,7 @@ pub(crate) fn refresh_with_token(refresh_token: &str) -> Result<OAuthTokenBundle
             oauth_error_code(&text).as_deref(),
         ));
     }
-    let tokens: OAuthTokenResponse = response
-        .json()
-        .map_err(|e| OAuthError::Parse(e.to_string()))?;
+    let tokens: OAuthTokenResponse = super::read_json_response(response)?;
     // A refresh may omit a new refresh token; the caller keeps the old one.
     bundle_from_tokens(tokens, false)
 }
@@ -206,7 +205,7 @@ fn bundle_from_tokens(
     require_id_token: bool,
 ) -> Result<OAuthTokenBundle, OAuthError> {
     let refresh_token = tokens.refresh_token.unwrap_or_default();
-    if require_id_token && refresh_token.is_empty() {
+    if require_id_token && refresh_token.trim().is_empty() {
         return Err(OAuthError::token_fetch_failed_plain(
             "login response missing refresh_token",
         ));
@@ -267,31 +266,20 @@ fn bundle_from_tokens(
 /// The machine-readable OAuth `error` code from a JSON error body, used for
 /// sanitized IPC-facing messages (never the free-text `error_description`).
 fn oauth_error_code(text: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|e| e.as_str())
-                .map(str::to_string)
-        })
+    extract_error_code(text)
 }
 
 fn extract_error_code(text: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|e| e.as_str())
-                .map(str::to_string)
-                .or_else(|| {
-                    value
-                        .get("error_description")
-                        .and_then(|e| e.as_str())
-                        .map(str::to_string)
-                })
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    value
+        .get("error")
+        .and_then(|error| {
+            error
+                .as_str()
+                .or_else(|| error.get("code").and_then(|code| code.as_str()))
         })
+        .or_else(|| value.get("code").and_then(|code| code.as_str()))
+        .map(str::to_ascii_lowercase)
 }
 
 /// Read a response body with the read itself capped, so an oversized error
@@ -354,5 +342,28 @@ mod tests {
         tokens.access_token = "   ".to_string();
         let err = bundle_from_tokens(tokens, false).unwrap_err();
         assert!(matches!(err, OAuthError::TokenFetchFailed { .. }));
+    }
+    #[test]
+    fn refresh_errors_accept_nested_and_flat_codes_without_descriptions() {
+        for body in [
+            r#"{"error":{"code":"refresh_token_reused","message":"secret"}}"#,
+            r#"{"error":"refresh_token_reused","error_description":"secret"}"#,
+            r#"{"code":"REFRESH_TOKEN_REUSED"}"#,
+        ] {
+            assert_eq!(
+                extract_error_code(body).as_deref(),
+                Some("refresh_token_reused")
+            );
+            let err = OAuthError::token_fetch_failed(
+                "refresh",
+                reqwest::StatusCode::BAD_REQUEST,
+                oauth_error_code(body).as_deref(),
+            );
+            assert!(!err.to_string().contains("secret"));
+        }
+        assert_eq!(
+            extract_error_code(r#"{"error_description":"secret"}"#),
+            None
+        );
     }
 }

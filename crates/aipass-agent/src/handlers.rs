@@ -136,7 +136,11 @@ fn dispatch_request(
             proxy.rotate_token(vault, route_id)
         })
         .map(AgentResponse::success),
-        AgentRequest::ServerUsageSummary => with_vault(state, true, |vault| {
+        AgentRequest::ServerUsageSummary {
+            days,
+            timezone_offset_minutes,
+            granularity,
+        } => with_vault(state, true, |vault| {
             let mut proxy = state
                 .proxy
                 .lock()
@@ -144,7 +148,13 @@ fn dispatch_request(
             proxy.load_config(vault)?;
             let pricing = proxy.pricing_config(vault)?;
             let list_prices = crate::pricing::load_list_prices(&state.vault_dir);
-            proxy.usage_summary(&pricing, &list_prices)
+            proxy.usage_summary(
+                days.map(|days| {
+                    aipass_proxy::usage_window_start(days, timezone_offset_minutes, granularity)
+                }),
+                &pricing,
+                &list_prices,
+            )
         })
         .map(AgentResponse::success),
         AgentRequest::ServerUsageClear => with_vault(state, false, |_vault| {
@@ -158,6 +168,7 @@ fn dispatch_request(
         AgentRequest::ServerUsageTimeseries {
             days,
             timezone_offset_minutes,
+            granularity,
         } => with_vault(state, true, |vault| {
             let mut proxy = state
                 .proxy
@@ -166,7 +177,13 @@ fn dispatch_request(
             proxy.load_config(vault)?;
             let pricing = proxy.pricing_config(vault)?;
             let list_prices = crate::pricing::load_list_prices(&state.vault_dir);
-            proxy.usage_timeseries(days, timezone_offset_minutes, &pricing, &list_prices)
+            proxy.usage_timeseries(
+                days,
+                timezone_offset_minutes,
+                granularity,
+                &pricing,
+                &list_prices,
+            )
         })
         .map(AgentResponse::success),
         AgentRequest::ServerPricingConfigGet => with_vault(state, true, |vault| {
@@ -705,9 +722,14 @@ fn dispatch_request(
         })
         .map(AgentResponse::success),
         AgentRequest::OAuthLoginStart { provider } => {
+            with_vault(state, true, |_| Ok(()))?;
             let challenge = crate::oauth::oauth_manager()
                 .start(provider)
                 .map_err(|err| ServiceError::new(AgentErrorCode::Internal, err.to_string()))?;
+            if let Err(err) = with_vault(state, false, |_| Ok(())) {
+                crate::oauth::oauth_manager().cancel(&challenge.device_code);
+                return Err(err);
+            }
             Ok(AgentResponse::success(OAuthDeviceStart {
                 device_code: challenge.device_code,
                 user_code: challenge.user_code,
@@ -720,50 +742,72 @@ fn dispatch_request(
         AgentRequest::OAuthLoginPoll {
             provider,
             device_code,
-        } => match crate::oauth::oauth_manager().poll(provider, &device_code) {
-            Ok(outcome) => match outcome.bundle {
-                None => Ok(AgentResponse::success(OAuthLoginPoll {
-                    status: OAuthLoginStatus::Pending,
-                    account: None,
-                    message: None,
-                    interval_secs: Some(outcome.interval_secs),
-                })),
-                Some(bundle) => {
-                    let account = complete_oauth_login(state, provider, bundle)?;
-                    // Consume the device entry only after persistence succeeds,
-                    // so a failed persist does not lose the token bundle.
-                    crate::oauth::oauth_manager().consume(&device_code);
+        } => {
+            with_vault(state, true, |_| Ok(()))?;
+            match crate::oauth::oauth_manager().poll(provider, &device_code) {
+                Ok(outcome) => match outcome.bundle {
+                    None => Ok(AgentResponse::success(OAuthLoginPoll {
+                        status: OAuthLoginStatus::Pending,
+                        account: None,
+                        message: None,
+                        interval_secs: Some(outcome.interval_secs),
+                    })),
+                    Some(bundle) => {
+                        let Some(result) = crate::oauth::oauth_manager()
+                            .complete(&device_code, || {
+                                complete_oauth_login(state, provider, bundle)
+                            })
+                        else {
+                            return Ok(AgentResponse::success(OAuthLoginPoll {
+                                status: OAuthLoginStatus::Expired,
+                                account: None,
+                                message: None,
+                                interval_secs: None,
+                            }));
+                        };
+                        let account = match result {
+                            Ok(account) => account,
+                            Err(err) => {
+                                return Ok(AgentResponse::success(OAuthLoginPoll {
+                                    status: OAuthLoginStatus::Pending,
+                                    account: None,
+                                    message: Some(err.message),
+                                    interval_secs: Some(outcome.interval_secs),
+                                }))
+                            }
+                        };
+                        Ok(AgentResponse::success(OAuthLoginPoll {
+                            status: OAuthLoginStatus::Authorized,
+                            account: Some(account),
+                            message: None,
+                            interval_secs: None,
+                        }))
+                    }
+                },
+                Err(crate::oauth::OAuthError::ExpiredDeviceCode) => {
                     Ok(AgentResponse::success(OAuthLoginPoll {
-                        status: OAuthLoginStatus::Authorized,
-                        account: Some(account),
+                        status: OAuthLoginStatus::Expired,
+                        account: None,
                         message: None,
                         interval_secs: None,
                     }))
                 }
-            },
-            Err(crate::oauth::OAuthError::ExpiredDeviceCode) => {
-                Ok(AgentResponse::success(OAuthLoginPoll {
-                    status: OAuthLoginStatus::Expired,
+                // Transient failures (network, 5xx) must not kill the login: report
+                // pending with a sanitized warning and let the client keep polling.
+                Err(err) if err.is_retryable() => Ok(AgentResponse::success(OAuthLoginPoll {
+                    status: OAuthLoginStatus::Pending,
                     account: None,
-                    message: None,
+                    message: Some(err.to_string()),
+                    interval_secs: crate::oauth::oauth_manager().current_interval(&device_code),
+                })),
+                Err(err) => Ok(AgentResponse::success(OAuthLoginPoll {
+                    status: OAuthLoginStatus::Error,
+                    account: None,
+                    message: Some(err.to_string()),
                     interval_secs: None,
-                }))
+                })),
             }
-            // Transient failures (network, 5xx) must not kill the login: report
-            // pending with a sanitized warning and let the client keep polling.
-            Err(err) if err.is_retryable() => Ok(AgentResponse::success(OAuthLoginPoll {
-                status: OAuthLoginStatus::Pending,
-                account: None,
-                message: Some(err.to_string()),
-                interval_secs: crate::oauth::oauth_manager().current_interval(&device_code),
-            })),
-            Err(err) => Ok(AgentResponse::success(OAuthLoginPoll {
-                status: OAuthLoginStatus::Error,
-                account: None,
-                message: Some(err.to_string()),
-                interval_secs: None,
-            })),
-        },
+        }
         AgentRequest::OAuthLoginCancel { device_code, .. } => Ok(AgentResponse::success(
             crate::oauth::oauth_manager().cancel(&device_code),
         )),
@@ -1215,6 +1259,7 @@ fn complete_oauth_login(
         };
         let outcome = match provider {
             OAuthProvider::Codex => native_write::sync_codex_auth_json(
+                &vault.config_backup_key(),
                 &bundle.access_token,
                 &bundle.refresh_token,
                 bundle.id_token.as_deref(),
@@ -1223,6 +1268,7 @@ fn complete_oauth_login(
                 now,
             ),
             OAuthProvider::Grok => native_write::sync_grok_auth_json(
+                &vault.config_backup_key(),
                 &bundle.access_token,
                 &bundle.refresh_token,
                 None,
@@ -1230,7 +1276,14 @@ fn complete_oauth_login(
                 bundle.account_identity.as_deref(),
             ),
         }
-        .map_err(ServiceError::internal)?;
+        .unwrap_or_else(|err| {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                &format!("oauth native write-back failed: {err}"),
+            );
+            NativeSyncOutcome::Skipped("native credential file could not be updated".into())
+        });
         match outcome {
             NativeSyncOutcome::Adopted {
                 access_token,

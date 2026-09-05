@@ -1,14 +1,16 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
+  import { Badge } from "@aipass/ui";
   import { ContextMenu, Switch } from "bits-ui";
-  import { Pencil, Plus, Server, Trash2 } from "lucide-svelte";
+  import { AlertTriangle, Pencil, Plus, Server, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyRouteConfig } from "../../types";
+  import type { MaybePromise, ProxyRouteConfig, ProxyStatus } from "../../types";
   import RouteGroupDialog from "./RouteGroupDialog.svelte";
 
   export let routes: ProxyRouteConfig[] = [];
   export let entries: ProviderEntry[] = [];
+  export let status: ProxyStatus | undefined = undefined;
   export let selectedRouteId = "";
   export let busy = "";
   export let onSelect: (routeId: string) => MaybePromise = () => {};
@@ -18,6 +20,7 @@
 
   let dialogOpen = false;
   let editingRoute: ProxyRouteConfig | undefined;
+  $: degradedTargetIds = new Set(status?.running ? status.degradedTargetIds ?? [] : []);
 
   function openCreate() {
     editingRoute = undefined;
@@ -25,6 +28,7 @@
   }
 
   function openEdit(route: ProxyRouteConfig) {
+    if (busy) return;
     selectRoute(route);
     editingRoute = route;
     dialogOpen = true;
@@ -78,6 +82,9 @@
               on:click={(event) => {
                 if (!(event.target as Element).closest("[data-route-control]")) selectRoute(route);
               }}
+              on:dblclick={(event) => {
+                if (!(event.target as Element).closest("[data-route-control]")) openEdit(route);
+              }}
               on:contextmenu={() => selectRoute(route)}
               on:keydown={(event) => {
                 if (event.target !== event.currentTarget) return;
@@ -89,7 +96,12 @@
             >
               <span class="entry-icon" aria-hidden="true"><Server size={16} /></span>
               <div class="entry-content">
-                <span class="title">{route.name}</span>
+                <span class="entry-heading">
+                  <span class="title">{route.name}</span>
+                  {#if route.enabled && route.targets.some((target) => target.enabled && degradedTargetIds.has(target.id))}
+                    <Badge tone="warning" size="sm"><AlertTriangle size={12} /> {$t("server.degraded")}</Badge>
+                  {/if}
+                </span>
                 <span class="subtitle">
                   {route.strategy === "round_robin" ? $t("server.strategyRoundRobin") : $t("server.strategyFallback")}
                   <span aria-hidden="true"> · </span>
@@ -129,7 +141,7 @@
 </section>
 
 {#if dialogOpen}
-  <RouteGroupDialog route={editingRoute} {entries} onSave={saveDialog} onClose={closeDialog} />
+  <RouteGroupDialog route={editingRoute} {entries} {status} onSave={saveDialog} onClose={closeDialog} />
 {/if}
 
 <style lang="scss">
@@ -254,7 +266,15 @@
     gap: 4px;
   }
 
+  .entry-heading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
   .title {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

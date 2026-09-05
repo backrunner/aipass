@@ -58,6 +58,7 @@ struct OAuthTokenResponse {
 fn client() -> Result<reqwest::blocking::Client, OAuthError> {
     reqwest::blocking::Client::builder()
         .timeout(OAUTH_HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| OAuthError::Network(e.to_string()))
 }
@@ -81,11 +82,9 @@ fn discover_endpoints() -> Result<OAuthEndpoints, OAuthError> {
             "xAI discovery failed: HTTP {status}"
         )));
     }
-    let value: serde_json::Value = response
-        .json()
-        .map_err(|e| OAuthError::Parse(e.to_string()))?;
-    let document: DiscoveryDocument =
-        serde_json::from_value(value).map_err(|e| OAuthError::Parse(e.to_string()))?;
+    let value: serde_json::Value = super::read_json_response(response)?;
+    let document: DiscoveryDocument = serde_json::from_value(value)
+        .map_err(|_| OAuthError::Parse("invalid OAuth response".into()))?;
     if document.issuer.trim_end_matches('/') != XAI_ISSUER {
         return Err(OAuthError::Parse("xAI discovery issuer mismatch".into()));
     }
@@ -102,7 +101,7 @@ fn discover_endpoints() -> Result<OAuthEndpoints, OAuthError> {
 fn validate_endpoint(url: &str) -> Result<(), OAuthError> {
     let parsed =
         reqwest::Url::parse(url).map_err(|_| OAuthError::Parse("bad xAI endpoint".into()))?;
-    if parsed.scheme() != "https" {
+    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(OAuthError::Parse("xAI endpoint must be https".into()));
     }
     // Endpoints come from a remotely fetched discovery document and refresh
@@ -135,16 +134,15 @@ pub(crate) fn start_device_flow() -> Result<DeviceChallenge, OAuthError> {
             oauth_error_code_str(&text).as_deref(),
         ));
     }
-    let device: DeviceCodeResponse = response
-        .json()
-        .map_err(|e| OAuthError::Parse(e.to_string()))?;
+    let device: DeviceCodeResponse = super::read_json_response(response)?;
+    validate_endpoint(&device.verification_uri)?;
+    if let Some(uri) = &device.verification_uri_complete {
+        validate_endpoint(uri)?;
+    }
     Ok(DeviceChallenge {
         device_code: device.device_code,
         user_code: device.user_code,
-        verification_uri: device
-            .verification_uri_complete
-            .clone()
-            .unwrap_or_else(|| device.verification_uri.clone()),
+        verification_uri: device.verification_uri,
         verification_uri_complete: device.verification_uri_complete,
         expires_in: device
             .expires_in
@@ -169,9 +167,13 @@ pub(crate) fn poll_for_token(device_code: &str) -> Result<OAuthTokenBundle, OAut
         ]))
         .send()?;
     let status = response.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(OAuthError::SlowDown);
+    }
     // Parse opportunistically: an unreadable/empty body on an error status is
     // still just that HTTP error, not a parse failure.
-    let value: serde_json::Value = response.json().unwrap_or(serde_json::Value::Null);
+    let value: serde_json::Value =
+        super::read_json_response(response).unwrap_or(serde_json::Value::Null);
     if let Some(code) = oauth_error_code(&value) {
         return match code.as_str() {
             "authorization_pending" => Err(OAuthError::AuthorizationPending),
@@ -192,8 +194,8 @@ pub(crate) fn poll_for_token(device_code: &str) -> Result<OAuthTokenBundle, OAut
             None,
         ));
     }
-    let tokens: OAuthTokenResponse =
-        serde_json::from_value(value).map_err(|e| OAuthError::Parse(e.to_string()))?;
+    let tokens: OAuthTokenResponse = serde_json::from_value(value)
+        .map_err(|_| OAuthError::Parse("invalid OAuth response".into()))?;
     bundle_from_tokens(tokens, true)
 }
 
@@ -212,7 +214,8 @@ pub(crate) fn refresh_with_token(refresh_token: &str) -> Result<OAuthTokenBundle
         .send()?;
     let status = response.status();
     // An unreadable/empty body on a 4xx still means the grant is gone.
-    let value: serde_json::Value = response.json().unwrap_or(serde_json::Value::Null);
+    let value: serde_json::Value =
+        super::read_json_response(response).unwrap_or(serde_json::Value::Null);
     let code = oauth_error_code(&value);
     if matches!(
         code.as_deref(),
@@ -229,8 +232,8 @@ pub(crate) fn refresh_with_token(refresh_token: &str) -> Result<OAuthTokenBundle
             code.as_deref(),
         ));
     }
-    let tokens: OAuthTokenResponse =
-        serde_json::from_value(value).map_err(|e| OAuthError::Parse(e.to_string()))?;
+    let tokens: OAuthTokenResponse = serde_json::from_value(value)
+        .map_err(|_| OAuthError::Parse("invalid OAuth response".into()))?;
     bundle_from_tokens(tokens, false)
 }
 
@@ -252,14 +255,13 @@ fn bundle_from_tokens(
     // Identity comes from the id_token (OIDC): prefer email, fall back to sub.
     let claims = tokens.id_token.as_deref().and_then(jwt_claims);
     let account_identity = claims.as_ref().and_then(|claims| {
-        ["email", "preferred_username", "name", "sub"]
-            .iter()
-            .find_map(|key| {
-                claims
-                    .get(*key)
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
+        ["email", "sub"].iter().find_map(|key| {
+            claims
+                .get(*key)
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string)
+        })
     });
     if require_refresh && account_identity.is_none() {
         return Err(OAuthError::Parse(

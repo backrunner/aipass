@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProviderEmptyState from "./ProviderEmptyState.svelte";
   import type { InterfaceType, ProviderEntry, ProviderKind, SecretRef } from "@aipass/schemas";
   import {
     Badge,
@@ -132,6 +133,17 @@
   ) => MaybePromise = () => {};
   export let onDeletePricingGroup: (groupId: string) => MaybePromise = () => {};
   export let onDeletePricingVersion: (groupId: string, effectiveFrom: number) => MaybePromise = () => {};
+
+  let saving = false;
+  async function saveEdit() {
+    if (saving) return;
+    saving = true;
+    try {
+      await onEditSave();
+    } finally {
+      saving = false;
+    }
+  }
 
   let showAddSecret = false;
   let editingSecretId = "";
@@ -279,6 +291,9 @@
     lastDialogEntryId = selected?.id ?? "";
     usageDialogOpen = false;
     pricingDialogOpen = false;
+    showAddSecret = false;
+    newSecretKey = "";
+    cancelSecretEdit();
   }
 
   function integrationRequest(tool: IntegrationToolDefinition, id: string) {
@@ -341,6 +356,7 @@
   function cancelEdit() {
     showAddSecret = false;
     newSecretKey = "";
+    cancelSecretEdit();
     onEditCancel();
   }
 
@@ -403,8 +419,8 @@
           </IconButton>
         {/if}
         {#if editMode}
-          <Button variant="ghost" on:click={cancelEdit}>{$t("common.cancel")}</Button>
-          <Button variant="primary" on:click={() => onEditSave()}>{$t("providerModal.saveChanges")}</Button>
+          <Button variant="ghost" disabled={saving} on:click={cancelEdit}>{$t("common.cancel")}</Button>
+          <Button variant="primary" loading={saving} on:click={saveEdit}>{$t("providerModal.saveChanges")}</Button>
         {:else if showTrash}
           <Button variant="ghost" on:click={() => onRestore()}>
             <Undo2 size={14} /> {$t("providerDetail.restore")}
@@ -472,6 +488,7 @@
 
       {#if editMode}
         <ProviderFormFields
+          itemLayout
           {formMode}
           bind:draft
           {onInferDraftFromDomain}
@@ -487,12 +504,6 @@
           <section class="form-section">
             <h3 class="section-title">{$t("providerDetail.apiKey")} · {$t("pricing.group")}</h3>
             <div class="section-fields">
-              <Field label={$t("providerDetail.secretLabel")}>
-                <input
-                  bind:value={draft.secretLabel}
-                  placeholder={$t("providerForm.secretLabelPlaceholder")}
-                />
-              </Field>
               <div class="key-pricing">
                 <SelectField
                   label={$t("pricing.group")}
@@ -640,7 +651,7 @@
                     type="password"
                     placeholder={$t("providerDetail.apiKey")}
                   />
-                  <Button variant="secondary" size="sm" disabled={secretBusy === "add"} on:click={() => onAddSecret()}>
+                  <Button variant="secondary" size="sm" disabled={secretBusy === "add" || !newSecretLabel.trim() || !newSecretKey.trim()} on:click={() => onAddSecret()}>
                     {$t("common.save")}
                   </Button>
                   <Button variant="ghost" size="sm" on:click={() => { showAddSecret = false; newSecretKey = ""; }}>
@@ -663,7 +674,7 @@
           </button>
         {/if}
       {:else}
-        <Card title={$t("providerDetail.credentials")} collapsible padded={false}>
+        <Card title={$t("providerDetail.credentials")} padded={false}>
           {#if selected.credentialKind === "oauth"}
             <div class="oauth-note">{$t("providerDetail.oauthCredentialNote")}</div>
           {/if}
@@ -708,27 +719,11 @@
                 </IconButton>
               </div>
             {:else}
-              <div
-                class="kv-row secret clickable"
-                class:copied-flash={copied === `secret:${secret.id}`}
-                role="button"
-                tabindex="0"
-                aria-label={$t("providerDetail.copySecret", { label: secret.label })}
-                on:click={() => onCopySecret(secret.id)}
-                on:keydown|self={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onCopySecret(secret.id);
-                  }
-                }}
-              >
-                <span class="kv-label">
-                  <KeyRound size={13} />
-                  {secret.label}
-                </span>
-                <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>
-                  {revealedSecrets[secret.id] || fullyMasked()}
-                </code>
+              <div class="kv-row secret" class:copied-flash={copied === `secret:${secret.id}`}>
+                <button type="button" class="secret-copy" aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}>
+                  <span class="kv-label"><KeyRound size={13} />{secret.label}</span>
+                  <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
+                </button>
                 <span class="kv-actions">
                   {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
                     <span class="pricing-badge">
@@ -739,7 +734,12 @@
                   {#if copied === `secret:${secret.id}`}
                     <span class="kv-hint copied"><Check size={13} /> {$t("providerDetail.copied")}</span>
                   {:else}
-                    <span class="copy-hint"><Copy size={13} /></span>
+                    <button
+                      type="button"
+                      class="icon-btn copy-hint"
+                      aria-label={$t("providerDetail.copySecret", { label: secret.label })}
+                      on:click={() => onCopySecret(secret.id)}
+                    ><Copy size={13} /></button>
                   {/if}
                   <button
                     type="button"
@@ -1003,15 +1003,50 @@
   {/if}
 {:else}
   <section class="detail empty">
-    <div class="empty-card">
-      <span class="empty-icon"><KeyRound size={22} /></span>
-      <h1>{$t("providerDetail.noneSelected")}</h1>
-      <p class="text-tertiary">{$t("providerDetail.noneSelectedDesc")}</p>
-    </div>
+    <ProviderEmptyState
+      title={$t("providerDetail.noneSelected")}
+      description={$t("providerDetail.noneSelectedDesc")}
+    >
+      {#snippet icon()}<KeyRound size={22} />{/snippet}
+    </ProviderEmptyState>
   </section>
 {/if}
 
 <style lang="scss">
+  .kv-row > .kv-hint, .kv-row > .kv-actions, .kv-row > span:last-child:not(.kv-label):not(.kv-value) {
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+  .secret-copy {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    grid-column: 1;
+    grid-row: 1 / 3;
+    text-align: left;
+    border-radius: 4px;
+  }
+  .secret-copy:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 4px;
+  }
+  .secret:focus-within .copy-hint, .secret:hover .copy-hint {
+    opacity: 1;
+    color: var(--accent);
+  }
+  .secret .kv-actions {
+    flex-wrap: wrap;
+    max-width: 150px;
+  }
+  .pricing-badge {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .notes-body {
+    overflow-wrap: anywhere;
+  }
+
   .detail {
     display: flex;
     flex-direction: column;
@@ -1045,10 +1080,11 @@
 
   .detail-header {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 22px 28px;
+    flex-direction: column-reverse;
+    flex-shrink: 0;
+    align-items: stretch;
+    gap: 20px;
+    padding: 14px 24px 24px;
     border-bottom: 1px solid var(--divider);
     background: transparent;
   }
@@ -1103,6 +1139,7 @@
   }
 
   .actions {
+    justify-content: flex-end;
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -1181,7 +1218,7 @@
     flex: 1;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 22px 28px 36px;
+    padding: 24px 24px 36px;
     display: flex;
     flex-direction: column;
     gap: 18px;
@@ -1195,10 +1232,11 @@
 
   .kv-row {
     display: grid;
-    grid-template-columns: 110px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    gap: 12px;
-    padding: 10px 16px;
+    column-gap: 12px;
+    row-gap: 5px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--divider);
     text-align: left;
 
@@ -1219,7 +1257,7 @@
       background: var(--surface-2);
     }
 
-    &:hover .copy-hint {
+    &:is(:hover, :focus-visible, :focus-within) .copy-hint {
       opacity: 1;
       color: var(--accent);
     }
@@ -1234,13 +1272,19 @@
     width: 100%;
     background: transparent;
     border: 0;
+    border-bottom: 1px solid var(--divider);
   }
 
   /* 1Password-style copy feedback: the whole row flashes green and fades
      back to its own background. Secret rows fade to surface-2 instead of
      transparent via --row-bg. */
-  .kv-row.clickable.copied-flash {
+  .kv-row.copied-flash {
     animation: kv-copy-flash 900ms ease-out;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+      background: var(--success-soft);
+    }
   }
 
   .kv-row.secret {
@@ -1257,7 +1301,7 @@
   }
 
   /* Secret rows already sit on surface-2, so their hover state deepens it. */
-  .kv-row.secret.clickable:hover {
+  .kv-row.secret:is(:hover, :focus-within) {
     background: color-mix(in oklab, var(--text) 6%, var(--surface-2));
   }
 
@@ -1281,7 +1325,7 @@
 
   /* Secret rows share the endpoint row's grid so label/value/action columns
      line up; the badge, copy hint, and reveal toggle live in the trailing
-     column. Copy happens by clicking the row itself. */
+     column. The value and copy button invoke the same copy action. */
   .kv-actions {
     display: inline-flex;
     align-items: center;
@@ -1336,18 +1380,22 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--text-secondary);
-    font-size: 12px;
+    grid-column: 1;
+    grid-row: 1;
+    color: var(--text-tertiary);
+    font-size: 11px;
     font-weight: 500;
   }
 
   .kv-value {
+    grid-column: 1;
+    grid-row: 2;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
-    color: var(--text-tertiary);
+    color: var(--text);
 
     /* Revealed secrets render like a readonly input: full value, no
        ellipsis, horizontally scrollable. */
@@ -1461,7 +1509,7 @@
 
   .key-pricing {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 110px 34px;
+    grid-template-columns: minmax(0, 1fr) 80px 34px;
     align-items: end;
     gap: 10px;
   }
@@ -1505,9 +1553,15 @@
   .credential-inline-editor,
   .add-secret-row {
     display: grid;
-    grid-template-columns: 130px minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 8px;
     align-items: center;
+
+    input:first-child {
+
+      grid-column: 1 / -1;
+
+    }
 
     input {
       width: 100%;
@@ -1536,7 +1590,7 @@
   }
 
   .credential-add-row {
-    padding: 10px 16px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--divider);
   }
 
@@ -1590,65 +1644,9 @@
 
 
   .empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    position: relative;
     flex: 1;
-    padding: 24px;
     background: transparent;
   }
 
-  .empty-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    text-align: center;
-    color: var(--text-tertiary);
-
-    h1 {
-      color: var(--text);
-      font-size: 14px;
-      font-weight: 600;
-    }
-
-    p {
-      max-width: 240px;
-      font-size: 12px;
-      line-height: 1.4;
-    }
-  }
-
-  .empty-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    color: var(--text-tertiary);
-    margin-bottom: 4px;
-  }
-
-  @media (max-width: 720px) {
-    .detail-header {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .actions {
-      justify-content: flex-end;
-    }
-
-    .secret-edit-row,
-    .credential-inline-editor,
-    .add-secret-row {
-      grid-template-columns: minmax(0, 1fr) auto auto;
-
-      > input:first-of-type {
-        grid-column: 1 / -1;
-      }
-    }
-  }
 </style>

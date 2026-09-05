@@ -4,7 +4,7 @@
   import type { ProviderEntry } from "@aipass/schemas";
 
   import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyConfig, ProxyLogEntry, ProxyStatus, ServerUsageSummary, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
+  import type { MaybePromise, ProxyConfig, ProxyLogEntry, ProxyStatus, ServerUsageByRange, UsageRange, ToolConfigApplyResult, ToolConfigPreview, ToolConfigTarget, ToolDetection, UsageTimeseriesPoint } from "../../types";
   import { formatCompact } from "../../utils/format";
   import { integrationToolDefinitions, localProxyAvailability } from "../../utils/integrations";
   import { advertisedProxyAddress } from "../../utils/server";
@@ -17,7 +17,9 @@
   export let config: ProxyConfig;
   export let status: ProxyStatus;
   export let series: UsageTimeseriesPoint[] = [];
-  export let usage: ServerUsageSummary;
+  export let hourlySeries: UsageTimeseriesPoint[] = [];
+  export let usageByRange: ServerUsageByRange;
+  let usageRange: UsageRange = 7;
   export let entries: ProviderEntry[] = [];
   // Archived providers still work in the proxy; resolve their labels and
   // default models instead of treating them as missing.
@@ -212,11 +214,14 @@
           <Trash2 size={14} />
         </IconButton>
       </svelte:fragment>
-      <UsageChart {series} />
+      <UsageChart {series} {hourlySeries} bind:range={usageRange} />
     </Card>
 
     <Card title={$t("server.usageBreakdown")} padded={false} collapsible>
-      <UsageBreakdown {usage} {entries} {archivedEntries} />
+      <svelte:fragment slot="actions">
+        <span class="hint">{$t(usageRange === "24h" ? "server.last24Hours" : usageRange === 7 ? "server.last7Days" : "server.last30Days")}</span>
+      </svelte:fragment>
+      <UsageBreakdown usage={usageByRange[usageRange]} {entries} {archivedEntries} />
     </Card>
 
     <IntegrationCard
@@ -355,6 +360,10 @@
     flex-direction: column;
     gap: 14px;
     background: transparent;
+  }
+
+  .detail-body > :global(.card) {
+    flex-shrink: 0;
   }
 
   .status-grid {

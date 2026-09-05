@@ -82,13 +82,33 @@ fn refresh_due_accounts(state: &Arc<AgentState>) -> ServiceResult<()> {
     })?;
 
     for account in due {
-        match OAuthManager::refresh(account.provider, &account.refresh_token) {
+        let read_native = || {
+            with_vault(state, false, |vault| {
+                let current = vault
+                    .get_oauth_account(account.id)
+                    .map_err(map_vault_error)?;
+                native_write::newer_native_bundle(&current).map_err(ServiceError::internal)
+            })
+            .ok()
+            .flatten()
+        };
+        let result = match read_native() {
+            Some(bundle) => Ok(bundle),
+            None => match OAuthManager::refresh(account.provider, &account.refresh_token) {
+                Err(OAuthError::RefreshTokenInvalid) => {
+                    read_native().ok_or(OAuthError::RefreshTokenInvalid)
+                }
+                result => result,
+            },
+        };
+        match result {
             Ok(bundle) => {
                 if let Err(err) = persist_refreshed(
                     state,
                     account.id,
                     account.provider,
                     account.last_refresh_ms,
+                    &account.refresh_token,
                     bundle,
                 ) {
                     write_component_log(
@@ -99,7 +119,12 @@ fn refresh_due_accounts(state: &Arc<AgentState>) -> ServiceResult<()> {
                 }
             }
             Err(OAuthError::RefreshTokenInvalid) => {
-                if let Err(err) = mark_requires_reauth(state, account.id) {
+                if let Err(err) = mark_requires_reauth(
+                    state,
+                    account.id,
+                    account.last_refresh_ms,
+                    &account.refresh_token,
+                ) {
                     write_component_log(
                         AGENT_LOG,
                         "WARN",
@@ -124,6 +149,7 @@ fn persist_refreshed(
     id: Uuid,
     provider: OAuthProvider,
     expected_last_refresh_ms: i64,
+    expected_refresh_token: &str,
     bundle: crate::oauth::OAuthTokenBundle,
 ) -> ServiceResult<()> {
     let now = now_ms();
@@ -134,7 +160,9 @@ fn persist_refreshed(
         // A concurrent re-login while we were doing network I/O bumps
         // last_refresh_ms; discard our stale bundle instead of clobbering the
         // newer tokens (or tripping refresh_token_reused on the next pass).
-        if account.last_refresh_ms != expected_last_refresh_ms {
+        if account.last_refresh_ms != expected_last_refresh_ms
+            || account.refresh_token != expected_refresh_token
+        {
             write_component_log(
                 AGENT_LOG,
                 "INFO",
@@ -159,6 +187,7 @@ fn persist_refreshed(
 
         let outcome = match provider {
             OAuthProvider::Codex => native_write::sync_codex_auth_json(
+                &vault.config_backup_key(),
                 &account.access_token,
                 &account.refresh_token,
                 account.id_token.as_deref(),
@@ -167,6 +196,7 @@ fn persist_refreshed(
                 now,
             ),
             OAuthProvider::Grok => native_write::sync_grok_auth_json(
+                &vault.config_backup_key(),
                 &account.access_token,
                 &account.refresh_token,
                 Some(prior_expires),
@@ -174,7 +204,14 @@ fn persist_refreshed(
                 account.account_identity.as_deref(),
             ),
         }
-        .map_err(ServiceError::internal)?;
+        .unwrap_or_else(|err| {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                &format!("oauth native write-back failed: {err}"),
+            );
+            NativeSyncOutcome::Skipped("native credential file could not be updated".into())
+        });
         if let NativeSyncOutcome::Adopted {
             access_token,
             refresh_token,
@@ -195,6 +232,11 @@ fn persist_refreshed(
             }
         }
 
+        // Commit the rotated refresh token before updating dependent mirrors.
+        // A missing entry/secret must not discard a one-use token generation.
+        vault
+            .update_oauth_account(account.clone())
+            .map_err(map_vault_error)?;
         // Mirror the live access token into the entry secret the proxy reads.
         if let Some(entry_id) = account.entry_id {
             if let Ok(summary) = vault.get_provider_summary(entry_id) {
@@ -210,9 +252,6 @@ fn persist_refreshed(
                 }
             }
         }
-        vault
-            .update_oauth_account(account.clone())
-            .map_err(map_vault_error)?;
         if let Some(entry_id) = account.entry_id {
             // Push the rotated token into a running proxy; recover a poisoned
             // lock rather than panicking the background thread.
@@ -223,9 +262,19 @@ fn persist_refreshed(
     })
 }
 
-fn mark_requires_reauth(state: &Arc<AgentState>, id: Uuid) -> ServiceResult<()> {
+fn mark_requires_reauth(
+    state: &Arc<AgentState>,
+    id: Uuid,
+    expected_last_refresh_ms: i64,
+    expected_refresh_token: &str,
+) -> ServiceResult<()> {
     with_vault(state, false, |vault| {
         let mut account = vault.get_oauth_account(id).map_err(map_vault_error)?;
+        if account.last_refresh_ms != expected_last_refresh_ms
+            || account.refresh_token != expected_refresh_token
+        {
+            return Ok(());
+        }
         account.requires_reauth = true;
         // The grant is dead, so the mirrored access token will never be
         // rotated again: quarantine it so the proxy stops sending it.
@@ -256,4 +305,100 @@ fn mark_requires_reauth(state: &Arc<AgentState>, id: Uuid) -> ServiceResult<()> 
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::{InitialSyncState, SessionState};
+    use aipass_agent_protocol::{SensitiveString, SessionPolicy};
+    use std::sync::{atomic::AtomicBool, Condvar, Mutex};
+
+    #[test]
+    fn stale_refresh_success_and_failure_cannot_clobber_a_new_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        let creation = aipass_vault::Vault::create(
+            &vault_dir,
+            &aipass_crypto::SecretString::new("test password"),
+        )
+        .unwrap();
+        let entry_id = crate::official_accounts::persist_login_account(
+            &creation.vault,
+            "openai",
+            Some("alice".into()),
+            Some("workspace".into()),
+            "new-access".into(),
+            None,
+        )
+        .unwrap();
+        let account = aipass_vault::ManagedOAuthAccount {
+            id: Uuid::new_v4(),
+            provider: OAuthProvider::Codex,
+            account_identity: Some("alice".into()),
+            chatgpt_account_id: Some("workspace".into()),
+            access_token: "new-access".into(),
+            refresh_token: "new-refresh".into(),
+            id_token: None,
+            expires_at_ms: now_ms() + 3_600_000,
+            last_refresh_ms: 42,
+            entry_id: Some(entry_id),
+            is_default: true,
+            requires_reauth: false,
+            authenticated_at: time::OffsetDateTime::now_utc(),
+        };
+        creation.vault.add_oauth_account(account.clone()).unwrap();
+        let state = Arc::new(AgentState {
+            policy: Mutex::new(SessionPolicy::default()),
+            vault_dir: vault_dir.clone(),
+            namespace: "test".into(),
+            auth_token: SensitiveString::from("test"),
+            session: Mutex::new(SessionState::Locked),
+            session_changed: Condvar::new(),
+            last_lock_reason: Mutex::new(None),
+            proxy: Mutex::new(crate::proxy_service::ProxyService::new(&vault_dir).unwrap()),
+            favicon_backfill: Mutex::new(()),
+            sync_lock: Mutex::new(()),
+            initial_sync: Mutex::new(InitialSyncState::Done),
+            sync_watcher: Mutex::new(None),
+            shutdown: AtomicBool::new(false),
+        });
+        crate::session::set_session_vault(&state, creation.vault);
+        // Same timestamp deliberately covers two rotations within one millisecond.
+        mark_requires_reauth(&state, account.id, 42, "old-refresh").unwrap();
+        persist_refreshed(
+            &state,
+            account.id,
+            account.provider,
+            42,
+            "old-refresh",
+            crate::oauth::OAuthTokenBundle {
+                access_token: "stale-access".into(),
+                refresh_token: "stale-refresh".into(),
+                id_token: None,
+                chatgpt_account_id: None,
+                account_identity: None,
+                expires_in: 3600,
+            },
+        )
+        .unwrap();
+        with_vault(&state, false, |vault| {
+            let saved = vault.get_oauth_account(account.id).unwrap();
+            assert!(!saved.requires_reauth);
+            assert_eq!(saved.refresh_token, "new-refresh");
+            assert_eq!(vault.reveal_secret(entry_id).unwrap(), "new-access");
+            Ok(())
+        })
+        .unwrap();
+        mark_requires_reauth(&state, account.id, 42, "new-refresh").unwrap();
+        with_vault(&state, false, |vault| {
+            assert!(vault.get_oauth_account(account.id).unwrap().requires_reauth);
+            assert_eq!(
+                vault.reveal_secret(entry_id).unwrap(),
+                REQUIRES_REAUTH_PLACEHOLDER
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
 }

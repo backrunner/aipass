@@ -174,12 +174,36 @@ fn persist_account(
             &fingerprint[..fingerprint.len().min(12)]
         ))
     });
+    // One user can authorize multiple ChatGPT workspaces. Keep their tokens and
+    // chatgpt-account-id headers together instead of deduplicating by email alone.
+    let mut matching_workspaces = HashSet::new();
+    if account.provider_id == "openai" {
+        if let Some(account_id) = account.account_id.as_deref() {
+            for entry in existing
+                .iter()
+                .filter(|entry| entry.provider_id.as_deref() == Some("openai"))
+            {
+                if vault
+                    .reveal_provider_headers(entry.id)?
+                    .iter()
+                    .any(|(key, value)| {
+                        key.eq_ignore_ascii_case("chatgpt-account-id") && value == account_id
+                    })
+                {
+                    matching_workspaces.insert(entry.id);
+                }
+            }
+        }
+    }
     let existing_id = existing
         .iter()
         .find(|entry| {
             entry.provider_id.as_deref() == Some(account.provider_id)
                 && (entry.credential_kind == CredentialKind::OAuth
                     || entry.tags.iter().any(|tag| tag == "oauth"))
+                && (account.provider_id != "openai"
+                    || account.account_id.is_none()
+                    || matching_workspaces.contains(&entry.id))
                 && (entry.account_identity == identity || entry.fingerprint == fingerprint)
         })
         .map(|entry| entry.id)
@@ -188,7 +212,7 @@ fn persist_account(
             // identity that goes stale on every token rotation, so the direct
             // match above can never find them again after the CLI rotates its
             // access token.
-            if account.identity.is_some() {
+            if account.identity.is_some() || account.account_id.is_some() {
                 return None;
             }
             rotation_candidate(existing, batch_imported, account.provider_id)
@@ -1289,5 +1313,43 @@ mod tests {
                 return bytes;
             }
         }
+    }
+    #[test]
+    fn oauth_workspaces_with_the_same_email_keep_separate_tokens_and_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let creation = Vault::create(
+            dir.path().join("vault"),
+            &aipass_crypto::SecretString::new("test password"),
+        )
+        .unwrap();
+        let vault = creation.vault;
+        let save = |workspace: &str, token: &str| {
+            persist_login_account(
+                &vault,
+                "openai",
+                Some("alice@example.com".into()),
+                Some(workspace.into()),
+                token.into(),
+                None,
+            )
+            .unwrap()
+        };
+        let first = save("personal", "personal-token");
+        let second = save("team", "team-token");
+        assert_ne!(first, second);
+        assert_eq!(save("personal", "rotated-personal-token"), first);
+        assert_eq!(
+            vault.reveal_secret(first).unwrap(),
+            "rotated-personal-token"
+        );
+        assert_eq!(vault.reveal_secret(second).unwrap(), "team-token");
+        assert!(vault
+            .reveal_provider_headers(first)
+            .unwrap()
+            .contains(&("chatgpt-account-id".into(), "personal".into())));
+        assert!(vault
+            .reveal_provider_headers(second)
+            .unwrap()
+            .contains(&("chatgpt-account-id".into(), "team".into())));
     }
 }

@@ -169,6 +169,7 @@ export type ProxyStatus = {
   failures: number;
   lastError?: string;
   degraded?: boolean;
+  degradedTargetIds?: string[];
   recentRequests: number;
   recentTokens: number;
   successRateBps: number;
@@ -236,6 +237,9 @@ export type PricingConfig = {
 };
 export type PricingApplyScope = "all_history" | "from_now";
 export type ToolDetection = { tool: ToolConfigTarget; binaryFound: boolean; configPath?: string };
+export type UsageRange = "24h" | 7 | 30;
+export type ServerUsageByRange = Record<UsageRange, ServerUsageSummary>;
+
 export type ServerUsageSummary = {
   requestCount: number;
   inputTokens: number;

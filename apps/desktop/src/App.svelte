@@ -51,7 +51,7 @@
     ProxyRouteConfig,
     ProxyStatus,
     ServerTokenResponse,
-    ServerUsageSummary,
+    ServerUsageByRange,
     CodexApiKeyMode,
     CcSwitchDetection,
     CcSwitchProviderImportError,
@@ -84,6 +84,7 @@
   import { buildRouteTarget, buildSingleEntryRoute, nativeProtocolForEntry, proxySupportedEntry, routeNeedsConversion } from "./lib/utils/server";
   import { checkForUpdates, downloadUpdate, installPendingUpdate, installUpdate, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
+  import { emptyServerUsage, loadServerUsage } from "./lib/services/serverUsage";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
   import type { MessageValue } from "./lib/types";
 
@@ -105,11 +106,6 @@
 
   function nextFrame() {
     return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  }
-
-  function currentTimezoneOffsetMinutes(): number {
-    // Date#getTimezoneOffset is UTC minus local time; the agent expects local minus UTC.
-    return -new Date().getTimezoneOffset();
   }
 
   async function flushUiBeforeBlockingWork() {
@@ -327,8 +323,9 @@
   let searchResultQuery = "";
   let faviconBackfillBusy = false;
   let serverBusy = "";
-  let serverUsage: ServerUsageSummary = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
+  let serverUsage: ServerUsageByRange = emptyServerUsage();
   let serverUsageSeries: UsageTimeseriesPoint[] = [];
+  let serverUsageHourlySeries: UsageTimeseriesPoint[] = [];
   let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [], upstreamProxy: { mode: "system" } };
   let serverStatus: ProxyStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0, successRateBps: 0 };
   let selectedRouteId = "";
@@ -1049,8 +1046,9 @@
     showServer = false;
     serverConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [], upstreamProxy: { mode: "system" } };
     serverStatus = { running: false, enabled: false, bindAddr: "127.0.0.1:8787", activeRoutes: 0, requests: 0, failures: 0, recentRequests: 0, recentTokens: 0, successRateBps: 0 };
-    serverUsage = { requestCount: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, estimatedCostMicros: 0, attemptCount: 0, completedAttempts: 0, successfulAttempts: 0, successRateBps: 0, providers: [], models: [] };
+    serverUsage = emptyServerUsage();
     serverUsageSeries = [];
+    serverUsageHourlySeries = [];
     selectedRouteId = "";
     pendingServerView = false;
     detailEditMode = false;
@@ -1783,38 +1781,26 @@
     const refreshVersion = serverMutationVersion;
     serverRefreshPromise = (async () => {
       try {
-        const [nextStatus, nextConfig, usage] = await Promise.all([
+        const [nextStatus, nextConfig] = await Promise.all([
           invokeTauri<ProxyStatus>("server_status"),
-          invokeTauri<ProxyConfig>("server_config_get"),
-          invokeTauri<ServerUsageSummary>("server_usage_summary")
+          invokeTauri<ProxyConfig>("server_config_get")
         ]);
         if (serverMutationInFlight || refreshVersion !== serverMutationVersion) return;
         serverStatus = nextStatus;
         serverConfig = { ...nextConfig, upstreamProxy: nextConfig.upstreamProxy ?? { mode: "system" } };
-        // Older agents may omit the newer breakdown arrays; default them so the
-        // UI never has to deal with undefined.
-        serverUsage = {
-          ...usage,
-          attemptCount: usage.attemptCount ?? 0,
-          completedAttempts: usage.completedAttempts ?? 0,
-          successfulAttempts: usage.successfulAttempts ?? 0,
-          successRateBps: usage.successRateBps ?? 0,
-          providers: usage.providers ?? [],
-          models: usage.models ?? []
-        };
       } catch (err) {
         console.warn("server state load failed", err);
       }
       try {
-        const nextSeries = await invokeTauri<UsageTimeseriesPoint[]>("server_usage_timeseries", {
-          days: 30,
-          timezoneOffsetMinutes: currentTimezoneOffsetMinutes()
-        });
+        const nextUsage = await loadServerUsage(invokeTauri);
         if (!serverMutationInFlight && refreshVersion === serverMutationVersion) {
-          serverUsageSeries = nextSeries;
+          // Publish all periods together; a failed refresh keeps the previous pair.
+          serverUsage = nextUsage.usage;
+          serverUsageSeries = nextUsage.series;
+          serverUsageHourlySeries = nextUsage.hourlySeries;
         }
       } catch (err) {
-        console.warn("server usage timeseries load failed", err);
+        console.warn("server usage load failed", err);
       }
     })().finally(() => {
       serverRefreshPromise = undefined;
@@ -3108,6 +3094,7 @@
       {#if showServer}
         <RouteListPane
           routes={serverConfig.routes}
+          status={serverStatus}
           entries={countEntries}
           bind:selectedRouteId
           busy={serverBusy}
@@ -3120,7 +3107,8 @@
           config={serverConfig}
           status={serverStatus}
           series={serverUsageSeries}
-          usage={serverUsage}
+          hourlySeries={serverUsageHourlySeries}
+          usageByRange={serverUsage}
           entries={countEntries}
           {archivedEntries}
           {selectedRouteId}
@@ -3479,7 +3467,7 @@
   }
 
   .workspace > :global(.list-pane .toolbar) {
-    padding-top: var(--workspace-content-top);
+    padding-top: var(--list-toolbar-top, var(--workspace-content-top));
   }
 
   .workspace > :global(.detail-header) {

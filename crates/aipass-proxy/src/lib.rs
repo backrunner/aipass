@@ -234,9 +234,18 @@ pub struct UsageAggregate {
     pub models: Vec<ModelUsageAggregate>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageGranularity {
+    Hour,
+    #[default]
+    Day,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageTimeseriesPoint {
+    /// Local YYYY-MM-DD for daily buckets; UTC RFC 3339 bucket start for hours.
     pub date: String,
     pub request_count: u64,
     pub input_tokens: u64,
@@ -319,6 +328,9 @@ pub struct ProxyStatus {
     pub last_error: Option<String>,
     #[serde(default)]
     pub degraded: bool,
+    /// Enabled targets with an unresolved failure in the last 60 seconds or an open circuit.
+    #[serde(default)]
+    pub degraded_target_ids: Vec<Uuid>,
     /// Requests completed in the last 60 seconds (for RPM display).
     #[serde(default)]
     pub recent_requests: u64,
@@ -557,6 +569,14 @@ impl UsageStore {
     }
 
     pub fn summary(&self, cost: impl Fn(&UsageRow) -> u64) -> Result<UsageAggregate, ProxyError> {
+        self.summary_since(None, cost)
+    }
+
+    pub fn summary_since(
+        &self,
+        since: Option<i64>,
+        cost: impl Fn(&UsageRow) -> u64,
+    ) -> Result<UsageAggregate, ProxyError> {
         let mut aggregate = UsageAggregate::default();
         let mut request_stats = RequestStats::default();
         let mut providers: HashMap<(Uuid, String), (ProviderUsageAggregate, i64)> = HashMap::new();
@@ -565,7 +585,7 @@ impl UsageStore {
         let mut provider_request_stats: HashMap<(Uuid, String), RequestStats> = HashMap::new();
         let mut model_request_stats: HashMap<(Uuid, String, Option<String>), RequestStats> =
             HashMap::new();
-        self.visit_rows_since(None, |_, row| {
+        self.visit_rows_since(since, |_, row| {
             let row_cost = cost(&row);
             request_stats.observe(&row);
             aggregate.request_count = aggregate.request_count.saturating_add(1);
@@ -663,7 +683,7 @@ impl UsageStore {
         let mut provider_attempts: HashMap<(Uuid, String), AttemptStats> = HashMap::new();
         let mut model_attempts: HashMap<(Uuid, String, Option<String>), AttemptStats> =
             HashMap::new();
-        self.visit_attempt_rows(|row| {
+        self.visit_attempt_rows(since, |row| {
             attempt_stats.observe(&row);
             let provider_key = (row.provider_entry_id, row.secret_id.clone());
             let (provider, last_started) =
@@ -766,66 +786,70 @@ impl UsageStore {
         &self,
         days: u32,
         timezone_offset_minutes: i32,
+        granularity: UsageGranularity,
         cost: impl Fn(&UsageRow) -> u64,
     ) -> Result<Vec<UsageTimeseriesPoint>, ProxyError> {
-        let days = i64::from(days.max(1));
-        let timezone_offset_minutes = timezone_offset_minutes.clamp(-1_440, 1_440);
-        let timezone_offset_seconds = i64::from(timezone_offset_minutes) * 60;
-        let today_start = local_day_start(now_unix(), timezone_offset_seconds);
-        let cutoff = today_start - (days - 1) * 86_400;
+        let timezone_offset_seconds = i64::from(timezone_offset_minutes.clamp(-1_440, 1_440)) * 60;
+        let cutoff = usage_window_start(days, timezone_offset_minutes, granularity);
         let mut buckets: std::collections::BTreeMap<String, UsageTimeseriesPoint> =
             std::collections::BTreeMap::new();
-        self.visit_rows_since_with_offset(Some(cutoff), timezone_offset_seconds, |date, row| {
-            let point = buckets
-                .entry(date.clone())
-                .or_insert_with(|| UsageTimeseriesPoint {
-                    date,
-                    request_count: 0,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_read_tokens: 0,
-                    cache_creation_tokens: 0,
-                    estimated_cost_micros: 0,
-                    models: Vec::new(),
-                });
-            point.request_count = point.request_count.saturating_add(1);
-            point.input_tokens = point.input_tokens.saturating_add(row.input_tokens);
-            point.output_tokens = point.output_tokens.saturating_add(row.output_tokens);
-            point.cache_read_tokens = point
-                .cache_read_tokens
-                .saturating_add(row.cache_read_tokens);
-            point.cache_creation_tokens = point
-                .cache_creation_tokens
-                .saturating_add(row.cache_creation_tokens);
-            let row_cost = cost(&row);
-            point.estimated_cost_micros = point.estimated_cost_micros.saturating_add(row_cost);
-            if let Some(model) = point
-                .models
-                .iter_mut()
-                .find(|model| model.model == row.model)
-            {
-                model.request_count = model.request_count.saturating_add(1);
-                model.input_tokens = model.input_tokens.saturating_add(row.input_tokens);
-                model.output_tokens = model.output_tokens.saturating_add(row.output_tokens);
-                model.cache_read_tokens = model
+        self.visit_rows_since_with_offset(
+            Some(cutoff),
+            timezone_offset_seconds,
+            granularity,
+            |date, row| {
+                let point = buckets
+                    .entry(date.clone())
+                    .or_insert_with(|| UsageTimeseriesPoint {
+                        date,
+                        request_count: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                        estimated_cost_micros: 0,
+                        models: Vec::new(),
+                    });
+                point.request_count = point.request_count.saturating_add(1);
+                point.input_tokens = point.input_tokens.saturating_add(row.input_tokens);
+                point.output_tokens = point.output_tokens.saturating_add(row.output_tokens);
+                point.cache_read_tokens = point
                     .cache_read_tokens
                     .saturating_add(row.cache_read_tokens);
-                model.cache_creation_tokens = model
+                point.cache_creation_tokens = point
                     .cache_creation_tokens
                     .saturating_add(row.cache_creation_tokens);
-                model.estimated_cost_micros = model.estimated_cost_micros.saturating_add(row_cost);
-            } else {
-                point.models.push(UsageTimeseriesModel {
-                    model: row.model,
-                    request_count: 1,
-                    input_tokens: row.input_tokens,
-                    output_tokens: row.output_tokens,
-                    cache_read_tokens: row.cache_read_tokens,
-                    cache_creation_tokens: row.cache_creation_tokens,
-                    estimated_cost_micros: row_cost,
-                });
-            }
-        })?;
+                let row_cost = cost(&row);
+                point.estimated_cost_micros = point.estimated_cost_micros.saturating_add(row_cost);
+                if let Some(model) = point
+                    .models
+                    .iter_mut()
+                    .find(|model| model.model == row.model)
+                {
+                    model.request_count = model.request_count.saturating_add(1);
+                    model.input_tokens = model.input_tokens.saturating_add(row.input_tokens);
+                    model.output_tokens = model.output_tokens.saturating_add(row.output_tokens);
+                    model.cache_read_tokens = model
+                        .cache_read_tokens
+                        .saturating_add(row.cache_read_tokens);
+                    model.cache_creation_tokens = model
+                        .cache_creation_tokens
+                        .saturating_add(row.cache_creation_tokens);
+                    model.estimated_cost_micros =
+                        model.estimated_cost_micros.saturating_add(row_cost);
+                } else {
+                    point.models.push(UsageTimeseriesModel {
+                        model: row.model,
+                        request_count: 1,
+                        input_tokens: row.input_tokens,
+                        output_tokens: row.output_tokens,
+                        cache_read_tokens: row.cache_read_tokens,
+                        cache_creation_tokens: row.cache_creation_tokens,
+                        estimated_cost_micros: row_cost,
+                    });
+                }
+            },
+        )?;
         for point in buckets.values_mut() {
             point.models.sort_by(|left, right| {
                 right
@@ -868,18 +892,25 @@ impl UsageStore {
         since: Option<i64>,
         visit: impl FnMut(String, UsageRow),
     ) -> Result<(), ProxyError> {
-        self.visit_rows_since_with_offset(since, 0, visit)
+        self.visit_rows_since_with_offset(since, 0, UsageGranularity::Day, visit)
     }
 
     fn visit_rows_since_with_offset(
         &self,
         since: Option<i64>,
         timezone_offset_seconds: i64,
+        granularity: UsageGranularity,
         mut visit: impl FnMut(String, UsageRow),
     ) -> Result<(), ProxyError> {
         let conn = self.connection.lock().map_err(|_| ProxyError::Poisoned)?;
         let date_modifier = format!("{timezone_offset_seconds:+} seconds");
-        let columns = format!("date(started_at, 'unixepoch', '{date_modifier}'), started_at, provider_entry_id, secret_id, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, status, first_token_ms");
+        let bucket = match granularity {
+            UsageGranularity::Day => format!("date(started_at, 'unixepoch', '{date_modifier}')"),
+            UsageGranularity::Hour => format!(
+                "strftime('%Y-%m-%dT%H:%M:%SZ', (started_at + {timezone_offset_seconds}) / 3600 * 3600 - {timezone_offset_seconds}, 'unixepoch')"
+            ),
+        };
+        let columns = format!("{bucket}, started_at, provider_entry_id, secret_id, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, status, first_token_ms");
         let sql = if since.is_some() {
             format!("SELECT {columns} FROM proxy_usage WHERE started_at >= ?1 ORDER BY started_at")
         } else {
@@ -898,20 +929,46 @@ impl UsageStore {
         Ok(())
     }
 
-    fn visit_attempt_rows(&self, mut visit: impl FnMut(AttemptRow)) -> Result<(), ProxyError> {
+    fn visit_attempt_rows(
+        &self,
+        since: Option<i64>,
+        mut visit: impl FnMut(AttemptRow),
+    ) -> Result<(), ProxyError> {
         let conn = self.connection.lock().map_err(|_| ProxyError::Poisoned)?;
         let mut statement = conn
             .prepare(
-                "SELECT started_at, provider_entry_id, secret_id, model, success, first_token_ms FROM proxy_attempts ORDER BY started_at",
+                "SELECT started_at, provider_entry_id, secret_id, model, success, first_token_ms FROM proxy_attempts WHERE (?1 IS NULL OR started_at >= ?1) ORDER BY started_at",
             )
             .map_err(ProxyError::Sqlite)?;
         let rows = statement
-            .query_map([], decode_attempt_row)
+            .query_map(params![since], decode_attempt_row)
             .map_err(ProxyError::Sqlite)?;
         for row in rows {
             visit(row.map_err(ProxyError::Sqlite)?);
         }
         Ok(())
+    }
+}
+
+/// Shared lower bound for usage charts and provider/model summaries.
+pub fn usage_window_start(
+    days: u32,
+    timezone_offset_minutes: i32,
+    granularity: UsageGranularity,
+) -> i64 {
+    let days = i64::from(days.max(1));
+    let timezone_offset_minutes = timezone_offset_minutes.clamp(-1_440, 1_440);
+    let timezone_offset_seconds = i64::from(timezone_offset_minutes) * 60;
+    match granularity {
+        UsageGranularity::Day => {
+            local_day_start(now_unix(), timezone_offset_seconds) - (days - 1) * 86_400
+        }
+        // Include the current local hour and the preceding hours.
+        UsageGranularity::Hour => {
+            let hour_start = (now_unix() + timezone_offset_seconds).div_euclid(3_600) * 3_600
+                - timezone_offset_seconds;
+            hour_start - (days * 24 - 1) * 3_600
+        }
     }
 }
 
@@ -1054,6 +1111,7 @@ struct RuntimeStats {
 struct TargetHealth {
     consecutive_failures: u8,
     open_until: Option<Instant>,
+    last_failure_at: Option<Instant>,
 }
 
 pub struct ProxyHandle {
@@ -1160,6 +1218,31 @@ impl ProxyHandle {
             .config
             .read()
             .map(|config| {
+                let now = Instant::now();
+                let degraded_target_ids = self
+                    .state
+                    .health
+                    .lock()
+                    .map(|health| {
+                        config
+                            .routes
+                            .iter()
+                            .filter(|route| route.config.enabled)
+                            .flat_map(|route| &route.targets)
+                            .filter(|target| target.config.enabled)
+                            .filter(|target| {
+                                health.get(&target.config.id).is_some_and(|health| {
+                                    health.open_until.is_some_and(|until| until > now)
+                                        || health.last_failure_at.is_some_and(|at| {
+                                            now.saturating_duration_since(at)
+                                                < Duration::from_secs(60)
+                                        })
+                                })
+                            })
+                            .map(|target| target.config.id)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 (
                     config.enabled,
                     config
@@ -1167,6 +1250,7 @@ impl ProxyHandle {
                         .iter()
                         .filter(|route| route.config.enabled)
                         .count(),
+                    degraded_target_ids,
                 )
             })
             .unwrap_or_default();
@@ -1239,9 +1323,11 @@ impl ProxyHandle {
             .thread
             .as_ref()
             .is_some_and(|thread| !thread.is_finished());
+        let degraded_target_ids = if running { config.2 } else { Vec::new() };
         let degraded = running
-            && recent_requests > 0
-            && recent_failures.saturating_mul(100) >= recent_requests.saturating_mul(20);
+            && (!degraded_target_ids.is_empty()
+                || (recent_requests > 0
+                    && recent_failures.saturating_mul(100) >= recent_requests.saturating_mul(20)));
         ProxyStatus {
             running,
             enabled: config.0,
@@ -1251,6 +1337,7 @@ impl ProxyHandle {
             failures,
             last_error,
             degraded,
+            degraded_target_ids,
             recent_requests,
             recent_tokens,
             success_rate_bps,
@@ -3448,6 +3535,7 @@ fn mark_failure(state: &RuntimeState, target_id: Uuid, policy: &RetryPolicy) {
         return;
     };
     let target = health.entry(target_id).or_default();
+    target.last_failure_at = Some(Instant::now());
     target.consecutive_failures = target.consecutive_failures.saturating_add(1);
     if target.consecutive_failures >= policy.failure_threshold.max(1) {
         target.open_until = Some(Instant::now() + Duration::from_secs(policy.circuit_open_seconds));
@@ -4172,6 +4260,82 @@ mod tests {
     }
 
     #[test]
+    fn degraded_targets_follow_recent_failures_circuits_and_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let retry = RetryPolicy::default();
+        let mut route = single_target_route(
+            "aipass_health_status_test",
+            "http://127.0.0.1:1/v1".into(),
+            retry.clone(),
+        );
+        let target_id = route.targets[0].config.id;
+        let mut disabled_target = test_target("http://127.0.0.1:2/v1".into(), 1);
+        disabled_target.config.enabled = false;
+        let disabled_target_id = disabled_target.config.id;
+        route.targets.push(disabled_target);
+        let mut disabled_route = single_target_route(
+            "aipass_disabled_health_status_test",
+            "http://127.0.0.1:3/v1".into(),
+            retry.clone(),
+        );
+        disabled_route.config.enabled = false;
+        let disabled_route_target_id = disabled_route.targets[0].config.id;
+        let proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes("127.0.0.1:0", vec![route, disabled_route]),
+            usage,
+        )
+        .unwrap();
+
+        assert!(!proxy.status().degraded);
+        for id in [
+            target_id,
+            disabled_target_id,
+            disabled_route_target_id,
+            Uuid::new_v4(),
+        ] {
+            mark_failure(&proxy.state, id, &retry);
+        }
+        assert!(proxy.status().degraded);
+        assert_eq!(proxy.status().degraded_target_ids, vec![target_id]);
+
+        // Recovery belongs to the affected target; a healthy fallback cannot clear it.
+        mark_success(&proxy.state, disabled_target_id);
+        assert_eq!(proxy.status().degraded_target_ids, vec![target_id]);
+        mark_success(&proxy.state, target_id);
+        assert!(!proxy.status().degraded);
+
+        mark_failure(&proxy.state, target_id, &retry);
+        {
+            let mut health = proxy.state.health.lock().unwrap();
+            let target = health.get_mut(&target_id).unwrap();
+            target.last_failure_at = Some(Instant::now() - Duration::from_secs(61));
+        }
+        assert!(proxy.status().degraded_target_ids.is_empty());
+        assert!(!proxy.status().degraded);
+        {
+            let mut health = proxy.state.health.lock().unwrap();
+            health.get_mut(&target_id).unwrap().open_until =
+                Some(Instant::now() + Duration::from_secs(120));
+        }
+        assert_eq!(proxy.status().degraded_target_ids, vec![target_id]);
+        {
+            let mut health = proxy.state.health.lock().unwrap();
+            health.get_mut(&target_id).unwrap().open_until =
+                Some(Instant::now() - Duration::from_secs(1));
+        }
+        assert!(!proxy.status().degraded);
+
+        // The additive status field remains compatible with older serialized statuses.
+        let mut legacy = serde_json::to_value(proxy.status()).unwrap();
+        legacy.as_object_mut().unwrap().remove("degradedTargetIds");
+        assert!(serde_json::from_value::<ProxyStatus>(legacy)
+            .unwrap()
+            .degraded_target_ids
+            .is_empty());
+    }
+
+    #[test]
     fn runtime_config_update_resets_circuit_and_round_robin_state() {
         let bind_addr = available_addr();
         let dead_addr = available_addr();
@@ -4199,6 +4363,7 @@ mod tests {
         let _ = round_robin_start(&proxy.state, route_id, &[1]);
         assert!(circuit_open(&proxy.state, target_id));
         assert!(!proxy.state.rr_counters.lock().unwrap().is_empty());
+        assert_eq!(proxy.status().degraded_target_ids, vec![target_id]);
 
         let mut replacement = single_target_route(
             "aipass_runtime_reset_test",
@@ -4216,6 +4381,8 @@ mod tests {
 
         assert!(!circuit_open(&proxy.state, target_id));
         assert!(proxy.state.rr_counters.lock().unwrap().is_empty());
+        assert!(proxy.status().degraded_target_ids.is_empty());
+        assert!(!proxy.status().degraded);
     }
 
     #[test]
@@ -6067,7 +6234,8 @@ mod tests {
                 target(Uuid::new_v4(), format!("http://{upstream_addr}/v1"), 1),
             ],
         };
-        let _proxy = ProxyHandle::start(
+        let failed_target_id = route.targets[0].config.id;
+        let proxy = ProxyHandle::start(
             RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
             usage.clone(),
         )
@@ -6110,6 +6278,9 @@ mod tests {
         assert_eq!(summary.attempt_count, 2);
         assert_eq!(summary.successful_attempts, 1);
         assert_eq!(summary.success_rate_bps, 10_000);
+        assert!(proxy.status().degraded);
+        assert_eq!(proxy.status().degraded_target_ids, vec![failed_target_id]);
+        assert_eq!(proxy.status().failures, 0);
     }
 
     #[test]
@@ -6198,7 +6369,9 @@ mod tests {
             .record(&record(today_start - 10 * 86_400, 99, None))
             .unwrap();
 
-        let points = store.timeseries(7, 0, |_| 3).unwrap();
+        let points = store
+            .timeseries(7, 0, UsageGranularity::Day, |_| 3)
+            .unwrap();
         assert_eq!(points.len(), 2);
         assert_eq!(points[0].request_count, 1);
         assert_eq!(points[0].input_tokens, 7);
@@ -6249,10 +6422,184 @@ mod tests {
         store.record(&record(local_today_start - 60)).unwrap();
         store.record(&record(local_today_start + 60)).unwrap();
 
-        let points = store.timeseries(2, 8 * 60, |_| 3).unwrap();
+        let points = store
+            .timeseries(2, 8 * 60, UsageGranularity::Day, |_| 3)
+            .unwrap();
         assert_eq!(points.len(), 2);
         assert_eq!(points[0].input_tokens, 1);
         assert_eq!(points[1].input_tokens, 1);
+    }
+
+    #[test]
+    fn usage_timeseries_groups_the_last_24_hours_in_local_hour_buckets() {
+        // Include both whole-hour and fractional timezone offsets.
+        for offset_minutes in [0, 480, 330, -210, 345] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = UsageStore::open(temp.path().join("usage.sqlite")).unwrap();
+            let offset_seconds = i64::from(offset_minutes) * 60;
+            let current_hour =
+                (now_unix() + offset_seconds).div_euclid(3_600) * 3_600 - offset_seconds;
+            let cutoff = current_hour - 23 * 3_600;
+            let record = |started_at, model: Option<&str>| UsageRecord {
+                id: Uuid::new_v4(),
+                started_at,
+                duration_ms: 1,
+                first_token_ms: None,
+                route_id: Uuid::new_v4(),
+                provider_entry_id: Uuid::new_v4(),
+                secret_id: "key".into(),
+                model: model.map(str::to_string),
+                inbound_protocol: ProxyProtocol::OpenAiResponses,
+                upstream_protocol: ProxyProtocol::OpenAiResponses,
+                status: 200,
+                attempts: 1,
+                input_tokens: 10,
+                output_tokens: 2,
+                cache_read_tokens: 3,
+                cache_creation_tokens: 4,
+                estimated_cost_micros: 99,
+            };
+            for (timestamp, model) in [
+                (cutoff - 1, None),
+                (cutoff, None),
+                (current_hour - 3_600, Some("model-a")),
+                (current_hour - 1, Some("model-a")),
+                (current_hour - 2, Some("model-b")),
+                (current_hour, Some("model-b")),
+            ] {
+                store.record(&record(timestamp, model)).unwrap();
+            }
+            let points = store
+                .timeseries(1, offset_minutes, UsageGranularity::Hour, |_| 7)
+                .unwrap();
+            assert_eq!(points.len(), 3);
+            assert_eq!(points[0].request_count, 1);
+            assert_eq!(points[0].models[0].model, None);
+            assert_eq!(points[1].request_count, 3);
+            assert_eq!(points[1].input_tokens, 30);
+            assert_eq!(points[1].output_tokens, 6);
+            assert_eq!(points[1].cache_read_tokens, 9);
+            assert_eq!(points[1].cache_creation_tokens, 12);
+            assert_eq!(points[1].estimated_cost_micros, 21);
+            assert_eq!(points[1].models.len(), 2);
+            assert_eq!(points[1].models[0].model.as_deref(), Some("model-a"));
+            assert_eq!(points[1].models[0].request_count, 2);
+            assert_eq!(points[1].models[0].estimated_cost_micros, 14);
+            assert_eq!(points[2].request_count, 1);
+            let conn = store.connection.lock().unwrap();
+            for (point, timestamp) in
+                points
+                    .iter()
+                    .zip([cutoff, current_hour - 3_600, current_hour])
+            {
+                let bucket_start: i64 = conn
+                    .query_row("SELECT unixepoch(?1)", params![point.date], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(bucket_start, timestamp);
+            }
+        }
+    }
+
+    #[test]
+    fn usage_summary_matches_chart_periods_and_filters_attempts() {
+        for offset in [0, 480, 330, -210, 345] {
+            for (days, granularity) in [
+                (1, UsageGranularity::Hour),
+                (7, UsageGranularity::Day),
+                (30, UsageGranularity::Day),
+            ] {
+                let temp = tempfile::tempdir().unwrap();
+                let store = UsageStore::open(temp.path().join("usage.sqlite")).unwrap();
+                let cutoff = usage_window_start(days, offset, granularity);
+                let provider = Uuid::new_v4();
+                let old_provider = Uuid::new_v4();
+                for (started_at, provider_entry_id, status, latency) in [
+                    (cutoff - 1, old_provider, 502, 900),
+                    (cutoff - 1, provider, 502, 900),
+                    (cutoff, provider, 200, 120),
+                    (now_unix(), provider, 200, 240),
+                ] {
+                    let record = UsageRecord {
+                        id: Uuid::new_v4(),
+                        started_at,
+                        duration_ms: 1000,
+                        first_token_ms: Some(latency),
+                        route_id: Uuid::new_v4(),
+                        provider_entry_id,
+                        secret_id: "key".into(),
+                        model: Some("model".into()),
+                        inbound_protocol: ProxyProtocol::OpenAiResponses,
+                        upstream_protocol: ProxyProtocol::OpenAiResponses,
+                        status,
+                        attempts: 1,
+                        input_tokens: 10,
+                        output_tokens: 2,
+                        cache_read_tokens: 3,
+                        cache_creation_tokens: 4,
+                        estimated_cost_micros: 99,
+                    };
+                    store.record(&record).unwrap();
+                    store
+                        .record_attempt(&AttemptRecord {
+                            id: Uuid::new_v4(),
+                            started_at,
+                            duration_ms: 1000,
+                            first_token_ms: Some(latency),
+                            route_id: record.route_id,
+                            target_id: Uuid::new_v4(),
+                            provider_entry_id,
+                            secret_id: "key".into(),
+                            model: Some("model".into()),
+                            status: Some(status),
+                            success: Some(status == 200),
+                        })
+                        .unwrap();
+                }
+                let summary = store.summary_since(Some(cutoff), |_| 7).unwrap();
+                let points = store.timeseries(days, offset, granularity, |_| 7).unwrap();
+                assert_eq!(summary.request_count, 2);
+                assert_eq!(
+                    summary.request_count,
+                    points.iter().map(|p| p.request_count).sum::<u64>()
+                );
+                assert_eq!(
+                    summary.input_tokens,
+                    points.iter().map(|p| p.input_tokens).sum::<u64>()
+                );
+                assert_eq!(
+                    summary.output_tokens,
+                    points.iter().map(|p| p.output_tokens).sum::<u64>()
+                );
+                assert_eq!(
+                    summary.cache_read_tokens,
+                    points.iter().map(|p| p.cache_read_tokens).sum::<u64>()
+                );
+                assert_eq!(
+                    summary.cache_creation_tokens,
+                    points.iter().map(|p| p.cache_creation_tokens).sum::<u64>()
+                );
+                assert_eq!(
+                    summary.estimated_cost_micros,
+                    points.iter().map(|p| p.estimated_cost_micros).sum::<u64>()
+                );
+                assert_eq!(summary.attempt_count, 2);
+                assert_eq!(summary.completed_attempts, 2);
+                assert_eq!(summary.successful_attempts, 2);
+                assert_eq!(summary.success_rate_bps, 10_000);
+                assert_eq!(summary.average_first_token_ms, Some(180));
+                assert_eq!(summary.providers.len(), 1);
+                assert_eq!(summary.providers[0].provider_entry_id, provider);
+                assert_eq!(summary.providers[0].request_count, 2);
+                assert_eq!(summary.providers[0].attempt_count, 2);
+                assert_eq!(summary.providers[0].success_rate_bps, 10_000);
+                assert_eq!(summary.providers[0].average_first_token_ms, Some(180));
+                assert_eq!(summary.models.len(), 1);
+                assert_eq!(summary.models[0].attempt_count, 2);
+                assert_eq!(store.summary(|_| 7).unwrap().request_count, 4);
+            }
+        }
     }
 
     #[test]

@@ -382,6 +382,7 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
     if let Ok(mut session) = state.session.lock() {
         *session = SessionState::Locked;
     }
+    crate::oauth::oauth_manager().clear();
     state.session_changed.notify_all();
     // Transition the session first. Any vault operation already in flight must
     // finish before this lock is acquired, and no new one can start after it.
@@ -1093,7 +1094,7 @@ mod tests {
         assert!(vault_dir.join("proxy-usage.sqlite").exists());
         assert_eq!(
             proxy
-                .usage_summary(&Default::default(), &[])
+                .usage_summary(None, &Default::default(), &[])
                 .expect("usage summary")
                 .request_count,
             0

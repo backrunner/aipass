@@ -24,7 +24,7 @@ use aipass_agent_protocol::{
     SyncConflictResponse as AgentSyncConflictResponse, SyncSettings as AgentSyncSettings,
     ToolConfigApplyResponse as AgentToolConfigApplyResponse,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
-    ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageProbeMode,
+    ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageGranularity, UsageProbeMode,
     UsageProbeResult as AgentUsageProbeResult, UsageTimeseriesPoint,
 };
 use aipass_provider_registry::{GatewayMetadata, OAuthProvider, QuotaInfo};
@@ -230,8 +230,21 @@ pub(crate) async fn server_token_rotate(
 }
 
 #[tauri::command]
-pub(crate) async fn server_usage_summary(app: AppHandle) -> Result<ServerUsageSummary, String> {
-    agent_request_async(app, AgentRequest::ServerUsageSummary).await
+pub(crate) async fn server_usage_summary(
+    app: AppHandle,
+    days: Option<u32>,
+    timezone_offset_minutes: Option<i32>,
+    granularity: Option<UsageGranularity>,
+) -> Result<ServerUsageSummary, String> {
+    agent_request_async(
+        app,
+        AgentRequest::ServerUsageSummary {
+            days,
+            timezone_offset_minutes: timezone_offset_minutes.unwrap_or_default(),
+            granularity: granularity.unwrap_or_default(),
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -244,12 +257,14 @@ pub(crate) async fn server_usage_timeseries(
     app: AppHandle,
     days: u32,
     timezone_offset_minutes: Option<i32>,
+    granularity: Option<UsageGranularity>,
 ) -> Result<Vec<UsageTimeseriesPoint>, String> {
     agent_request_async(
         app,
         AgentRequest::ServerUsageTimeseries {
             days,
             timezone_offset_minutes: timezone_offset_minutes.unwrap_or_default(),
+            granularity: granularity.unwrap_or_default(),
         },
     )
     .await

@@ -9,8 +9,8 @@ use aipass_provider_registry::{
     AuthScheme, CredentialKind, EndpointKind, InterfaceType, ProviderKind,
 };
 use aipass_proxy::{
-    ProxyConfig, ProxyHandle, ProxyStatus, ResolvedRoute, ResolvedTarget, RuntimeConfig, UsageRow,
-    UsageStore, UsageTimeseriesPoint,
+    ProxyConfig, ProxyHandle, ProxyStatus, ResolvedRoute, ResolvedTarget, RuntimeConfig,
+    UsageGranularity, UsageRow, UsageStore, UsageTimeseriesPoint,
 };
 use aipass_storage::atomic_write_bytes;
 use aipass_vault::Vault;
@@ -72,6 +72,7 @@ impl ProxyService {
                 failures: 0,
                 last_error: None,
                 degraded: false,
+                degraded_target_ids: Vec::new(),
                 recent_requests: 0,
                 recent_tokens: 0,
                 success_rate_bps: 0,
@@ -397,12 +398,13 @@ impl ProxyService {
 
     pub fn usage_summary(
         &self,
+        since: Option<i64>,
         pricing: &PricingConfig,
         list_prices: &[ModelPriceRule],
     ) -> ServiceResult<ServerUsageSummary> {
         let summary = self
             .usage
-            .summary(self.cost_resolver(pricing, list_prices))
+            .summary_since(since, self.cost_resolver(pricing, list_prices))
             .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))?;
         Ok(ServerUsageSummary {
             request_count: summary.request_count,
@@ -431,6 +433,7 @@ impl ProxyService {
         &self,
         days: u32,
         timezone_offset_minutes: i32,
+        granularity: UsageGranularity,
         pricing: &PricingConfig,
         list_prices: &[ModelPriceRule],
     ) -> ServiceResult<Vec<UsageTimeseriesPoint>> {
@@ -438,6 +441,7 @@ impl ProxyService {
             .timeseries(
                 days,
                 timezone_offset_minutes,
+                granularity,
                 self.cost_resolver(pricing, list_prices),
             )
             .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))

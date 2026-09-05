@@ -4,6 +4,7 @@
   import { ContextMenu, DropdownMenu } from "bits-ui";
   import { ChevronRight, KeyRound, Plug, Plus, RefreshCw, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
+  import ProviderEmptyState from "./ProviderEmptyState.svelte";
   import { t } from "../../stores/i18n";
   import type { MaybePromise, ProviderFilter } from "../../types";
 
@@ -137,8 +138,11 @@
 
   <div class="entries" role="listbox" aria-label={$t("providerList.providers")}>
     {#if entries.length === 0}
-      <div class="empty">
-        <span class="empty-icon">
+      <ProviderEmptyState
+        title={$t(showTrash ? "providerList.trashEmpty" : showFavorites ? "providerList.favoritesEmpty" : showArchived ? "providerList.archiveEmpty" : "providerList.noProviders")}
+        description={$t(showTrash ? "providerList.trashEmptyDesc" : showFavorites ? "providerList.favoritesEmptyDesc" : showArchived ? "providerList.archiveEmptyDesc" : "providerList.noProvidersDesc")}
+      >
+        {#snippet icon()}
           {#if showTrash}
             <Trash2 size={22} />
           {:else if showFavorites}
@@ -146,40 +150,18 @@
           {:else}
             <KeyRound size={22} />
           {/if}
-        </span>
-        <strong class="empty-title">
-          {#if showTrash}
-            {$t("providerList.trashEmpty")}
-          {:else if showFavorites}
-            {$t("providerList.favoritesEmpty")}
-          {:else if showArchived}
-            {$t("providerList.archiveEmpty")}
-          {:else}
-            {$t("providerList.noProviders")}
-          {/if}
-        </strong>
-        <span class="empty-meta">
-          {#if showTrash}
-            {$t("providerList.trashEmptyDesc")}
-          {:else if showFavorites}
-            {$t("providerList.favoritesEmptyDesc")}
-          {:else if showArchived}
-            {$t("providerList.archiveEmptyDesc")}
-          {:else}
-            {$t("providerList.noProvidersDesc")}
-          {/if}
-        </span>
-        {#if !showArchived && !showTrash && !showFavorites}
-          <div class="empty-actions">
+        {/snippet}
+        {#snippet actions()}
+          {#if !showArchived && !showTrash && !showFavorites}
             <Button variant="primary" size="sm" on:click={() => onAdd()}>
               <Plus size={14} /> {$t("providerList.addProvider")}
             </Button>
             <Button variant="secondary" size="sm" on:click={() => onConnectOAuth()}>
               <Plug size={14} /> {$t("oauthConnect.title")}
             </Button>
-          </div>
-        {/if}
-      </div>
+          {/if}
+        {/snippet}
+      </ProviderEmptyState>
     {/if}
     {#each entries as entry (entry.id)}
       <ContextMenu.Root>
@@ -234,6 +216,7 @@
 
 <style lang="scss">
   .list-pane {
+    --list-toolbar-top: 38px;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -245,10 +228,10 @@
   }
 
   .toolbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
+    align-items: center;
     gap: 8px;
-    padding: 14px 12px 10px;
+    padding: 10px 16px 8px;
   }
 
   .filter-trigger {
@@ -279,6 +262,7 @@
     align-items: center;
     gap: 6px;
     height: 34px;
+    flex-shrink: 0;
     padding: 0 12px;
     border-radius: 8px;
     font-size: 13px;
@@ -322,6 +306,7 @@
     justify-content: center;
     width: 34px;
     height: 34px;
+    flex-shrink: 0;
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--text-secondary);
@@ -374,6 +359,7 @@
 
   .search {
     display: flex;
+    flex: 1;
     align-items: center;
     gap: 8px;
     min-width: 0;
@@ -414,11 +400,10 @@
   .entries {
     flex: 1;
     overflow: auto;
-    padding: 4px 12px 12px;
+    padding: 0 8px 8px;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    position: relative;
   }
 
   .entry {
@@ -428,7 +413,8 @@
     gap: 12px;
     width: 100%;
     height: 56px;
-    padding: 8px 12px;
+    flex-shrink: 0;
+    padding: 8px;
     border-radius: var(--radius);
     text-align: left;
     position: relative;
@@ -479,51 +465,6 @@
     white-space: nowrap;
     font-size: 12px;
     color: var(--text-tertiary);
-  }
-
-  .empty {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 24px 16px;
-    text-align: center;
-    color: var(--text-tertiary);
-
-    .empty-title {
-      color: var(--text);
-      font-weight: 600;
-      font-size: 14px;
-    }
-
-    .empty-meta {
-      max-width: 240px;
-      font-size: 12px;
-      line-height: 1.4;
-    }
-  }
-
-  .empty-actions {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .empty-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    color: var(--text-tertiary);
-    margin-bottom: 4px;
   }
 
   @media (max-width: 720px) {

@@ -3,7 +3,7 @@ import type { ProviderEntry } from "@aipass/schemas";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 
-import type { ProxyRouteConfig } from "../../types";
+import type { ProxyRouteConfig, ProxyStatus } from "../../types";
 import RouteGroupDialog from "./RouteGroupDialog.svelte";
 
 const entries = [
@@ -91,6 +91,30 @@ afterEach(async () => {
   if (app) await unmount(app as never);
   app = undefined;
   document.body.innerHTML = "";
+});
+
+test.each([true, false])("marks the affected credential while running=%s", (running) => {
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  const status: ProxyStatus = {
+    running, enabled: true, bindAddr: "127.0.0.1:8787", activeRoutes: 1,
+    requests: 1, failures: 0, recentRequests: 1, recentTokens: 0, successRateBps: 10_000,
+    degraded: true, degradedTargetIds: ["target-1"]
+  };
+  // Two credentials from the same provider must retain independent health.
+  const sameProviderRoute = {
+    ...route,
+    targets: [route.targets[0], { ...route.targets[0], id: "target-2", secretId: "secret-2" }]
+  };
+  const sameProviderEntries = [{
+    ...entries[0],
+    secretRefs: [...entries[0].secretRefs, { ...entries[0].secretRefs[0], id: "secret-2", label: "Backup" }]
+  }];
+  app = mount(RouteGroupDialog, { target, props: { route: sameProviderRoute, entries: sameProviderEntries, status } }) as never;
+  flushSync();
+  const rows = document.body.querySelectorAll(".member-row");
+  expect(rows[0].querySelector(".tone-warning") !== null).toBe(running);
+  expect(rows[1].querySelector(".tone-warning")).toBeNull();
 });
 
 test("keeps the editor open when persistence fails", async () => {

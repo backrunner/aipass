@@ -3,6 +3,8 @@ import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { ProxyConfig, ProxyStatus, ServerUsageSummary } from "../../types";
+import { emptyServerUsage } from "../../services/serverUsage";
+import { formatCompact } from "../../utils/format";
 import ServerDetailPane from "./ServerDetailPane.svelte";
 
 const config: ProxyConfig = {
@@ -57,7 +59,7 @@ test("requires confirmation before clearing usage", async () => {
   const onClearUsage = vi.fn().mockResolvedValue(true);
   app = mount(ServerDetailPane, {
     target,
-    props: { config, status, usage, onClearUsage }
+    props: { config, status, usageByRange: { "24h": usage, 7: usage, 30: usage }, onClearUsage }
   }) as never;
   flushSync();
 
@@ -82,4 +84,48 @@ test("requires confirmation before clearing usage", async () => {
   flushSync();
 
   expect(onClearUsage).toHaveBeenCalledOnce();
+});
+
+
+test("switches chart totals and provider details together for every period", () => {
+  const now = new Date();
+  const dateKey = (date: Date) => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  const older = new Date(now);
+  older.setDate(older.getDate() - 10);
+  const currentHour = now.getTime() - (now.getMinutes() * 60 + now.getSeconds()) * 1000 - now.getMilliseconds();
+  const point = (date: string, inputTokens: number) => ({
+    date, requestCount: 1, inputTokens, outputTokens: 0, cacheReadTokens: 0,
+    cacheCreationTokens: 0, estimatedCostMicros: 0
+  });
+  const usageByRange = emptyServerUsage();
+  for (const [range, tokens] of [["24h", 120], [7, 700], [30, 3000]] as const) {
+    usageByRange[range] = {
+      ...usage, inputTokens: tokens,
+      providers: [{ ...usage, providerEntryId: `provider-${range}`, secretId: "key", inputTokens: tokens }]
+    };
+  }
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  app = mount(ServerDetailPane, {
+    target,
+    props: {
+      config, status, usageByRange,
+      series: [point(dateKey(now), 700), point(dateKey(older), 2300)],
+      hourlySeries: [point(new Date(currentHour).toISOString(), 120)]
+    }
+  }) as never;
+  flushSync();
+  const check = (tokens: number) => {
+    expect(document.querySelector(".chart-summary .summary-item strong")?.textContent).toBe(formatCompact(tokens));
+    expect(document.querySelector(".breakdown-table tbody tr td:nth-child(3)")?.textContent).toBe(formatCompact(tokens));
+  };
+  check(700);
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>(".range-toggle button")];
+  for (const [label, tokens] of [["24", 120], ["30", 3000], ["7", 700]] as const) {
+    buttons.find((button) => button.textContent?.includes(label))!.click();
+    flushSync();
+    check(tokens);
+    const breakdownCard = document.querySelector(".usage-breakdown")!.closest(".card");
+    expect(breakdownCard?.querySelector(".card-actions")?.textContent).toContain(label);
+  }
 });

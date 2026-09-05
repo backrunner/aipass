@@ -6,7 +6,7 @@ use aipass_provider_registry::{
 pub use aipass_proxy::{
     ModelPricing, ModelUsageAggregate, Protocol as ProxyProtocol, ProviderUsageAggregate,
     ProxyConfig, ProxyLogEntry, ProxyRouteConfig, ProxyStatus, ProxyTargetConfig, RetryPolicy,
-    RouteStrategy, UsageAggregate, UsageTimeseriesModel, UsageTimeseriesPoint,
+    RouteStrategy, UsageAggregate, UsageGranularity, UsageTimeseriesModel, UsageTimeseriesPoint,
 };
 use aipass_sync::SyncObject;
 use aipass_vault::{
@@ -511,7 +511,14 @@ pub enum AgentRequest {
     #[serde(rename = "server.token.rotate")]
     ServerTokenRotate { route_id: Uuid },
     #[serde(rename = "server.usage.summary")]
-    ServerUsageSummary,
+    ServerUsageSummary {
+        #[serde(default)]
+        days: Option<u32>,
+        #[serde(default)]
+        timezone_offset_minutes: i32,
+        #[serde(default)]
+        granularity: UsageGranularity,
+    },
     #[serde(rename = "server.usage.clear")]
     ServerUsageClear,
     #[serde(rename = "server.usage_timeseries")]
@@ -519,6 +526,8 @@ pub enum AgentRequest {
         days: u32,
         #[serde(default)]
         timezone_offset_minutes: i32,
+        #[serde(default)]
+        granularity: UsageGranularity,
     },
     #[serde(rename = "server.pricing_config.get")]
     ServerPricingConfigGet,
@@ -1395,7 +1404,31 @@ mod tests {
     }
 
     #[test]
-    fn usage_timeseries_defaults_to_utc_for_older_clients() {
+    fn usage_summary_preserves_unfiltered_clients_and_accepts_periods() {
+        let request: AgentRequest = serde_json::from_value(serde_json::json!({
+            "type": "server.usage.summary"
+        }))
+        .unwrap();
+        assert!(matches!(
+            request,
+            AgentRequest::ServerUsageSummary {
+                days: None,
+                timezone_offset_minutes: 0,
+                granularity: UsageGranularity::Day
+            }
+        ));
+        for (days, granularity) in [(1, "hour"), (7, "day"), (30, "day")] {
+            let value = serde_json::json!({
+                "type": "server.usage.summary", "days": days,
+                "timezone_offset_minutes": 345, "granularity": granularity
+            });
+            let request: AgentRequest = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(request).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn usage_timeseries_defaults_to_daily_utc_for_older_clients() {
         let request: AgentRequest = serde_json::from_value(serde_json::json!({
             "type": "server.usage_timeseries",
             "days": 7
@@ -1405,8 +1438,29 @@ mod tests {
             request,
             AgentRequest::ServerUsageTimeseries {
                 days: 7,
-                timezone_offset_minutes: 0
+                timezone_offset_minutes: 0,
+                granularity: UsageGranularity::Day
             }
         ));
+    }
+
+    #[test]
+    fn usage_timeseries_accepts_hourly_granularity() {
+        let value = serde_json::json!({
+            "type": "server.usage_timeseries",
+            "days": 1,
+            "timezone_offset_minutes": 480,
+            "granularity": "hour"
+        });
+        let request: AgentRequest = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(
+            request,
+            AgentRequest::ServerUsageTimeseries {
+                days: 1,
+                timezone_offset_minutes: 480,
+                granularity: UsageGranularity::Hour
+            }
+        ));
+        assert_eq!(serde_json::to_value(request).unwrap(), value);
     }
 }

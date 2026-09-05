@@ -2,16 +2,19 @@
   import { ChartColumn } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
-  import type { UsageTimeseriesModel, UsageTimeseriesPoint } from "../../types";
+  import type { UsageRange, UsageTimeseriesModel, UsageTimeseriesPoint } from "../../types";
   import { formatCompact, formatCostMicros } from "../../utils/format";
 
   export let series: UsageTimeseriesPoint[] = [];
+  export let hourlySeries: UsageTimeseriesPoint[] = [];
 
-  let range: 7 | 30 = 7;
+  export let range: UsageRange = 7;
   let hoveredPoint: UsageTimeseriesPoint | undefined;
   let tooltipLeft = 50;
+  let tooltipWidth = 310;
 
-  const CHART_WIDTH = 560;
+  let chartWidth = 560;
+  $: CHART_WIDTH = chartWidth > 0 ? chartWidth : 560;
   const CHART_HEIGHT = 120;
   const CHART_TOP = 8;
   const LABEL_HEIGHT = 18;
@@ -56,6 +59,32 @@
 
   function tokensOf(point: UsageTimeseriesPoint): number {
     return point.inputTokens + point.outputTokens + point.cacheReadTokens + point.cacheCreationTokens;
+  }
+
+  function buildHours(points: UsageTimeseriesPoint[]): UsageTimeseriesPoint[] {
+    const byHour = new Map(points.map((point) => [new Date(point.date).getTime(), point]));
+    const now = new Date();
+    // Subtract elapsed minutes to preserve the second occurrence of a local
+    // hour when daylight saving time ends.
+    const currentHour = now.getTime() - (now.getMinutes() * 60 + now.getSeconds()) * 1000 - now.getMilliseconds();
+    return Array.from({ length: 24 }, (_, index) => {
+      const timestamp = currentHour - (23 - index) * 3_600_000;
+      return byHour.get(timestamp) ?? emptyPoint(new Date(timestamp).toISOString());
+    });
+  }
+
+  function timeLabel(value: string): string {
+    const date = new Date(value);
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  }
+
+  function pointLabel(point: UsageTimeseriesPoint): string {
+    return range === "24h" ? `${dateKey(new Date(point.date))} ${timeLabel(point.date)}` : point.date;
+  }
+
+  function selectRange(value: typeof range) {
+    hideTooltip();
+    range = value;
   }
 
   function tokensOfModel(model: UsageTimeseriesModel): number {
@@ -107,32 +136,27 @@
     hoveredPoint = undefined;
   }
 
-  $: days = buildDays(range, series);
-  $: maxTokens = Math.max(1, ...days.map(tokensOf));
-  $: totalTokens = days.reduce((sum, point) => sum + tokensOf(point), 0);
-  $: totalRequests = days.reduce((sum, point) => sum + point.requestCount, 0);
-  $: totalCostMicros = days.reduce((sum, point) => sum + point.estimatedCostMicros, 0);
+  $: points = range === "24h" ? buildHours(hourlySeries) : buildDays(range, series);
+  $: maxTokens = Math.max(1, ...points.map(tokensOf));
+  $: totalTokens = points.reduce((sum, point) => sum + tokensOf(point), 0);
+  $: totalRequests = points.reduce((sum, point) => sum + point.requestCount, 0);
+  $: totalCostMicros = points.reduce((sum, point) => sum + point.estimatedCostMicros, 0);
   $: hasData = totalRequests > 0 || totalTokens > 0;
-  $: barSlot = (CHART_WIDTH - Y_AXIS_WIDTH) / Math.max(1, days.length);
+  $: barSlot = (CHART_WIDTH - Y_AXIS_WIDTH) / Math.max(1, points.length);
   $: barWidth = Math.max(2, barSlot * 0.62);
-  $: labelEvery = range === 7 ? 1 : 5;
+  $: labelEvery = range === 7 ? 1 : range === "24h" ? 4 : 5;
   $: yTicks = [
     { value: maxTokens, y: CHART_TOP },
     { value: maxTokens / 2, y: CHART_TOP + (CHART_HEIGHT - CHART_TOP) / 2 }
   ];
   $: legendModels = Array.from(
     new Map(
-      days
+      points
         .flatMap((point) => segmentsFor(point))
         .map((segment) => [modelKey(segment.model), segment] as const)
     ).values()
   );
   $: hoveredSegments = hoveredPoint ? segmentsFor(hoveredPoint) : [];
-  $: tooltipTransform = tooltipLeft < 25
-    ? "translateX(-8px)"
-    : tooltipLeft > 75
-      ? "translateX(calc(-100% + 8px))"
-      : "translateX(-50%)";
 </script>
 
 <div class="usage-chart">
@@ -148,14 +172,15 @@
       </div>
     {/if}
     <div class="range-toggle" role="group" aria-label={$t("server.usageChart")}>
-      <button type="button" class:active={range === 7} on:click={() => (range = 7)}>{$t("server.last7Days")}</button>
-      <button type="button" class:active={range === 30} on:click={() => (range = 30)}>{$t("server.last30Days")}</button>
+      <button type="button" class:active={range === "24h"} aria-pressed={range === "24h"} on:click={() => selectRange("24h")}>{$t("server.last24Hours")}</button>
+      <button type="button" class:active={range === 7} aria-pressed={range === 7} on:click={() => selectRange(7)}>{$t("server.last7Days")}</button>
+      <button type="button" class:active={range === 30} aria-pressed={range === 30} on:click={() => selectRange(30)}>{$t("server.last30Days")}</button>
     </div>
   </div>
 
   {#if hasData}
     <div class="chart-body">
-      <div class="chart-frame">
+      <div class="chart-frame" bind:clientWidth={chartWidth}>
         <svg
           class="chart"
           viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT + LABEL_HEIGHT}`}
@@ -169,7 +194,7 @@
             </text>
           {/each}
           <line class="baseline" x1={Y_AXIS_WIDTH} y1={CHART_HEIGHT} x2={CHART_WIDTH} y2={CHART_HEIGHT} />
-          {#each days as point, index (point.date)}
+          {#each points as point, index (point.date)}
             {@const tokens = tokensOf(point)}
             {@const segments = segmentsFor(point)}
             {@const height = Math.max(
@@ -184,10 +209,10 @@
               on:blur={hideTooltip}
               role="button"
               tabindex="0"
-              aria-label={`${point.date} ${formatCompact(tokens)} tokens ${formatCompact(point.requestCount)} requests`}
+              aria-label={`${pointLabel(point)} ${formatCompact(tokens)} tokens ${formatCompact(point.requestCount)} requests`}
             >
               {#if segments.length > 0}
-                {#each segments as segment, segmentIndex (segment.model ?? "unknown")}
+                {#each segments as segment, segmentIndex (modelKey(segment.model))}
                   {@const segmentHeight = segment.tokenCount > 0
                     ? Math.max(1, (segment.tokenCount / maxTokens) * (CHART_HEIGHT - CHART_TOP))
                     : tokens === 0 && point.requestCount > 0 && segmentIndex === 0 ? 2 : 0}
@@ -214,21 +239,26 @@
                   rx={Math.min(2, barWidth / 2)}
                 />
               {/if}
-              <title>{point.date} · {formatCompact(tokens)} tokens · {formatCompact(point.requestCount)} req · {formatCostMicros(point.estimatedCostMicros)}</title>
+              <title>{pointLabel(point)} · {formatCompact(tokens)} tokens · {formatCompact(point.requestCount)} req · {formatCostMicros(point.estimatedCostMicros)}</title>
             </g>
-            {#if index % labelEvery === 0 || index === days.length - 1}
+            {#if index % labelEvery === 0 || index === points.length - 1}
               <text
                 class="axis-label"
                 x={Y_AXIS_WIDTH + index * barSlot + barSlot / 2}
                 y={CHART_HEIGHT + LABEL_HEIGHT - 4}
                 text-anchor="middle"
-              >{point.date.slice(5)}</text>
+              >{range === "24h" ? timeLabel(point.date) : point.date.slice(5)}</text>
             {/if}
           {/each}
         </svg>
         {#if hoveredPoint}
-          <div class="chart-tooltip" style={`left: ${tooltipLeft}%; transform: ${tooltipTransform}`} role="status">
-            <strong>{hoveredPoint.date}</strong>
+          <div
+            class="chart-tooltip"
+            bind:offsetWidth={tooltipWidth}
+            style={`left: clamp(0px, calc(${tooltipLeft}% - ${tooltipWidth / 2}px), calc(100% - ${tooltipWidth}px))`}
+            role="status"
+          >
+            <strong>{pointLabel(hoveredPoint)}</strong>
             <div class="tooltip-total">
               <span>{$t("server.totalTokens")} {formatCompact(tokensOf(hoveredPoint))}</span>
               <span>{$t("server.requests")} {formatCompact(hoveredPoint.requestCount)}</span>
@@ -274,6 +304,7 @@
 
 <style lang="scss">
   .usage-chart {
+    container-type: inline-size;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -311,6 +342,7 @@
 
   .range-toggle {
     display: inline-flex;
+    flex-shrink: 0;
     gap: 2px;
     padding: 2px;
     background: var(--surface-2);
@@ -322,6 +354,7 @@
       color: var(--text-tertiary);
       font-size: 11px;
       font-weight: 600;
+      white-space: nowrap;
       transition: background-color 80ms ease, color 120ms ease;
 
       &:hover {
@@ -391,7 +424,7 @@
 
   .tooltip-model {
     display: grid;
-    grid-template-columns: 7px minmax(74px, 130px) repeat(3, max-content);
+    grid-template-columns: 7px minmax(0, 130px) repeat(3, max-content);
   }
 
   .tooltip-total {
@@ -415,7 +448,7 @@
   }
 
   .model-name {
-    min-width: 74px;
+    min-width: 0;
     max-width: 130px;
     overflow: hidden;
     color: var(--text-secondary);
@@ -521,7 +554,7 @@
     line-height: 1.4;
   }
 
-  @media (max-width: 620px) {
+  @container (max-width: 620px) {
     .chart-body {
       flex-direction: column;
       gap: 12px;

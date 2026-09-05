@@ -56,6 +56,7 @@
 
         <div class="modal-body">
           <ProviderFormFields
+            itemLayout
             {formMode}
             bind:draft
             {onInferDraftFromDomain}

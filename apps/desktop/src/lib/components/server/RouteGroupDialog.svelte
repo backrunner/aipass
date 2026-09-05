@@ -1,19 +1,20 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
-  import { Button, IconButton, SelectField } from "@aipass/ui";
+  import { Badge, Button, IconButton, SelectField } from "@aipass/ui";
   import { Dialog, Switch } from "bits-ui";
-  import { ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
+  import { AlertTriangle, ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyTargetConfig, RetryPolicy } from "../../types";
+  import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyStatus, ProxyTargetConfig, RetryPolicy } from "../../types";
   import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, proxySupportedEntry, reorderItems, routeNeedsConversion, routeProtocolFor } from "../../utils/server";
 
   export let route: ProxyRouteConfig | undefined = undefined;
   export let entries: ProviderEntry[] = [];
+  export let status: ProxyStatus | undefined = undefined;
   export let onSave: (route: ProxyRouteConfig) => MaybePromise<boolean | void> = () => {};
   export let onClose: () => MaybePromise = () => {};
 
-  type Member = { entry: ProviderEntry; secret: SecretRef; weight: number; enabled: boolean };
+  type Member = { targetId?: string; entry: ProviderEntry; secret: SecretRef; weight: number; enabled: boolean };
 
   let dialogOpen = true;
   let closing = false;
@@ -38,12 +39,13 @@
     const entry = entries.find((item) => item.id === target.providerEntryId);
     const secret = entry?.secretRefs.find((item) => item.id === target.secretId);
     if (entry && secret) {
-      members.push({ entry, secret, weight: Math.max(1, target.weight || 1), enabled: target.enabled !== false });
+      members.push({ targetId: target.id, entry, secret, weight: Math.max(1, target.weight || 1), enabled: target.enabled !== false });
     } else {
       missingMembers.push(target);
     }
   }
   let dragIndex: number | null = null;
+  $: degradedTargetIds = new Set(status?.running && route?.enabled ? status.degradedTargetIds ?? [] : []);
 
   $: credentialOptions = entries
     .filter((entry) => Boolean(apiBaseUrl(entry)))
@@ -348,7 +350,12 @@
                 </span>
                 <span class="member-icon" aria-hidden="true"><KeyRound size={15} /></span>
                 <div class="member-main">
-                  <strong>{member.entry.title}</strong>
+                  <div class="member-heading">
+                    <strong>{member.entry.title}</strong>
+                    {#if member.enabled && member.targetId && degradedTargetIds.has(member.targetId)}
+                      <Badge tone="warning" size="sm"><AlertTriangle size={12} /> {$t("server.degraded")}</Badge>
+                    {/if}
+                  </div>
                   <span>{member.secret.label}{#if !member.enabled} · {$t("server.memberDisabled")}{/if}</span>
                 </div>
                 <div class="member-controls">
@@ -386,7 +393,12 @@
                 <span class="drag-handle placeholder" aria-hidden="true"></span>
                 <span class="member-icon" aria-hidden="true"><KeyRound size={15} /></span>
                 <div class="member-main">
-                  <strong>{missing.label || missing.providerEntryId}</strong>
+                  <div class="member-heading">
+                    <strong>{missing.label || missing.providerEntryId}</strong>
+                    {#if missing.enabled && degradedTargetIds.has(missing.id)}
+                      <Badge tone="warning" size="sm"><AlertTriangle size={12} /> {$t("server.degraded")}</Badge>
+                    {/if}
+                  </div>
                   <span class="mono">{missing.providerEntryId} · {$t("server.memberMissing")}</span>
                 </div>
                 <div class="member-controls">
@@ -781,6 +793,13 @@
     border-radius: var(--radius-sm);
     background: var(--surface-2);
     color: var(--text-secondary);
+  }
+
+  .member-heading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
   }
 
   .member-main {

@@ -49,6 +49,13 @@ Newest entries last within each section.
 - **Guardrail**: converted WS routes must retain complete text/tool context (including empty-argument tool calls), emit argument completion events, release the active lane on every error, and account each response exactly once, ignoring duplicate terminal notifications. Treat `response.incomplete` as a terminal generation result, not an upstream transport failure. Preserve system/developer message roles when converting requests. Evict failed same-lane parents without evicting a failed fork's source lane. Do not treat the initial `response.created` event as successful completion.
 - **Watch points**: `websocket/bridge.rs` request preparation, SSE completion/error handling, `SessionUsage::server_event`; coverage in `websocket_conversion_preserves_tool_calls_results_and_forked_context`, `websocket_conversion_orders_lanes_and_recovers_after_upstream_failure`, and `websocket_conversion_warmup_and_error_cache_eviction_are_connection_local`.
 
+### Successful fallback hid failing proxy targets
+- **Symptom**: the proxy showed a healthy status after a backup completed the request, and users could not identify the failing service in a route group.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` `ProxyHandle::status` only used final request failures; target circuit health never crossed the status boundary into `RouteListPane` / `RouteGroupDialog`.
+- **Fix**: expose enabled target IDs with recent unresolved failures or an open circuit through `ProxyStatus`; include them in degradation and display badges per group and credential while running.
+- **Guardrail**: derive target degradation from shared runtime health, including successful fallback, recovery, expiration, and config reload. Keep target IDs distinct across credentials. Enforced by `degraded_targets_follow_recent_failures_circuits_and_recovery`, `proxy_authenticates_fails_over_and_records_usage`, and desktop route component tests.
+- **Watch points**: HTTP/model discovery/stream/WebSocket `mark_failure` and `mark_success`, agent stopped status, desktop status polling, route list and editor.
+
 ## Public model pricing (aipass-agent pricing)
 
 ### Startup-only refresh and encrypted metadata left prices stale
@@ -91,3 +98,45 @@ Newest entries last within each section.
 - **Fix**: tray `can_start_proxy` requires an active route; agent `start()` rejects configs with no enabled route group (ValidationFailed); tray surfaces the agent's validation error text instead of a generic failure.
 - **Guardrail**: every action with multiple entry points (tray, UI, CLI, extension) must share one server-side validation; UI-level gating is a convenience, never the authority. When changing validation, update all three layers together.
 - **Watch points**: `apps/desktop/src-tauri/src/tray.rs`, `apps/desktop/src/lib/components/server/ServerDetailPane.svelte`, `crates/aipass-agent/src/proxy_service.rs` `validate_config`/`start`.
+
+
+## Usage periods (desktop / agent / proxy store)
+
+### Chart range did not filter provider details
+- **Symptom**: switching between 24 hours, 7 days, and 30 days changed chart totals while provider details continued showing all history.
+- **Root cause**: `UsageChart.svelte:11` owned a private range, while `App.svelte:1791` loaded an unfiltered summary and `UsageStore::summary` read every request and attempt.
+- **Fix**: share the selected range in `ServerDetailPane`, preload matching summaries with chart series and publish them together, and use `usage_window_start` for both core queries. Filter attempts as well as requests.
+- **Guardrail**: keep chart and breakdown on the same range and timezone; apply the cutoff to requests, attempts, costs, and health metrics. Enforced by `usage_summary_matches_chart_periods_and_filters_attempts`, `serverUsage.test.ts`, and `ServerDetailPane.test.ts`.
+- **Watch points**: `App.svelte` refresh/clear/reset, `services/serverUsage.ts`, `UsageChart.svelte`, Tauri summary command, agent summary handler, `UsageStore::summary_since` / `timeseries`.
+
+
+## OAuth lifecycle and native credential reconciliation
+
+### Canceled device flows and failed persistence reused one-shot exchanges
+- **Symptom**: closing/canceling during an in-flight start or poll could reconnect later; a failed vault write spent the authorization code again on retry.
+- **Root cause**: `oauth/mod.rs` retained only device metadata, while `handlers.rs` consumed after persistence without caching tokens or serializing cancellation. `OAuthConnectDialog.svelte` invalidated cancellation only after IPC completed and accepted late start responses.
+- **Fix**: cache exchanged bundles until successful commit, serialize completion/cancellation, enforce one in-flight poll and server intervals, clear pending flows on lock, and invalidate UI generations immediately.
+- **Guardrail**: test cancellation during both start and poll, failed persistence followed by retry without a second token exchange, and overlapping polls. Cached token bundles must be redacted and zeroized on drop.
+- **Watch points**: `oauth/mod.rs` tests, OAuth handlers, session lock, `OAuthConnectDialog.test.ts`.
+
+### Refresh races and native reconciliation mixed token generations or accounts
+- **Symptom**: an old refresh failure invalidated a fresh login; native CLI rotations could trigger false reauthentication or copy another account's tokens; identical emails across Codex workspaces reused the wrong header.
+- **Root cause**: `oauth/refresh_loop.rs` guarded only successful responses by timestamp; `oauth/native_write.rs` compared generations without account identity; `official_accounts.rs` deduplicated only by email/fingerprint. Codex nested `error.code` was ignored.
+- **Fix**: compare both timestamp and refresh token on success and failure; adopt complete newer native bundles before refresh and recheck after rejection; match workspace plus subject for Codex and identity for Grok; deduplicate Codex entries by workspace too; parse nested/flat machine error codes.
+- **Guardrail**: preserve token/header/account identity together. Guard every asynchronous refresh outcome by its source generation. Test the same timestamp with different refresh tokens and the same email with different workspaces.
+- **Watch points**: refresh-loop race test, native account/rotation tests, official-account workspace regression, Codex refresh error parser.
+
+### Native OAuth backup and mirror failures escaped vault protections
+- **Symptom**: native backup files retained plaintext refresh tokens; malformed native files were overwritten as if missing; native write failures prevented saving a rotated token in the vault.
+- **Root cause**: `oauth/native_write.rs` copied raw bytes and flattened read/parse errors to `None`; login and refresh propagated mirror errors before storing managed accounts.
+- **Fix**: encrypt new native backups with the vault backup key, preserve malformed/unreadable files, and treat native write errors as logged mirror failures while committing managed credentials. Bound OAuth response reads and redact parse errors.
+- **Guardrail**: never create plaintext credential backups or treat unreadable credentials as absent. Keep authoritative token persistence independent of optional native mirrors; test encrypted backup recovery and malformed input preservation.
+- **Watch points**: native backup tests, login completion, background refresh persistence, OAuth response parsing tests. Existing legacy backup files are not migrated by this change.
+
+
+### OAuth management hid destructive effects and recovery states
+- **Symptom**: account removal silently retired linked provider routes; loading looked empty, failed login returned to provider selection, and failed browser/clipboard actions gave no feedback.
+- **Root cause**: `OAuthConnectDialog.svelte` used a single busy flag and icon-only account actions, mixed loading with empty lists, and used WebView `window.open` for an external browser.
+- **Fix**: separate connection and account views with explicit loading/error/retry states; preserve provider and reauthentication context; confirm removal with its effects; notify the host after a successful removal even if list refresh fails. Launch provider HTTPS links through the Tauri `oauth_open_verification` command on an explicit user click and surface fallback instructions.
+- **Guardrail**: never equate a loading/failed list with an empty list. Confirm account removal before IPC; verify host invalidation independently of list reload. Test browser/clipboard failures and retry without losing the selected provider. Clear delayed close callbacks on unmount.
+- **Watch points**: `OAuthConnectDialog.test.ts`, `src-tauri/src/oauth_browser.rs`, host `onAccountsChanged`, and the shared English/Chinese OAuth messages. Validate all states at 960×640.

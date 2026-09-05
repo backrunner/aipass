@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { authSchemeCompatibleWithInterface, providerDefinitions } from "@aipass/schemas";
-  import { Eye, EyeOff, Plus, X } from "lucide-svelte";
+  import { ChevronDown, Eye, EyeOff, Plus, X } from "lucide-svelte";
+  import { DropdownMenu } from "bits-ui";
   import { onMount, tick } from "svelte";
 
   import { t } from "../i18n";
@@ -16,6 +17,7 @@
   export let onProviderChanged: () => MaybePromise = () => {};
   export let onInterfaceChanged: () => MaybePromise = () => {};
   export let onAuthChanged: () => MaybePromise = () => {};
+  export let itemLayout = false;
   export let compactProviderSelect = false;
   export let showSecretLabel = true;
   // Set when editing an official OAuth entry: the proxy sends the OAuth token
@@ -114,7 +116,7 @@
     {
       id: "group",
       label: "providerForm.group",
-      section: "details",
+      section: "advanced",
       hasValue: () => Boolean(draft.gatewayGroup),
       clear: () => (draft.gatewayGroup = "")
     },
@@ -133,6 +135,7 @@
 
   let visibleFields: Set<FieldId> = new Set();
   let showApiKey = false;
+  let advancedOpen = false;
   let formRoot: HTMLDivElement;
 
   onMount(() => {
@@ -146,9 +149,13 @@
       initial.add("endpoint");
     }
     visibleFields = initial;
+    if (itemLayout && formMode === "edit") {
+      formRoot.querySelector<HTMLInputElement>(".title-field input")?.focus({ preventScroll: true });
+    }
   });
 
   async function addField(id: FieldId) {
+    if (optionalFields.find((field) => field.id === id)?.section === "advanced") advancedOpen = true;
     visibleFields = new Set([...visibleFields, id]);
     await tick();
     const field = formRoot.querySelector<HTMLElement>(`[data-provider-field="${id}"]`);
@@ -156,12 +163,16 @@
     field?.querySelector<HTMLElement>("input, textarea, select, button")?.focus({ preventScroll: true });
   }
 
-  function removeField(id: FieldId) {
+  async function removeField(id: FieldId) {
     const field = optionalFields.find((item) => item.id === id);
     field?.clear();
     const next = new Set(visibleFields);
     next.delete(id);
     visibleFields = next;
+    if (itemLayout) {
+      await tick();
+      formRoot.querySelector<HTMLButtonElement>(".add-field-trigger")?.focus();
+    }
   }
 
   function interfaceLabelKey(value: InterfaceType): string {
@@ -214,7 +225,7 @@
     visibleFields.has("quota");
 </script>
 
-<div class="provider-form-fields" bind:this={formRoot}>
+<div class="provider-form-fields" class:item-layout={itemLayout} bind:this={formRoot}>
 <section class="form-section">
   <h3 class="section-title">{$t("providerForm.identity")}</h3>
   <div class="section-fields identity-fields">
@@ -229,7 +240,7 @@
     <Field label={$t("providerForm.title")} class="title-field">
       <input bind:value={draft.title} placeholder={$t("providerForm.titlePlaceholder")} />
     </Field>
-    {#if showSecretLabel && formMode === "add"}
+    {#if showSecretLabel && (formMode === "add" || itemLayout)}
       <Field label={$t("providerForm.secretLabel")} class="secret-label-field">
         <input bind:value={draft.secretLabel} placeholder={$t("providerForm.secretLabelPlaceholder")} />
       </Field>
@@ -248,6 +259,7 @@
             type="button"
             class="secret-toggle"
             aria-label={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
+            aria-pressed={showApiKey}
             title={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
             on:click={() => (showApiKey = !showApiKey)}
           >
@@ -354,8 +366,8 @@
   </section>
 {/if}
 
-<section class="form-section">
-  <h3 class="section-title">{$t("providerForm.advanced")}</h3>
+<details class="form-section advanced-section" open={!itemLayout || advancedOpen} on:toggle={(event) => (advancedOpen = event.currentTarget.open)}>
+  <summary class="section-title">{$t("providerForm.advanced")}<ChevronDown size={14} /></summary>
   <div class="section-fields">
     <div class="protocol-field">
       <SelectField
@@ -445,9 +457,28 @@
       </div>
     {/if}
   </div>
-</section>
+</details>
 
 {#if detailsAvailable.length > 0 || advancedAvailable.length > 0}
+  {#if itemLayout}
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger class="add-field-trigger"><Plus size={14} />{$t("providerForm.addField")}<ChevronDown size={14} /></DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content class="provider-field-menu" sideOffset={6} align="start">
+          {#each [detailsAvailable, advancedAvailable] as fields, index}
+            {#if fields.length}
+              <DropdownMenu.Group>
+                <DropdownMenu.GroupHeading class="provider-field-menu-heading">{$t(index === 0 ? "providerForm.details" : "providerForm.advanced")}</DropdownMenu.GroupHeading>
+                {#each fields as field}
+                  <DropdownMenu.Item class="provider-field-menu-item" onSelect={() => { setTimeout(() => addField(field.id), 0); }}>{$t(field.label)}</DropdownMenu.Item>
+                {/each}
+              </DropdownMenu.Group>
+            {/if}
+          {/each}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  {:else}
   <section class="form-section">
     <h3 class="section-title">{$t("providerForm.addField")}</h3>
     <div class="chip-group">
@@ -465,10 +496,122 @@
       {/each}
     </div>
   </section>
+  {/if}
 {/if}
 </div>
 
 <style lang="scss">
+  .advanced-section summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    list-style: none;
+    padding: 8px 2px;
+  }
+  .advanced-section summary::-webkit-details-marker {
+    display: none;
+  }
+  .advanced-section[open] summary :global(svg) {
+    transform: rotate(180deg);
+  }
+  .advanced-section .section-fields {
+    margin-top: 8px;
+  }
+
+  .provider-form-fields.item-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    min-width: 0;
+  }
+  .item-layout .section-fields {
+    padding: 0;
+    gap: 0;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .item-layout .section-fields > :global(*) {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--divider);
+  }
+  .item-layout .section-fields > :global(*:last-child) {
+    border-bottom: 0;
+  }
+  .item-layout :global(.field), .item-layout :global(.select-field) {
+    min-width: 0;
+    gap: 4px;
+  }
+  .item-layout :global(.field-label), .item-layout :global(.select-label) {
+    color: var(--text-tertiary);
+    font-size: 11px;
+  }
+  .item-layout :global(.field input), .item-layout :global(.field textarea), .item-layout :global(.select-trigger) {
+    min-width: 0;
+    background: transparent;
+    border-color: transparent;
+    padding-left: 0;
+    border-radius: 4px;
+    min-height: 28px;
+  }
+  .item-layout :global(.field input:focus), .item-layout :global(.field textarea:focus), .item-layout :global(.select-trigger:focus-visible) {
+    box-shadow: none;
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 3px;
+  }
+  .item-layout .section-fields > :global(*:focus-within) {
+    background: var(--accent-soft);
+  }
+  .item-layout .remove-btn {
+    align-self: center;
+    margin: 0;
+  }
+  .item-layout .remove-btn:focus-visible {
+    outline: 2px solid var(--accent-ring);
+  }
+  :global(.add-field-trigger) {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--accent);
+    font-size: 12px;
+  }
+  :global(.add-field-trigger:hover), :global(.add-field-trigger:focus-visible) {
+    background: var(--accent-soft);
+  }
+  :global(.provider-field-menu) {
+    min-width: 220px;
+    max-height: min(380px, var(--bits-dropdown-menu-content-available-height, 380px));
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow-pop);
+    z-index: 230;
+  }
+  :global(.provider-field-menu-heading) {
+    padding: 8px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  :global(.provider-field-menu-item) {
+    padding: 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    outline: none;
+  }
+  :global(.provider-field-menu-item[data-highlighted]) {
+    background: var(--accent-soft);
+  }
+
   .provider-form-fields {
     display: contents;
   }
