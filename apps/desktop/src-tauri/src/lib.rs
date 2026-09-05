@@ -667,6 +667,7 @@ fn install_browser_extension(app: &AppHandle) -> Result<BrowserExtensionInstallR
 struct ExtensionPackage {
     id: String,
     version: String,
+    manifest_version: String,
     zip_path: PathBuf,
 }
 
@@ -707,9 +708,19 @@ fn parse_extension_package_metadata(
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("aipass-extension.zip");
+    // The version written into manifest.json inside the zip. Nightly builds
+    // stamp a Chrome-compatible numeric manifest version while `version`
+    // keeps the full semver for display; older metadata lacks the field.
+    let manifest_version = metadata
+        .get("manifest_version")
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| version.clone());
     Ok(ExtensionPackage {
         id,
         version,
+        manifest_version,
         zip_path: metadata_dir.join(zip_name),
     })
 }
@@ -761,6 +772,135 @@ fn extract_extension_package(zip_path: &Path, extract_dir: &Path) -> Result<(), 
             .map_err(|err| format!("failed to create {}: {err}", out_path.display()))?;
         std::io::copy(&mut entry, &mut out_file)
             .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
+    }
+    Ok(())
+}
+
+// Chrome/Edge only accept extension versions of one to four dot-separated
+// integers, each at most 65535. Returns the value zero-padded to four parts
+// so arrays compare with the same ordering browsers use.
+fn parse_chrome_version(version: &str) -> Option<[u64; 4]> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let mut parsed = [0u64; 4];
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        let value: u64 = part.parse().ok()?;
+        if value > 65535 {
+            return None;
+        }
+        parsed[index] = value;
+    }
+    Some(parsed)
+}
+
+// The highest Chrome-compatible version directory containing a manifest under
+// a browser profile's Extensions/<id> directory.
+fn latest_installed_extension_version(extension_dir: &Path) -> Option<[u64; 4]> {
+    fs::read_dir(extension_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && path.join("manifest.json").is_file())
+        .filter_map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .and_then(parse_chrome_version)
+        })
+        .max()
+}
+
+// Pushes the bundled extension package into every browser profile that already
+// has it installed by extracting it as a new version directory — the same
+// layout Chrome uses for self-hosted updates, picked up on the next browser
+// launch. Runs silently at startup; failures are logged, never surfaced.
+fn sync_installed_browser_extensions(app: &AppHandle) {
+    if let Err(err) = sync_installed_browser_extensions_inner(app) {
+        let _ = logging::log_event("desktop.extension_sync.failed", &[("error", &err)]);
+    }
+}
+
+fn sync_installed_browser_extensions_inner(app: &AppHandle) -> Result<(), String> {
+    let package = bundled_extension_package(app)?;
+    if !package.zip_path.is_file() {
+        return Ok(());
+    }
+    let Some(bundled_version) = parse_chrome_version(&package.manifest_version) else {
+        // A non-numeric manifest version cannot be compared or loaded by the
+        // browser; leave sideloaded copies untouched.
+        let _ = logging::log_event(
+            "desktop.extension_sync.skipped",
+            &[("reason", "bundled manifest version is not Chrome-compatible")],
+        );
+        return Ok(());
+    };
+
+    let extension_ids = extension_ids_for_native_host(&package.id);
+    for installed_dir in installed_extension_paths(&extension_ids) {
+        let Some(installed_max) = latest_installed_extension_version(&installed_dir) else {
+            // Store-installed copy or an unknown layout: never touch it.
+            continue;
+        };
+        // Never downgrade or rewrite an identical version in place.
+        if bundled_version <= installed_max {
+            continue;
+        }
+        let version_dir = installed_dir.join(&package.manifest_version);
+        match extract_extension_package(&package.zip_path, &version_dir) {
+            Ok(()) => {
+                let _ = logging::log_event(
+                    "desktop.extension_sync.updated",
+                    &[
+                        ("path", &version_dir.display().to_string()),
+                        ("version", &package.manifest_version),
+                    ],
+                );
+            }
+            Err(err) => {
+                let _ = logging::log_event(
+                    "desktop.extension_sync.extract_failed",
+                    &[("path", &version_dir.display().to_string()), ("error", &err)],
+                );
+            }
+        }
+    }
+
+    // Users who loaded the extension unpacked from our own data directory get
+    // the same silent refresh; the browser picks the files up on relaunch.
+    let unpack_dir = bundled_extension_extract_dir(&package.id)?;
+    if unpack_dir.is_dir() {
+        let current = fs::read_to_string(unpack_dir.join("manifest.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| value.get("version")?.as_str().map(ToString::to_string));
+        let stale = current
+            .as_deref()
+            .and_then(parse_chrome_version)
+            .map(|current| bundled_version > current)
+            .unwrap_or(true);
+        if stale {
+            match extract_extension_package(&package.zip_path, &unpack_dir) {
+                Ok(()) => {
+                    let _ = logging::log_event(
+                        "desktop.extension_sync.updated",
+                        &[
+                            ("path", &unpack_dir.display().to_string()),
+                            ("version", &package.manifest_version),
+                        ],
+                    );
+                }
+                Err(err) => {
+                    let _ = logging::log_event(
+                        "desktop.extension_sync.extract_failed",
+                        &[("path", &unpack_dir.display().to_string()), ("error", &err)],
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2160,6 +2300,14 @@ pub fn run() {
             }
             let _ = logging::log_event("desktop.tray.ready", &[]);
             ensure_agent_resident_async(app.handle().clone());
+            let extension_sync_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = run_blocking(move || {
+                    sync_installed_browser_extensions(&extension_sync_handle);
+                    Ok::<(), String>(())
+                })
+                .await;
+            });
             let _ = logging::log_event("desktop.setup.complete", &[]);
             Ok(())
         })
@@ -2294,6 +2442,57 @@ mod tests {
         let without_zip = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "1.2.3"}"#;
         let package = parse_extension_package_metadata(without_zip, metadata_dir).unwrap();
         assert_eq!(package.zip_path, metadata_dir.join("aipass-extension.zip"));
+        // Older metadata has no manifest_version; it falls back to version.
+        assert_eq!(package.manifest_version, "1.2.3");
+    }
+
+    #[test]
+    fn extension_package_metadata_prefers_manifest_version() {
+        let metadata_dir = Path::new("/bundle/browser-extension");
+        let nightly = r#"{"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version": "0.3.0-nightly.20260905", "manifest_version": "0.3.0.1045"}"#;
+        let package = parse_extension_package_metadata(nightly, metadata_dir).unwrap();
+        assert_eq!(package.version, "0.3.0-nightly.20260905");
+        assert_eq!(package.manifest_version, "0.3.0.1045");
+    }
+
+    #[test]
+    fn parse_chrome_version_accepts_only_browser_compatible_versions() {
+        assert_eq!(parse_chrome_version("0.3.0.1045"), Some([0, 3, 0, 1045]));
+        assert_eq!(parse_chrome_version("1.2"), Some([1, 2, 0, 0]));
+        assert_eq!(parse_chrome_version("0.3.0-nightly.20260905"), None);
+        assert_eq!(parse_chrome_version("0.3.0.65536"), None);
+        assert_eq!(parse_chrome_version("1.2.3.4.5"), None);
+        assert_eq!(parse_chrome_version(""), None);
+    }
+
+    #[test]
+    fn chrome_version_arrays_order_like_browser_versions() {
+        let older = parse_chrome_version("0.3.0.1044").unwrap();
+        let newer = parse_chrome_version("0.3.0.1045").unwrap();
+        let stable = parse_chrome_version("0.3.0").unwrap();
+        assert!(older < newer);
+        assert!(stable < newer);
+    }
+
+    #[test]
+    fn latest_installed_extension_version_picks_highest_valid_version_dir() {
+        let root = std::env::temp_dir().join(format!("aipass-ext-ver-{}", Uuid::new_v4()));
+        let extension_dir = root.join("Extensions").join("aabbccddeeffgghhiijjkkllmmnnoopp");
+        fs::create_dir_all(extension_dir.join("0.3.0.1044")).unwrap();
+        fs::write(extension_dir.join("0.3.0.1044").join("manifest.json"), b"{}").unwrap();
+        fs::create_dir_all(extension_dir.join("0.3.0.1045")).unwrap();
+        fs::write(extension_dir.join("0.3.0.1045").join("manifest.json"), b"{}").unwrap();
+        // Invalid names and manifest-less dirs are ignored.
+        fs::create_dir_all(extension_dir.join("0.3.0-nightly.20260905")).unwrap();
+        fs::create_dir_all(extension_dir.join("0.3.0.9999")).unwrap();
+
+        assert_eq!(
+            latest_installed_extension_version(&extension_dir),
+            Some([0, 3, 0, 1045])
+        );
+        assert_eq!(latest_installed_extension_version(&root.join("missing")), None);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
