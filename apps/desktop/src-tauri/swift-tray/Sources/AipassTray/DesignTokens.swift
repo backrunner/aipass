@@ -20,12 +20,12 @@ enum TrayColors {
         )
     }
 
-    static let surface = dynamic(rgb(0xFFFFFF), rgb(0x131826))
-    static let surface2 = dynamic(rgb(0xF1F3F8), rgb(0x1A2032))
+    static let surface = dynamic(rgb(0xFFFFFF, alpha: 0.96), rgb(0x171A22, alpha: 0.96))
+    static let surface2 = dynamic(rgb(0xF5F6FA), rgb(0x20242E))
     static let text = dynamic(rgb(0x08101F), rgb(0xF4F6FC))
     static let textSecondary = dynamic(rgb(0x383F55), rgb(0xC8CEE0))
     static let textTertiary = dynamic(rgb(0x636B82), rgb(0x969EB6))
-    static let border = dynamic(rgb(0xE1E4ED), rgb(0x232B40))
+    static let border = dynamic(rgb(0xDDE1EA), rgb(0x303542))
     static let accent = dynamic(rgb(0x2563EB), rgb(0x6092FF))
     static let accentSoft = dynamic(rgb(0x2563EB, alpha: 0.10), rgb(0x6092FF, alpha: 0.16))
     static let success = dynamic(rgb(0x18794E), rgb(0x8AD8BE))
@@ -34,7 +34,7 @@ enum TrayColors {
 }
 
 enum TrayMetrics {
-    static let panelWidth: CGFloat = 300
+    static let panelWidth: CGFloat = 304
     static let panelRadius: CGFloat = 12
     static let cardRadius: CGFloat = 8
     static let rowRadius: CGFloat = 6

@@ -7,6 +7,7 @@ public final class TrayViewModel: ObservableObject {
     @Published public var busyAction: String?
     @Published public var unlockPassword: String = ""
     @Published public var unlockError: String?
+    @Published public var isPasswordVisible = false
 
     public init() {}
 
@@ -55,7 +56,8 @@ public struct TrayPanelView: View {
         }
         .padding(12)
         .frame(width: TrayMetrics.panelWidth)
-        .background(TrayColors.surface)
+        .background(.ultraThinMaterial)
+        .background(TrayColors.surface.opacity(0.94))
         .clipShape(RoundedRectangle(cornerRadius: TrayMetrics.panelRadius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: TrayMetrics.panelRadius, style: .continuous)
@@ -118,13 +120,41 @@ public struct TrayPanelView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(TrayColors.text)
             }
+            Text("Enter your master password")
+                .font(.system(size: 11))
+                .foregroundStyle(TrayColors.textSecondary)
             HStack(spacing: 8) {
-                SecureField("Master Password", text: $model.unlockPassword)
-                    .textFieldStyle(.roundedBorder)
+                HStack(spacing: 0) {
+                    Group {
+                        if model.isPasswordVisible {
+                            TextField("Master Password", text: $model.unlockPassword)
+                        } else {
+                            SecureField("Master Password", text: $model.unlockPassword)
+                        }
+                    }
+                    .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .focused($unlockFieldFocused)
                     .disabled(model.busyAction == "unlock")
                     .onSubmit(submitUnlock)
+
+                    Button {
+                        model.isPasswordVisible.toggle()
+                        unlockFieldFocused = true
+                    } label: {
+                        Image(systemName: model.isPasswordVisible ? "eye.slash" : "eye")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(TrayColors.textTertiary)
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.busyAction == "unlock")
+                    .help(model.isPasswordVisible ? "Hide password" : "Show password")
+                }
+                .padding(.leading, 9)
+                .background(TrayColors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(TrayColors.border, lineWidth: 1))
                 Button(action: submitUnlock) {
                     if model.busyAction == "unlock" {
                         ProgressView()
@@ -142,10 +172,15 @@ public struct TrayPanelView: View {
                 .keyboardShortcut(.defaultAction)
             }
             if let error = model.unlockError {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(TrayColors.danger)
-                    .lineLimit(2)
+                Label {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .lineLimit(2)
+                } icon: {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(TrayColors.danger)
             }
         }
         .padding(10)
@@ -160,7 +195,7 @@ public struct TrayPanelView: View {
 
     private func submitUnlock() {
         let password = model.unlockPassword
-        guard !password.isEmpty, model.busyAction == nil || model.busyAction == "unlock" else { return }
+        guard !password.isEmpty, model.busyAction == nil else { return }
         onUnlock(password)
     }
 

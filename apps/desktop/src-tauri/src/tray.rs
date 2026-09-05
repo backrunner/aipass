@@ -1,11 +1,13 @@
+#[cfg(target_os = "macos")]
+use crate::agent_request_no_unlock_detailed;
 use crate::{
     agent_client, agent_error_to_string, agent_request_no_unlock, ensure_agent_running_for_desktop,
     install_tray_autostart_for_current_desktop,
 };
 use aipass_agent_protocol::ProxyConfig;
-use aipass_agent_protocol::{AgentRequest, LockReason, ProxyStatus, SessionStatus};
 #[cfg(target_os = "macos")]
-use aipass_agent_protocol::{SensitiveString, SessionUnlockMode};
+use aipass_agent_protocol::{AgentErrorCode, SensitiveString, SessionUnlockMode};
+use aipass_agent_protocol::{AgentRequest, LockReason, ProxyStatus, SessionStatus};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -700,7 +702,7 @@ fn lock_vault_async(app: AppHandle, feedback: TrayFeedback) {
 #[cfg(target_os = "macos")]
 pub(crate) fn unlock_vault_with_password(app: AppHandle, password: String) {
     thread::spawn(move || {
-        let result = agent_request_no_unlock::<SessionStatus>(
+        let result = agent_request_no_unlock_detailed::<SessionStatus>(
             &app,
             AgentRequest::SessionUnlock {
                 mode: SessionUnlockMode::Password {
@@ -715,11 +717,23 @@ pub(crate) fn unlock_vault_with_password(app: AppHandle, password: String) {
             }
             Err(err) => {
                 eprintln!("failed to unlock AIPass vault from tray: {err}");
-                crate::tray_swift::report_unlock_result(Some(short_error(&err).to_string()));
+                crate::tray_swift::report_unlock_result(Some(friendly_unlock_error(&err)));
             }
         }
         refresh_status(&app, &TrayFeedback::Swift);
     });
+}
+
+#[cfg(target_os = "macos")]
+fn friendly_unlock_error(error: &aipass_agent::AgentCommandError) -> String {
+    match error.code {
+        Some(AgentErrorCode::InvalidPassword) => "Password incorrect. Try again.".to_string(),
+        Some(AgentErrorCode::ServiceUnavailable) => {
+            "Agent unavailable. Open AIPass and try again.".to_string()
+        }
+        Some(AgentErrorCode::Locked) => "Vault is locked. Enter your password.".to_string(),
+        _ => "Unable to unlock. Try again.".to_string(),
+    }
 }
 
 fn install_login_agent_async(app: AppHandle, feedback: TrayFeedback) {
@@ -1155,6 +1169,24 @@ mod tests {
         assert_eq!(offline.proxy_state, "unavailable");
         assert!(offline.can_start_agent);
         assert!(!offline.can_stop_proxy);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unlock_errors_are_safe_and_actionable() {
+        let invalid = aipass_agent::AgentCommandError {
+            code: Some(AgentErrorCode::InvalidPassword),
+            message: "internal vault decryption details".to_string(),
+        };
+        let message = friendly_unlock_error(&invalid);
+        assert!(message.contains("Password incorrect"));
+        assert!(!message.contains("internal vault"));
+
+        let unavailable = aipass_agent::AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: "socket path and diagnostics".to_string(),
+        };
+        assert!(friendly_unlock_error(&unavailable).contains("Agent unavailable"));
     }
 
     fn snapshot(locked: bool, proxy: ProxyTrayStatus) -> TraySnapshot {

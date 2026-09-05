@@ -252,7 +252,7 @@ fn agent_request_no_unlock<T: DeserializeOwned>(
     agent_request_no_unlock_detailed(app, request).map_err(agent_error_to_string)
 }
 
-fn agent_request_no_unlock_detailed<T: DeserializeOwned>(
+pub(crate) fn agent_request_no_unlock_detailed<T: DeserializeOwned>(
     app: &AppHandle,
     request: AgentRequest,
 ) -> Result<T, AgentCommandError> {

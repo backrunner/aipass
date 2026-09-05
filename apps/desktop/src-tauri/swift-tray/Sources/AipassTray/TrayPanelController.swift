@@ -196,6 +196,7 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
         } else {
             viewModel.unlockError = nil
             viewModel.unlockPassword = ""
+            viewModel.isPasswordVisible = false
         }
     }
 
