@@ -153,7 +153,7 @@
       saveError = $t("server.invalidHoldDelay");
       return;
     }
-    const editableTargets: ProxyTargetConfig[] = members.map((member, index) => {
+    const editableTargets = members.map((member, index): ProxyTargetConfig | undefined => {
       const existing = route?.targets.find(
         (target) => target.providerEntryId === member.entry.id && target.secretId === member.secret.id
       );

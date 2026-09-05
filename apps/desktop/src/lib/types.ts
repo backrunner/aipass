@@ -120,6 +120,7 @@ export type ProxyTargetConfig = {
   priority: number;
   weight: number;
   enabled: boolean;
+  protocol?: ProxyProtocol;
 };
 
 export type ProxyRouteStrategy = "fallback" | "round_robin";
