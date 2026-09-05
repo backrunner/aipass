@@ -42,6 +42,16 @@ AIPass includes definitions for OpenAI, Anthropic, Gemini, Azure OpenAI, AWS Bed
 
 It can configure Codex, Claude Code, Gemini CLI, and OpenCode while keeping configuration backups encrypted for rollback.
 
+### Local Proxy WebSocket Support
+
+The local proxy accepts OpenAI [Responses WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode) at `ws://127.0.0.1:8787/v1/responses` (replace the address if configured differently). Use the Responses route's local token in `Authorization: Bearer <route-token>`; AIPass injects the selected provider credential upstream. Keep the provider base URL as `https://...` or `http://...`, just as for HTTP requests.
+
+With route conversion disabled, the proxy relays to a native Responses WebSocket endpoint. With conversion enabled, each `response.create` uses the shared HTTP/SSE forwarding pipeline: Responses targets receive a Responses HTTP request, and Anthropic Messages targets receive a translated Messages request. SSE events are returned as Responses WebSocket events, including text, function calls, and tool results in subsequent requests. Usage is recorded per response. Outbound system, environment, and custom proxy settings apply to both modes.
+
+Native WS mode selects and retries targets before the connection opens and never replays or switches upstreams after opening. Converted mode applies the route's HTTP retry policy separately to each response, with no replay after emitting its events. It supports ordered `stream_id` lanes, parallel lanes and forks, and `previous_response_id` through an in-memory cache of the latest response in each lane (up to 64 MiB of cached context per connection). Full input context is replayed to HTTP targets for continuations. Converted `generate: false` warms only the local context cache; it does not call or prewarm an upstream model. Responses are not persisted by this local cache, even with `store: true`; uncached IDs require resending full input. Background generation, server-managed conversations and compaction, and mid-turn steering require native Responses mode.
+
+Credential/configuration refreshes close existing connections; clients must reconnect and recover their conversation state. The response idle timeout applies while responses are pending, allowing idle connections between tool calls. OpenAI Chat Completions WebSocket conversion, browser subprotocol authentication, and the separate Realtime audio API are not supported.
+
 ## Quick Start
 
 ### Prerequisites

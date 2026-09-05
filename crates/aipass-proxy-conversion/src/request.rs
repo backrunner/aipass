@@ -582,9 +582,10 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
     let src = object(&payload, RS)?;
     let mut out = Map::new();
     pass(src, &mut out, &["model", "stream", "temperature", "top_p"]);
+    let mut system_parts = Vec::new();
     if let Some(instructions) = src.get("instructions").and_then(Value::as_str) {
         if !instructions.is_empty() {
-            out.insert("system".into(), json!(instructions));
+            system_parts.push(instructions.to_owned());
         }
     }
     let max_tokens = src
@@ -603,13 +604,28 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
         }
         Some(Value::Array(items)) => {
             for item in items {
-                rs_item_to_am(item, &mut messages)?;
+                if matches!(
+                    item.get("role").and_then(Value::as_str),
+                    Some("system" | "developer")
+                ) {
+                    for block in rs_message_content_to_am(item.get("content")) {
+                        if let Some(text) = block.get("text").and_then(Value::as_str) {
+                            system_parts.push(text.to_owned());
+                        }
+                    }
+                } else {
+                    rs_item_to_am(item, &mut messages)?;
+                }
             }
         }
         None => return Err(invalid(RS, "missing input")),
         _ => return Err(invalid(RS, "input must be a string or an array")),
     }
     out.insert("messages".into(), Value::Array(merge_consecutive(messages)));
+
+    if !system_parts.is_empty() {
+        out.insert("system".into(), json!(system_parts.join("\n")));
+    }
 
     if let Some(tools) = src.get("tools").and_then(Value::as_array) {
         let am_tools: Vec<Value> = tools
@@ -676,7 +692,7 @@ fn rs_item_to_am(
                 })],
             ));
         }
-        Some("message") => {
+        Some("message") | None if item.get("role").is_some() => {
             let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
             let role = if role == "assistant" {
                 "assistant"
@@ -743,6 +759,23 @@ mod tests {
             "thinking": {"type": "enabled", "budget_tokens": 1000},
             "metadata": {"user_id": "u1"}
         })
+    }
+
+    #[test]
+    fn responses_system_and_developer_items_remain_system_instructions() {
+        let out = rs_to_am(json!({
+            "model":"m", "instructions":"top-level",
+            "input":[
+                {"role":"system","content":"system rule"},
+                {"type":"message","role":"developer","content":[{"type":"input_text","text":"developer rule"}]},
+                {"role":"user","content":"hello"}
+            ]
+        })).unwrap();
+        assert_eq!(out["system"], "top-level\nsystem rule\ndeveloper rule");
+        assert_eq!(
+            out["messages"],
+            json!([{ "role":"user", "content":[{"type":"text","text":"hello"}] }])
+        );
     }
 
     #[test]

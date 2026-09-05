@@ -669,6 +669,11 @@ struct AmToRs {
     tool_item: Option<(u64, Value, String)>,
     input_tokens: u64,
     output_tokens: u64,
+    output: Vec<Value>,
+    stop_reason: String,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    sequence: u64,
 }
 
 impl AmToRs {
@@ -699,6 +704,10 @@ impl AmToRs {
                     .to_string();
                 self.created = unix_now();
                 self.input_tokens = crate::number(message.pointer("/usage/input_tokens"));
+                self.cache_read_tokens =
+                    crate::number(message.pointer("/usage/cache_read_input_tokens"));
+                self.cache_creation_tokens =
+                    crate::number(message.pointer("/usage/cache_creation_input_tokens"));
                 self.started = true;
                 for kind in ["response.created", "response.in_progress"] {
                     out.push(emit_typed(
@@ -712,9 +721,7 @@ impl AmToRs {
                 match block.get("type").and_then(Value::as_str) {
                     Some("text") => {
                         self.finalize_open(&mut out);
-                        let index = self.next_output;
-                        self.next_output += 1;
-                        self.text_item = Some((index, format!("msg_conv_{index}"), String::new()));
+                        self.start_text(&mut out);
                     }
                     Some("tool_use") => {
                         self.finalize_open(&mut out);
@@ -722,15 +729,21 @@ impl AmToRs {
                         self.next_output += 1;
                         let item = json!({
                             "type": "function_call",
-                            "id": format!("fc_conv_{index}"),
+                            "id": format!("{}_fc_{index}", self.id),
                             "call_id": block.get("id").cloned().unwrap_or(Value::Null),
                             "name": block.get("name").cloned().unwrap_or(Value::Null),
                             "arguments": "",
+                            "status": "in_progress",
                         });
                         out.push(emit_typed(
                             "response.output_item.added",
                             &json!({"type": "response.output_item.added", "output_index": index, "item": item}),
                         ));
+                        let mut item = item;
+                        // Empty-argument calls need valid JSON even when the
+                        // upstream emits no input_json_delta at all.
+                        item["arguments"] =
+                            json!(block.get("input").unwrap_or(&json!({})).to_string());
                         self.tool_item = Some((index, item, String::new()));
                     }
                     _ => {}
@@ -743,10 +756,7 @@ impl AmToRs {
                         let text = delta.get("text").and_then(Value::as_str).unwrap_or("");
                         if self.text_item.is_none() {
                             self.finalize_open(&mut out);
-                            let index = self.next_output;
-                            self.next_output += 1;
-                            self.text_item =
-                                Some((index, format!("msg_conv_{index}"), String::new()));
+                            self.start_text(&mut out);
                         }
                         if let Some((index, item_id, acc)) = &mut self.text_item {
                             acc.push_str(text);
@@ -775,15 +785,30 @@ impl AmToRs {
             "content_block_stop" => self.finalize_open(&mut out),
             "message_delta" => {
                 self.output_tokens = crate::number(payload.pointer("/usage/output_tokens"));
+                self.stop_reason = payload
+                    .pointer("/delta/stop_reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
             }
             "message_stop" => {
                 self.finalize_open(&mut out);
-                out.push(emit_typed(
-                    "response.completed",
-                    &self.response_envelope("response.completed", "completed"),
-                ));
+                let (kind, status) = if self.stop_reason == "max_tokens" {
+                    ("response.incomplete", "incomplete")
+                } else {
+                    ("response.completed", "completed")
+                };
+                out.push(emit_typed(kind, &self.response_envelope(kind, status)));
             }
             _ => {}
+        }
+        for event in &mut out {
+            let parsed = parse_sse(event)?;
+            let mut value: Value = serde_json::from_str(&parsed.data)
+                .map_err(|_| invalid(AM, "invalid converted event"))?;
+            value["sequence_number"] = json!(self.sequence);
+            self.sequence += 1;
+            *event = emit_typed(parsed.kind.as_deref().unwrap_or_default(), &value);
         }
         Ok(out)
     }
@@ -795,16 +820,37 @@ impl AmToRs {
             "created_at": self.created,
             "status": status,
             "model": self.model,
-            "output": [],
+            "output": self.output,
         });
-        if kind == "response.completed" {
+        if matches!(kind, "response.completed" | "response.incomplete") {
+            let total_input =
+                self.input_tokens + self.cache_read_tokens + self.cache_creation_tokens;
             response["usage"] = json!({
-                "input_tokens": self.input_tokens,
+                "input_tokens": total_input,
                 "output_tokens": self.output_tokens,
-                "total_tokens": self.input_tokens + self.output_tokens,
+                "total_tokens": total_input + self.output_tokens,
+                "input_tokens_details": { "cached_tokens": self.cache_read_tokens, "cache_creation_tokens": self.cache_creation_tokens },
             });
         }
+        if status == "incomplete" {
+            response["incomplete_details"] = json!({"reason":"max_output_tokens"});
+        }
         json!({"type": kind, "response": response})
+    }
+
+    fn start_text(&mut self, out: &mut Vec<String>) {
+        let index = self.next_output;
+        self.next_output += 1;
+        let item_id = format!("{}_msg_{index}", self.id);
+        out.push(emit_typed("response.output_item.added", &json!({
+            "type":"response.output_item.added", "output_index":index,
+            "item":{"type":"message","id":item_id,"role":"assistant","status":"in_progress","content":[]}
+        })));
+        out.push(emit_typed("response.content_part.added", &json!({
+            "type":"response.content_part.added","item_id":item_id,"output_index":index,"content_index":0,
+            "part":{"type":"output_text","text":"","annotations":[]}
+        })));
+        self.text_item = Some((index, item_id, String::new()));
     }
 
     /// Close the open text or function_call item, if any.
@@ -814,13 +860,29 @@ impl AmToRs {
                 "response.output_text.done",
                 &json!({"type": "response.output_text.done", "item_id": item_id, "output_index": index, "content_index": 0, "text": text}),
             ));
+            let part = json!({"type":"output_text","text":text,"annotations":[]});
+            let item = json!({"type":"message","id":item_id,"role":"assistant","status":"completed","content":[part]});
+            out.push(emit_typed("response.content_part.done", &json!({"type":"response.content_part.done","item_id":item_id,"output_index":index,"content_index":0,"part":part})));
+            out.push(emit_typed(
+                "response.output_item.done",
+                &json!({"type":"response.output_item.done","output_index":index,"item":item}),
+            ));
+            self.output.push(item);
         }
         if let Some((index, mut item, arguments)) = self.tool_item.take() {
-            item["arguments"] = json!(arguments);
+            if !arguments.is_empty() {
+                item["arguments"] = json!(arguments);
+            }
+            item["status"] = json!("completed");
+            out.push(emit_typed(
+                "response.function_call_arguments.done",
+                &json!({"type":"response.function_call_arguments.done","item_id":item["id"],"output_index":index,"arguments":item["arguments"]}),
+            ));
             out.push(emit_typed(
                 "response.output_item.done",
                 &json!({"type": "response.output_item.done", "output_index": index, "item": item}),
             ));
+            self.output.push(item);
         }
     }
 }
@@ -1170,20 +1232,24 @@ mod tests {
             vec![
                 "response.created",
                 "response.in_progress",
+                "response.output_item.added",
+                "response.content_part.added",
                 "response.output_text.delta",
                 "response.output_text.done",
+                "response.content_part.done",
+                "response.output_item.done",
                 "response.completed",
             ]
         );
         let events = parsed(&out);
         assert_eq!(events[0].1["response"]["id"], "resp_1");
         assert_eq!(events[0].1["response"]["status"], "in_progress");
-        assert_eq!(events[2].1["delta"], "Hi");
-        assert_eq!(events[3].1["text"], "Hi");
-        assert_eq!(events[4].1["response"]["status"], "completed");
+        assert_eq!(events[4].1["delta"], "Hi");
+        assert_eq!(events[5].1["text"], "Hi");
+        assert_eq!(events[8].1["response"]["status"], "completed");
         assert_eq!(
-            events[4].1["response"]["usage"],
-            json!({"input_tokens": 8, "output_tokens": 3, "total_tokens": 11})
+            events[8].1["response"]["usage"],
+            json!({"input_tokens": 8, "output_tokens": 3, "total_tokens": 11, "input_tokens_details":{"cached_tokens":0,"cache_creation_tokens":0}})
         );
     }
 
@@ -1209,6 +1275,7 @@ mod tests {
                 "response.output_item.added",
                 "response.function_call_arguments.delta",
                 "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
                 "response.output_item.done",
                 "response.completed",
             ]
@@ -1216,12 +1283,15 @@ mod tests {
         let events = parsed(&out);
         assert_eq!(
             events[2].1["item"],
-            json!({"type": "function_call", "id": "fc_conv_0", "call_id": "toolu_1", "name": "f", "arguments": ""})
+            json!({"type": "function_call", "id": "resp_1_fc_0", "call_id": "toolu_1", "name": "f", "arguments": "", "status":"in_progress"})
         );
         // arguments are accumulated into the done item
-        assert_eq!(events[5].1["item"]["arguments"], "{\"a\":1}");
+        assert_eq!(events[5].1["arguments"], "{\"a\":1}");
+        assert_eq!(events[6].1["item"]["arguments"], "{\"a\":1}");
+        assert_eq!(events[6].1["item"]["status"], "completed");
+        assert_eq!(events[7].1["response"]["output"][0], events[6].1["item"]);
         // terminal fallback: message_stop without message_delta still completes
-        assert_eq!(events[6].1["response"]["usage"]["output_tokens"], 0);
+        assert_eq!(events[7].1["response"]["usage"]["output_tokens"], 0);
     }
 
     // --- framing & passthrough ----------------------------------------------

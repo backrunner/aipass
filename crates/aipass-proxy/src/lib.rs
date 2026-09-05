@@ -29,6 +29,7 @@ use zeroize::Zeroize;
 pub use aipass_proxy_conversion::{supports, ConversionError, ProxyProtocol as Protocol};
 
 mod shell_env;
+mod websocket;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1024,6 +1025,8 @@ impl RuntimeConfig {
     }
 }
 
+type UpstreamClientCache = HashMap<(u64, UpstreamProxyConfig, bool), reqwest::Client>;
+
 #[derive(Clone)]
 struct RuntimeState {
     config: Arc<RwLock<RuntimeConfig>>,
@@ -1031,7 +1034,8 @@ struct RuntimeState {
     usage: Arc<UsageStore>,
     health: Arc<Mutex<HashMap<Uuid, TargetHealth>>>,
     rr_counters: Arc<Mutex<HashMap<Uuid, AtomicU64>>>,
-    clients: Arc<Mutex<HashMap<(u64, UpstreamProxyConfig), reqwest::Client>>>,
+    clients: Arc<Mutex<UpstreamClientCache>>,
+    config_changed: tokio::sync::watch::Sender<()>,
 }
 
 #[derive(Default)]
@@ -1092,6 +1096,7 @@ impl ProxyHandle {
             health: Arc::new(Mutex::new(HashMap::new())),
             rr_counters: Arc::new(Mutex::new(HashMap::new())),
             clients: Arc::new(Mutex::new(HashMap::new())),
+            config_changed: tokio::sync::watch::channel(()).0,
         };
         let thread_state = state.clone();
         let (stop_tx, stop_rx) = oneshot::channel();
@@ -1116,7 +1121,7 @@ impl ProxyHandle {
                                 tokio::spawn(async move {
                                     let service = service_fn(move |request| handle_request(request, state.clone()));
                                     let io = TokioIo::new(stream);
-                                    let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, service).await;
+                                    let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, service).with_upgrades().await;
                                 });
                             }
                             Err(err) => { set_error(&thread_state, err.to_string()); break; }
@@ -1266,6 +1271,7 @@ impl ProxyHandle {
             .lock()
             .map_err(|_| ProxyError::Poisoned)?;
         *current = config;
+        self.state.config_changed.send_replace(());
         health.clear();
         rr_counters.clear();
         Ok(())
@@ -1310,6 +1316,14 @@ fn upstream_client(
     state: &RuntimeState,
     connect_timeout_ms: u64,
 ) -> Result<reqwest::Client, String> {
+    upstream_client_for_transport(state, connect_timeout_ms, false)
+}
+
+fn upstream_client_for_transport(
+    state: &RuntimeState,
+    connect_timeout_ms: u64,
+    http1_only: bool,
+) -> Result<reqwest::Client, String> {
     let connect_timeout_ms = connect_timeout_ms.max(1);
     let upstream_proxy = state
         .config
@@ -1317,7 +1331,7 @@ fn upstream_client(
         .map_err(|_| "proxy config lock poisoned".to_string())?
         .upstream_proxy
         .clone();
-    let cache_key = (connect_timeout_ms, upstream_proxy.clone());
+    let cache_key = (connect_timeout_ms, upstream_proxy.clone(), http1_only);
     let mut clients = state
         .clients
         .lock()
@@ -1328,6 +1342,11 @@ fn upstream_client(
     let builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(connect_timeout_ms))
         .redirect(reqwest::redirect::Policy::none());
+    let builder = if http1_only {
+        builder.http1_only()
+    } else {
+        builder
+    };
     let client = apply_upstream_proxy(builder, &upstream_proxy)?
         .build()
         .map_err(|err| err.to_string())?;
@@ -1882,6 +1901,9 @@ async fn handle_request(
     request: Request<Incoming>,
     state: RuntimeState,
 ) -> Result<Response<BoxBody>, Infallible> {
+    if websocket::is_upgrade_request(&request) {
+        return Ok(websocket::handle_request(request, state).await);
+    }
     let started = Instant::now();
     let started_at = now_unix();
     let path = request.uri().path().to_string();
@@ -1933,6 +1955,47 @@ async fn handle_request(
             return Ok(error_response(StatusCode::BAD_REQUEST, &err))
         }
     };
+    forward_request(
+        ForwardRequest {
+            method,
+            request_query,
+            incoming_headers,
+            body,
+            started,
+            started_at,
+        },
+        state,
+        route,
+        pricing,
+    )
+    .await
+}
+
+struct ForwardRequest {
+    method: http::Method,
+    request_query: Option<String>,
+    incoming_headers: HeaderMap,
+    body: ReplayableRequestBody,
+    started: Instant,
+    started_at: i64,
+}
+
+// Shared HTTP/SSE execution, including conversion, failover and usage tracking.
+// WS adaptation calls this directly after its authenticated upgrade.
+async fn forward_request(
+    request: ForwardRequest,
+    state: RuntimeState,
+    route: ResolvedRoute,
+    pricing: Vec<ModelPricing>,
+) -> Result<Response<BoxBody>, Infallible> {
+    let ForwardRequest {
+        method,
+        request_query,
+        incoming_headers,
+        body,
+        started,
+        started_at,
+    } = request;
     let request_json = if route.config.conversion_enabled
         && route.targets.iter().any(|target| {
             target.config.enabled
@@ -2900,11 +2963,15 @@ fn sse_event_reports_completion(protocol: ProxyProtocol, event: &[u8]) -> bool {
     };
     match protocol {
         ProxyProtocol::OpenAiResponses => {
-            value.get("type").and_then(serde_json::Value::as_str) == Some("response.completed")
-                || value
+            matches!(
+                value.get("type").and_then(serde_json::Value::as_str),
+                Some("response.completed" | "response.incomplete")
+            ) || matches!(
+                value
                     .pointer("/response/status")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("completed")
+                    .and_then(serde_json::Value::as_str),
+                Some("completed" | "incomplete")
+            )
         }
         ProxyProtocol::OpenAiChatCompletions => value
             .get("choices")
