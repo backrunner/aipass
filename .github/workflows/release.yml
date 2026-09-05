@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing v-prefixed release tag, for example v1.2.3, v1.2.3-beta.1 or v1.3.0-nightly.20260905"
+        description: "Existing v-prefixed release tag, for example v1.2.3, v1.2.3-beta.1 or v1.3.0-nightly.20260905.2"
         required: true
       channel:
         description: "Release channel (auto derives it from the tag version)"
@@ -76,8 +76,8 @@ jobs:
             exit 1
           fi
 
-          if [[ "${channel}" == "nightly" && ! "${version}" =~ -nightly\.[0-9]{8}$ ]]; then
-            echo "::error::Nightly releases must use a -nightly.<YYYYMMDD> prerelease version: ${version}."
+          if [[ "${channel}" == "nightly" && ! "${version}" =~ -nightly\.[0-9]{8}(\.[1-9][0-9]*)?$ ]]; then
+            echo "::error::Nightly releases must use -nightly.<YYYYMMDD> with an optional positive daily build number: ${version}."
             exit 1
           fi
 
