@@ -76,6 +76,13 @@ Newest entries last within each section.
 - **Guardrail**: the update channel follows the build's version family; a stored preference is a hint, never an override across families. All call sites must go through `resolveUpdateChannel`. Enforced by `updates.test.ts`.
 - **Watch points**: `apps/desktop/src/App.svelte` update flows, `SettingsPanel.svelte` channel picker.
 
+### Nightly tag validation and update feeds must agree
+- **Symptom**: a repeated daily nightly tag passed release validation but was ignored by the updater feed.
+- **Root cause**: `.github/workflows/release.yml` accepted a daily revision suffix while `apps/web/src/worker.ts` still matched only the date.
+- **Fix**: align both tag patterns and exercise the public nightly feed against revised, older, draft, and beta release candidates.
+- **Guardrail**: when changing release tag syntax, update both release validation and the deployed channel resolver. Verify the public feed selects the published version before declaring the release complete.
+- **Watch points**: `.github/workflows/release.yml`, `apps/web/src/worker.ts`, and `apps/web/scripts/worker.test.mjs`.
+
 ## Tray vs UI vs agent validation
 
 ### Tray could start the proxy with no valid route groups
