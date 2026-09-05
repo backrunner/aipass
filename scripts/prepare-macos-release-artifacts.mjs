@@ -67,19 +67,22 @@ if (dmgFiles.length === 0) {
   );
 }
 
+// Publish one canonical installer. Tauri may name the DMG with a version
+// suffix, but exposing both that file and the friendly alias creates two
+// installers for the same build in CI and release downloads.
+const dmgFile = await selectBundleFile(dmgFiles);
+
 await rm(artifactDir, { recursive: true, force: true });
 await mkdir(artifactDir, { recursive: true });
 
+const dmgAlias = join(artifactDir, `AIPass-macOS-${version}.dmg`);
+await copyFile(dmgFile, dmgAlias);
 for (const file of [
-  ...dmgFiles,
   updaterArchive,
-  ...currentBundleFiles.filter((file) => file.endsWith(".sig")),
+  signatureFile,
 ]) {
   await copyFile(file, join(artifactDir, basename(file)));
 }
-
-const dmgAlias = join(artifactDir, "AIPass-macOS.dmg");
-await copyFile(dmgFiles.at(-1), dmgAlias);
 
 const archiveName = basename(updaterArchive);
 const signature = (await readFile(signatureFile, "utf8")).trim();
