@@ -11,7 +11,11 @@ export function defaultRetryPolicy(): RetryPolicy {
     firstByteTimeoutMs: 30_000,
     streamIdleTimeoutMs: 120_000,
     silentRetry: false,
-    maxSilentRetries: 3
+    maxSilentRetries: 3,
+    holdOnFailure: false,
+    holdInitialDelayMs: 500,
+    holdMaxDelayMs: 10_000,
+    holdMaxDurationMs: 300_000
   };
 }
 

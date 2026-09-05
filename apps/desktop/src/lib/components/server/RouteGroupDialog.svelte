@@ -5,7 +5,7 @@
   import { ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyTargetConfig } from "../../types";
+  import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyTargetConfig, RetryPolicy } from "../../types";
   import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, proxySupportedEntry, reorderItems, routeNeedsConversion, routeProtocolFor } from "../../utils/server";
 
   export let route: ProxyRouteConfig | undefined = undefined;
@@ -24,6 +24,10 @@
   let advancedOpen = false;
   let silentRetry = route?.retry?.silentRetry ?? false;
   let maxSilentRetries = route?.retry?.maxSilentRetries ?? 3;
+  let holdOnFailure = route?.retry?.holdOnFailure ?? false;
+  let holdInitialDelayMs = route?.retry?.holdInitialDelayMs ?? 500;
+  let holdMaxDelayMs = route?.retry?.holdMaxDelayMs ?? 10_000;
+  let holdMaxDurationMs = route?.retry?.holdMaxDurationMs ?? 300_000;
   let memberPickerValue = "";
   let members: Member[] = [];
   // Targets whose provider entry or secret can no longer be resolved (archived,
@@ -154,6 +158,15 @@
     const conversionEnabled =
       routeNeedsConversion(protocol, members) ||
       (missingMembers.length > 0 && (route?.conversionEnabled ?? false));
+    const retry: RetryPolicy = {
+      ...(route?.retry ?? defaultRetryPolicy()),
+      silentRetry,
+      maxSilentRetries: Math.max(1, Math.min(20, Math.round(maxSilentRetries) || 1)),
+      holdOnFailure,
+      holdInitialDelayMs: Math.max(1, Math.round(holdInitialDelayMs) || 500),
+      holdMaxDelayMs: Math.max(1, Math.round(holdMaxDelayMs) || 10_000),
+      holdMaxDurationMs: Math.max(0, Math.round(holdMaxDurationMs) || 0)
+    };
     const nextRoute: ProxyRouteConfig = route
       ? {
           ...route,
@@ -163,11 +176,7 @@
           upstreamProtocol,
           conversionEnabled,
           targets,
-          retry: {
-            ...route.retry,
-            silentRetry,
-            maxSilentRetries: Math.max(1, Math.min(20, Math.round(maxSilentRetries) || 1))
-          }
+          retry
         }
       : {
         id: crypto.randomUUID(),
@@ -178,7 +187,7 @@
         upstreamProtocol,
         conversionEnabled,
         targets,
-        retry: defaultRetryPolicy(),
+        retry,
         enabled: true
       };
     saving = true;
@@ -264,6 +273,34 @@
                   <label class="field advanced-number-field">
                     <span>{$t("server.maxSilentRetries")}</span>
                     <input type="number" min="1" max="20" step="1" bind:value={maxSilentRetries} />
+                  </label>
+                {/if}
+                <div class="advanced-row">
+                  <div class="advanced-copy">
+                    <strong>{$t("server.holdOnFailure")}</strong>
+                    <span>{$t("server.holdOnFailureDesc")}</span>
+                  </div>
+                  <Switch.Root
+                    checked={holdOnFailure}
+                    onCheckedChange={(checked) => (holdOnFailure = checked)}
+                    class="silent-retry-switch"
+                    aria-label={$t("server.holdOnFailure")}
+                  >
+                    <Switch.Thumb class="silent-retry-thumb" />
+                  </Switch.Root>
+                </div>
+                {#if holdOnFailure}
+                  <label class="field advanced-number-field">
+                    <span>{$t("server.holdInitialDelayMs")}</span>
+                    <input type="number" min="1" step="1" bind:value={holdInitialDelayMs} />
+                  </label>
+                  <label class="field advanced-number-field">
+                    <span>{$t("server.holdMaxDelayMs")}</span>
+                    <input type="number" min="1" step="1" bind:value={holdMaxDelayMs} />
+                  </label>
+                  <label class="field advanced-number-field">
+                    <span>{$t("server.holdMaxDurationMs")}</span>
+                    <input type="number" min="0" step="1" bind:value={holdMaxDurationMs} />
                   </label>
                 {/if}
               </div>

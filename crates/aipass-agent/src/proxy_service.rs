@@ -1082,6 +1082,24 @@ fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
                 "proxy route group tokens must be unique",
             ));
         }
+        if route.retry.hold_initial_delay_ms == 0 {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                format!(
+                    "proxy route {} hold initial delay must be greater than zero",
+                    route.name
+                ),
+            ));
+        }
+        if route.retry.hold_max_delay_ms < route.retry.hold_initial_delay_ms {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                format!(
+                    "proxy route {} hold max delay must be at least its initial delay",
+                    route.name
+                ),
+            ));
+        }
         for target in &route.targets {
             if !target_ids.insert(target.id) {
                 return Err(ServiceError::new(
@@ -1185,6 +1203,33 @@ mod tests {
     fn config_accepts_plaintext_token() {
         let config = config_with_token("matching-token");
         assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn config_rejects_zero_hold_initial_delay() {
+        let mut config = config_with_token("hold-token");
+        config.routes[0].retry.hold_on_failure = true;
+        config.routes[0].retry.hold_initial_delay_ms = 0;
+        let err = validate_config(&config).expect_err("zero hold initial delay is rejected");
+        assert_eq!(
+            err.code,
+            aipass_agent_protocol::AgentErrorCode::ValidationFailed
+        );
+        assert!(err.message.contains("hold initial delay"));
+    }
+
+    #[test]
+    fn config_rejects_hold_max_delay_below_initial_delay() {
+        let mut config = config_with_token("hold-token");
+        config.routes[0].retry.hold_on_failure = true;
+        config.routes[0].retry.hold_initial_delay_ms = 1_000;
+        config.routes[0].retry.hold_max_delay_ms = 500;
+        let err = validate_config(&config).expect_err("hold max delay below initial is rejected");
+        assert_eq!(
+            err.code,
+            aipass_agent_protocol::AgentErrorCode::ValidationFailed
+        );
+        assert!(err.message.contains("hold max delay"));
     }
 
     #[test]

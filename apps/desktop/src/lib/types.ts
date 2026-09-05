@@ -102,6 +102,10 @@ export type RetryPolicy = {
   streamIdleTimeoutMs: number;
   silentRetry?: boolean;
   maxSilentRetries?: number;
+  holdOnFailure?: boolean;
+  holdInitialDelayMs?: number;
+  holdMaxDelayMs?: number;
+  holdMaxDurationMs?: number;
 };
 
 export type ProxyTargetConfig = {
