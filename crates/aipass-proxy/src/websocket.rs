@@ -28,6 +28,11 @@ pub(super) async fn handle_request(
     mut request: Request<Incoming>,
     state: RuntimeState,
 ) -> Response<BoxBody> {
+    let request_id = request
+        .extensions()
+        .get::<Uuid>()
+        .copied()
+        .unwrap_or_else(Uuid::new_v4);
     // Subscribe before resolving credentials, including changes during handshake.
     let mut config_changed = state.config_changed.subscribe();
     if request.uri().path().trim_end_matches('/') != "/v1/responses" {
@@ -98,9 +103,16 @@ pub(super) async fn handle_request(
             )
         });
     let mut hold_round = 0_u32;
-    loop {
+    let hold_deadline = hold_deadline(&route.config.retry, started);
+    'hold: loop {
+        if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            break;
+        }
         for _ in 0..silent_retry_rounds(&route.config.retry) {
             for mut target in select_route_targets(&state, &route, hold_round > 0) {
+                if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                    break 'hold;
+                }
                 attempts = attempts.saturating_add(1);
                 let attempt_started = Instant::now();
                 let attempt_started_at = now_unix();
@@ -109,8 +121,8 @@ pub(super) async fn handle_request(
                     _ = config_changed.changed() => {
                         return error_response(StatusCode::SERVICE_UNAVAILABLE, "proxy configuration changed; reconnect");
                     }
-                    result = tokio::time::timeout(
-                        Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1)),
+                    result = tokio::time::timeout_at(
+                        bounded_deadline(Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1)), hold_deadline),
                         connect,
                     ) => result.unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT)),
                 };
@@ -127,7 +139,7 @@ pub(super) async fn handle_request(
                         }
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             None,
                             attempt_started_at,
@@ -202,7 +214,7 @@ pub(super) async fn handle_request(
     record_request(&state, false, None);
     if let Some((provider_entry_id, secret_id)) = failure_target {
         let _ = state.usage.record(&UsageRecord {
-            id: Uuid::new_v4(),
+            id: request_id,
             started_at,
             duration_ms: started.elapsed().as_millis() as u64,
             first_token_ms: None,
@@ -388,6 +400,7 @@ async fn relay(
 }
 
 struct ResponseUsage {
+    request_id: Uuid,
     started: Instant,
     started_at: i64,
     model: Option<String>,
@@ -399,6 +412,7 @@ struct ResponseUsage {
 impl ResponseUsage {
     fn new(value: &serde_json::Value) -> Self {
         Self {
+            request_id: Uuid::new_v4(),
             started: Instant::now(),
             last_event: Instant::now(),
             started_at: now_unix(),
@@ -470,6 +484,13 @@ impl SessionUsage {
             return;
         }
         let request = ResponseUsage::new(value);
+        self.state.usage.log_diagnostic(
+            "info",
+            format!(
+                "event=proxy.websocket.request.started request_id={} route_id={}",
+                request.request_id, self.route_id
+            ),
+        );
         self.pending
             .entry(request.stream_id.clone())
             .or_default()
@@ -621,7 +642,7 @@ impl SessionUsage {
                 .max_by_key(|p| p.model.len())
         });
         let _ = self.state.usage.record(&UsageRecord {
-            id: Uuid::new_v4(),
+            id: request.request_id,
             started_at: request.started_at,
             duration_ms: request.started.elapsed().as_millis() as u64,
             first_token_ms: request.first_token_ms,
@@ -643,6 +664,7 @@ impl SessionUsage {
         });
         let _ = self.state.usage.record_attempt(&AttemptRecord {
             id: Uuid::new_v4(),
+            request_id: Some(request.request_id),
             started_at: request.started_at,
             duration_ms: request.started.elapsed().as_millis() as u64,
             first_token_ms: request.first_token_ms,

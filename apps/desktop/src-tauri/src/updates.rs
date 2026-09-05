@@ -129,10 +129,28 @@ fn read_cached_update(app: &AppHandle) -> Result<Option<(CachedUpdate, Vec<u8>)>
 }
 
 fn clear_cached_update(app: &AppHandle) {
-    if let Ok((package_path, metadata_path)) = update_cache_paths(app) {
-        let _ = fs::remove_file(package_path);
-        let _ = fs::remove_file(metadata_path);
+    let _ = try_clear_cached_update(app);
+}
+
+fn try_clear_cached_update(app: &AppHandle) -> Result<(), String> {
+    let operation = crate::logging::DesktopOperation::start("desktop.update.clear_cache");
+    let result = update_cache_paths(app).and_then(|(package, metadata)| {
+        remove_cache_files(&[package, metadata]).map_err(|err| err.to_string())
+    });
+    operation.finish(result.is_ok());
+    result
+}
+
+fn remove_cache_files(paths: &[PathBuf]) -> std::io::Result<()> {
+    let mut result = Ok(());
+    for path in paths {
+        if let Err(err) = fs::remove_file(path) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                result = Err(err);
+            }
+        }
     }
+    result
 }
 
 async fn download_and_cache_update(
@@ -227,6 +245,16 @@ pub(crate) async fn check_for_updates(
     app: AppHandle,
     channel: String,
 ) -> Result<UpdateCheckResult, String> {
+    let operation = crate::logging::DesktopOperation::start("desktop.update.check");
+    let result = check_for_updates_inner(app, channel).await;
+    operation.finish(result.as_ref().is_ok_and(|value| value.error.is_none()));
+    result
+}
+
+async fn check_for_updates_inner(
+    app: AppHandle,
+    channel: String,
+) -> Result<UpdateCheckResult, String> {
     let current_version = app.package_info().version.to_string();
 
     let updater = match updater_for_channel(&app, &channel) {
@@ -254,6 +282,14 @@ pub(crate) async fn check_for_updates(
 
 #[tauri::command]
 pub(crate) async fn download_update(app: AppHandle, channel: String) -> Result<String, String> {
+    crate::logging::log_task(
+        "desktop.update.download",
+        download_update_inner(app, channel),
+    )
+    .await
+}
+
+async fn download_update_inner(app: AppHandle, channel: String) -> Result<String, String> {
     let updater = updater_for_channel(&app, &channel)?;
     let update = updater
         .check()
@@ -313,6 +349,7 @@ fn install_verified_update(
     // the tray instead of showing the main window.
     std::env::remove_var("AIPASS_WINDOW_TARGET");
     crate::ALLOW_PROCESS_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = crate::logging::log_event("desktop.update.installed_restarting", &[]);
     app.restart()
 }
 
@@ -328,6 +365,14 @@ pub(crate) async fn install_pending_update(
     app: AppHandle,
     channel: String,
 ) -> Result<bool, String> {
+    crate::logging::log_task(
+        "desktop.update.install_pending",
+        install_pending_update_inner(app, channel),
+    )
+    .await
+}
+
+async fn install_pending_update_inner(app: AppHandle, channel: String) -> Result<bool, String> {
     let Some((cached, _)) = read_cached_update(&app)? else {
         return Ok(false);
     };
@@ -339,12 +384,16 @@ pub(crate) async fn install_pending_update(
 }
 
 #[tauri::command]
-pub(crate) fn clear_pending_update(app: AppHandle) {
-    clear_cached_update(&app);
+pub(crate) fn clear_pending_update(app: AppHandle) -> Result<(), String> {
+    try_clear_cached_update(&app)
 }
 
 #[tauri::command]
 pub(crate) async fn install_update(app: AppHandle, channel: String) -> Result<(), String> {
+    crate::logging::log_task("desktop.update.install", install_update_inner(app, channel)).await
+}
+
+async fn install_update_inner(app: AppHandle, channel: String) -> Result<(), String> {
     let updater = updater_for_channel(&app, &channel)?;
     let update = updater
         .check()
@@ -413,6 +462,19 @@ fn stop_runtime_processes(app: &AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::endpoint_for_channel;
+
+    #[test]
+    fn cache_cleanup_reports_failures_and_still_removes_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("package");
+        let metadata = dir.path().join("metadata.json");
+        std::fs::create_dir(&package).unwrap();
+        std::fs::write(&metadata, "{}").unwrap();
+        assert!(super::remove_cache_files(&[package.clone(), metadata.clone()]).is_err());
+        assert!(!metadata.exists());
+        std::fs::remove_dir(&package).unwrap();
+        assert!(super::remove_cache_files(&[package, metadata]).is_ok());
+    }
 
     #[test]
     fn update_channels_use_the_expected_feeds() {

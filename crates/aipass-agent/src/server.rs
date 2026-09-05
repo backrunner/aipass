@@ -110,6 +110,7 @@ impl ServerOptions {
 }
 
 pub fn run_server(options: ServerOptions) -> Result<()> {
+    let started = Instant::now();
     let launch_desktop_tray = options.launch_desktop_tray;
     let vault_dir = canonical_vault_dir(options.vault_dir)?;
     let namespace = namespace_for_vault_dir(&vault_dir)?;
@@ -154,6 +155,14 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         sync_watcher: Mutex::new(None),
         shutdown: AtomicBool::new(false),
     });
+    write_component_log(
+        AGENT_LOG,
+        "INFO",
+        &format!(
+            "agent state initialized elapsed_ms={}",
+            started.elapsed().as_millis()
+        ),
+    );
     run_server_with_state(state, listener, launch_desktop_tray)
 }
 
@@ -202,7 +211,7 @@ fn run_server_with_state(
                 });
             }
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(200));
+                ipc::wait_for_connection(&listener)?;
             }
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
             Err(err) => {
@@ -277,7 +286,20 @@ fn handle_connection(mut conn: Stream, state: Arc<AgentState>) -> Result<()> {
             if payload.protocol_version == AGENT_PROTOCOL_VERSION
                 && auth_tokens_match(&payload.auth_token, &state.auth_token) =>
         {
-            handle_request(&state, payload.request)
+            let _scope =
+                crate::logging::RequestScope::new(payload.request_id.unwrap_or_else(Uuid::new_v4));
+            let response = handle_request(&state, payload.request);
+            if let Err(err) = write_frame_with_deadline(&mut conn, &response, CONNECTION_IO_TIMEOUT)
+            {
+                write_component_log(
+                    AGENT_LOG,
+                    "ERROR",
+                    "event=ipc.response outcome=delivery_failed",
+                );
+                return Err(err);
+            }
+            conn.flush().ok();
+            return Ok(());
         }
         Ok(payload) if payload.protocol_version != AGENT_PROTOCOL_VERSION => AgentResponse::error(
             AgentErrorCode::ValidationFailed,
@@ -286,6 +308,14 @@ fn handle_connection(mut conn: Stream, state: Arc<AgentState>) -> Result<()> {
         Ok(_) => AgentResponse::error(AgentErrorCode::PermissionDenied, "invalid agent auth token"),
         Err(err) => AgentResponse::error(AgentErrorCode::ValidationFailed, err.to_string()),
     };
+    write_component_log(
+        AGENT_LOG,
+        "WARN",
+        &format!(
+            "event=ipc.request outcome=rejected code={:?}",
+            response.code
+        ),
+    );
     write_frame_with_deadline(&mut conn, &response, CONNECTION_IO_TIMEOUT)?;
     conn.flush().ok();
     Ok(())
@@ -423,11 +453,11 @@ fn run_initial_sync(state: &Arc<AgentState>) -> InitialSyncState {
     }
     let settings = match load_sync_settings(&state.vault_dir) {
         Ok(settings) => settings,
-        Err(err) => {
+        Err(_) => {
             write_component_log(
                 AGENT_LOG,
                 "WARN",
-                &format!("initial sync skipped: failed to load sync settings: {err}"),
+                "initial sync skipped: failed to load sync settings",
             );
             return InitialSyncState::Failed;
         }
@@ -451,7 +481,7 @@ fn run_initial_sync(state: &Arc<AgentState>) -> InitialSyncState {
             write_component_log(
                 AGENT_LOG,
                 "WARN",
-                &format!("initial sync failed: {}", err.message),
+                &format!("initial sync failed code={:?}", err.code),
             );
             InitialSyncState::Failed
         }
@@ -2076,6 +2106,18 @@ fn home_dir() -> ServiceResult<PathBuf> {
 }
 
 pub(crate) fn run_sync_local(state: &Arc<AgentState>, dir: &Path) -> ServiceResult<SyncReport> {
+    let operation = crate::operation_log::OperationLog::background("sync.local");
+    let result = run_sync_local_inner(state, dir);
+    if let Some(operation) = operation {
+        operation.finish(&match &result {
+            Ok(report) => AgentResponse::success(report),
+            Err(err) => AgentResponse::error(err.code.clone(), "sync failed"),
+        });
+    }
+    result
+}
+
+fn run_sync_local_inner(state: &Arc<AgentState>, dir: &Path) -> ServiceResult<SyncReport> {
     // Lock order is sync_lock -> session -> proxy everywhere: a sync in flight
     // and its follow-up vault/proxy reloads stay atomic against vault writes,
     // which all go through the session lock.
@@ -2121,6 +2163,15 @@ pub(crate) fn run_sync_local(state: &Arc<AgentState>, dir: &Path) -> ServiceResu
 }
 
 pub(crate) fn run_sync_webdav(state: &Arc<AgentState>, client: &impl WebDavClient) -> SyncReport {
+    let operation = crate::operation_log::OperationLog::background("sync.webdav");
+    let report = run_sync_webdav_inner(state, client);
+    if let Some(operation) = operation {
+        operation.finish(&AgentResponse::success(&report));
+    }
+    report
+}
+
+fn run_sync_webdav_inner(state: &Arc<AgentState>, client: &impl WebDavClient) -> SyncReport {
     let sync_error = |message: &str| SyncReport {
         uploaded: 0,
         downloaded: 0,
@@ -2233,7 +2284,10 @@ fn reload_proxy_after_sync_download(state: &Arc<AgentState>) {
         write_component_log(
             AGENT_LOG,
             "WARN",
-            &format!("proxy reload after sync download failed: {}", err.message),
+            &format!(
+                "proxy reload after sync download failed code={:?}",
+                err.code
+            ),
         );
     }
 }
@@ -2389,6 +2443,21 @@ mod tests {
             }
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn sequential_status_requests_do_not_pay_an_accept_poll_delay() {
+        let agent = RunningAgent::start();
+        let started = Instant::now();
+        for _ in 0..12 {
+            agent
+                .client
+                .request::<SessionStatus>(&AgentRequest::SessionStatus)
+                .expect("session status");
+        }
+        let elapsed = started.elapsed();
+        eprintln!("12 sequential status requests: {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(1), "elapsed {elapsed:?}");
     }
 
     #[test]
@@ -2556,6 +2625,81 @@ mod tests {
             tags: Vec::new(),
             notes: None,
             secret_metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn provider_operations_are_correlated_persistent_and_secret_free() {
+        let temp = tempdir().unwrap();
+        let vault_dir = temp.path().join("vault");
+        let creation =
+            Vault::create(&vault_dir, &SecretString::new("test-master-password")).unwrap();
+        let state = sync_test_state(vault_dir);
+        crate::session::set_session_vault(&state, creation.vault);
+        let log_dir = temp.path().join("logs");
+        let request_id = Uuid::new_v4();
+        let provider_id = crate::logging::with_test_log_dir(&log_dir, || {
+            let _scope = crate::logging::RequestScope::new(request_id);
+            let input = sync_test_provider("private-provider-title", "fake-private-api-key");
+            let response = handle_request(
+                &state,
+                AgentRequest::ProviderAdd {
+                    input: input.clone(),
+                },
+            );
+            assert!(response.ok);
+            let id: Uuid = serde_json::from_value(response.data).unwrap();
+            let update = serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
+            for request in [
+                AgentRequest::ProviderUpdate { id, input: update },
+                AgentRequest::SecretAdd {
+                    id,
+                    label: "private-label".into(),
+                    secret: "fake-second-key".into(),
+                },
+                AgentRequest::ProviderArchive { id },
+                AgentRequest::ProviderRestore { id },
+                AgentRequest::ProviderTrash { id },
+                AgentRequest::ProviderDelete { id },
+            ] {
+                assert!(handle_request(&state, request).ok);
+            }
+            assert!(!handle_request(&state, AgentRequest::ProviderGet { id }).ok);
+            assert!(handle_request(&state, AgentRequest::SessionStatus).ok);
+            id
+        });
+        let logs = fs::read_to_string(log_dir.join("agent.log")).unwrap();
+        for event in [
+            "provider.add",
+            "provider.update",
+            "secret.add",
+            "provider.archive",
+            "provider.restore",
+            "provider.trash",
+            "provider.delete",
+        ] {
+            assert!(logs.contains(&format!("event={event} outcome=started")));
+            assert!(logs.contains(&format!(
+                "event={event} outcome=completed resource_id={provider_id}"
+            )));
+        }
+        assert!(logs.contains("event=provider.get outcome=failed"));
+        assert!(logs
+            .lines()
+            .all(|line| line.contains(&format!("request_id={request_id}"))));
+        for forbidden in [
+            "private-provider-title",
+            "fake-private-api-key",
+            "fake-second-key",
+            "private-label",
+            "test-master-password",
+            "127.0.0.1:9",
+            "event=session.status",
+        ] {
+            assert!(
+                !logs.contains(forbidden),
+                "unexpected log content: {forbidden}"
+            );
         }
     }
 

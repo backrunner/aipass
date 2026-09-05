@@ -474,6 +474,9 @@ pub struct AuthenticatedAgentRequest {
     #[serde(default = "agent_protocol_version")]
     pub protocol_version: u32,
     pub auth_token: SensitiveString,
+    /// Correlation only; never used for authorization or deduplication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Uuid>,
     pub request: AgentRequest,
 }
 
@@ -861,6 +864,117 @@ const LONG_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 const RESPONSE_TIMEOUT_SLACK: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl AgentRequest {
+    /// Stable diagnostics name. Never serialize a request just to identify it.
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::SessionStatus => "session.status",
+            Self::SessionUnlock { .. } => "session.unlock",
+            Self::SessionLock { .. } => "session.lock",
+            Self::SessionTouch => "session.touch",
+            Self::SessionPolicyGet => "session.policy.get",
+            Self::SessionPolicySet { .. } => "session.policy.set",
+            Self::ServerStatus => "server.status",
+            Self::ServerLogs => "server.logs",
+            Self::ServerStart => "server.start",
+            Self::ServerStop => "server.stop",
+            Self::ServerRouteSelect { .. } => "server.route.select",
+            Self::ServerRouteSetEnabled { .. } => "server.route.set_enabled",
+            Self::ServerConfigGet => "server.config.get",
+            Self::ServerConfigSet { .. } => "server.config.set",
+            Self::ServerTokenRotate { .. } => "server.token.rotate",
+            Self::ServerUsageSummary { .. } => "server.usage.summary",
+            Self::ServerUsageClear => "server.usage.clear",
+            Self::ServerUsageTimeseries { .. } => "server.usage_timeseries",
+            Self::ServerPricingConfigGet => "server.pricing_config.get",
+            Self::ServerPricingRemoteSync { .. } => "server.pricing_remote_sync",
+            Self::ServerPricingAssignmentSet { .. } => "server.pricing_assignment.set",
+            Self::ServerPricingGroupUpsert { .. } => "server.pricing_group.upsert",
+            Self::ServerPricingGroupDelete { .. } => "server.pricing_group.delete",
+            Self::ServerPricingGroupVersionDelete { .. } => "server.pricing_group_version.delete",
+            Self::VaultStatus => "vault.status",
+            Self::VaultCreate { .. } => "vault.create",
+            Self::VaultRecover { .. } => "vault.recover",
+            Self::VaultReset => "vault.reset",
+            Self::VaultChangePassword { .. } => "vault.change_password",
+            Self::VaultRotate { .. } => "vault.rotate",
+            Self::VaultExport { .. } => "vault.export",
+            Self::VaultImport { .. } => "vault.import",
+            Self::EntriesList { .. } => "entries.list",
+            Self::EntriesTrash => "entries.trash",
+            Self::EntriesFavorites => "entries.favorites",
+            Self::EntriesSearch { .. } => "entries.search",
+            Self::ProviderGet { .. } => "provider.get",
+            Self::ProviderAdd { .. } => "provider.add",
+            Self::ProviderUpdate { .. } => "provider.update",
+            Self::ProviderArchive { .. } => "provider.archive",
+            Self::ProviderRestore { .. } => "provider.restore",
+            Self::ProviderTrash { .. } => "provider.trash",
+            Self::ProviderFavorite { .. } => "provider.favorite",
+            Self::ProviderDelete { .. } => "provider.delete",
+            Self::TrashPurgeExpired => "trash.purge_expired",
+            Self::TrashEmpty => "trash.empty",
+            Self::SecretRevealField { .. } => "secret.reveal_field",
+            Self::SecretRevealHeaders { .. } => "secret.reveal_headers",
+            Self::SecretAdd { .. } => "secret.add",
+            Self::SecretUpdate { .. } => "secret.update",
+            Self::SecretRemove { .. } => "secret.remove",
+            Self::SecretMetadataSet { .. } => "secret.metadata_set",
+            Self::DevicesList => "devices.list",
+            Self::DeviceRevoke { .. } => "device.revoke",
+            Self::ProviderProbe { .. } => "provider.probe",
+            Self::ProviderUsageProbe { .. } => "provider.usage_probe",
+            Self::ProviderUsageApply { .. } => "provider.usage_apply",
+            Self::OfficialAccountsRefresh { .. } => "official_accounts.refresh",
+            Self::CcSwitchDetect => "ccswitch.detect",
+            Self::CcSwitchImport => "ccswitch.import",
+            Self::OAuthLoginStart { .. } => "oauth.login.start",
+            Self::OAuthLoginPoll { .. } => "oauth.login.poll",
+            Self::OAuthLoginCancel { .. } => "oauth.login.cancel",
+            Self::OAuthAccountsList { .. } => "oauth.accounts.list",
+            Self::OAuthAccountsRemove { .. } => "oauth.accounts.remove",
+            Self::OAuthAccountsSetDefault { .. } => "oauth.accounts.set_default",
+            Self::ProviderFaviconBackfill { .. } => "provider.favicon_backfill",
+            Self::ToolConfigPreview { .. } => "tool_config.preview",
+            Self::ToolConfigApply { .. } => "tool_config.apply",
+            Self::ToolConfigProxyPreview { .. } => "tool_config.proxy_preview",
+            Self::ToolConfigProxyApply { .. } => "tool_config.proxy_apply",
+            Self::ToolConfigRollback { .. } => "tool_config.rollback",
+            Self::SyncLocal { .. } => "sync.local",
+            Self::SyncSettingsGet => "sync.settings.get",
+            Self::SyncSettingsSet { .. } => "sync.settings.set",
+            Self::SyncConfigured => "sync.configured",
+            Self::SyncCloud { .. } => "sync.cloud",
+            Self::SyncWebDav { .. } => "sync.webdav",
+            Self::SyncConflicts { .. } => "sync.conflicts",
+            Self::SyncAcceptConflict { .. } => "sync.accept_conflict",
+            Self::SyncDiscardConflict { .. } => "sync.discard_conflict",
+            Self::BrowserContextLookup { .. } => "browser.context_lookup",
+            Self::BrowserEntriesSearch { .. } => "browser.entries_search",
+            Self::BrowserSecretFill { .. } => "browser.secret_fill",
+            Self::BrowserPreviewDetected { .. } => "browser.preview_detected",
+            Self::BrowserSaveDetected { .. } => "browser.save_detected",
+            Self::BrowserIgnoreOrigin { .. } => "browser.ignore_origin",
+            Self::BrowserIsOriginIgnored { .. } => "browser.is_origin_ignored",
+            Self::UiOpenMain => "ui.open_main",
+            Self::UiOpenUnlock => "ui.open_unlock",
+            Self::UiOpenQuickAccess => "ui.open_quick_access",
+            Self::AgentShutdown => "agent.shutdown",
+        }
+    }
+
+    /// Successful high-frequency polls need no individual operation trail.
+    pub fn is_background_poll(&self) -> bool {
+        matches!(
+            self,
+            Self::SessionStatus
+                | Self::VaultStatus
+                | Self::SessionTouch
+                | Self::ServerStatus
+                | Self::ServerLogs
+                | Self::ServerUsageSummary { .. }
+                | Self::ServerUsageTimeseries { .. }
+        )
+    }
     /// How long a client should wait for this request's response.
     ///
     /// Without a deadline a wedged agent hangs the caller forever; with a
@@ -904,7 +1018,13 @@ impl AgentRequest {
             | Self::OAuthLoginPoll { .. }
             | Self::TrashPurgeExpired
             | Self::TrashEmpty
-            | Self::ServerPricingGroupUpsert { .. } => LONG_RESPONSE_TIMEOUT,
+            | Self::ServerPricingGroupUpsert { .. }
+            // Configuration writes may checkpoint and migrate a large Codex
+            // SQLite state database before replacing the requested files.
+            | Self::ToolConfigPreview { .. }
+            | Self::ToolConfigApply { .. }
+            | Self::ToolConfigProxyPreview { .. }
+            | Self::ToolConfigProxyApply { .. } => LONG_RESPONSE_TIMEOUT,
             // Cheap local file reads only.
             Self::CcSwitchDetect | Self::CcSwitchImport => DEFAULT_RESPONSE_TIMEOUT,
             _ => DEFAULT_RESPONSE_TIMEOUT,
@@ -1212,6 +1332,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tool_config_requests_use_the_long_response_timeout() {
+        let request = AgentRequest::ToolConfigApply {
+            request: ToolConfigRequest {
+                tool: ToolConfigTool::Codex,
+                id: uuid::Uuid::nil(),
+                mode: ToolConfigMode::Plaintext,
+                codex_api_key_mode: None,
+            },
+        };
+        assert_eq!(request.response_timeout(), LONG_RESPONSE_TIMEOUT);
+    }
+
     /// A request that waits on the user outlives the default bound, so the
     /// client must follow the deadline the request itself carries.
     #[test]
@@ -1356,6 +1489,19 @@ mod tests {
             serde_json::json!(AGENT_PROTOCOL_VERSION)
         );
         assert!(value.get("protocol_version").is_none());
+    }
+
+    #[test]
+    fn correlation_metadata_accepts_legacy_frames_and_round_trips() {
+        let legacy = serde_json::json!({"protocolVersion":AGENT_PROTOCOL_VERSION,"authToken":"test-token","request":{"type":"provider.get","id":Uuid::nil()}});
+        let mut request: AuthenticatedAgentRequest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(request.request_id, None);
+        let id = Uuid::new_v4();
+        request.request_id = Some(id);
+        let decoded: AuthenticatedAgentRequest =
+            serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
+        assert_eq!(decoded.request_id, Some(id));
+        assert_eq!(decoded.request.event_name(), "provider.get");
     }
 
     #[test]

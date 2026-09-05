@@ -38,15 +38,13 @@ fn main() -> Result<()> {
                 break;
             }
             Err(err) => {
-                write_component_log(
-                    NATIVE_HOST_LOG,
-                    "ERROR",
-                    &format!("failed to read native message: {err}"),
-                );
+                write_component_log(NATIVE_HOST_LOG, "ERROR", "failed to read native message");
                 return Err(err).context("failed to read native message");
             }
         };
-        if !matches!(request, NativeRequest::Ping { .. }) {
+        let _scope = aipass_agent::logging::RequestScope::new(native_request_id(&request));
+        let log_success = !matches!(request, NativeRequest::Ping { .. });
+        if log_success {
             write_component_log(
                 NATIVE_HOST_LOG,
                 "INFO",
@@ -58,7 +56,9 @@ fn main() -> Result<()> {
             );
         }
         let response = handle_request(request);
-        log_native_response(&response);
+        if log_success || !response.ok {
+            log_native_response(&response);
+        }
         if let Err(err) = write_message(&mut writer, &response) {
             write_component_log(
                 NATIVE_HOST_LOG,
@@ -81,6 +81,11 @@ fn main() -> Result<()> {
 
 fn log_native_response(response: &NativeResponse) {
     if response.ok {
+        write_component_log(
+            NATIVE_HOST_LOG,
+            "INFO",
+            &format!("event=native.response id={} outcome=completed", response.id),
+        );
         return;
     }
     let error = response.error.as_deref().unwrap_or("unknown error");
@@ -97,7 +102,7 @@ fn log_native_response(response: &NativeResponse) {
         write_component_log(
             NATIVE_HOST_LOG,
             "ERROR",
-            &format!("responding id={} status=error error={error}", response.id),
+            &format!("responding id={} status=error", response.id),
         );
     }
 }

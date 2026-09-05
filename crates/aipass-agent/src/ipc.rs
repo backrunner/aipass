@@ -15,6 +15,30 @@ use uuid::Uuid;
 
 const MAX_AUTH_TOKEN_BYTES: u64 = 4096;
 
+pub(crate) fn wait_for_connection(listener: &Listener) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use rustix::event::{poll, PollFd, PollFlags, Timespec};
+        let Listener::UdSocket(listener) = listener;
+        let mut fds = [PollFd::new(listener, PollFlags::IN)];
+        // Wake immediately for clients; retain a bounded shutdown check while idle.
+        let timeout = Timespec {
+            tv_sec: 0,
+            tv_nsec: 200_000_000,
+        };
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = listener;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        Ok(())
+    }
+}
+
 pub fn connect(vault_dir: impl AsRef<Path>) -> Result<Stream> {
     let namespace = namespace_for_vault_dir(vault_dir)?;
     #[cfg(target_os = "windows")]

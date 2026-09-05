@@ -116,6 +116,41 @@ impl AgentClient {
         &self,
         request: &AgentRequest,
     ) -> std::result::Result<AgentResponse, AgentCommandError> {
+        let request_id = crate::logging::current_request_id().unwrap_or_else(uuid::Uuid::new_v4);
+        let _scope = crate::logging::RequestScope::new(request_id);
+        let started = Instant::now();
+        let event = request.event_name();
+        if !request.is_background_poll() {
+            crate::logging::write_component_log(
+                crate::logging::CLIENT_LOG,
+                "INFO",
+                &format!("event={event} outcome=sending"),
+            );
+        }
+        let result = self.send_request(request, request_id);
+        let (outcome, code) = match &result {
+            Ok(response) if response.ok => ("received", None),
+            Ok(response) => ("rejected", response.code.clone()),
+            Err(err) => ("transport_failed", err.code.clone()),
+        };
+        if !request.is_background_poll() || code.is_some() {
+            crate::logging::write_component_log(
+                crate::logging::CLIENT_LOG,
+                if code.is_some() { "WARN" } else { "INFO" },
+                &format!(
+                    "event={event} outcome={outcome} code={code:?} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                ),
+            );
+        }
+        result
+    }
+
+    fn send_request(
+        &self,
+        request: &AgentRequest,
+        request_id: uuid::Uuid,
+    ) -> std::result::Result<AgentResponse, AgentCommandError> {
         let mut stream = ipc::connect(&self.config.vault_dir).map_err(|err| AgentCommandError {
             code: Some(AgentErrorCode::ServiceUnavailable),
             message: err.to_string(),
@@ -132,6 +167,7 @@ impl AgentClient {
         let payload = AuthenticatedAgentRequest {
             protocol_version: AGENT_PROTOCOL_VERSION,
             auth_token,
+            request_id: Some(request_id),
             request: request.clone(),
         };
         write_frame(&mut stream, &payload).map_err(timeout_aware_error)?;

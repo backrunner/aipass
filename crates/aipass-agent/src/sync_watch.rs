@@ -88,10 +88,10 @@ pub(crate) fn restart_sync_watcher(state: &Arc<AgentState>, settings: &StoredSyn
 pub(crate) fn start_sync_watcher_for_current_settings(state: &Arc<AgentState>) {
     match crate::session::load_sync_settings(&state.vault_dir) {
         Ok(settings) => restart_sync_watcher(state, &settings),
-        Err(err) => write_component_log(
+        Err(_) => write_component_log(
             AGENT_LOG,
             "WARN",
-            &format!("sync watcher not started: failed to load sync settings: {err}"),
+            "sync watcher not started: failed to load sync settings",
         ),
     }
 }
@@ -99,13 +99,8 @@ pub(crate) fn start_sync_watcher_for_current_settings(state: &Arc<AgentState>) {
 fn spawn_sync_watcher(state: Arc<AgentState>, dir: PathBuf) -> Option<SyncWatcher> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
-    let watch_dir = dir.clone();
     let handle = thread::spawn(move || watch_loop(state, dir, stop_thread));
-    write_component_log(
-        AGENT_LOG,
-        "INFO",
-        &format!("watching sync folder {}", watch_dir.display()),
-    );
+    write_component_log(AGENT_LOG, "INFO", "event=sync.watcher outcome=started");
     Some(SyncWatcher {
         stop,
         handle: Some(handle),
@@ -119,21 +114,13 @@ fn watch_loop(state: Arc<AgentState>, dir: PathBuf, stop: Arc<AtomicBool>) {
             let _ = tx.send(());
         }) {
             Ok(watcher) => watcher,
-            Err(err) => {
-                write_component_log(
-                    AGENT_LOG,
-                    "WARN",
-                    &format!("sync watcher unavailable for {}: {err}", dir.display()),
-                );
+            Err(_) => {
+                write_component_log(AGENT_LOG, "WARN", "event=sync.watcher outcome=unavailable");
                 return;
             }
         };
-    if let Err(err) = watcher.watch(&dir, RecursiveMode::Recursive) {
-        write_component_log(
-            AGENT_LOG,
-            "WARN",
-            &format!("cannot watch sync folder {}: {err}", dir.display()),
-        );
+    if watcher.watch(&dir, RecursiveMode::Recursive).is_err() {
+        write_component_log(AGENT_LOG, "WARN", "event=sync.watcher outcome=watch_failed");
         return;
     }
     let mut debounce = Debounce::new(SYNC_WATCH_DEBOUNCE);
@@ -155,21 +142,14 @@ fn watch_loop(state: Arc<AgentState>, dir: PathBuf, stop: Arc<AtomicBool>) {
                     AGENT_LOG,
                     "INFO",
                     &format!(
-                        "sync watcher ran sync on {}: uploaded={} downloaded={} conflicts={}",
-                        dir.display(),
-                        report.uploaded,
-                        report.downloaded,
-                        report.conflicts
+                        "sync watcher ran sync: uploaded={} downloaded={} conflicts={}",
+                        report.uploaded, report.downloaded, report.conflicts
                     ),
                 ),
                 Err(err) => write_component_log(
                     AGENT_LOG,
                     "WARN",
-                    &format!(
-                        "sync watcher sync failed for {}: {}",
-                        dir.display(),
-                        err.message
-                    ),
+                    &format!("sync watcher sync failed code={:?}", err.code),
                 ),
             }
         }

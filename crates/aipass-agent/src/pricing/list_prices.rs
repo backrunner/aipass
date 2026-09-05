@@ -164,19 +164,29 @@ pub fn spawn_list_price_refresh(state: Arc<AgentState>) {
                 break;
             }
             if schedule.is_due(now()) {
+                let operation =
+                    crate::operation_log::OperationLog::background("pricing.catalog.refresh");
                 let result = fetch_list_prices(LITELLM_PRICES_URL);
                 if shutdown_requested(&state) {
                     break;
                 }
                 let result = result.and_then(|rules| save_snapshot(&vault_dir, rules, now()));
                 schedule.record_attempt(now(), result.is_ok());
-                if let Err(err) = result {
+                if let Some(operation) = operation {
+                    operation.finish(&if result.is_ok() {
+                        aipass_agent_protocol::AgentResponse::empty()
+                    } else {
+                        aipass_agent_protocol::AgentResponse::error(
+                            aipass_agent_protocol::AgentErrorCode::Internal,
+                            "price refresh failed",
+                        )
+                    });
+                }
+                if result.is_err() {
                     write_component_log(
                         AGENT_LOG,
                         "WARN",
-                        &format!(
-                            "list price refresh failed; retaining cached or built-in prices, retrying in one hour: {err:#}"
-                        ),
+                        "list price refresh failed; retaining cached or built-in prices, retrying in one hour",
                     );
                 }
             }

@@ -7,6 +7,7 @@ pub mod launcher;
 pub mod logging;
 pub(crate) mod oauth;
 pub(crate) mod official_accounts;
+pub(crate) mod operation_log;
 pub mod paths;
 pub mod pricing;
 pub mod proxy_service;

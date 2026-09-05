@@ -1258,3 +1258,51 @@ async fn websocket_busy_lane_and_pings_do_not_mask_another_lanes_timeout() {
     .expect("a busy lane must not keep a stalled response alive");
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn websocket_hold_deadline_bounds_backoff_and_handshake() {
+    for stall in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut route = test_route(format!("http://{}/v1", listener.local_addr().unwrap()));
+        route.config.retry.hold_on_failure = true;
+        route.config.retry.hold_initial_delay_ms = if stall { 10 } else { 5_000 };
+        route.config.retry.hold_max_delay_ms = 5_000;
+        route.config.retry.hold_max_duration_ms = 1_000;
+        route.config.retry.first_byte_timeout_ms = 5_000;
+        let count = Arc::new(AtomicU64::new(0));
+        let counter = count.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let attempt = counter.fetch_add(1, Ordering::SeqCst);
+                if stall && attempt > 0 {
+                    let _stream = stream;
+                    std::future::pending::<()>().await;
+                } else {
+                    let _ = accept_hdr_async(stream, |_: &Request<()>, _| {
+                        Err(Response::builder()
+                            .status(StatusCode::SERVICE_UNAVAILABLE)
+                            .body(Some("unavailable".into()))
+                            .unwrap())
+                    })
+                    .await;
+                }
+            }
+        });
+        let (handle, store, _dir) = start_proxy(vec![route], direct());
+        let response = tokio::time::timeout(
+            Duration::from_secs(3),
+            connect(&handle, "/v1/responses", LOCAL_TOKEN),
+        )
+        .await;
+        server.abort();
+        match response.expect("WebSocket handshake exceeded hold deadline") {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert!(response.status().is_server_error())
+            }
+            other => panic!("expected HTTP rejection: {other:?}"),
+        }
+        assert_eq!(count.load(Ordering::SeqCst), if stall { 2 } else { 1 });
+        assert_eq!(store.count().unwrap(), 1);
+    }
+}

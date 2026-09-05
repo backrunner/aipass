@@ -19,12 +19,35 @@ Newest entries last within each section.
 - **Guardrail**: never gate readiness by blocking the IPC listener — extend `SessionStatus` and let the client poll. Startup gates must always terminate (failure marks the gate done, never blocks ready).
 - **Watch points**: `crates/aipass-agent/src/client.rs` ready loop, `handlers.rs` SessionStatus response, `session.rs` `load_sync_settings`, `apps/desktop/src/App.svelte` sync-settings save path.
 
+### Agent startup paid fixed polling delays
+- **Symptom**: first requests after an update were delayed by seconds even after the agent had bound its socket.
+- **Root cause**: the nonblocking listener slept 200ms after every empty accept, and supervisors checked child exit only every 10 seconds; desktop setup also risked synchronously waiting on agent repair.
+- **Fix**: wake the listener with a Unix socket poll timeout, reduce supervisor checks to 1 second, and keep desktop agent warmup asynchronous.
+- **Guardrail**: do not add fixed waits to the agent readiness path; keep launch repair and desktop setup off the Tauri setup critical path.
+- **Watch points**: `crates/aipass-agent/src/server.rs`, `src/ipc.rs`, `src/autostart.rs`, and `apps/desktop/src-tauri/src/lib.rs`.
+
 ### No remote-change awareness for folder sync
 - **Symptom**: iCloud Drive changes made on another device only appeared after a manual "sync now".
 - **Root cause**: no file watching existed; iCloud Drive materializes files via the OS and the app never noticed.
 - **Fix**: `sync_watch.rs` uses `notify` (FSEvents) with a 2s debounce to trigger `run_sync_local` plus the reload/restart follow-ups; watcher restarts when sync settings change and exits on shutdown.
 - **Guardrail**: realtime triggers must reuse the exact same post-sync path (vault reload + proxy reconcile) as manual sync — never fork a second "sync completed" flow.
 - **Watch points**: WebDAV has no watcher by design; new folder-based backends must opt into `folder_sync_dir` resolution.
+
+## Tool configuration writes (aipass-agent / config-writers)
+
+### Local diagnostics stopped at rotation limits and runtime boundaries
+- **Symptom**: component logs stopped after reaching the daily size cap; proxy failures disappeared after stopping/restarting; failed probes and sync could look successful at the IPC layer.
+- **Root cause**: `logging.rs` returned on overflow, `proxy::RuntimeStats` retained only in-memory errors, and request logging relied on transport success and serialized requests to discover their event names.
+- **Fix**: shared component writer with size rotation and process locking; static exhaustive request event names, UUID correlation and semantic outcomes; bounded persistent proxy diagnostics linked to upstream attempts. See `docs/local-logging.md`.
+- **Guardrail**: never serialize requests for diagnostics; log only allowlisted metadata, retain operation pairs across repetition/rotation, correlate attempts across HTTP/SSE/WebSocket, and test persistence after stop/restart and business failures within successful IPC responses.
+- **Watch points**: agent `operation_log.rs`, shared `logging.rs`, client/envelope/server correlation, desktop logger, proxy `diagnostics.rs` and `persist_attempt`. Regression tests cover provider lifecycle, semantic errors/unwinding, concurrent rotation, restart retention and successful fallback.
+
+### Configuration failures lacked an operation trail
+- **Symptom**: a failed config write surfaced only a transport error such as `failed to fill whole buffer`, with no way to identify which write was interrupted.
+- **Root cause**: tool config preview/apply/rollback handlers had no lifecycle logs, while writes can wait on vault or Codex SQLite state migration.
+- **Fix**: handlers now log start, completion, rejection, and write/rollback failures with operation or request IDs, target metadata, and elapsed time; config requests use the long response timeout.
+- **Guardrail**: log every configuration operation's lifecycle and correlate apply/rollback failures by operation ID without logging config contents or secrets.
+- **Watch points**: `crates/aipass-agent/src/handlers.rs`, `crates/aipass-agent-protocol/src/lib.rs`, and `crates/aipass-config-writers/src/backup.rs`.
 
 ## Proxy credential snapshot (proxy_service / handlers)
 
@@ -42,6 +65,13 @@ Newest entries last within each section.
 - **Guardrail**: route every new transport through the existing token selection, credential injection and outbound proxy settings; terminate authenticated long-lived sessions when their runtime snapshot changes, including while blocked writing to a slow client. Never replay a committed Responses WS session on another target.
 - **Watch points**: `lib.rs` `upstream_client_for_transport` / `update_config`, `websocket.rs` handshake / relay, agent `proxy_service.rs` credential refresh. Regression coverage lives in `websocket/tests.rs` (custom proxy, config reload, and no replay after disconnect).
 
+### Self-hosted routes must honor the selected wire format
+- **Symptom**: a self-hosted endpoint that accepts both OpenAI and Anthropic requests was rejected at proxy startup or received an inferred format instead of the route's selected format.
+- **Root cause**: `proxy_service.rs` and `RouteGroupDialog.svelte` derived each target's protocol from provider metadata and automatically enabled conversion, even though self-hosted endpoints can support multiple wire formats.
+- **Fix**: route configuration now supplies the upstream protocol; target metadata is not used to infer conversion, while explicitly persisted target protocols remain supported.
+- **Guardrail**: send every target the route's configured protocol unless a target has an explicit protocol override; preserve that override through editor save round trips. Never probe or infer a self-hosted target's format during proxy startup.
+- **Watch points**: `crates/aipass-agent/src/proxy_service.rs` runtime config, `apps/desktop/src/lib/components/server/RouteGroupDialog.svelte`, and route protocol tests.
+
 ### Converted WebSocket sessions need request-scoped state
 - **Symptom**: an Anthropic-only route previously rejected Responses WS clients even though the existing SSE converter supported the protocol pair.
 - **Root cause**: the WS path only accepted native Responses upgrades and did not adapt `response.create` into HTTP/SSE requests or retain the conversation associated with `previous_response_id`.
@@ -55,6 +85,34 @@ Newest entries last within each section.
 - **Fix**: expose enabled target IDs with recent unresolved failures or an open circuit through `ProxyStatus`; include them in degradation and display badges per group and credential while running.
 - **Guardrail**: derive target degradation from shared runtime health, including successful fallback, recovery, expiration, and config reload. Keep target IDs distinct across credentials. Enforced by `degraded_targets_follow_recent_failures_circuits_and_recovery`, `proxy_authenticates_fails_over_and_records_usage`, and desktop route component tests.
 - **Watch points**: HTTP/model discovery/stream/WebSocket `mark_failure` and `mark_success`, agent stopped status, desktop status polling, route list and editor.
+
+### Empty successful bodies must not commit
+- **Symptom**: an upstream could return HTTP 200 with an empty body, leaving the model client with an empty response instead of trying another target.
+- **Root cause**: non-stream forwarding treated any 2xx response as successful before checking whether a body was present.
+- **Fix**: empty buffered success bodies now mark the target failed and enter the normal fallback chain.
+- **Guardrail**: before committing a non-stream upstream response, reject empty bodies and structured error payloads as target failures.
+- **Watch points**: `crates/aipass-proxy/src/lib.rs` `forward_request`, silent retry buffering, and usage attempt accounting.
+
+### Validate provider payloads before success accounting
+- **Symptom**: a malformed 200 response on a converted route returned 502 without fallback and was counted as successful; model discovery also returned empty/error 200 bodies as healthy results.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` `forward_request` started usage tracking before non-stream conversion; `handle_models_request` skipped the error-body guard used by generation.
+- **Fix**: validate non-stream conversion before starting success/usage tracking, and reject empty or structured-error model-list bodies before marking success.
+- **Guardrail**: finish response validation before success accounting or committing a response; on provider response conversion failure, continue fallback and record only the failed attempt. Enforced by `invalid_converted_response_fails_over_without_recording_success` and `model_discovery_empty_and_error_success_bodies_fail_over`.
+- **Watch points**: `forward_request`, `handle_models_request`, `track_usage_stream`, and converted WebSocket calls to the shared forwarding path.
+
+### Hold duration must bound in-flight waits
+- **Symptom**: a short maximum hold duration could still leave HTTP requests or WS handshakes waiting for the much longer per-attempt timeout, and start new attempts after the budget expired.
+- **Root cause**: HTTP `forward_request` and native WS handshake loops only checked elapsed time after an entire round, before sleeping; buffered body reads restarted the idle timeout on every chunk.
+- **Fix**: share an absolute hold deadline across target selection, response headers, first SSE events, buffered body reads and WS handshakes. Count only targets actually attempted and preserve the last failure across backoff.
+- **Guardrail**: enforce the hold deadline on every pre-commit network wait and before each attempt; never apply it to an already committed live stream. Covered by `hold_deadline_bounds_backoff_headers_and_buffered_bodies`, `hold_deadline_does_not_cut_off_a_committed_stream`, and `websocket_hold_deadline_bounds_backoff_and_handshake`.
+- **Watch points**: `crates/aipass-proxy/src/lib.rs` forwarding/collection and `websocket.rs` handshake; converted WS shares the HTTP path.
+
+### Circuit-open weights distorted round robin
+- **Symptom**: after a high-weight target opened its circuit, one healthy fallback received its weight while another equally weighted target received no requests.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` `select_route_targets` rotated by all enabled targets' weights before removing circuit-open targets.
+- **Fix**: remove unavailable targets before calculating weighted rotation.
+- **Guardrail**: calculate round-robin weights over the actual eligible target set; keep explicit hold-mode circuit bypass intact. Covered by `round_robin_redistributes_weight_among_available_targets`.
+- **Watch points**: shared target selection used by HTTP, model discovery, native WS, and converted WS.
 
 ## Public model pricing (aipass-agent pricing)
 
@@ -140,3 +198,10 @@ Newest entries last within each section.
 - **Fix**: separate connection and account views with explicit loading/error/retry states; preserve provider and reauthentication context; confirm removal with its effects; notify the host after a successful removal even if list refresh fails. Launch provider HTTPS links through the Tauri `oauth_open_verification` command on an explicit user click and surface fallback instructions.
 - **Guardrail**: never equate a loading/failed list with an empty list. Confirm account removal before IPC; verify host invalidation independently of list reload. Test browser/clipboard failures and retry without losing the selected provider. Clear delayed close callbacks on unmount.
 - **Watch points**: `OAuthConnectDialog.test.ts`, `src-tauri/src/oauth_browser.rs`, host `onAccountsChanged`, and the shared English/Chinese OAuth messages. Validate all states at 960×640.
+
+### Advanced route settings failed without actionable feedback
+- **Symptom**: editing retry settings appeared not to save when the agent rejected an invalid backoff range; the dialog closed or showed no reason to correct the values.
+- **Root cause**: the route dialog used bespoke controls and discarded a `false` save result, while the agent requires maximum backoff to be at least initial backoff (`crates/aipass-agent/src/proxy_service.rs:1068`).
+- **Fix**: reuse shared form/card controls, validate retry numbers and ordering before IPC, and keep the dialog open with an inline error on persistence failure.
+- **Guardrail**: validate advanced retry fields before saving and surface every failed route-config write in the open dialog. When disabling an option, retain valid persisted/default numbers instead of submitting invalid hidden inputs. Covered by `RouteGroupDialog.test.ts`.
+- **Watch points**: `RouteGroupDialog.svelte`, `App.svelte` `saveRouteGroup`, and agent `validate_config`.

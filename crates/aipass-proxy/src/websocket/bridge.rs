@@ -475,6 +475,7 @@ async fn run_response(
     }
     let response = forward_request(
         ForwardRequest {
+            request_id: Uuid::new_v4(),
             method: http::Method::POST,
             request_query: context.query.clone(),
             incoming_headers: context.headers.clone(),

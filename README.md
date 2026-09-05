@@ -229,6 +229,7 @@ Microsoft Edge Add-ons submission material lives in [`apps/extension/store`](app
 
 ## Documentation
 
+- [Local logs and troubleshooting](docs/local-logging.md)
 - [Product research](.agents/01-research.md)
 - [Requirements](.agents/02-requirements.md)
 - [UI design](.agents/03-ui-design.md)

@@ -28,6 +28,7 @@ use zeroize::Zeroize;
 
 pub use aipass_proxy_conversion::{supports, ConversionError, ProxyProtocol as Protocol};
 
+mod diagnostics;
 mod shell_env;
 mod websocket;
 
@@ -378,6 +379,8 @@ pub struct UsageRecord {
 #[serde(rename_all = "camelCase")]
 pub struct AttemptRecord {
     pub id: Uuid,
+    #[serde(default)]
+    pub request_id: Option<Uuid>,
     pub started_at: i64,
     pub duration_ms: u64,
     pub first_token_ms: Option<u64>,
@@ -489,7 +492,19 @@ impl UsageStore {
             std::fs::create_dir_all(parent).map_err(ProxyError::Io)?;
         }
         let connection = Connection::open(&path).map_err(ProxyError::Sqlite)?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS proxy_usage (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, first_token_ms INTEGER, route_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, inbound_protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, status INTEGER NOT NULL, attempts INTEGER NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_creation_tokens INTEGER NOT NULL, estimated_cost_micros INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS proxy_usage_started_at_idx ON proxy_usage(started_at); CREATE TABLE IF NOT EXISTS proxy_attempts (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, first_token_ms INTEGER, route_id TEXT NOT NULL, target_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, status INTEGER, success INTEGER); CREATE INDEX IF NOT EXISTS proxy_attempts_started_at_idx ON proxy_attempts(started_at)").map_err(ProxyError::Sqlite)?;
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS proxy_usage (id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, first_token_ms INTEGER, route_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, inbound_protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, status INTEGER NOT NULL, attempts INTEGER NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, cache_creation_tokens INTEGER NOT NULL, estimated_cost_micros INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS proxy_usage_started_at_idx ON proxy_usage(started_at); CREATE TABLE IF NOT EXISTS proxy_attempts (id TEXT PRIMARY KEY, request_id TEXT, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL, first_token_ms INTEGER, route_id TEXT NOT NULL, target_id TEXT NOT NULL, provider_entry_id TEXT NOT NULL, secret_id TEXT NOT NULL, model TEXT, status INTEGER, success INTEGER); CREATE INDEX IF NOT EXISTS proxy_attempts_started_at_idx ON proxy_attempts(started_at)").map_err(ProxyError::Sqlite)?;
+        let has_request_id = connection
+            .prepare("PRAGMA table_info(proxy_attempts)")
+            .map_err(ProxyError::Sqlite)?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(ProxyError::Sqlite)?
+            .filter_map(Result::ok)
+            .any(|name| name == "request_id");
+        if !has_request_id {
+            connection
+                .execute("ALTER TABLE proxy_attempts ADD COLUMN request_id TEXT", [])
+                .map_err(ProxyError::Sqlite)?;
+        }
         let has_first_token = connection
             .prepare("PRAGMA table_info(proxy_usage)")
             .map_err(ProxyError::Sqlite)?
@@ -505,6 +520,7 @@ impl UsageStore {
                 )
                 .map_err(ProxyError::Sqlite)?;
         }
+        Self::init_diagnostics(&connection)?;
         Ok(Self {
             path,
             connection: Mutex::new(connection),
@@ -516,17 +532,20 @@ impl UsageStore {
     }
 
     pub fn record(&self, item: &UsageRecord) -> Result<(), ProxyError> {
+        self.log_request(item);
         let conn = self.connection.lock().map_err(|_| ProxyError::Poisoned)?;
         conn.execute("INSERT OR REPLACE INTO proxy_usage (id, started_at, duration_ms, first_token_ms, route_id, provider_entry_id, secret_id, model, inbound_protocol, upstream_protocol, status, attempts, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, estimated_cost_micros) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)", params![item.id.to_string(), item.started_at, item.duration_ms, item.first_token_ms, item.route_id.to_string(), item.provider_entry_id.to_string(), item.secret_id, item.model, serde_json::to_string(&item.inbound_protocol).unwrap_or_default(), serde_json::to_string(&item.upstream_protocol).unwrap_or_default(), item.status, item.attempts, item.input_tokens, item.output_tokens, item.cache_read_tokens, item.cache_creation_tokens, item.estimated_cost_micros]).map_err(ProxyError::Sqlite)?;
         Ok(())
     }
 
     pub fn record_attempt(&self, item: &AttemptRecord) -> Result<(), ProxyError> {
+        self.log_attempt(item);
         let conn = self.connection.lock().map_err(|_| ProxyError::Poisoned)?;
         conn.execute(
-            "INSERT OR REPLACE INTO proxy_attempts (id, started_at, duration_ms, first_token_ms, route_id, target_id, provider_entry_id, secret_id, model, status, success) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO proxy_attempts (id, request_id, started_at, duration_ms, first_token_ms, route_id, target_id, provider_entry_id, secret_id, model, status, success) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 item.id.to_string(),
+                item.request_id.map(|id| id.to_string()),
                 item.started_at,
                 item.duration_ms,
                 item.first_token_ms,
@@ -1100,7 +1119,6 @@ struct RuntimeStats {
     requests: u64,
     failures: u64,
     last_error: Option<String>,
-    logs: VecDeque<ProxyLogEntry>,
     first_token_samples: VecDeque<Option<u64>>,
     recent_request_times: VecDeque<Instant>,
     recent_failure_times: VecDeque<Instant>,
@@ -1124,7 +1142,7 @@ pub struct ProxyHandle {
 impl ProxyHandle {
     pub fn start(config: RuntimeConfig, usage: Arc<UsageStore>) -> Result<Self, ProxyError> {
         for route in &config.routes {
-            for target in &route.targets {
+            for target in route.targets.iter().filter(|target| target.config.enabled) {
                 let target_protocol = target
                     .config
                     .effective_protocol(route.config.upstream_protocol);
@@ -1204,6 +1222,9 @@ impl ProxyHandle {
                 )));
             }
         }
+        state
+            .usage
+            .log_diagnostic("info", "event=proxy.started".into());
         Ok(Self {
             state,
             stop: Some(stop_tx),
@@ -1361,15 +1382,14 @@ impl ProxyHandle {
         self.state.config_changed.send_replace(());
         health.clear();
         rr_counters.clear();
+        self.state
+            .usage
+            .log_diagnostic("info", "event=proxy.config.reloaded".into());
         Ok(())
     }
 
     pub fn logs(&self) -> Result<Vec<ProxyLogEntry>, ProxyError> {
-        self.state
-            .stats
-            .lock()
-            .map(|stats| stats.logs.iter().cloned().collect())
-            .map_err(|_| ProxyError::Poisoned)
+        self.state.usage.logs()
     }
 
     pub fn usage_count(&self) -> Result<u64, ProxyError> {
@@ -1385,6 +1405,9 @@ impl Drop for ProxyHandle {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        self.state
+            .usage
+            .log_diagnostic("info", "event=proxy.stopped".into());
     }
 }
 
@@ -1714,6 +1737,23 @@ fn hold_backoff_delay(policy: &RetryPolicy, hold_round: u32) -> Duration {
     Duration::from_millis(delay_ms.min(policy.hold_max_delay_ms.max(1)))
 }
 
+// The hold budget applies until the response is committed. A live stream
+// uses its idle timeout after commit and must never be replayed at this deadline.
+fn hold_deadline(policy: &RetryPolicy, started: Instant) -> Option<tokio::time::Instant> {
+    (policy.hold_on_failure && policy.hold_max_duration_ms > 0)
+        .then(|| started.checked_add(Duration::from_millis(policy.hold_max_duration_ms)))
+        .flatten()
+        .map(tokio::time::Instant::from_std)
+}
+
+fn bounded_deadline(
+    timeout: Duration,
+    hold_deadline: Option<tokio::time::Instant>,
+) -> tokio::time::Instant {
+    let deadline = tokio::time::Instant::now() + timeout;
+    hold_deadline.map_or(deadline, |hold| deadline.min(hold))
+}
+
 fn select_route_targets(
     state: &RuntimeState,
     route: &ResolvedRoute,
@@ -1722,6 +1762,10 @@ fn select_route_targets(
     let mut targets = route.targets.clone();
     targets.retain(|target| target.config.enabled);
     targets.sort_by_key(|target| target.config.priority);
+    // Unavailable targets must not donate their weight to the next target.
+    if !ignore_circuit {
+        targets.retain(|target| !circuit_open(state, target.config.id));
+    }
     if route.config.strategy == RouteStrategy::RoundRobin {
         let start = round_robin_start(
             state,
@@ -1732,9 +1776,6 @@ fn select_route_targets(
                 .collect::<Vec<_>>(),
         );
         targets.rotate_left(start);
-    }
-    if !ignore_circuit {
-        targets.retain(|target| !circuit_open(state, target.config.id));
     }
     targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
     targets
@@ -1849,8 +1890,8 @@ async fn handle_models_request(
             let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
             let idle_timeout =
                 Duration::from_millis(route.config.retry.stream_idle_timeout_ms.max(1));
-            let payload = match collect_upstream_body(None, &mut source, idle_timeout).await {
-                Ok(payload) => enrich_models_payload(payload, route.config.inbound_protocol),
+            let payload = match collect_upstream_body(None, &mut source, idle_timeout, None).await {
+                Ok(payload) => payload,
                 Err(err) => {
                     last_error = Some(err);
                     saw_other_failure = true;
@@ -1858,6 +1899,13 @@ async fn handle_models_request(
                     continue;
                 }
             };
+            if payload.is_empty() || is_upstream_error_payload(&payload) {
+                last_error = Some("upstream returned an empty or error model list".into());
+                saw_other_failure = true;
+                mark_failure(&state, target.config.id, &route.config.retry);
+                continue;
+            }
+            let payload = enrich_models_payload(payload, route.config.inbound_protocol);
             mark_success(&state, target.config.id);
             let body = BodyExt::boxed_unsync(
                 Full::new(payload).map_err(|never| -> BoxError { match never {} }),
@@ -1985,9 +2033,45 @@ async fn handle_local_health_request(
 }
 
 async fn handle_request(
+    mut request: Request<Incoming>,
+    state: RuntimeState,
+) -> Result<Response<BoxBody>, Infallible> {
+    let request_id = Uuid::new_v4();
+    request.extensions_mut().insert(request_id);
+    let health = request.uri().path().trim_end_matches('/') == "/health";
+    let started = Instant::now();
+    if !health {
+        state.usage.log_diagnostic(
+            "info",
+            format!("event=proxy.http.received request_id={request_id}"),
+        );
+    }
+    let response = handle_request_inner(request, state.clone()).await?;
+    if !health || !response.status().is_success() {
+        state.usage.log_diagnostic(
+            if response.status().is_client_error() || response.status().is_server_error() {
+                "warn"
+            } else {
+                "info"
+            },
+            format!(
+                "event=proxy.http.response_headers request_id={request_id} status={} elapsed_ms={}",
+                response.status().as_u16(),
+                started.elapsed().as_millis()
+            ),
+        );
+    }
+    Ok(response)
+}
+
+async fn handle_request_inner(
     request: Request<Incoming>,
     state: RuntimeState,
 ) -> Result<Response<BoxBody>, Infallible> {
+    let request_id = *request
+        .extensions()
+        .get::<Uuid>()
+        .expect("assigned by HTTP entry point");
     if websocket::is_upgrade_request(&request) {
         return Ok(websocket::handle_request(request, state).await);
     }
@@ -2044,6 +2128,7 @@ async fn handle_request(
     };
     forward_request(
         ForwardRequest {
+            request_id,
             method,
             request_query,
             incoming_headers,
@@ -2059,6 +2144,7 @@ async fn handle_request(
 }
 
 struct ForwardRequest {
+    request_id: Uuid,
     method: http::Method,
     request_query: Option<String>,
     incoming_headers: HeaderMap,
@@ -2076,6 +2162,7 @@ async fn forward_request(
     pricing: Vec<ModelPricing>,
 ) -> Result<Response<BoxBody>, Infallible> {
     let ForwardRequest {
+        request_id,
         method,
         request_query,
         incoming_headers,
@@ -2083,6 +2170,13 @@ async fn forward_request(
         started,
         started_at,
     } = request;
+    state.usage.log_diagnostic(
+        "info",
+        format!(
+            "event=proxy.request.started request_id={request_id} route_id={}",
+            route.config.id
+        ),
+    );
     let request_json = if route.config.conversion_enabled
         && route.targets.iter().any(|target| {
             target.config.enabled
@@ -2114,7 +2208,11 @@ async fn forward_request(
         });
     let mut target_attempts = 0u8;
     let mut hold_round = 0u32;
+    let hold_deadline = hold_deadline(&route.config.retry, started);
     'hold: loop {
+        if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            break;
+        }
         let ignore_circuit = hold_round > 0;
         for _round in 0..silent_retry_rounds(&route.config.retry) {
             let targets = select_route_targets(&state, &route, ignore_circuit);
@@ -2122,18 +2220,18 @@ async fn forward_request(
                 // No enabled targets remain, so holding cannot recover.
                 break 'hold;
             }
-            let round_attempt_base = target_attempts;
-            target_attempts =
-                target_attempts.saturating_add(u8::try_from(targets.len()).unwrap_or(u8::MAX));
-            for (attempt_index, target) in targets.into_iter().enumerate() {
+            for target in targets {
+                if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                    break 'hold;
+                }
+                target_attempts = target_attempts.saturating_add(1);
                 failure_target = Some((
                     target.config.provider_entry_id,
                     target.config.secret_id.clone(),
                 ));
                 let attempt_started_at = now_unix();
                 let attempt_started = Instant::now();
-                let attempts = round_attempt_base
-                    .saturating_add(u8::try_from(attempt_index + 1).unwrap_or(u8::MAX));
+                let attempts = target_attempts;
                 let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
                     Ok(client) => client,
                     Err(err) => {
@@ -2141,7 +2239,7 @@ async fn forward_request(
                         mark_failure(&state, target.config.id, &route.config.retry);
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             model.as_deref(),
                             attempt_started_at,
@@ -2217,7 +2315,7 @@ async fn forward_request(
                         mark_failure(&state, target.config.id, &route.config.retry);
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             model.as_deref(),
                             attempt_started_at,
@@ -2235,7 +2333,7 @@ async fn forward_request(
                             mark_failure(&state, target.config.id, &route.config.retry);
                             persist_attempt(
                                 &state.usage,
-                                route.config.id,
+                                (request_id, route.config.id),
                                 &target,
                                 model.as_deref(),
                                 attempt_started_at,
@@ -2257,7 +2355,7 @@ async fn forward_request(
                             mark_failure(&state, target.config.id, &route.config.retry);
                             persist_attempt(
                                 &state.usage,
-                                route.config.id,
+                                (request_id, route.config.id),
                                 &target,
                                 model.as_deref(),
                                 attempt_started_at,
@@ -2278,7 +2376,7 @@ async fn forward_request(
                         mark_failure(&state, target.config.id, &route.config.retry);
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             model.as_deref(),
                             attempt_started_at,
@@ -2294,7 +2392,11 @@ async fn forward_request(
                     .body(payload);
                 let first_byte_timeout =
                     Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1));
-                let response = match tokio::time::timeout(first_byte_timeout, upstream.send()).await
+                let response = match tokio::time::timeout_at(
+                    bounded_deadline(first_byte_timeout, hold_deadline),
+                    upstream.send(),
+                )
+                .await
                 {
                     Ok(Ok(response)) => response,
                     Ok(Err(err)) => {
@@ -2302,7 +2404,7 @@ async fn forward_request(
                         mark_failure(&state, target.config.id, &route.config.retry);
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             model.as_deref(),
                             attempt_started_at,
@@ -2316,7 +2418,7 @@ async fn forward_request(
                         mark_failure(&state, target.config.id, &route.config.retry);
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             model.as_deref(),
                             attempt_started_at,
@@ -2335,7 +2437,7 @@ async fn forward_request(
                     }
                     persist_attempt(
                         &state.usage,
-                        route.config.id,
+                        (request_id, route.config.id),
                         &target,
                         model.as_deref(),
                         attempt_started_at,
@@ -2356,7 +2458,7 @@ async fn forward_request(
                 // can be retried without leaking a transport error to the caller.
                 let buffer_streaming = streaming_response && route.config.retry.silent_retry;
                 let mut upstream_stream: UpstreamBodyStream = Box::pin(response.bytes_stream());
-                let first_event_deadline = tokio::time::Instant::now() + first_byte_timeout;
+                let first_event_deadline = bounded_deadline(first_byte_timeout, hold_deadline);
                 let first_chunk =
                     match tokio::time::timeout_at(first_event_deadline, upstream_stream.next())
                         .await
@@ -2367,7 +2469,7 @@ async fn forward_request(
                             mark_failure(&state, target.config.id, &route.config.retry);
                             persist_attempt(
                                 &state.usage,
-                                route.config.id,
+                                (request_id, route.config.id),
                                 &target,
                                 model.as_deref(),
                                 attempt_started_at,
@@ -2382,7 +2484,7 @@ async fn forward_request(
                             mark_failure(&state, target.config.id, &route.config.retry);
                             persist_attempt(
                                 &state.usage,
-                                route.config.id,
+                                (request_id, route.config.id),
                                 &target,
                                 model.as_deref(),
                                 attempt_started_at,
@@ -2414,7 +2516,7 @@ async fn forward_request(
                             mark_failure(&state, target.config.id, &route.config.retry);
                             persist_attempt(
                                 &state.usage,
-                                route.config.id,
+                                (request_id, route.config.id),
                                 &target,
                                 model.as_deref(),
                                 attempt_started_at,
@@ -2428,7 +2530,7 @@ async fn forward_request(
                             mark_failure(&state, target.config.id, &route.config.retry);
                             persist_attempt(
                                 &state.usage,
-                                route.config.id,
+                                (request_id, route.config.id),
                                 &target,
                                 model.as_deref(),
                                 attempt_started_at,
@@ -2454,7 +2556,7 @@ async fn forward_request(
                         .cloned()
                 });
                 let record = UsageRecord {
-                    id: Uuid::new_v4(),
+                    id: request_id,
                     started_at,
                     duration_ms: started.elapsed().as_millis() as u64,
                     first_token_ms,
@@ -2472,6 +2574,7 @@ async fn forward_request(
                     cache_creation_tokens: 0,
                     estimated_cost_micros: 0,
                 };
+                let mut converted_payload = None;
                 let body_stream: UpstreamBodyStream = if streaming_response && !buffer_streaming {
                     if let Some(first_chunk) = first_chunk {
                         Box::pin(
@@ -2485,6 +2588,7 @@ async fn forward_request(
                         first_chunk,
                         &mut upstream_stream,
                         stream_idle_timeout,
+                        hold_deadline,
                     )
                     .await
                     {
@@ -2494,7 +2598,7 @@ async fn forward_request(
                             mark_failure(&state, target.config.id, &route.config.retry);
                             persist_attempt(
                                 &state.usage,
-                                route.config.id,
+                                (request_id, route.config.id),
                                 &target,
                                 model.as_deref(),
                                 attempt_started_at,
@@ -2513,7 +2617,7 @@ async fn forward_request(
                         mark_failure(&state, target.config.id, &route.config.retry);
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             model.as_deref(),
                             attempt_started_at,
@@ -2527,7 +2631,7 @@ async fn forward_request(
                         mark_failure(&state, target.config.id, &route.config.retry);
                         persist_attempt(
                             &state.usage,
-                            route.config.id,
+                            (request_id, route.config.id),
                             &target,
                             model.as_deref(),
                             attempt_started_at,
@@ -2536,26 +2640,55 @@ async fn forward_request(
                         );
                         continue;
                     }
+                    if status.is_success() && buffered.is_empty() {
+                        last_error = Some("upstream returned an empty response".into());
+                        mark_failure(&state, target.config.id, &route.config.retry);
+                        persist_attempt(
+                            &state.usage,
+                            (request_id, route.config.id),
+                            &target,
+                            model.as_deref(),
+                            attempt_started_at,
+                            attempt_started,
+                            AttemptOutcome::failure(Some(status), first_token_ms),
+                        );
+                        continue;
+                    }
+                    if conversion && !streaming_response {
+                        converted_payload = serde_json::from_slice::<serde_json::Value>(&buffered)
+                            .ok()
+                            .and_then(|value| {
+                                BuiltinConversionPlugin
+                                    .convert_response(upstream_protocol, inbound_protocol, value)
+                                    .ok()
+                            })
+                            .and_then(|value| serde_json::to_vec(&value).ok())
+                            .map(Bytes::from);
+                        if converted_payload.is_none() {
+                            last_error =
+                                Some("protocol conversion failed for upstream response".into());
+                            mark_failure(&state, target.config.id, &route.config.retry);
+                            persist_attempt(
+                                &state.usage,
+                                (request_id, route.config.id),
+                                &target,
+                                model.as_deref(),
+                                attempt_started_at,
+                                attempt_started,
+                                AttemptOutcome::failure(Some(status), first_token_ms),
+                            );
+                            continue;
+                        }
+                    }
                     Box::pin(stream::once(async move {
                         Ok::<Bytes, reqwest::Error>(buffered)
                     }))
                 };
-                if !streaming_response {
-                    mark_success(&state, target.config.id);
-                    persist_attempt(
-                        &state.usage,
-                        route.config.id,
-                        &target,
-                        model.as_deref(),
-                        attempt_started_at,
-                        attempt_started,
-                        AttemptOutcome::success(status, first_token_ms),
-                    );
-                }
                 let streaming_attempt = streaming_response.then(|| {
                     (
                         AttemptRecord {
                             id: Uuid::new_v4(),
+                            request_id: Some(record.id),
                             started_at: attempt_started_at,
                             duration_ms: 0,
                             first_token_ms,
@@ -2589,46 +2722,25 @@ async fn forward_request(
                 let output_stream: Pin<Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>> =
                     if conversion && streaming_response {
                         convert_sse_stream(body_stream, upstream_protocol, inbound_protocol)
-                    } else if conversion {
-                        let bytes = match body_stream
-                            .collect::<Vec<_>>()
-                            .await
-                            .into_iter()
-                            .collect::<Result<Vec<_>, _>>()
-                        {
-                            Ok(parts) => parts.into_iter().fold(Bytes::new(), |all, part| {
-                                let mut data = all.to_vec();
-                                data.extend_from_slice(&part);
-                                Bytes::from(data)
-                            }),
-                            Err(err) => {
-                                return Ok(error_response(
-                                    StatusCode::BAD_GATEWAY,
-                                    &err.to_string(),
-                                ))
-                            }
-                        };
-                        let converted = match serde_json::from_slice::<serde_json::Value>(&bytes)
-                            .ok()
-                            .and_then(|value| {
-                                BuiltinConversionPlugin
-                                    .convert_response(upstream_protocol, inbound_protocol, value)
-                                    .ok()
-                            })
-                            .and_then(|value| serde_json::to_vec(&value).ok())
-                        {
-                            Some(value) => Bytes::from(value),
-                            None => {
-                                return Ok(error_response(
-                                    StatusCode::BAD_GATEWAY,
-                                    "protocol conversion failed for upstream response",
-                                ))
-                            }
-                        };
-                        Box::pin(stream::once(async move { Ok(converted) }))
+                    } else if let Some(converted) = converted_payload {
+                        // Track usage from the original provider payload only after
+                        // conversion has succeeded, then emit the converted body.
+                        Box::pin(body_stream.map(move |result| result.map(|_| converted.clone())))
                     } else {
                         Box::pin(body_stream)
                     };
+                if !streaming_response {
+                    mark_success(&state, target.config.id);
+                    persist_attempt(
+                        &state.usage,
+                        (request_id, route.config.id),
+                        &target,
+                        model.as_deref(),
+                        attempt_started_at,
+                        attempt_started,
+                        AttemptOutcome::success(status, first_token_ms),
+                    );
+                }
                 let frame_stream = output_stream.map(|result| result.map(Frame::data));
                 let stream_body = BodyExt::boxed_unsync(StreamBody::new(frame_stream));
                 let mut builder = Response::builder().status(status);
@@ -2662,7 +2774,6 @@ async fn forward_request(
             delay = delay.min(budget - elapsed);
         }
         tokio::time::sleep(delay).await;
-        last_error = None;
         hold_round = hold_round.saturating_add(1);
     }
 
@@ -2671,7 +2782,7 @@ async fn forward_request(
     set_error(&state, diagnostic);
     if let Some((provider_entry_id, secret_id)) = failure_target {
         let _ = state.usage.record(&UsageRecord {
-            id: Uuid::new_v4(),
+            id: request_id,
             started_at,
             duration_ms: started.elapsed().as_millis() as u64,
             first_token_ms: None,
@@ -2722,15 +2833,17 @@ impl AttemptOutcome {
 
 fn persist_attempt(
     store: &UsageStore,
-    route_id: Uuid,
+    ids: (Uuid, Uuid),
     target: &ResolvedTarget,
     model: Option<&str>,
     started_at: i64,
     started: Instant,
     outcome: AttemptOutcome,
 ) {
+    let (request_id, route_id) = ids;
     let _ = store.record_attempt(&AttemptRecord {
         id: Uuid::new_v4(),
+        request_id: Some(request_id),
         started_at,
         duration_ms: started.elapsed().as_millis() as u64,
         first_token_ms: outcome.first_token_ms,
@@ -3098,13 +3211,16 @@ async fn collect_upstream_body(
     first_chunk: Option<Bytes>,
     source: &mut UpstreamBodyStream,
     idle_timeout: Duration,
+    hold_deadline: Option<tokio::time::Instant>,
 ) -> Result<Bytes, String> {
     let mut buffered = first_chunk.map_or_else(Vec::new, |chunk| chunk.to_vec());
     loop {
         if buffered.len() > MAX_BUFFERED_RESPONSE_BYTES {
             return Err("upstream response exceeds proxy buffer limit".into());
         }
-        match tokio::time::timeout(idle_timeout, source.next()).await {
+        match tokio::time::timeout_at(bounded_deadline(idle_timeout, hold_deadline), source.next())
+            .await
+        {
             Ok(Some(Ok(chunk))) => buffered.extend_from_slice(&chunk),
             Ok(Some(Err(err))) => return Err(err.to_string()),
             Ok(None) => return Ok(Bytes::from(buffered)),
@@ -3549,7 +3665,11 @@ fn mark_success(state: &RuntimeState, target_id: Uuid) {
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {
-    !status.is_success()
+    // A response that reached the upstream can still be a target failure:
+    // quota/authentication errors (including 403 insufficient balance),
+    // client errors, redirects and server errors all need to advance the
+    // fallback chain before anything is committed to the caller.
+    status.is_redirection() || status.is_client_error() || status.is_server_error()
 }
 
 fn status_affects_circuit(status: StatusCode) -> bool {
@@ -3729,16 +3849,12 @@ fn error_response(status: StatusCode, message: &str) -> Response<BoxBody> {
         .unwrap()
 }
 fn set_error(state: &RuntimeState, error: String) {
+    // Raw errors can embed upstream URLs, userinfo, headers or response bodies.
+    state
+        .usage
+        .log_diagnostic("error", "event=proxy.runtime.failed".into());
     if let Ok(mut stats) = state.stats.lock() {
-        stats.last_error = Some(error.clone());
-        stats.logs.push_back(ProxyLogEntry {
-            timestamp: now_unix(),
-            level: "error".into(),
-            message: error,
-        });
-        while stats.logs.len() > MAX_PROXY_LOG_ENTRIES {
-            stats.logs.pop_front();
-        }
+        stats.last_error = Some(error);
     }
 }
 
@@ -4051,6 +4167,7 @@ mod tests {
         assert!(is_retryable_status(StatusCode::BAD_REQUEST));
         assert!(is_retryable_status(StatusCode::NOT_FOUND));
         assert!(is_retryable_status(StatusCode::UNPROCESSABLE_ENTITY));
+        assert!(is_retryable_status(StatusCode::FORBIDDEN));
         assert!(is_retryable_status(StatusCode::INTERNAL_SERVER_ERROR));
         assert!(is_retryable_status(StatusCode::MOVED_PERMANENTLY));
         assert!(!is_retryable_status(StatusCode::OK));
@@ -4565,6 +4682,37 @@ mod tests {
     }
 
     #[test]
+    fn model_discovery_empty_and_error_success_bodies_fail_over() {
+        for body in ["", r#"{"error":{"message":"quota exhausted"}}"#] {
+            let (bad_addr, bad) = mock_upstream("200 OK", "application/json", body.into());
+            let (good_addr, good) = mock_upstream(
+                "200 OK",
+                "application/json",
+                r#"{"object":"list","data":[{"id":"fallback","object":"model"}]}"#.into(),
+            );
+            let token = "models_payload_fallback";
+            let route = fallback_route(token, &[bad_addr, good_addr], RetryPolicy::default());
+            let failed_id = route.targets[0].config.id;
+            let bind_addr = available_addr();
+            let proxy = start_proxy(bind_addr, route);
+            let response = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap()
+                .get(format!("http://{bind_addr}/v1/models"))
+                .bearer_auth(token)
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let payload: serde_json::Value = response.json().unwrap();
+            assert_eq!(payload["data"][0]["id"], "fallback");
+            assert!(proxy.status().degraded_target_ids.contains(&failed_id));
+            bad.join().unwrap();
+            good.join().unwrap();
+        }
+    }
+
+    #[test]
     fn model_discovery_not_found_does_not_pollute_proxy_health() {
         let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
@@ -4915,6 +5063,129 @@ mod tests {
     }
 
     #[test]
+    fn forbidden_insufficient_balance_fails_over_before_returning_an_empty_response() {
+        let primary = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let primary_addr = primary.local_addr().unwrap();
+        let primary_thread = std::thread::spawn(move || {
+            let (mut stream, _) = primary.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let body = r#"{"error":{"message":"insufficient balance"}}"#;
+            write!(
+                stream,
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let fallback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let fallback_addr = fallback.local_addr().unwrap();
+        let fallback_thread = std::thread::spawn(move || {
+            let (mut stream, _) = fallback.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let body = r#"{"status":"completed","source":"fallback"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let token = "aipass_forbidden_balance_fallback_test";
+        let route = fallback_route(
+            token,
+            &[primary_addr, fallback_addr],
+            RetryPolicy {
+                max_attempts: 2,
+                ..RetryPolicy::default()
+            },
+        );
+        let _proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/responses"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({"model":"balance-test","input":[]}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.text().unwrap();
+        assert!(body.contains("fallback"));
+        assert!(!body.contains("insufficient balance"));
+        primary_thread.join().unwrap();
+        fallback_thread.join().unwrap();
+    }
+
+    #[test]
+    fn successful_empty_upstream_body_fails_over_before_returning_to_client() {
+        let primary = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let primary_addr = primary.local_addr().unwrap();
+        let primary_thread = std::thread::spawn(move || {
+            let (mut stream, _) = primary.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let fallback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let fallback_addr = fallback.local_addr().unwrap();
+        let fallback_thread = std::thread::spawn(move || {
+            let (mut stream, _) = fallback.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            let body = r#"{"status":"completed","source":"fallback"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let token = "aipass_empty_body_fallback_test";
+        let route = fallback_route(
+            token,
+            &[primary_addr, fallback_addr],
+            RetryPolicy {
+                max_attempts: 2,
+                ..RetryPolicy::default()
+            },
+        );
+        let _proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        let response = reqwest::blocking::Client::new()
+            .post(format!("http://{bind_addr}/v1/responses"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({"model":"empty-body-test","input":[]}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.text().unwrap().contains("fallback"));
+        primary_thread.join().unwrap();
+        fallback_thread.join().unwrap();
+    }
+
+    #[test]
     fn silent_retry_replays_a_failed_upstream_round_before_returning_error() {
         let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
@@ -5107,6 +5378,196 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert!(request_count.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[tokio::test]
+    async fn hold_deadline_bounds_backoff_headers_and_buffered_bodies() {
+        for mode in [
+            "backoff",
+            "headers",
+            "body",
+            "trickle",
+            "prefetch",
+            "silent_stream",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let count = Arc::new(AtomicU64::new(0));
+            let counter = count.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let counter = counter.clone();
+                    tokio::spawn(async move {
+                        let service = service_fn(move |_: Request<Incoming>| {
+                            let attempt = counter.fetch_add(1, Ordering::SeqCst);
+                            async move {
+                                let response = if mode == "backoff" || attempt == 0 {
+                                    error_response(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+                                } else if mode == "headers" {
+                                    std::future::pending::<Response<BoxBody>>().await
+                                } else {
+                                    let first = if mode == "silent_stream" {
+                                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
+                                    } else if mode == "prefetch" {
+                                        "data: {\"type\":\"response.created\"}\n\n"
+                                    } else {
+                                        "{\"output\":"
+                                    };
+                                    let source = stream::once(async move {
+                                        Ok::<_, BoxError>(Frame::data(Bytes::from_static(
+                                            first.as_bytes(),
+                                        )))
+                                    })
+                                    .chain(stream::unfold((), move |()| async move {
+                                        if mode == "trickle" {
+                                            tokio::time::sleep(Duration::from_millis(20)).await;
+                                            Some((
+                                                Ok::<_, BoxError>(Frame::data(Bytes::from_static(
+                                                    b" ",
+                                                ))),
+                                                (),
+                                            ))
+                                        } else {
+                                            std::future::pending().await
+                                        }
+                                    }));
+                                    Response::builder()
+                                        .header(
+                                            header::CONTENT_TYPE,
+                                            if matches!(mode, "silent_stream" | "prefetch") {
+                                                "text/event-stream"
+                                            } else {
+                                                "application/json"
+                                            },
+                                        )
+                                        .body(BodyExt::boxed_unsync(StreamBody::new(source)))
+                                        .unwrap()
+                                };
+                                Ok::<_, Infallible>(response)
+                            }
+                        });
+                        let _ = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(TokioIo::new(socket), service)
+                            .await;
+                    });
+                }
+            });
+            let token = "hold_deadline_test";
+            let route = single_target_route(
+                token,
+                format!("http://{addr}/v1"),
+                RetryPolicy {
+                    hold_on_failure: true,
+                    hold_initial_delay_ms: if mode == "backoff" { 5_000 } else { 10 },
+                    hold_max_delay_ms: 5_000,
+                    hold_max_duration_ms: 1_000,
+                    first_byte_timeout_ms: 5_000,
+                    stream_idle_timeout_ms: 5_000,
+                    silent_retry: mode == "silent_stream",
+                    max_silent_retries: 0,
+                    ..RetryPolicy::default()
+                },
+            );
+            let bind_addr = available_addr();
+            let temp = tempfile::tempdir().unwrap();
+            let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+            let mut config = RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]);
+            config.upstream_proxy.mode = UpstreamProxyMode::Direct;
+            let proxy = ProxyHandle::start(config, usage).unwrap();
+            let response = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(3)).build().unwrap()
+                .post(format!("http://{bind_addr}/v1/responses"))
+                .bearer_auth(token)
+                .json(&serde_json::json!({"model":"test","input":[],"stream":matches!(mode, "silent_stream" | "prefetch")}))
+                .send().await;
+            server.abort();
+            let response = response.unwrap_or_else(|error| {
+                panic!(
+                    "{mode}: exceeded hold deadline: {error:?}; requests={}; status={:?}",
+                    count.load(Ordering::SeqCst),
+                    proxy.status()
+                )
+            });
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY, "{mode}");
+            assert_eq!(
+                count.load(Ordering::SeqCst),
+                if mode == "backoff" { 1 } else { 2 },
+                "{mode}"
+            );
+            assert_eq!(proxy.status().requests, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn hold_deadline_does_not_cut_off_a_committed_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let service = service_fn(|_: Request<Incoming>| async {
+                let source = stream::iter([0, 1]).then(|index| async move {
+                    let data = if index == 0 {
+                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
+                    } else {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+                    };
+                    Ok::<_, BoxError>(Frame::data(Bytes::from_static(data.as_bytes())))
+                });
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .header(header::CONTENT_TYPE, "text/event-stream")
+                        .body(BodyExt::boxed_unsync(StreamBody::new(source)))
+                        .unwrap(),
+                )
+            });
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(socket), service)
+                .await;
+        });
+        let token = "hold_live_stream_test";
+        let route = single_target_route(
+            token,
+            format!("http://{addr}/v1"),
+            RetryPolicy {
+                hold_on_failure: true,
+                hold_max_duration_ms: 150,
+                stream_idle_timeout_ms: 2_000,
+                ..RetryPolicy::default()
+            },
+        );
+        let bind_addr = available_addr();
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let mut config = RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]);
+        config.upstream_proxy.mode = UpstreamProxyMode::Direct;
+        let proxy = ProxyHandle::start(config, usage.clone()).unwrap();
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .post(format!("http://{bind_addr}/v1/responses"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({"model":"test","input":[],"stream":true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response
+            .text()
+            .await
+            .unwrap()
+            .contains("response.completed"));
+        for _ in 0..100 {
+            if usage.count().unwrap() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(proxy.status().requests, 1);
+        assert_eq!(proxy.status().failures, 0);
+        server.abort();
     }
 
     #[test]
@@ -6281,6 +6742,47 @@ mod tests {
         assert!(proxy.status().degraded);
         assert_eq!(proxy.status().degraded_target_ids, vec![failed_target_id]);
         assert_eq!(proxy.status().failures, 0);
+        let request_id: String = usage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row("SELECT id FROM proxy_usage", [], |row| row.get(0))
+            .unwrap();
+        let linked_attempts: i64 = usage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM proxy_attempts WHERE request_id = ?1",
+                [&request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(linked_attempts, 2);
+        drop(proxy);
+        let reopened = UsageStore::open(usage.path()).unwrap();
+        let logs = reopened.logs().unwrap();
+        let text = logs
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("event=proxy.stopped"));
+        assert!(text.contains("outcome=failed"));
+        assert!(text.contains("outcome=success"));
+        assert!(text.contains(&format!(
+            "event=proxy.request.completed request_id={request_id}"
+        )));
+        for forbidden in [
+            token,
+            "upstream-secret",
+            "local-credential-must-not-forward",
+            "gpt-test",
+            "hello",
+            "http://",
+        ] {
+            assert!(!text.contains(forbidden));
+        }
     }
 
     #[test]
@@ -6318,6 +6820,42 @@ mod tests {
         assert_eq!(route.strategy, RouteStrategy::Fallback);
         assert_eq!(route.token, "legacy-plaintext-token");
         assert_eq!(route.targets[0].weight, 1);
+    }
+
+    #[test]
+    fn round_robin_redistributes_weight_among_available_targets() {
+        let mut route = fallback_route(
+            "healthy_weight_test",
+            &[
+                "127.0.0.1:1".parse().unwrap(),
+                "127.0.0.1:2".parse().unwrap(),
+                "127.0.0.1:3".parse().unwrap(),
+            ],
+            RetryPolicy {
+                failure_threshold: 1,
+                max_attempts: 1,
+                ..RetryPolicy::default()
+            },
+        );
+        route.config.strategy = RouteStrategy::RoundRobin;
+        route.targets[0].config.weight = 100;
+        let proxy = start_proxy(available_addr(), route.clone());
+        mark_failure(
+            &proxy.state,
+            route.targets[0].config.id,
+            &route.config.retry,
+        );
+        let mut counts = [0; 2];
+        for _ in 0..20 {
+            let selected = select_route_targets(&proxy.state, &route, false);
+            assert_eq!(selected.len(), 1);
+            let index = route.targets[1..]
+                .iter()
+                .position(|target| target.config.id == selected[0].config.id)
+                .unwrap();
+            counts[index] += 1;
+        }
+        assert_eq!(counts, [10, 10]);
     }
 
     #[test]
@@ -6544,6 +7082,7 @@ mod tests {
                     store
                         .record_attempt(&AttemptRecord {
                             id: Uuid::new_v4(),
+                            request_id: Some(record.id),
                             started_at,
                             duration_ms: 1000,
                             first_token_ms: Some(latency),
@@ -6725,6 +7264,7 @@ mod tests {
         let attempt = |provider_entry_id, secret_id: &str, started_at, success, first_token_ms| {
             AttemptRecord {
                 id: Uuid::new_v4(),
+                request_id: None,
                 started_at,
                 duration_ms: 10,
                 first_token_ms,
@@ -7166,6 +7706,70 @@ mod tests {
     }
 
     #[test]
+    fn invalid_converted_response_fails_over_without_recording_success() {
+        let (bad_addr, bad) = mock_upstream("200 OK", "application/json", "not json".into());
+        let (good_addr, good) = mock_upstream(
+            "200 OK",
+            "application/json",
+            serde_json::json!({
+                "id":"msg_ok", "type":"message", "role":"assistant", "model":"test",
+                "content":[{"type":"text","text":"fallback"}],
+                "stop_reason":"end_turn", "usage":{"input_tokens":5,"output_tokens":2}
+            })
+            .to_string(),
+        );
+        let token = "conversion_failure_test";
+        let route = conversion_route(
+            token,
+            ProxyProtocol::AnthropicMessages,
+            ProxyProtocol::AnthropicMessages,
+            vec![
+                conversion_target(
+                    format!("http://{bad_addr}/v1"),
+                    0,
+                    ProxyProtocol::OpenAiChatCompletions,
+                ),
+                conversion_target(
+                    format!("http://{good_addr}/v1"),
+                    1,
+                    ProxyProtocol::AnthropicMessages,
+                ),
+            ],
+            2,
+        );
+        let failed_id = route.targets[0].config.id;
+        let bind_addr = available_addr();
+        let proxy = start_proxy(bind_addr, route);
+        let response = reqwest::blocking::Client::builder().timeout(Duration::from_secs(5)).build().unwrap()
+            .post(format!("http://{bind_addr}/v1/messages"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({"model":"test","messages":[{"role":"user","content":"hello"}],"max_tokens":32}))
+            .send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.text().unwrap().contains("fallback"));
+        bad.join().unwrap();
+        good.join().unwrap();
+        for _ in 0..100 {
+            if proxy.status().requests == 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(proxy.status().requests, 1);
+        assert_eq!(proxy.status().failures, 0);
+        assert!(proxy.status().degraded_target_ids.contains(&failed_id));
+        let conn = proxy.state.usage.connection.lock().unwrap();
+        let (failed, succeeded): (i64, i64) = conn
+            .query_row(
+                "SELECT SUM(success = 0), SUM(success = 1) FROM proxy_attempts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((failed, succeeded), (1, 1));
+    }
+
+    #[test]
     fn mixed_protocol_route_passes_native_through_and_converts_on_failover() {
         // Target 0 is Anthropic-native and fails; target 1 is Chat
         // Completions-native and must receive a converted request.
@@ -7290,6 +7894,27 @@ mod tests {
         );
         assert!(ProxyHandle::start(
             RuntimeConfig::from_routes(available_addr().to_string(), vec![supported]),
+            usage,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn start_gate_ignores_disabled_targets_when_validating_protocols() {
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let mut route = single_target_route(
+            "aipass_disabled_target_protocol_test",
+            "http://127.0.0.1:9/v1".into(),
+            RetryPolicy::default(),
+        );
+        let mut disabled = route.targets[0].clone();
+        disabled.config.id = Uuid::new_v4();
+        disabled.config.enabled = false;
+        disabled.config.protocol = Some(ProxyProtocol::AnthropicMessages);
+        route.targets.push(disabled);
+        assert!(ProxyHandle::start(
+            RuntimeConfig::from_routes(available_addr().to_string(), vec![route]),
             usage,
         )
         .is_ok());

@@ -256,7 +256,7 @@ fn restore_proxy_if_enabled(state: &Arc<AgentState>) {
             crate::logging::write_component_log(
                 crate::logging::AGENT_LOG,
                 "WARN",
-                &format!("failed to restore proxy after unlock: {}", err.message),
+                &format!("failed to restore proxy after unlock code={:?}", err.code),
             );
         }
     }
@@ -379,6 +379,11 @@ pub fn touch_session(state: &Arc<AgentState>) {
 }
 
 pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
+    crate::logging::write_component_log(
+        crate::logging::AGENT_LOG,
+        "INFO",
+        &format!("event=session.lock reason={reason:?}"),
+    );
     if let Ok(mut session) = state.session.lock() {
         *session = SessionState::Locked;
     }

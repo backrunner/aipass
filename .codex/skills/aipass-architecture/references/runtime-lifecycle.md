@@ -64,7 +64,7 @@ Do not add another unauthenticated local channel for convenience.
 Use timestamps to separate desktop construction, frontend loading, agent launch, and first successful request.
 
 - Desktop trace: `~/Library/Logs/AIPass/desktop.log` on macOS.
-- Agent component log: the platform data directory, typically `~/Library/Application Support/dev.aipass.desktop/logs/agent-YYYY-MM-DD.log` on macOS.
+- Agent, native-host, desktop, and client component logs: `~/Library/Logs/AIPass/{agent,native-host,desktop,client}.log` on macOS (or the platform data directory on other systems). Logs rotate at 10 MiB and retain ten generations.
 - LaunchAgent supervisor and child logs: `~/Library/Logs/AIPass/*.log`.
 - Inspect active processes and `launchctl print gui/<uid>/<service>` only after resolving the exact vault namespace.
 

@@ -82,10 +82,8 @@ impl ProxyService {
     }
 
     pub fn logs(&self) -> ServiceResult<Vec<aipass_agent_protocol::ProxyLogEntry>> {
-        self.handle
-            .as_ref()
-            .map(|handle| handle.logs())
-            .unwrap_or_else(|| Ok(Vec::new()))
+        self.usage
+            .logs()
             .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))
     }
 
@@ -612,8 +610,8 @@ impl ProxyService {
                 AGENT_LOG,
                 "WARN",
                 &format!(
-                    "failed to remove pricing assignments for provider {entry_id}: {}",
-                    err.message
+                    "failed to remove pricing assignments for provider {entry_id} code={:?}",
+                    err.code
                 ),
             );
         }
@@ -804,34 +802,28 @@ impl ProxyService {
                     .interface_type
                     .as_ref()
                     .unwrap_or(&entry.interface_type);
-                let target_protocol =
-                    native_protocol_for_entry(&entry, credential).ok_or_else(|| {
-                        ServiceError::new(
-                            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-                            format!(
-                            "proxy target {} uses a {interface:?} interface that cannot be proxied",
-                            target.label
-                        ),
-                        )
-                    })?;
-                if target_protocol != route.inbound_protocol && !route.conversion_enabled {
+                if !matches!(
+                    interface,
+                    InterfaceType::AnthropicMessages
+                        | InterfaceType::OpenAiCompatible
+                        | InterfaceType::AzureOpenAi
+                ) {
                     return Err(ServiceError::new(
                         aipass_agent_protocol::AgentErrorCode::ValidationFailed,
                         format!(
-                            "proxy target {} speaks a different protocol than route {}; enable protocol conversion for this route",
-                            target.label, route.name
+                            "proxy target {} uses an unsupported {:?} interface",
+                            target.label, interface
                         ),
                     ));
                 }
-                if !aipass_proxy::supports(route.inbound_protocol, target_protocol) {
-                    return Err(ServiceError::new(
-                        aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-                        format!(
-                            "proxy target {} has no conversion path from the route protocol",
-                            target.label
-                        ),
-                    ));
-                }
+                // The route owns the wire format. A self-hosted endpoint may
+                // support both OpenAI and Anthropic protocols, so inferring a
+                // target's "native" protocol from provider metadata would
+                // reject valid configurations and silently enable conversion
+                // for the wrong format. An explicit target protocol remains
+                // available for legacy/advanced configs; otherwise use the
+                // route's configured upstream protocol verbatim.
+                let target_protocol = target.protocol.unwrap_or(route.upstream_protocol);
                 let mut provider_headers = vault
                     .reveal_provider_headers(target.provider_entry_id)
                     .map_err(map_vault_error)?;
@@ -860,8 +852,8 @@ impl ProxyService {
                         AGENT_LOG,
                         "WARN",
                         &format!(
-                            "official OAuth entry {} has no pinned upstream for provider_id {:?}; keeping entry endpoint",
-                            entry.id, entry.provider_id
+                            "official OAuth entry {} has no pinned upstream; keeping entry endpoint",
+                            entry.id
                         ),
                     );
                 }
@@ -941,35 +933,6 @@ fn proxy_auth_scheme(auth_scheme: &AuthScheme) -> Option<&'static str> {
     }
 }
 
-/// Native wire protocol of a provider entry, mirroring the desktop's
-/// `nativeProtocolForEntry`: Anthropic entries speak Anthropic Messages;
-/// OpenAI's own API and Codex OAuth credentials speak the Responses API;
-/// other OpenAI-compatible and Azure entries speak Chat Completions.
-/// Gemini, Bedrock, and custom-HTTP entries cannot be proxy targets.
-fn native_protocol_for_entry(
-    entry: &aipass_vault::EntrySummary,
-    credential: &aipass_provider_registry::SecretRef,
-) -> Option<aipass_proxy::Protocol> {
-    let interface = credential
-        .interface_type
-        .as_ref()
-        .unwrap_or(&entry.interface_type);
-    match interface {
-        InterfaceType::AnthropicMessages => Some(aipass_proxy::Protocol::AnthropicMessages),
-        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => {
-            let responses_native = entry.provider_id.as_deref() == Some("openai")
-                || (entry.provider_id.as_deref() == Some("codex")
-                    && entry.credential_kind == CredentialKind::OAuth);
-            Some(if responses_native {
-                aipass_proxy::Protocol::OpenAiResponses
-            } else {
-                aipass_proxy::Protocol::OpenAiChatCompletions
-            })
-        }
-        InterfaceType::Gemini | InterfaceType::Bedrock | InterfaceType::CustomHttp => None,
-    }
-}
-
 fn normalize_versions(versions: &mut Vec<aipass_agent_protocol::GroupPriceVersion>) {
     versions.sort_by_key(|version| version.effective_from);
     let mut deduped: Vec<aipass_agent_protocol::GroupPriceVersion> =
@@ -1037,8 +1000,13 @@ fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
     for route in &config.routes {
         // `upstream_protocol` is the legacy route-level fallback; targets
         // with an explicit protocol validate against their own value.
-        let target_protocols = std::iter::once(route.upstream_protocol)
-            .chain(route.targets.iter().filter_map(|target| target.protocol));
+        let target_protocols = std::iter::once(route.upstream_protocol).chain(
+            route
+                .targets
+                .iter()
+                .filter(|target| target.enabled)
+                .filter_map(|target| target.protocol),
+        );
         for target_protocol in target_protocols {
             if route.inbound_protocol != target_protocol && !route.conversion_enabled {
                 return Err(ServiceError::new(
@@ -1703,7 +1671,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_rejects_provider_protocol_drift() {
+    fn runtime_config_uses_configured_route_protocol_without_provider_inference() {
         let temp = tempfile::tempdir().expect("tempdir");
         let creation = Vault::create(
             temp.path(),
@@ -1773,12 +1741,12 @@ mod tests {
             )
             .expect("update provider protocol");
 
-        let error = service
+        let runtime = service
             .runtime_config(&creation.vault)
-            .expect_err("protocol drift must be rejected");
+            .expect("provider metadata must not override route protocol");
         assert_eq!(
-            error.code,
-            aipass_agent_protocol::AgentErrorCode::ValidationFailed
+            runtime.routes[0].targets[0].config.protocol,
+            Some(aipass_proxy::Protocol::OpenAiResponses)
         );
     }
 
@@ -2056,99 +2024,6 @@ mod tests {
         assert!(validate_config(&config).is_err());
         config.routes[0].conversion_enabled = true;
         assert!(validate_config(&config).is_ok());
-    }
-
-    fn summary_for(
-        interface: InterfaceType,
-        provider_id: Option<&str>,
-        credential_kind: CredentialKind,
-    ) -> (
-        aipass_vault::EntrySummary,
-        aipass_provider_registry::SecretRef,
-    ) {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let creation = Vault::create(
-            temp.path(),
-            &SecretString::new("correct horse battery staple"),
-        )
-        .expect("create vault");
-        let mut input = provider_input("key", "http://127.0.0.1:9/v1".into(), "header");
-        input.provider_kind = ProviderKind::Official;
-        input.provider_id = provider_id.map(str::to_string);
-        input.credential_kind = credential_kind;
-        input.interface_type = interface.clone();
-        input.auth_scheme = if interface == InterfaceType::AnthropicMessages {
-            AuthScheme::XApiKey
-        } else {
-            AuthScheme::Bearer
-        };
-        let id = creation.vault.add_provider(input).expect("add provider");
-        let summary = creation
-            .vault
-            .get_provider_summary(id)
-            .expect("provider summary");
-        let secret = summary.secret_refs[0].clone();
-        (summary, secret)
-    }
-
-    #[test]
-    fn native_protocol_derivation_matches_desktop_contract() {
-        let (entry, secret) = summary_for(
-            InterfaceType::AnthropicMessages,
-            Some("anthropic"),
-            CredentialKind::default(),
-        );
-        assert_eq!(
-            native_protocol_for_entry(&entry, &secret),
-            Some(aipass_proxy::Protocol::AnthropicMessages)
-        );
-
-        let (entry, secret) = summary_for(
-            InterfaceType::OpenAiCompatible,
-            Some("openai"),
-            CredentialKind::default(),
-        );
-        assert_eq!(
-            native_protocol_for_entry(&entry, &secret),
-            Some(aipass_proxy::Protocol::OpenAiResponses)
-        );
-
-        // Codex OAuth credentials are Responses-native.
-        let (entry, secret) = summary_for(
-            InterfaceType::OpenAiCompatible,
-            Some("codex"),
-            CredentialKind::OAuth,
-        );
-        assert_eq!(
-            native_protocol_for_entry(&entry, &secret),
-            Some(aipass_proxy::Protocol::OpenAiResponses)
-        );
-
-        let (entry, secret) = summary_for(
-            InterfaceType::OpenAiCompatible,
-            Some("openrouter"),
-            CredentialKind::default(),
-        );
-        assert_eq!(
-            native_protocol_for_entry(&entry, &secret),
-            Some(aipass_proxy::Protocol::OpenAiChatCompletions)
-        );
-
-        let (entry, secret) =
-            summary_for(InterfaceType::AzureOpenAi, None, CredentialKind::default());
-        assert_eq!(
-            native_protocol_for_entry(&entry, &secret),
-            Some(aipass_proxy::Protocol::OpenAiChatCompletions)
-        );
-
-        for interface in [
-            InterfaceType::Gemini,
-            InterfaceType::Bedrock,
-            InterfaceType::CustomHttp,
-        ] {
-            let (entry, secret) = summary_for(interface, None, CredentialKind::default());
-            assert_eq!(native_protocol_for_entry(&entry, &secret), None);
-        }
     }
 
     #[test]

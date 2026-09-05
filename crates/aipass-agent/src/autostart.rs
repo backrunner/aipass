@@ -565,7 +565,7 @@ while [ -x "$AGENT" ]; do
       cleanup
       exit 0
     fi
-    sleep 10
+    sleep 1
   done
   wait "$child" >/dev/null 2>&1 || true
   child=""
@@ -655,7 +655,7 @@ while [ -x "$DESKTOP" ]; do
       cleanup
       exit 0
     fi
-    sleep 10
+    sleep 1
   done
   wait "$child" >/dev/null 2>&1 || true
   child=""
@@ -734,7 +734,9 @@ cleanup
             .args(["enable", service.as_str()])
             .status();
         let _ = Command::new("launchctl")
-            .args(["kickstart", "-k", service.as_str()])
+            // RunAtLoad may already have started the new supervisor. Do not
+            // kill it again; explicit repair has already unloaded the old job.
+            .args(["kickstart", service.as_str()])
             .status();
         Ok(())
     }
@@ -1081,7 +1083,7 @@ while [ -x "$AGENT" ]; do
       cleanup
       exit 0
     fi
-    sleep 10
+    sleep 1
   done
   wait "$child" >/dev/null 2>&1 || true
   child=""
