@@ -130,7 +130,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Set release version
-        run: node scripts/set-release-version.mjs "${{ needs.resolve-release.outputs.version }}"
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve-release.outputs.version }}"
+          node scripts/set-release-version.mjs "${version}"
+          if [[ "${{ needs.resolve-release.outputs.channel }}" == "nightly" ]]; then
+            node scripts/set-extension-release-version.mjs "${version}" "${version%%-*}.${GITHUB_RUN_NUMBER}"
+          fi
 
       - name: Validate signing and updater secrets
         shell: bash
@@ -240,6 +246,7 @@ jobs:
         env:
           CI: true
           AIPASS_MACOS_UNIVERSAL: true
+          AIPASS_EXTENSION_RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
