@@ -42,6 +42,20 @@ Newest entries last within each section.
 - **Guardrail**: never serialize requests for diagnostics; log only allowlisted metadata, retain operation pairs across repetition/rotation, correlate attempts across HTTP/SSE/WebSocket, and test persistence after stop/restart and business failures within successful IPC responses.
 - **Watch points**: agent `operation_log.rs`, shared `logging.rs`, client/envelope/server correlation, desktop logger, proxy `diagnostics.rs` and `persist_attempt`. Regression tests cover provider lifecycle, semantic errors/unwinding, concurrent rotation, restart retention and successful fallback.
 
+### Unsupported Responses tools must not disappear during conversion
+- **Symptom**: Responses-to-Anthropic conversion returned success after removing `custom` execution tools and their call history.
+- **Root cause**: `request.rs` filtered tools to `function` and ignored unsupported call/result items.
+- **Fix**: reject unsupported definitions and call/result history with an explicit conversion error, preserving native Responses passthrough. Regression: `responses_conversion_rejects_unsupported_tools_and_history_without_silently_dropping_them`.
+- **Guardrail**: implement complete reversible tool mappings or reject the request; never silently drop executable capabilities or invocation history.
+- **Watch points**: `crates/aipass-proxy-conversion/src/request.rs`, native Responses routing, and converted WS requests.
+
+### Protocol failures need comparable metadata across transports
+- **Symptom**: Codex reported missing terminal tools while proxy status alone could not distinguish dropped tool definitions, malformed Responses events, and WS transport failures.
+- **Root cause**: request diagnostics omitted tool shape and event lifecycle; WS connector errors were reduced to HTTP status, and mixed WS requests logged a UUID before replacing it for usage accounting.
+- **Fix**: shared allowlisted tool/event summaries in `crates/aipass-proxy/src/diagnostics/protocol.rs`, fixed transport reason categories and OS codes, and one generated request ID across mixed WS attempts and usage records.
+- **Guardrail**: observe native WS and HTTP/SSE with the same bounded counters; compare tool summaries across conversion without logging names or payloads; assign correlation IDs before logging. Keep diagnostics observational. Covered by `diagnostics::protocol::tests` and `websocket::tests::diagnostics`.
+- **Watch points**: native `websocket.rs`, mixed `websocket/upstream.rs`, bridge context restoration, HTTP `forward_request` / `observe_sse_usage_traced`, and `docs/local-logging.md`.
+
 ### Configuration failures lacked an operation trail
 - **Symptom**: a failed config write surfaced only a transport error such as `failed to fill whole buffer`, with no way to identify which write was interrupted.
 - **Root cause**: tool config preview/apply/rollback handlers had no lifecycle logs, while writes can wait on vault or Codex SQLite state migration.
@@ -49,14 +63,28 @@ Newest entries last within each section.
 - **Guardrail**: log every configuration operation's lifecycle and correlate apply/rollback failures by operation ID without logging config contents or secrets.
 - **Watch points**: `crates/aipass-agent/src/handlers.rs`, `crates/aipass-agent-protocol/src/lib.rs`, and `crates/aipass-config-writers/src/backup.rs`.
 
+### Codex session migration overflowed the IPC response
+- **Symptom**: changing a Codex provider failed with `failed to fill whole buffer`, while other tool configuration writes succeeded.
+- **Root cause**: Codex provider migration scanned session JSONL files and put each transformed file into `ConfigPlan.extra_writes`; large histories made the preview response exceed the 16 MiB agent frame limit or exhausted the agent before it could answer.
+- **Fix**: keep only migration paths and counts in the plan, and perform per-file backup plus streaming JSONL rewrite in Rust during apply; previews contain configuration diffs and migration summaries only.
+- **Guardrail**: never place Codex session/history contents in `ToolConfigPreviewResponse` or any IPC frame; migrate history files on the agent side with bounded per-file memory and encrypted backups.
+- **Watch points**: `crates/aipass-config-writers/src/plan.rs`, `crates/aipass-config-writers/src/backup.rs`, and `crates/aipass-agent/src/handlers.rs`.
+
 ### Codex provider writes omitted WebSocket support
 - **Symptom**: generated Codex configurations did not advertise Responses WebSocket support, including when pointing at the WS-capable local proxy.
 - **Root cause**: `crates/aipass-config-writers/src/plan.rs:930` managed `wire_api` but omitted the provider-level `supports_websockets` flag.
-- **Fix**: set `supports_websockets = true` in the shared provider updater for every auth mode, including existing provider blocks.
-- **Guardrail**: keep transport flags in the shared Codex provider updater; verify new configs, provider migration, and local proxy writes all enable WS while keeping HTTP base URLs. Covered by the Codex writer idempotence/migration tests and `codex_local_proxy_writer_enables_websocket_transport`.
+- **Fix**: default `supports_websockets` to true in the shared provider updater for every auth mode; honor an explicit provider opt-out on direct integrations while local proxy integrations always advertise their own WS capability.
+- **Guardrail**: keep transport flags in the shared Codex provider updater; verify new configs, provider migration, direct opt-outs and local proxy WS support while keeping HTTP base URLs. Covered by the Codex writer idempotence/migration tests and `codex_local_proxy_writer_enables_websocket_transport`.
 - **Watch points**: `plan_codex`, `plan_codex_official`, `plan_codex_plaintext_with_mode`, and agent `build_tool_config_proxy_plan`.
 
 ## Proxy credential snapshot (proxy_service / handlers)
+
+### Codex local tokens must stay on Responses
+- **Symptom**: a Codex-configured local proxy token could be reused against another inbound API route such as Chat Completions.
+- **Root cause**: local authentication is token based, so protocol scoping depends on the route selection predicate remaining aligned with Codex's `wire_api = "responses"` configuration.
+- **Fix**: keep Codex integration validation and runtime route selection tied to `OpenAiResponses`, with an explicit protocol-scope helper and regression test.
+- **Guardrail**: preserve one-to-one Codex token and Responses route scoping; reject Chat Completions and Anthropic paths before forwarding.
+- **Watch points**: `crates/aipass-agent/src/server.rs` `ensure_proxy_tool_protocol`, `crates/aipass-proxy/src/lib.rs` route selection, and `apps/desktop/src/lib/utils/integrations.ts`.
 
 ### New or changed credentials invisible to the running proxy
 - **Symptom**: a credential added from the extension, imported, archived/restored, or synced from another device did not work through the local proxy until the proxy was manually restarted.
@@ -93,6 +121,13 @@ Newest entries last within each section.
 - **Guardrail**: derive target degradation from shared runtime health, including successful fallback, recovery, expiration, and config reload. Keep target IDs distinct across credentials. Enforced by `degraded_targets_follow_recent_failures_circuits_and_recovery`, `proxy_authenticates_fails_over_and_records_usage`, and desktop route component tests.
 - **Watch points**: HTTP/model discovery/stream/WebSocket `mark_failure` and `mark_success`, agent stopped status, desktop status polling, route list and editor.
 
+### Immediate success cleared a recovering target
+- **Symptom**: a provider briefly showed as degraded and then returned to healthy after one successful fallback or a late in-flight response.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` `mark_success` removed target health on the first success, even when the target had unresolved failures or had just left its circuit-open period.
+- **Fix**: retain target health through recovery and require two consecutive successful requests before clearing it; ignore successes that arrive while a newer circuit is still open.
+- **Guardrail**: treat every target with unresolved failures as recovering and require `RECOVERY_SUCCESS_THRESHOLD` consecutive successes before removing health state. Keep the rule shared by HTTP, SSE, model discovery, and WebSocket completion paths.
+- **Watch points**: `mark_failure`, `mark_success`, `circuit_open`, streaming completion, converted WebSocket lanes, and degraded status projection.
+
 ### Empty successful bodies must not commit
 - **Symptom**: an upstream could return HTTP 200 with an empty body, leaving the model client with an empty response instead of trying another target.
 - **Root cause**: non-stream forwarding treated any 2xx response as successful before checking whether a body was present.
@@ -121,6 +156,27 @@ Newest entries last within each section.
 - **Guardrail**: calculate round-robin weights over the actual eligible target set; keep explicit hold-mode circuit bypass intact. Covered by `round_robin_redistributes_weight_among_available_targets`.
 - **Watch points**: shared target selection used by HTTP, model discovery, native WS, and converted WS.
 
+### Session cache affinity was lost during target selection
+- **Symptom**: requests from one conversation alternated between providers, reducing provider prompt-cache hits even while every target was healthy.
+- **Root cause**: round-robin selection had no short-lived association between a client session key and the target that completed its previous request; HTTP, model discovery, and WebSocket paths all started from the route-wide rotation.
+- **Fix**: keep bounded in-memory affinity keyed by route and `prompt_cache_key`/session headers, prefer the healthy remembered target, and rebind after fallback; failures clear mappings for the affected target.
+- **Guardrail**: apply session affinity after health filtering in every transport path, remember only a validated successful target, bound and expire keys, and clear them on target failure or config reload. Covered by `session_affinity_prefers_last_successful_target_across_round_robin` and `session_affinity_is_cleared_when_a_target_fails`.
+- **Watch points**: `crates/aipass-proxy/src/lib.rs` forwarding/model discovery and `crates/aipass-proxy/src/websocket.rs` handshake selection.
+
+### Provider WS capability must not become a route-wide transport choice
+- **Symptom**: one HTTP-only provider forced every target in a mixed route to SSE, while a rejecting WS endpoint could repeatedly fail despite working over SSE.
+- **Root cause**: `crates/aipass-proxy/src/websocket.rs` selected the bridge once for the whole route; native handshakes shared the ordinary HTTP target circuit, and pre-output buffering could replay a submitted generation.
+- **Fix**: prefer transparent relay for the actual selected native target, select upstream WS per provider only inside fallback/converted sessions, track provider-scoped WS cooldown separately from HTTP health, and use the shared connector for non-generating Responses warmup probes.
+- **Guardrail**: never reset WS failures on SSE success or on a 101 handshake alone. Do not replay a WS client's generation after submission or an ambiguous disconnect, including before output and with silent retry enabled. Keep probe auth/quota/timeouts inconclusive and clear runtime capability state on config refresh. Regression coverage: `websocket/tests/adaptive.rs`.
+- **Watch points**: `websocket.rs` native relay, `websocket/upstream.rs` mixed-route WS, `websocket/bridge.rs`, `lib.rs` forwarding/WS health, agent `provider.probe`, and desktop probe rendering.
+
+### WS preference must cover HTTP entry points and preserve upstream connections
+- **Symptom**: mixed routes opened a new upstream socket for each generation, HTTP Responses clients never tried WS, and idle upstream sockets had no proactive heartbeat.
+- **Root cause**: `websocket/upstream.rs` owned a socket only for the response lifetime; `lib.rs` gated it on the inbound `websocket` flag; native relay only replied to peer pings.
+- **Fix**: prefer WS for native Responses HTTP and WS requests, retain successful sockets only inside fallback WS sessions, for 120 seconds, with exclusive leases and handshake/session isolation, and add hop-local ping/pong liveness checks.
+- **Guardrail**: never share a leased socket between active generations or client connections. A Codex close ends every upstream lease and idle worker; never reuse across client connections or retain HTTP-request sockets. Keep native sessions transparent even on mixed routes. Revalidate fallback sockets before generation, drop them on config refresh/cancellation/error, preserve buffered HTTP response shape, and never count control frames as response progress. Reconstruct complete tool history before provider changes; reject orphan results and pin opaque provider state to its source target. Cover reuse, idle heartbeats, isolation, refresh, safe reconnect and no replay in `websocket/tests/adaptive.rs`.
+- **Watch points**: `lib.rs` HTTP entry, `websocket.rs` native relay, `websocket/bridge.rs` session ownership, `websocket/upstream.rs`, `websocket/pool.rs`, and `websocket/keepalive.rs`.
+
 ## Public model pricing (aipass-agent pricing)
 
 ### Startup-only refresh and encrypted metadata left prices stale
@@ -138,6 +194,13 @@ Newest entries last within each section.
 - **Fix**: shared evidence regexes exported from schemas and consumed by the extension; Rust hand-aligned with a sync comment; minimax registry entry corrected to `openai_compatible`; `custom_http` is now strictly the no-AI-evidence fallback.
 - **Guardrail**: endpoint inference changes must land in all three implementations in the same change, with regression tests on both sides. `custom_http` may only be chosen when no AI evidence exists.
 - **Watch points**: `packages/schemas/src/index.ts`, `apps/extension/src/content/detector.ts`, `crates/aipass-agent/src/server.rs` `infer_interface_from_endpoint`, `crates/aipass-provider-registry/src/lib.rs` interface lists.
+
+### New API speed-test URLs were saved as API endpoints
+- **Symptom**: importing a token from a New API console stored the channel's health-check/speed-test URL as the provider API endpoint.
+- **Root cause**: the extension treated every HTTP URL with API-like path evidence as equivalent and did not inspect labels such as `测速地址` when choosing among candidates.
+- **Fix**: endpoint extraction now includes input labels and filters explicitly labelled speed-test URLs, external speed-test wrappers, and known health-check paths before applying API evidence; regression tests cover mixed, speed-test-only, neighbouring, and external-link New API pages.
+- **Guardrail**: when scraping endpoint candidates, exclude speed-test, probe, latency, ping, and health-check URLs before provider inference; if no API URL remains, fall back to the provider origin rather than persisting the test target.
+- **Watch points**: `apps/extension/src/content/detector.ts` endpoint candidate ranking, `apps/extension/src/content/detector.test.ts`, and any future detector implementation that derives endpoints from gateway management pages.
 
 ## Update channel resolution (apps/desktop)
 
