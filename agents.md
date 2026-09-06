@@ -21,3 +21,16 @@ Examples:
 - `chore(repo): tighten ignore rules`
 - `refactor(native-host): split request handling`
 - `fix(sync): handle webdav conflict metadata`
+
+## Local Validation Platform
+
+User instruction, 2026-09-07: permanently skip local Ubuntu validation.
+
+- Run local Rust, Node, and desktop bundle checks natively on macOS.
+- Do not create, start, or retain Ubuntu/Linux containers or virtual machines to
+  reproduce CI checks, including before branch pushes and nightly releases.
+- Do not install Linux dependencies or block a local push/release on missing
+  local Ubuntu validation. This overrides older workflow environment-matching
+  instructions in repository skills and documentation.
+- GitHub Actions remains responsible for its configured Linux jobs. Report
+  local macOS results and remote CI results accurately and separately.

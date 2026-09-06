@@ -77,36 +77,43 @@ Read these repo docs before large changes:
 - Does sync still operate on encrypted objects only?
 - Did you avoid introducing a second code path that bypasses `aipass-agent`?
 
-## Pre-push GitHub CI gate
+## Local validation platform
+
+Per the permanent user instruction recorded in root `agents.md` on 2026-09-07,
+local Ubuntu validation is skipped. Run local checks natively on macOS. Never
+create, start, or retain Ubuntu/Linux containers or virtual machines for local
+CI reproduction, including branch and nightly release gates. Do not install
+Linux dependencies locally or treat unavailable local Ubuntu validation as a
+blocker. GitHub Actions runs its configured Linux jobs remotely.
+
+## Pre-push validation gate
 
 `git push` is prohibited until every required check below passes for the exact commit being pushed.
 
-1. Immediately before validation, re-read every file in `.github/workflows/`. Treat the workflows as the source of truth and include any newly added or changed check.
+1. Immediately before validation, re-read every file in `.github/workflows/`. Use their check commands, applying the macOS-only local validation rule above instead of matching Ubuntu runner environments.
 2. Passing this gate is necessary but does not grant permission to push. Only push when the user has explicitly requested it.
 3. Finalize the intended commits first. Record the source ref and commit SHA for every intended refspec, require a clean worktree, and run the gate against each unique commit being pushed. Never include unvalidated extra refs through `--all`, `--tags`, or additional refspecs.
-4. Run the complete branch CI gate for every code or documentation push, even when the changed files look unrelated to a job. Do not select checks based on the diff.
-5. Match the workflow environments: run the `rust` and `node` jobs on an Ubuntu-compatible clean runner, and run `macOS desktop bundle` on macOS. Use Node 24, pnpm from the root `packageManager` field, stable Rust, and every platform dependency declared by the workflows.
+4. Run the complete local branch gate below for every code or documentation push, even when the changed files look unrelated to a job. Do not select checks based on the diff.
+5. Run `rust`, `node`, and `macOS desktop bundle` natively on macOS. Use Node 24, pnpm from the root `packageManager` field, stable Rust, and the required macOS build dependencies. Local Ubuntu jobs and Linux dependency setup are permanently excluded.
 6. Every setup step, command, and bundle assertion must exit successfully. A pre-existing failure is still a failure.
 7. After validation, require every recorded ref to resolve to the same commit and the worktree to still be clean. Any commit, amend, rebase, merge, generated-file change, or workflow change invalidates the result and requires the full gate again.
-8. Never bypass the gate with `--no-verify`, ignored exit codes, narrower package filters, skipped tests, or a claim that CI will catch the problem after pushing.
-9. If a check cannot run because a toolchain, dependency, operating system, credential, or service is unavailable, stop and report the blocker. Do not push.
+8. Never bypass the required macOS gate with `--no-verify`, ignored exit codes, narrower package filters, or skipped tests. The explicit local Ubuntu exclusion above is a standing user rule, not a gate failure.
+9. If a required macOS check cannot run because a toolchain, dependency, credential, or service is unavailable, stop and report the blocker. Do not push.
 
-### Required branch CI commands
+### Required local branch commands
 
 Run these from the repository root. Apply any shell wrapper required by the active agent instructions without changing the wrapped commands.
 
-`rust` on Ubuntu:
+`rust` on macOS:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 ```
 
-`node` on Ubuntu with Node 24:
+`node` on macOS with Node 24:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -130,7 +137,7 @@ test -x "${app_path}/Contents/Resources/aipass-agent"
 test -x "${app_path}/Contents/Resources/aipass-native-host"
 ```
 
-Report each completed job as `rust`, `node`, and `macOS desktop bundle`, including failures or checks that could not run.
+Report each completed local job as `rust (macOS)`, `node (macOS)`, and `macOS desktop bundle`, including failures or required checks that could not run. Report remote GitHub Actions results separately; never claim local Ubuntu checks ran.
 
 ### Release tag pushes
 
@@ -139,6 +146,6 @@ The branch gate does not authorize pushing a `v*.*.*` tag. A release tag also tr
 Before a release tag push:
 
 - Run the complete branch gate above against the tagged commit.
-- Re-read `release.yml` and execute every locally reproducible command for the exact tag.
+- Re-read `release.yml` and execute every command reproducible natively on macOS for the exact tag. Never start an Ubuntu/Linux container or VM for release validation; platform-specific Linux/Windows jobs run in GitHub Actions.
 - Confirm every required GitHub, Apple, Tauri, and Cloudflare secret and external prerequisite without printing secret values.
-- Do not push the tag if any release job, platform assertion, credential, or external prerequisite cannot be verified. Report the blocker instead of weakening or bypassing the workflow.
+- Verify required remote release credentials and prerequisites before pushing the tag. Validate macOS assertions locally and monitor all required GitHub Actions release jobs through completion. Missing local Linux/Windows execution is not a blocker and must not trigger container setup.
