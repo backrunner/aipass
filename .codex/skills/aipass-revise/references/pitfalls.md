@@ -5,6 +5,13 @@ Newest entries last within each section.
 
 ## Sync lifecycle (aipass-agent server / session / sync_watch)
 
+### Agent integration fixtures inherited the host cloud directory
+- **Symptom**: native-host tests on macOS stalled in initial sync while reading the host's iCloud files.
+- **Root cause**: `crates/aipass-native-host/src/lib.rs` `RunningAgent::start` created a vault at the temporary root and omitted sync settings; sibling agent settings were shared and macOS selected its real iCloud default.
+- **Fix**: place each fixture vault under its own temporary root and persist a local sync folder before starting the agent.
+- **Guardrail**: every agent integration fixture must isolate the vault, sibling settings and sync destination before startup; never rely on the host's platform defaults. Keep native-host and agent server fixtures aligned.
+- **Watch points**: native-host `RunningAgent`, agent server `RunningAgent`, `session::sync_settings_path` and `load_sync_settings`.
+
 ### Sync downloads left the in-memory vault stale
 - **Symptom**: entries synced from another device disappeared or were overwritten by older content on the next write.
 - **Root cause**: `run_sync_local` / `run_sync_webdav` wrote downloaded objects into the vault directory on disk, but an unlocked session kept serving the `Vault` loaded at open time; the next write used stale lamport clocks and content and clobbered the new files. Original defect at `crates/aipass-agent/src/server.rs` `run_sync_local` (no reload after sync).

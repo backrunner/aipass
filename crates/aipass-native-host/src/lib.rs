@@ -37,14 +37,24 @@ mod tests {
     impl RunningAgent {
         fn start() -> Self {
             let dir = tempdir().unwrap();
+            let vault_dir = dir.path().join("vault");
             let password = "correct horse battery staple".to_string();
-            aipass_vault::Vault::create(dir.path(), &SecretString::new(&password)).unwrap();
-            let vault_dir = dir.path().to_path_buf();
+            aipass_vault::Vault::create(&vault_dir, &SecretString::new(&password)).unwrap();
+            // Keep sibling agent settings and startup sync inside this fixture.
+            // Otherwise macOS defaults to the host's real iCloud directory.
+            let settings = aipass_agent::session::PersistedSyncSettings {
+                mode: aipass_agent_protocol::SyncMode::Local,
+                sync_folder: Some(dir.path().join("sync")),
+                ..Default::default()
+            };
+            let settings_path = aipass_agent::session::sync_settings_path(&vault_dir);
+            std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+            std::fs::write(&settings_path, serde_json::to_vec(&settings).unwrap()).unwrap();
+            let server_vault_dir = vault_dir.clone();
             let handle = thread::spawn(move || {
-                run_server(ServerOptions::without_desktop_tray(vault_dir)).unwrap();
+                run_server(ServerOptions::without_desktop_tray(server_vault_dir)).unwrap();
             });
-            let client =
-                AgentClient::new(AgentClientConfig::for_vault(dir.path().to_path_buf()).unwrap());
+            let client = AgentClient::new(AgentClientConfig::for_vault(vault_dir).unwrap());
             for _ in 0..50 {
                 if client
                     .request::<SessionStatus>(&AgentRequest::SessionStatus)
@@ -64,14 +74,14 @@ mod tests {
 
         fn config(&self) -> NativeHostConfig {
             NativeHostConfig {
-                vault_dir: self.dir.path().to_path_buf(),
+                vault_dir: self.client.config.vault_dir.clone(),
                 allowed_extension_ids: vec![],
             }
         }
 
         fn config_with_allowed_extension(&self, extension_id: &str) -> NativeHostConfig {
             NativeHostConfig {
-                vault_dir: self.dir.path().to_path_buf(),
+                vault_dir: self.client.config.vault_dir.clone(),
                 allowed_extension_ids: vec![extension_id.to_string()],
             }
         }
@@ -713,7 +723,7 @@ mod tests {
         );
         assert!(save.ok, "{save:?}");
         let vault = aipass_vault::Vault::open(
-            agent.dir.path(),
+            &agent.client.config.vault_dir,
             &SecretString::new("correct horse battery staple"),
         )
         .unwrap();
@@ -787,7 +797,7 @@ mod tests {
         );
         assert!(refreshed.ok, "{refreshed:?}");
         let refreshed_entries = aipass_vault::Vault::open(
-            agent.dir.path(),
+            &agent.client.config.vault_dir,
             &SecretString::new("correct horse battery staple"),
         )
         .unwrap()
@@ -872,7 +882,7 @@ mod tests {
         assert_eq!(preview.data["maskedSecret"], "sk-gat...alue");
         assert!(!preview.data["fingerprint"].as_str().unwrap().is_empty());
         let vault = aipass_vault::Vault::open(
-            agent.dir.path(),
+            &agent.client.config.vault_dir,
             &SecretString::new("correct horse battery staple"),
         )
         .unwrap();
