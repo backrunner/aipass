@@ -1156,7 +1156,8 @@ mod tests {
 
     fn provider_input(api_key: &str, endpoint: String, header: &str) -> ProviderEntryInput {
         ProviderEntryInput {
-            supports_websockets: None,
+            // Credential-refresh fixtures serve HTTP generations only.
+            supports_websockets: Some(false),
             title: "Proxy upstream".into(),
             provider_kind: ProviderKind::Unknown,
             // Matches the routes these tests build: an OpenAI-native entry
@@ -1407,7 +1408,7 @@ mod tests {
             config: service.config.routes[0].clone(),
             local_token: local_token.into(),
             targets: vec![ResolvedTarget {
-                supports_websockets: true,
+                supports_websockets: false,
                 config: ProxyTargetConfig {
                     id: Uuid::new_v4(),
                     provider_entry_id: Uuid::new_v4(),
