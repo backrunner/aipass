@@ -27,6 +27,7 @@ export type Draft = {
   accountIdentity?: string;
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
+  supportsWebsockets?: boolean;
   apiKey: string;
   secretLabel: string;
   defaultModel: string;

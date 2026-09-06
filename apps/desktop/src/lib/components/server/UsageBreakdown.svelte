@@ -163,9 +163,9 @@
     }
 
     .col-name {
-      min-width: 88px;
-      width: 88px;
-      max-width: 88px;
+      min-width: 72px;
+      width: 72px;
+      max-width: 72px;
       overflow: hidden;
       text-align: left;
     }

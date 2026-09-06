@@ -9,6 +9,7 @@
   import type { Draft, FormMode, MaybePromise } from "../types";
   import Field from "./Field.svelte";
   import SelectField from "./SelectField.svelte";
+  import SwitchField from "./SwitchField.svelte";
 
   export let formMode: FormMode = "add";
   export let draft: Draft;
@@ -18,6 +19,7 @@
   export let onInterfaceChanged: () => MaybePromise = () => {};
   export let onAuthChanged: () => MaybePromise = () => {};
   export let itemLayout = false;
+  export let showWebsocketSetting = false;
   export let compactProviderSelect = false;
   export let showSecretLabel = true;
   // Set when editing an official OAuth entry: the proxy sends the OAuth token
@@ -385,6 +387,14 @@
         onValueChange={() => onAuthChanged()}
       />
     </div>
+    {#if showWebsocketSetting && (draft.interfaceType === "openai_compatible" || draft.interfaceType === "azure_openai")}
+      <SwitchField
+        label={$t("providerForm.supportsWebsockets")}
+        description={$t("providerForm.supportsWebsocketsHint")}
+        checked={draft.supportsWebsockets ?? true}
+        onCheckedChange={(checked) => (draft.supportsWebsockets = checked)}
+      />
+    {/if}
     {#if visibleFields.has("consoleUrl")}
       <div class="removable-field" data-provider-field="consoleUrl">
         <Field label={$t("providerForm.consoleUrl")}>
@@ -530,13 +540,18 @@
     gap: 0;
     border-radius: 10px;
     overflow: hidden;
+    background: color-mix(in oklab, var(--surface) 92%, var(--surface-2));
   }
   .item-layout .section-fields > :global(*) {
-    padding: 12px 16px;
+    padding: 13px 16px;
     border-bottom: 1px solid var(--divider);
+    transition: background-color 120ms ease;
   }
   .item-layout .section-fields > :global(*:last-child) {
     border-bottom: 0;
+  }
+  .item-layout .section-fields > :global(*:hover) {
+    background: color-mix(in oklab, var(--surface-2) 48%, transparent);
   }
   .item-layout :global(.field), .item-layout :global(.select-field) {
     min-width: 0;
@@ -551,16 +566,25 @@
     background: transparent;
     border-color: transparent;
     padding-left: 0;
+    padding-right: 0;
     border-radius: 4px;
     min-height: 28px;
+    box-shadow: inset 0 -1px 0 color-mix(in oklab, var(--border) 58%, transparent);
+    transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
   }
-  .item-layout :global(.field input:focus), .item-layout :global(.field textarea:focus), .item-layout :global(.select-trigger:focus-visible) {
-    box-shadow: none;
-    outline: 2px solid var(--accent-ring);
-    outline-offset: 3px;
+  .item-layout :global(.field input:hover), .item-layout :global(.field textarea:hover), .item-layout :global(.select-trigger:hover:not([data-disabled])) {
+    background: color-mix(in oklab, var(--surface-2) 56%, transparent);
+    box-shadow: inset 0 -1px 0 var(--border-strong);
   }
-  .item-layout .section-fields > :global(*:focus-within) {
-    background: var(--accent-soft);
+  .item-layout :global(.field input:focus), .item-layout :global(.field textarea:focus), .item-layout :global(.select-trigger[data-state="open"]) {
+    background: color-mix(in oklab, var(--accent-soft) 44%, transparent);
+    border-color: transparent;
+    box-shadow: inset 0 -2px 0 var(--accent);
+    outline: 0;
+  }
+  .item-layout :global(.field input:focus-visible), .item-layout :global(.field textarea:focus-visible), .item-layout :global(.select-trigger:focus-visible) {
+    outline: 1px solid color-mix(in oklab, var(--accent) 58%, transparent);
+    outline-offset: 1px;
   }
   .item-layout .remove-btn {
     align-self: center;

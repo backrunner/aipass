@@ -141,6 +141,7 @@ export const emptyDraft = (): Draft => ({
   providerId: "anthropic",
   credentialKind: "api",
   accountIdentity: "",
+  supportsWebsockets: true,
   interfaceType: "anthropic_messages",
   authScheme: "x_api_key",
   apiKey: "",

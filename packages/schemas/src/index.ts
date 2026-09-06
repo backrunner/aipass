@@ -140,6 +140,7 @@ export interface ProviderEntry {
   endpoints: ProviderEndpoint[];
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
+  supportsWebsockets?: boolean;
   secretRefs: SecretRef[];
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;

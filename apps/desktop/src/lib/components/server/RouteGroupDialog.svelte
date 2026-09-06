@@ -47,6 +47,8 @@
     }
   }
   let dragIndex: number | null = null;
+  let dragPointerId: number | null = null;
+  let dragContainer: HTMLElement | null = null;
   $: degradedTargetIds = new Set(status?.running && route?.enabled ? status.degradedTargetIds ?? [] : []);
 
   $: credentialOptions = entries
@@ -111,23 +113,44 @@
     members = reorderItems(members, index, index + direction);
   }
 
-  function startDrag(event: DragEvent, index: number) {
-    dragIndex = index;
-    event.dataTransfer?.setData("text/plain", String(index));
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-  }
-
-  function dragOverMember(event: DragEvent, index: number) {
+  // Use pointer events: Tauri's native file-drop handler can consume HTML DnD.
+  function startDrag(event: PointerEvent, index: number) {
+    if (event.button !== 0 || dragPointerId !== null) return;
     event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    // Live-reorder as the pointer crosses rows so the list stays WYSIWYG.
-    if (dragIndex === null || dragIndex === index) return;
-    members = reorderItems(members, dragIndex, index);
     dragIndex = index;
+    dragPointerId = event.pointerId;
+    dragContainer = (event.currentTarget as HTMLElement).closest(".members-block");
+    // Capture on the stable container, since keyed rows move during sorting.
+    dragContainer?.setPointerCapture(event.pointerId);
   }
 
-  function endDrag() {
+  function dragMove(event: PointerEvent) {
+    if (dragIndex === null || event.pointerId !== dragPointerId) return;
+    const rows = dragContainer?.querySelectorAll<HTMLElement>("[data-member-index]");
+    if (!rows) return;
+    for (const row of rows) {
+      const index = Number(row.dataset.memberIndex);
+      const rect = row.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right ||
+          event.clientY < rect.top || event.clientY > rect.bottom) continue;
+      const midpoint = rect.top + rect.height / 2;
+      if ((index > dragIndex && event.clientY >= midpoint) ||
+          (index < dragIndex && event.clientY <= midpoint)) {
+        members = reorderItems(members, dragIndex, index);
+        dragIndex = index;
+      }
+      break;
+    }
+  }
+
+  function endDrag(event?: PointerEvent) {
+    if (event && event.pointerId !== dragPointerId) return;
+    if (dragPointerId !== null && dragContainer?.hasPointerCapture(dragPointerId)) {
+      dragContainer.releasePointerCapture(dragPointerId);
+    }
     dragIndex = null;
+    dragPointerId = null;
+    dragContainer = null;
   }
 
   async function save() {
@@ -222,6 +245,8 @@
     }
   }
 </script>
+
+<svelte:window on:pointermove={dragMove} on:pointerup={endDrag} on:pointercancel={endDrag} on:blur={() => endDrag()} />
 
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
@@ -323,18 +348,21 @@
                 class:member-disabled={!member.enabled}
                 class:dragging={dragIndex === index}
                 role="listitem"
-                on:dragover={(event) => dragOverMember(event, index)}
-                on:drop={(event) => event.preventDefault()}
+                data-member-index={index}
               >
                 <span
                   class="drag-handle"
                   role="button"
                   tabindex="0"
-                  draggable="true"
                   aria-label={$t("server.dragToReorder")}
                   title={$t("server.dragToReorder")}
-                  on:dragstart={(event) => startDrag(event, index)}
-                  on:dragend={endDrag}
+                  on:pointerdown={(event) => startDrag(event, index)}
+                  on:keydown={(event) => {
+                    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                      event.preventDefault();
+                      moveMember(index, event.key === "ArrowUp" ? -1 : 1);
+                    }
+                  }}
                 >
                   <GripVertical size={14} />
                 </span>
@@ -663,6 +691,7 @@
     color: var(--text-tertiary);
     cursor: grab;
     touch-action: none;
+    user-select: none;
 
     &:hover {
       color: var(--text-secondary);

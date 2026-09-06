@@ -316,3 +316,53 @@ test("toggles a member off via the switch", async () => {
   const saved = onSave.mock.calls[0][0] as ProxyRouteConfig;
   expect(saved.targets[0].enabled).toBe(false);
 });
+
+test.each(["pointerup", "pointercancel"])("saves pointer-drag priority and stops on %s", async (endEvent) => {
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  const onSave = vi.fn().mockResolvedValue(false);
+  app = mount(RouteGroupDialog, { target, props: { route: mixedRoute, entries: mixedEntries, onSave } }) as never;
+  flushSync();
+  const container = document.body.querySelector<HTMLElement>(".members-block")!;
+  container.setPointerCapture = vi.fn();
+  container.hasPointerCapture = vi.fn().mockReturnValue(true);
+  container.releasePointerCapture = vi.fn();
+  const rows = () => [...container.querySelectorAll<HTMLElement>("[data-member-index]")];
+  for (const row of rows()) {
+    row.getBoundingClientRect = () => {
+      const top = Number(row.dataset.memberIndex) * 60;
+      return { left: 0, right: 500, top, bottom: top + 60, height: 60 } as DOMRect;
+    };
+  }
+  const pointer = (type: string, y: number, pointerId = 1) => new PointerEvent(type, {
+    bubbles: true, cancelable: true, button: 0, pointerId, clientX: 100, clientY: y
+  });
+  rows()[0].querySelector(".drag-handle")!.dispatchEvent(pointer("pointerdown", 30));
+  window.dispatchEvent(pointer("pointermove", 100, 2));
+  flushSync();
+  expect(rows()[0].textContent).toContain("Provider");
+  window.dispatchEvent(pointer("pointermove", 100));
+  flushSync();
+  expect(rows().map(row => row.querySelector("strong")!.textContent)).toEqual(["OpenAI", "Provider"]);
+  // Repeated moves over the same position must not oscillate the order.
+  window.dispatchEvent(pointer("pointermove", 100));
+  flushSync();
+  expect(rows()[0].textContent).toContain("OpenAI");
+  window.dispatchEvent(pointer(endEvent, 100));
+  window.dispatchEvent(pointer("pointermove", 10));
+  flushSync();
+  expect(container.querySelector(".dragging")).toBeNull();
+  expect(container.releasePointerCapture).toHaveBeenCalledWith(1);
+  document.body.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await Promise.resolve();
+  const saved = onSave.mock.calls[0][0] as ProxyRouteConfig;
+  expect(saved.targets.map(({ id, priority }) => ({ id, priority }))).toEqual([
+    { id: "target-2", priority: 0 }, { id: "target-1", priority: 1 }
+  ]);
+  // Drag upward in the same open editor as well.
+  rows()[1].querySelector(".drag-handle")!.dispatchEvent(pointer("pointerdown", 100));
+  window.dispatchEvent(pointer("pointermove", 10));
+  window.dispatchEvent(pointer("pointerup", 10));
+  flushSync();
+  expect(rows()[0].textContent).toContain("Provider");
+});

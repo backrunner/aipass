@@ -392,7 +392,7 @@
 </script>
 
 {#if selected}
-  <section class="detail">
+  <section class="detail" class:editing={editMode}>
     <header class="detail-header">
       <div class="identity">
         <ProviderIcon title={selected.title} kind={selected.providerKind} faviconUrl={selected.faviconUrl} size="lg" />
@@ -488,6 +488,7 @@
 
       {#if editMode}
         <ProviderFormFields
+          showWebsocketSetting
           itemLayout
           {formMode}
           bind:draft
@@ -873,6 +874,9 @@
                 <span class={`probe-dot ${probeResult.ok ? "ok" : "fail"}`}></span>
                 {probeResult.ok ? $t("providerDetail.healthy") : $t("providerDetail.checkFailed")}
                 {#if probeResult.modelCount !== undefined} · {$t("providerDetail.modelCount", { count: probeResult.modelCount })}{/if}
+                {#if probeResult.websocket}
+                  · {$t(probeResult.websocket.supported === true ? "providerDetail.wsSupported" : probeResult.websocket.supported === false ? "providerDetail.wsUnsupported" : "providerDetail.wsUnknown")}
+                {/if}
                 {#if probeResult.error} · <span class="probe-error">{probeResult.error}</span>{/if}
               </span>
               <span></span>
@@ -1089,6 +1093,34 @@
     background: transparent;
   }
 
+  // Editing uses the header as a persistent action bar. Keeping the title and
+  // save controls on one compact row leaves more room for the form at the
+  // Tauri minimum viewport (960x640).
+  .detail.editing .detail-header {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+    background: color-mix(in oklab, var(--surface) 94%, transparent);
+  }
+
+  .detail.editing .identity {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .detail.editing .identity-text {
+    gap: 5px;
+  }
+
+  .detail.editing .identity-text h1 {
+    font-size: 16px;
+  }
+
+  .detail.editing .actions {
+    flex: 0 0 auto;
+  }
+
   .identity {
     display: flex;
     align-items: center;
@@ -1223,6 +1255,11 @@
     flex-direction: column;
     gap: 18px;
     background: transparent;
+  }
+
+  .detail.editing .detail-body {
+    padding: 18px;
+    gap: 16px;
   }
 
   :global(.detail-body > .card) {

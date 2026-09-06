@@ -175,6 +175,9 @@ export type ProxyStatus = {
   recentTokens: number;
   successRateBps: number;
   averageFirstTokenMs?: number;
+  inFlightRequests?: number;
+  availableChannels?: number;
+  totalChannels?: number;
 };
 
 export type ProxyLogEntry = {
@@ -394,6 +397,7 @@ export type EntrySummary = {
   faviconUrl?: string;
   endpoints: ProviderEntry["endpoints"];
   interfaceType: InterfaceType;
+  supportsWebsockets?: boolean;
   authScheme: AuthScheme;
   maskedSecret: string;
   fingerprint: string;
@@ -470,6 +474,7 @@ export type ProbeResult = {
   status?: number;
   endpoint?: string;
   modelCount?: number;
+  websocket?: { supported: boolean | null; status?: number };
   error?: string;
 };
 

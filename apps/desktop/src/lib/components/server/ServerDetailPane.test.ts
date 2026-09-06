@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import type { ProxyConfig, ProxyStatus, ServerUsageSummary } from "../../types";
 import { emptyServerUsage } from "../../services/serverUsage";
+import { setLocale } from "../../stores/i18n";
 import { formatCompact } from "../../utils/format";
 import ServerDetailPane from "./ServerDetailPane.svelte";
 
@@ -84,6 +85,35 @@ test("requires confirmation before clearing usage", async () => {
   flushSync();
 
   expect(onClearUsage).toHaveBeenCalledOnce();
+});
+
+test("shows live concurrency and available channel totals in the overview", () => {
+  setLocale("en");
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  app = mount(ServerDetailPane, {
+    target,
+    props: {
+      config,
+      status: {
+        ...status,
+        running: true,
+        inFlightRequests: 7,
+        availableChannels: 2,
+        totalChannels: 5,
+      },
+      usageByRange: { "24h": usage, 7: usage, 30: usage },
+    },
+  }) as never;
+  flushSync();
+
+  const cells = Array.from(document.querySelectorAll(".status-cell"));
+  expect(
+    cells.find((cell) => cell.textContent?.toLowerCase().includes("concurrency"))?.textContent
+  ).toContain("7");
+  expect(
+    cells.find((cell) => cell.textContent?.toLowerCase().includes("channels"))?.textContent
+  ).toContain("2/5");
 });
 
 

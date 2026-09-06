@@ -1400,6 +1400,7 @@
       credentialKind: entry.credentialKind ?? "api",
       accountIdentity: entry.accountIdentity ?? "",
       interfaceType: entry.interfaceType,
+      supportsWebsockets: entry.supportsWebsockets ?? true,
       authScheme: entry.authScheme,
       apiKey: "",
       secretLabel: entry.secretRefs[0]?.label ?? "",
@@ -1480,6 +1481,7 @@
       consoleEndpoints: splitEndpointList(draft.consoleUrl),
       faviconUrl: draft.faviconUrl || undefined,
       interfaceType: draft.interfaceType,
+      supportsWebsockets: draft.supportsWebsockets ?? true,
       authScheme: draft.authScheme,
       credentialKind: formMode === "add" ? draft.credentialKind || "api" : draft.credentialKind,
       // On edits, an empty value explicitly clears the stored identity;
@@ -2364,18 +2366,22 @@
 
   async function probeSelected() {
     if (!selected) return;
+    const entry = selected;
     probing = true;
     probeResult = undefined;
     error = "";
     try {
-      probeResult = await invokeTauri<ProbeResult>("provider_probe", { id: selected.id, timeoutSeconds: 15 });
+      const result = await invokeTauri<ProbeResult>("provider_probe", { id: entry.id, timeoutSeconds: 15 });
+      if (selected?.id === entry.id) probeResult = result;
     } catch (err) {
-      probeResult = {
-        ok: false,
-        providerId: selected.providerId,
-        interfaceType: selected.interfaceType,
-        error: String(err)
-      };
+      if (selected?.id === entry.id) {
+        probeResult = {
+          ok: false,
+          providerId: entry.providerId,
+          interfaceType: entry.interfaceType,
+          error: String(err)
+        };
+      }
     } finally {
       probing = false;
     }

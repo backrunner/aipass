@@ -56,6 +56,7 @@
 
         <div class="modal-body">
           <ProviderFormFields
+            showWebsocketSetting
             itemLayout
             {formMode}
             bind:draft

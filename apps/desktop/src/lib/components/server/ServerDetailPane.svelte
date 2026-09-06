@@ -54,6 +54,11 @@
   }
 
   $: enabledRoutes = config.routes.filter((route) => route.enabled);
+  $: configuredChannels = enabledRoutes.flatMap((route) => route.targets.filter((target) => target.enabled));
+  $: totalChannels = status.totalChannels ?? configuredChannels.length;
+  $: availableChannels = status.availableChannels ?? (status.running
+    ? configuredChannels.filter((target) => !(status.degradedTargetIds ?? []).includes(target.id)).length
+    : 0);
   $: integrateRoute =
     enabledRoutes.find((route) => route.id === selectedRouteId) ?? enabledRoutes[0];
   $: integrateEndpoint = integrateRoute
@@ -198,6 +203,14 @@
         <div class="status-cell">
           <span class="cell-label">{$t("server.firstToken")}</span>
           <strong class="cell-number">{status.averageFirstTokenMs == null ? "-" : `${formatCompact(status.averageFirstTokenMs)} ms`}</strong>
+        </div>
+        <div class="status-cell">
+          <span class="cell-label">{$t("server.realtimeConcurrency")}</span>
+          <strong class="cell-number">{formatCompact(status.inFlightRequests ?? 0)}</strong>
+        </div>
+        <div class="status-cell">
+          <span class="cell-label">{$t("server.availableChannels")}</span>
+          <strong class="cell-number">{formatCompact(availableChannels)}/{formatCompact(totalChannels)}</strong>
         </div>
       </div>
     </Card>
@@ -368,7 +381,7 @@
 
   .status-grid {
     display: grid;
-    grid-template-columns: repeat(6, minmax(64px, 1fr));
+    grid-template-columns: repeat(8, minmax(64px, 1fr));
     gap: 12px;
     align-items: center;
     padding: 12px 16px;
@@ -517,7 +530,7 @@
     }
 
     .status-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
 
