@@ -14,6 +14,7 @@ json5.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
+tempfile.workspace = true
 time.workspace = true
 toml_edit.workspace = true
 uuid.workspace = true

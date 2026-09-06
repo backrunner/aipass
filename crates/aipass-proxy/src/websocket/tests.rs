@@ -2,6 +2,8 @@
 #![allow(clippy::result_large_err)]
 
 use super::*;
+
+mod diagnostics;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{accept_hdr_async, client_async, tungstenite::client::IntoClientRequest};
 
@@ -10,6 +12,7 @@ const UPSTREAM_KEY: &str = "upstream-ws-test-key";
 
 fn test_route(base_url: String) -> ResolvedRoute {
     let target = ResolvedTarget {
+        supports_websockets: true,
         config: ProxyTargetConfig {
             id: Uuid::new_v4(),
             provider_entry_id: Uuid::new_v4(),
@@ -556,7 +559,7 @@ async fn websocket_upstream_rejection_preserves_http_status_without_error_secret
         let (stream, _) = listener.accept().await.unwrap();
         let result = accept_hdr_async(stream, |_: &Request<()>, _| {
             Err(Response::builder()
-                .status(StatusCode::UPGRADE_REQUIRED)
+                .status(StatusCode::UNAUTHORIZED)
                 .body(Some(format!("rejected {UPSTREAM_KEY}")))
                 .unwrap())
         })
@@ -566,7 +569,7 @@ async fn websocket_upstream_rejection_preserves_http_status_without_error_secret
     let (handle, _, _dir) = start_proxy(vec![route], direct());
     match connect(&handle, "/v1/responses", LOCAL_TOKEN).await {
         Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
-            assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
             assert!(
                 !String::from_utf8_lossy(response.body().as_ref().unwrap()).contains(UPSTREAM_KEY)
             );
@@ -983,6 +986,7 @@ async fn websocket_conversion_mixed_route_falls_back_from_responses_http_to_anth
     let (native_address, mut native_calls, native_server) = mock_http_upstream().await;
     let (anthropic_address, mut anthropic_calls, anthropic_server) = mock_http_upstream().await;
     let mut route = test_route(native_address);
+    route.targets[0].supports_websockets = false; // Explicit HTTP target in a converted route.
     route.config.conversion_enabled = true;
     let mut fallback = converted_route(anthropic_address).targets[0].clone();
     fallback.config.priority = 1;
@@ -1306,3 +1310,5 @@ async fn websocket_hold_deadline_bounds_backoff_and_handshake() {
         assert_eq!(store.count().unwrap(), 1);
     }
 }
+
+mod adaptive;

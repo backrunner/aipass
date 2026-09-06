@@ -77,6 +77,16 @@ impl ProxyService {
                 recent_tokens: 0,
                 success_rate_bps: 0,
                 average_first_token_ms: None,
+                in_flight_requests: 0,
+                available_channels: 0,
+                total_channels: self
+                    .config
+                    .routes
+                    .iter()
+                    .filter(|route| route.enabled)
+                    .flat_map(|route| route.targets.iter())
+                    .filter(|target| target.enabled)
+                    .count(),
             });
         status
     }
@@ -870,6 +880,7 @@ impl ProxyService {
                     }
                 }
                 targets.push(ResolvedTarget {
+                    supports_websockets: entry.supports_websockets.unwrap_or(true),
                     config: target_config,
                     api_key,
                 });
@@ -907,7 +918,7 @@ impl ProxyService {
 
 /// Official OAuth tokens are only valid against the provider's own backend,
 /// so an editable entry endpoint must never redirect them elsewhere.
-fn pinned_official_oauth_endpoint(
+pub(crate) fn pinned_official_oauth_endpoint(
     provider_kind: &ProviderKind,
     credential_kind: &CredentialKind,
     provider_id: Option<&str>,
@@ -923,7 +934,7 @@ fn pinned_official_oauth_endpoint(
     }
 }
 
-fn proxy_auth_scheme(auth_scheme: &AuthScheme) -> Option<&'static str> {
+pub(crate) fn proxy_auth_scheme(auth_scheme: &AuthScheme) -> Option<&'static str> {
     match auth_scheme {
         AuthScheme::Bearer => Some("bearer"),
         AuthScheme::CustomHeader => Some("custom_header"),
@@ -1145,6 +1156,7 @@ mod tests {
 
     fn provider_input(api_key: &str, endpoint: String, header: &str) -> ProviderEntryInput {
         ProviderEntryInput {
+            supports_websockets: None,
             title: "Proxy upstream".into(),
             provider_kind: ProviderKind::Unknown,
             // Matches the routes these tests build: an OpenAI-native entry
@@ -1395,6 +1407,7 @@ mod tests {
             config: service.config.routes[0].clone(),
             local_token: local_token.into(),
             targets: vec![ResolvedTarget {
+                supports_websockets: true,
                 config: ProxyTargetConfig {
                     id: Uuid::new_v4(),
                     provider_entry_id: Uuid::new_v4(),
@@ -1532,6 +1545,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
                     provider_id: Some("openai".into()),
@@ -1630,6 +1644,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
                     provider_id: None,
@@ -1716,6 +1731,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
                     provider_id: None,
@@ -2283,6 +2299,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
                     provider_id: Some("openai".into()),

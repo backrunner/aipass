@@ -10,8 +10,8 @@ pub use backup::{
 };
 pub use detect::{detect_tools, ToolDetection};
 pub use models::{
-    ApplyResult, CodexApiKeyMode, CodexProviderMigration, ConfigPlan, ConfigWriter,
-    EncryptedBackup, ToolEntry, ToolId,
+    ApplyResult, CodexApiKeyMode, CodexProviderMigration, CodexSessionMigration, ConfigPlan,
+    ConfigWriter, EncryptedBackup, ToolEntry, ToolId,
 };
 pub use plan::{
     plan_claude_code, plan_claude_code_official, plan_claude_code_plaintext, plan_codex,
@@ -32,6 +32,7 @@ mod tests {
 
     fn entry(interface_type: InterfaceType, auth_scheme: AuthScheme) -> ToolEntry {
         ToolEntry {
+            supports_websockets: None,
             id: uuid::Uuid::new_v4(),
             title: "Anthropic Prod".to_string(),
             provider_id: Some("anthropic".to_string()),
@@ -303,7 +304,10 @@ mod tests {
         entry.env_key = "GATEWAY_API_KEY".to_string();
         let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
         assert!(content.contains("model_provider = \"aipass\""));
-        assert_eq!(plan.extra_writes.len(), 1);
+        assert!(plan.extra_writes.is_empty());
+        let migration = plan.codex_session_migration.as_ref().unwrap();
+        assert_eq!(migration.files, vec![session.clone()]);
+        assert_eq!(migration.changed_records, 1);
         assert!(plan.preview.contains("missing-provider -> aipass"));
 
         apply_plan(&plan, &content).unwrap();
@@ -314,6 +318,56 @@ mod tests {
         assert!(std::fs::read_to_string(&session)
             .unwrap()
             .contains("missing-provider"));
+    }
+
+    #[test]
+    fn codex_session_migration_keeps_large_history_out_of_the_plan() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        let sessions = codex_dir.join("sessions").join("2026");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            codex_dir.join("config.toml"),
+            "model_provider = \"old-provider\"\n",
+        )
+        .unwrap();
+        let session = sessions.join("large-rollout.jsonl");
+        let large_record = "x".repeat(17 * 1024 * 1024);
+        std::fs::write(
+            &session,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"model_provider\":\"old-provider\"}}}}\n{large_record}\n"
+            ),
+        )
+        .unwrap();
+
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.provider_id = None;
+        entry.endpoint = Some("https://gateway.example/v1".to_string());
+        let (plan, content) = plan_codex(dir.path(), &entry).unwrap();
+        assert!(plan.extra_writes.is_empty());
+        assert_eq!(
+            plan.codex_session_migration
+                .as_ref()
+                .unwrap()
+                .changed_records,
+            1
+        );
+
+        apply_plan(&plan, &content).unwrap();
+        let migrated = std::fs::read_to_string(&session).unwrap();
+        let first_record: serde_json::Value =
+            serde_json::from_str(migrated.lines().next().unwrap()).unwrap();
+        assert_eq!(
+            first_record["payload"]["model_provider"].as_str(),
+            Some("aipass")
+        );
+        assert!(migrated.ends_with(&format!("{large_record}\n")));
+        rollback_plain(&plan).unwrap();
+        assert!(std::fs::read_to_string(&session)
+            .unwrap()
+            .contains("old-provider"));
     }
 
     #[test]
@@ -893,6 +947,7 @@ mod tests {
             summary: "test encrypted backup".to_string(),
             preview: "{}".to_string(),
             extra_writes: Vec::new(),
+            codex_session_migration: None,
             codex_provider_migration: None,
         };
 
@@ -953,6 +1008,7 @@ mod tests {
             summary: "legacy backup".to_string(),
             preview: "{}".to_string(),
             extra_writes: Vec::new(),
+            codex_session_migration: None,
             codex_provider_migration: None,
         };
         apply_plan_encrypted(

@@ -333,6 +333,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let endpoints = endpoints_from_cli(endpoint, console_url)?;
             let id: Uuid = agent.request(AgentRequest::ProviderAdd {
                 input: ProviderEntryInput {
+                    supports_websockets: None,
                     title,
                     provider_kind: provider_kind_for_id(provider_guess.as_deref()),
                     provider_id: provider_guess,
@@ -458,6 +459,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 billing_unit_price,
             );
             let input = ProviderEntryUpdateInput {
+                supports_websockets: None,
                 title: title.unwrap_or(existing.title),
                 provider_kind: provider_kind_for_id(provider_guess.as_deref()),
                 provider_id: provider_guess,

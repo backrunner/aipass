@@ -25,6 +25,8 @@ pub enum CodexApiKeyMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolEntry {
+    #[serde(default)]
+    pub supports_websockets: Option<bool>,
     pub id: Uuid,
     pub title: String,
     pub provider_id: Option<String>,
@@ -43,6 +45,17 @@ pub struct PlannedWrite {
     pub content: String,
 }
 
+/// A Codex session history migration is kept as metadata in a plan. The
+/// history files can be hundreds of megabytes, so their transformed contents
+/// must not be retained in the plan or sent over the agent IPC frame.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CodexSessionMigration {
+    pub from_provider: String,
+    pub to_provider: String,
+    pub files: Vec<PathBuf>,
+    pub changed_records: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CodexProviderMigration {
     pub from_provider: String,
@@ -59,6 +72,8 @@ pub struct ConfigPlan {
     pub preview: String,
     #[serde(skip, default)]
     pub extra_writes: Vec<PlannedWrite>,
+    #[serde(skip, default)]
+    pub codex_session_migration: Option<CodexSessionMigration>,
     #[serde(skip, default)]
     pub codex_provider_migration: Option<CodexProviderMigration>,
 }

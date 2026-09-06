@@ -635,16 +635,28 @@ fn dispatch_request(
             id,
             timeout_seconds,
         } => {
-            let (entry, secret) = with_vault(state, true, |vault| {
+            let (entry, secret, headers, outbound) = with_vault(state, true, |vault| {
+                let outbound = state
+                    .proxy
+                    .lock()
+                    .map_err(|_| {
+                        ServiceError::new(AgentErrorCode::Internal, "proxy lock poisoned")
+                    })?
+                    .config(vault)?
+                    .upstream_proxy;
                 Ok((
                     vault.get_provider_summary(id).map_err(map_vault_error)?,
                     vault.reveal_secret(id).map_err(map_vault_error)?,
+                    vault.reveal_provider_headers(id).map_err(map_vault_error)?,
+                    outbound,
                 ))
             })?;
             Ok(AgentResponse::success(probe_entry(
                 entry,
                 secret,
                 timeout_seconds.max(1),
+                headers,
+                outbound,
             )))
         }
         AgentRequest::ProviderUsageProbe {

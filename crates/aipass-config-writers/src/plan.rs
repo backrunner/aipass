@@ -1,5 +1,6 @@
 use crate::models::{
-    CodexApiKeyMode, CodexProviderMigration, ConfigPlan, PlannedWrite, ToolEntry, ToolId,
+    CodexApiKeyMode, CodexProviderMigration, CodexSessionMigration, ConfigPlan, PlannedWrite,
+    ToolEntry, ToolId,
 };
 use crate::utils::{
     config_backup_path, diff_preview_for_path, diff_preview_from, dotenv_quote, ensure_json_object,
@@ -9,9 +10,7 @@ use crate::utils::{
 use aipass_provider_registry::{AuthScheme, InterfaceType};
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use toml_edit::{value, DocumentMut, Item, Table};
 
@@ -928,7 +927,7 @@ fn update_codex_provider(
         provider.remove("base_url");
     }
     provider["wire_api"] = value("responses");
-    provider["supports_websockets"] = value(true);
+    provider["supports_websockets"] = value(entry.supports_websockets.unwrap_or(true));
     match auth_mode {
         CodexAuthMode::ExperimentalBearer => {
             provider.remove("env_key");
@@ -1144,64 +1143,17 @@ fn append_codex_migration(
         collect_jsonl_files(&root, &mut session_files)?;
     }
 
-    let backup_root = codex_dir.join(".aipass-backups");
     let mut changed_files = 0;
     let mut changed_records = 0;
+    let mut migration_files = Vec::new();
     for path in session_files {
-        let original = fs::read_to_string(&path)?;
-        let mut changed = false;
-        let mut next_lines = Vec::new();
-        for line in original.split_inclusive('\n') {
-            let has_newline = line.ends_with('\n');
-            let body = line.strip_suffix('\n').unwrap_or(line);
-            let mut parsed = match serde_json::from_str::<Value>(body) {
-                Ok(value) => value,
-                Err(_) => {
-                    next_lines.push(line.to_string());
-                    continue;
-                }
-            };
-            let mut updated_record = false;
-            let should_update = parsed.get("type").and_then(Value::as_str) == Some("session_meta")
-                && parsed
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .and_then(|payload| payload.get("model_provider"))
-                    .and_then(Value::as_str)
-                    == Some(from_provider);
-            if should_update {
-                if let Some(payload) = parsed.get_mut("payload").and_then(Value::as_object_mut) {
-                    payload.insert(
-                        "model_provider".to_string(),
-                        Value::String(to_provider.to_string()),
-                    );
-                    changed = true;
-                    updated_record = true;
-                    changed_records += 1;
-                }
-            }
-            let serialized = if updated_record {
-                serde_json::to_string(&parsed)?
-            } else {
-                body.to_string()
-            };
-            next_lines.push(if has_newline {
-                format!("{serialized}\n")
-            } else {
-                serialized
-            });
-        }
-
-        if !changed {
+        let records = count_codex_session_migration_records(&path, from_provider)?;
+        if records == 0 {
             continue;
         }
+        changed_records += records;
         changed_files += 1;
-        let backup_path = backup_root.join(format!("session-{}.aipbackup", path_hash(&path)));
-        plan.extra_writes.push(PlannedWrite {
-            target_path: path,
-            backup_path,
-            content: next_lines.concat(),
-        });
+        migration_files.push(path);
     }
 
     let migration_preview = if changed_files == 0 {
@@ -1233,11 +1185,45 @@ fn append_codex_migration(
         "{}\n\n# Codex conversation migration\n{}\n{}",
         plan.preview, migration_preview, sqlite_preview
     );
+    plan.codex_session_migration = Some(CodexSessionMigration {
+        from_provider: from_provider.to_string(),
+        to_provider: to_provider.to_string(),
+        files: migration_files,
+        changed_records,
+    });
     plan.codex_provider_migration = Some(CodexProviderMigration {
         from_provider: from_provider.to_string(),
         to_provider: to_provider.to_string(),
     });
     Ok(())
+}
+
+/// Count matching session metadata without retaining the complete JSONL file
+/// in memory. Codex history files are append-only and can grow to hundreds of
+/// megabytes, while the plan only needs the paths and a preview count.
+fn count_codex_session_migration_records(path: &Path, from_provider: &str) -> Result<usize> {
+    use std::io::{BufRead, BufReader};
+
+    let file = fs::File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut count = 0;
+    for line in reader.lines() {
+        let line = line?;
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let should_update = value.get("type").and_then(Value::as_str) == Some("session_meta")
+            && value
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| payload.get("model_provider"))
+                .and_then(Value::as_str)
+                == Some(from_provider);
+        if should_update {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn collect_jsonl_files(root: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
@@ -1253,12 +1239,6 @@ fn collect_jsonl_files(root: &Path, files: &mut Vec<std::path::PathBuf>) -> Resu
         }
     }
     Ok(())
-}
-
-fn path_hash(path: &Path) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    path.to_string_lossy().hash(&mut hasher);
-    hasher.finish()
 }
 
 fn codex_base_url(entry: &ToolEntry) -> Option<String> {

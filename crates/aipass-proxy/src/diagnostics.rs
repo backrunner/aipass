@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) mod protocol;
+
 const RETAINED_EVENTS: i64 = 10_000;
 
 impl UsageStore {

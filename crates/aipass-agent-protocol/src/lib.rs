@@ -292,6 +292,9 @@ pub struct ProbeResult {
     pub status: Option<u16>,
     pub endpoint: Option<String>,
     pub model_count: Option<usize>,
+    /// Runtime probe result, independent from the provider transport preference.
+    #[serde(default)]
+    pub websocket: Option<aipass_proxy::WebsocketProbeResult>,
     pub error: Option<String>,
 }
 

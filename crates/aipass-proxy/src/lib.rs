@@ -31,6 +31,7 @@ pub use aipass_proxy_conversion::{supports, ConversionError, ProxyProtocol as Pr
 mod diagnostics;
 mod shell_env;
 mod websocket;
+pub use websocket::{probe_websocket, WebsocketProbeResult};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -342,6 +343,17 @@ pub struct ProxyStatus {
     pub success_rate_bps: u16,
     #[serde(default)]
     pub average_first_token_ms: Option<u64>,
+    /// Requests currently being handled by the proxy, including upgraded
+    /// Responses WebSocket sessions.
+    #[serde(default)]
+    pub in_flight_requests: u64,
+    /// Enabled upstream targets available while the proxy is running; zero
+    /// while stopped.
+    #[serde(default)]
+    pub available_channels: usize,
+    /// Total enabled upstream targets on enabled routes.
+    #[serde(default)]
+    pub total_channels: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1048,6 +1060,8 @@ pub enum ProxyError {
 
 #[derive(Clone, Debug)]
 pub struct ResolvedTarget {
+    /// Provider-owned capability, resolved from the vault on every refresh.
+    pub supports_websockets: bool,
     pub config: ProxyTargetConfig,
     pub api_key: String,
 }
@@ -1109,9 +1123,12 @@ struct RuntimeState {
     stats: Arc<Mutex<RuntimeStats>>,
     usage: Arc<UsageStore>,
     health: Arc<Mutex<HashMap<Uuid, TargetHealth>>>,
+    ws_health: Arc<Mutex<HashMap<Uuid, WsHealth>>>,
     rr_counters: Arc<Mutex<HashMap<Uuid, AtomicU64>>>,
+    session_affinity: Arc<Mutex<HashMap<(Uuid, String), SessionAffinity>>>,
     clients: Arc<Mutex<UpstreamClientCache>>,
     config_changed: tokio::sync::watch::Sender<()>,
+    in_flight_requests: Arc<AtomicU64>,
 }
 
 #[derive(Default)]
@@ -1125,11 +1142,47 @@ struct RuntimeStats {
     recent_token_totals: VecDeque<(Instant, u64)>,
 }
 
+struct InFlightGuard {
+    counter: Arc<AtomicU64>,
+}
+
+impl InFlightGuard {
+    fn new(counter: Arc<AtomicU64>) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self { counter }
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 #[derive(Default)]
 struct TargetHealth {
     consecutive_failures: u8,
+    consecutive_successes: u8,
     open_until: Option<Instant>,
     last_failure_at: Option<Instant>,
+    recovering: bool,
+}
+
+#[derive(Default)]
+struct WsHealth {
+    consecutive_failures: u8,
+    disabled_until: Option<Instant>,
+    probe_id: Option<Uuid>,
+}
+
+/// Require a short run of successful requests after a target failure so an
+/// intermittent provider does not immediately flap back to healthy.
+const RECOVERY_SUCCESS_THRESHOLD: u8 = 2;
+
+#[derive(Clone, Debug)]
+struct SessionAffinity {
+    target_id: Uuid,
+    last_used: Instant,
 }
 
 pub struct ProxyHandle {
@@ -1170,9 +1223,12 @@ impl ProxyHandle {
             stats: Arc::new(Mutex::new(RuntimeStats::default())),
             usage,
             health: Arc::new(Mutex::new(HashMap::new())),
+            ws_health: Arc::new(Mutex::new(HashMap::new())),
             rr_counters: Arc::new(Mutex::new(HashMap::new())),
+            session_affinity: Arc::new(Mutex::new(HashMap::new())),
             clients: Arc::new(Mutex::new(HashMap::new())),
             config_changed: tokio::sync::watch::channel(()).0,
+            in_flight_requests: Arc::new(AtomicU64::new(0)),
         };
         let thread_state = state.clone();
         let (stop_tx, stop_rx) = oneshot::channel();
@@ -1264,6 +1320,13 @@ impl ProxyHandle {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
+                let total_channels = config
+                    .routes
+                    .iter()
+                    .filter(|route| route.config.enabled)
+                    .flat_map(|route| route.targets.iter())
+                    .filter(|target| target.config.enabled)
+                    .count();
                 (
                     config.enabled,
                     config
@@ -1272,6 +1335,7 @@ impl ProxyHandle {
                         .filter(|route| route.config.enabled)
                         .count(),
                     degraded_target_ids,
+                    total_channels,
                 )
             })
             .unwrap_or_default();
@@ -1345,6 +1409,12 @@ impl ProxyHandle {
             .as_ref()
             .is_some_and(|thread| !thread.is_finished());
         let degraded_target_ids = if running { config.2 } else { Vec::new() };
+        let total_channels = config.3;
+        let available_channels = if running {
+            total_channels.saturating_sub(degraded_target_ids.len())
+        } else {
+            0
+        };
         let degraded = running
             && (!degraded_target_ids.is_empty()
                 || (recent_requests > 0
@@ -1363,6 +1433,9 @@ impl ProxyHandle {
             recent_tokens,
             success_rate_bps,
             average_first_token_ms,
+            in_flight_requests: self.state.in_flight_requests.load(Ordering::Relaxed),
+            available_channels,
+            total_channels,
         }
     }
 
@@ -1373,15 +1446,27 @@ impl ProxyHandle {
             .write()
             .map_err(|_| ProxyError::Poisoned)?;
         let mut health = self.state.health.lock().map_err(|_| ProxyError::Poisoned)?;
+        let mut ws_health = self
+            .state
+            .ws_health
+            .lock()
+            .map_err(|_| ProxyError::Poisoned)?;
         let mut rr_counters = self
             .state
             .rr_counters
             .lock()
             .map_err(|_| ProxyError::Poisoned)?;
+        let mut session_affinity = self
+            .state
+            .session_affinity
+            .lock()
+            .map_err(|_| ProxyError::Poisoned)?;
         *current = config;
         self.state.config_changed.send_replace(());
         health.clear();
+        ws_health.clear();
         rr_counters.clear();
+        session_affinity.clear();
         self.state
             .usage
             .log_diagnostic("info", "event=proxy.config.reloaded".into());
@@ -1526,6 +1611,39 @@ const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024 * 1024;
 const REQUEST_BODY_MEMORY_THRESHOLD: usize = 8 * 1024 * 1024;
 const MAX_BUFFERED_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROXY_LOG_ENTRIES: usize = 1_000;
+/// Session affinity is intentionally ephemeral. Provider prompt caches are
+/// useful while a client session is active, but retaining arbitrary client
+/// supplied keys indefinitely would make the proxy's memory usage unbounded.
+const SESSION_AFFINITY_TTL: Duration = Duration::from_secs(30 * 60);
+const MAX_SESSION_AFFINITY_ENTRIES: usize = 4_096;
+const MAX_SESSION_AFFINITY_KEY_BYTES: usize = 512;
+
+const SESSION_AFFINITY_HEADERS: [&str; 11] = [
+    "x-aipass-session-id",
+    "x-aipass-session",
+    "x-session-id",
+    "x-client-session-id",
+    "x-codex-session-id",
+    "x-openai-session-id",
+    "x-anthropic-session-id",
+    "x-claude-session-id",
+    "session-id",
+    "session_id",
+    "prompt-cache-key",
+];
+
+const SESSION_AFFINITY_FIELDS: [&str; 10] = [
+    "prompt_cache_key",
+    "promptCacheKey",
+    "session_id",
+    "sessionId",
+    "session",
+    "sessionKey",
+    "conversation_id",
+    "conversationId",
+    "previous_response_id",
+    "previousResponseId",
+];
 
 enum ReplayableRequestBody {
     Memory(Bytes),
@@ -1537,6 +1655,23 @@ struct RequestMetadata {
     #[serde(default)]
     stream: bool,
     model: Option<String>,
+    /// A stable client supplied key lets providers reuse their prompt cache
+    /// for a conversation. `prompt_cache_key` is the OpenAI API spelling;
+    /// the other fields cover clients that expose the same value as a
+    /// session or conversation identifier.
+    #[serde(alias = "promptCacheKey")]
+    prompt_cache_key: Option<String>,
+    #[serde(alias = "sessionId")]
+    session_id: Option<String>,
+    #[serde(alias = "sessionKey")]
+    session: Option<String>,
+    #[serde(alias = "conversationId")]
+    conversation_id: Option<String>,
+    #[serde(alias = "previousResponseId")]
+    previous_response_id: Option<String>,
+    /// Responses clients may carry a stable conversation identifier as a
+    /// string or as `{ "id": "..." }`.
+    conversation: Option<serde_json::Value>,
 }
 
 impl ReplayableRequestBody {
@@ -1573,6 +1708,10 @@ impl ReplayableRequestBody {
     }
 
     async fn metadata(&self) -> Option<RequestMetadata> {
+        self.parse_metadata().await
+    }
+
+    async fn parse_metadata<T: serde::de::DeserializeOwned + Send + 'static>(&self) -> Option<T> {
         match self {
             Self::Memory(bytes) => serde_json::from_slice(bytes).ok(),
             Self::File { file, .. } => {
@@ -1706,7 +1845,9 @@ fn select_route(
                 .iter()
                 .find(|route| {
                     route.config.enabled
-                        && inbound.is_none_or(|protocol| route.config.inbound_protocol == protocol)
+                        && inbound.is_none_or(|protocol| {
+                            route_accepts_inbound_protocol(&route.config, protocol)
+                        })
                         && (bearer_token
                             .is_some_and(|token| tokens_match(&route.local_token, token))
                             || api_key_token
@@ -1716,6 +1857,13 @@ fn select_route(
                 .map(|route| (route, config.pricing.clone()))
         })?
     })
+}
+
+/// A local token is scoped to one route's inbound wire protocol. Keeping this
+/// check explicit prevents a token configured for Codex/Responses from being
+/// accepted on another OpenAI-compatible endpoint such as Chat Completions.
+fn route_accepts_inbound_protocol(route: &ProxyRouteConfig, protocol: ProxyProtocol) -> bool {
+    route.inbound_protocol == protocol
 }
 
 fn silent_retry_rounds(policy: &RetryPolicy) -> u8 {
@@ -1754,10 +1902,152 @@ fn bounded_deadline(
     hold_deadline.map_or(deadline, |hold| deadline.min(hold))
 }
 
+fn normalize_session_affinity_key(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= MAX_SESSION_AFFINITY_KEY_BYTES).then(|| value.to_owned())
+}
+
+/// Resolve an affinity key without forwarding a proxy-only header as a
+/// provider credential. The body key is used as a fallback so clients can
+/// opt into affinity through the standard `prompt_cache_key` request field.
+fn session_affinity_key(headers: &HeaderMap, metadata: Option<&RequestMetadata>) -> Option<String> {
+    for name in SESSION_AFFINITY_HEADERS {
+        if let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) {
+            if let Some(value) = normalize_session_affinity_key(value) {
+                return Some(value);
+            }
+        }
+    }
+    metadata
+        .and_then(|metadata| {
+            metadata
+                .prompt_cache_key
+                .as_deref()
+                .or(metadata.session_id.as_deref())
+                .or(metadata.session.as_deref())
+                .or(metadata.conversation_id.as_deref())
+                .or(metadata.previous_response_id.as_deref())
+        })
+        .and_then(normalize_session_affinity_key)
+        .or_else(|| {
+            metadata
+                .and_then(|metadata| metadata.conversation.as_ref())
+                .and_then(|conversation| {
+                    conversation
+                        .as_str()
+                        .or_else(|| conversation.get("id").and_then(serde_json::Value::as_str))
+                })
+                .and_then(normalize_session_affinity_key)
+        })
+}
+
+fn session_affinity_key_from_value(value: &serde_json::Value) -> Option<String> {
+    let object = value.as_object()?;
+    SESSION_AFFINITY_FIELDS
+        .iter()
+        .find_map(|field| object.get(*field).and_then(serde_json::Value::as_str))
+        .and_then(normalize_session_affinity_key)
+        .or_else(|| {
+            object
+                .get("conversation")
+                .and_then(|conversation| {
+                    conversation
+                        .as_str()
+                        .or_else(|| conversation.get("id").and_then(serde_json::Value::as_str))
+                })
+                .and_then(normalize_session_affinity_key)
+        })
+}
+
+fn affinity_target(
+    state: &RuntimeState,
+    route_id: Uuid,
+    session_key: Option<&str>,
+    targets: &[ResolvedTarget],
+) -> Option<Uuid> {
+    let session_key = session_key.and_then(normalize_session_affinity_key)?;
+    let key = (route_id, session_key);
+    let now = Instant::now();
+    let target_id = {
+        let mut affinities = state.session_affinity.lock().ok()?;
+        affinities.retain(|_, affinity| {
+            now.saturating_duration_since(affinity.last_used) < SESSION_AFFINITY_TTL
+        });
+        affinities.get(&key)?.target_id
+    };
+    if !targets
+        .iter()
+        .any(|target| target.config.enabled && target.config.id == target_id)
+        || circuit_open(state, target_id)
+    {
+        if let Ok(mut affinities) = state.session_affinity.lock() {
+            affinities.remove(&key);
+        }
+        return None;
+    }
+    if let Ok(mut affinities) = state.session_affinity.lock() {
+        if let Some(affinity) = affinities.get_mut(&key) {
+            affinity.last_used = now;
+        }
+    }
+    Some(target_id)
+}
+
+fn remember_affinity_target(
+    state: &RuntimeState,
+    route_id: Uuid,
+    session_key: Option<&str>,
+    target_id: Uuid,
+) {
+    let Some(session_key) = session_key.and_then(normalize_session_affinity_key) else {
+        return;
+    };
+    let Ok(mut affinities) = state.session_affinity.lock() else {
+        return;
+    };
+    let now = Instant::now();
+    affinities.retain(|_, affinity| {
+        now.saturating_duration_since(affinity.last_used) < SESSION_AFFINITY_TTL
+    });
+    affinities.insert(
+        (route_id, session_key),
+        SessionAffinity {
+            target_id,
+            last_used: now,
+        },
+    );
+    while affinities.len() > MAX_SESSION_AFFINITY_ENTRIES {
+        let Some(oldest_key) = affinities
+            .iter()
+            .min_by_key(|(_, affinity)| affinity.last_used)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        affinities.remove(&oldest_key);
+    }
+}
+
+fn clear_affinity_for_target(state: &RuntimeState, target_id: Uuid) {
+    if let Ok(mut affinities) = state.session_affinity.lock() {
+        affinities.retain(|_, affinity| affinity.target_id != target_id);
+    }
+}
+
+#[cfg(test)]
 fn select_route_targets(
     state: &RuntimeState,
     route: &ResolvedRoute,
     ignore_circuit: bool,
+) -> Vec<ResolvedTarget> {
+    select_route_targets_with_affinity(state, route, ignore_circuit, None)
+}
+
+fn select_route_targets_with_affinity(
+    state: &RuntimeState,
+    route: &ResolvedRoute,
+    ignore_circuit: bool,
+    session_key: Option<&str>,
 ) -> Vec<ResolvedTarget> {
     let mut targets = route.targets.clone();
     targets.retain(|target| target.config.enabled);
@@ -1777,6 +2067,14 @@ fn select_route_targets(
         );
         targets.rotate_left(start);
     }
+    if let Some(target_id) = affinity_target(state, route.config.id, session_key, &targets) {
+        if let Some(index) = targets
+            .iter()
+            .position(|target| target.config.id == target_id)
+        {
+            targets.rotate_left(index);
+        }
+    }
     targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
     targets
 }
@@ -1793,6 +2091,7 @@ async fn handle_models_request(
     }
     let incoming_headers = request.headers().clone();
     let request_query = request.uri().query().map(str::to_owned);
+    let session_key = session_affinity_key(&incoming_headers, None);
     let (bearer_token, api_key_token) = local_proxy_tokens(&incoming_headers);
     if bearer_token.is_none() && api_key_token.is_none() {
         return error_response(StatusCode::UNAUTHORIZED, "missing local proxy token");
@@ -1809,7 +2108,8 @@ async fn handle_models_request(
     let mut saw_not_found = false;
     let mut saw_other_failure = false;
     for _round in 0..silent_retry_rounds(&route.config.retry) {
-        let targets = select_route_targets(&state, &route, false);
+        let targets =
+            select_route_targets_with_affinity(&state, &route, false, session_key.as_deref());
         for target in targets {
             let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
                 Ok(client) => client,
@@ -1907,6 +2207,12 @@ async fn handle_models_request(
             }
             let payload = enrich_models_payload(payload, route.config.inbound_protocol);
             mark_success(&state, target.config.id);
+            remember_affinity_target(
+                &state,
+                route.config.id,
+                session_key.as_deref(),
+                target.config.id,
+            );
             let body = BodyExt::boxed_unsync(
                 Full::new(payload).map_err(|never| -> BoxError { match never {} }),
             );
@@ -2039,6 +2345,13 @@ async fn handle_request(
     let request_id = Uuid::new_v4();
     request.extensions_mut().insert(request_id);
     let health = request.uri().path().trim_end_matches('/') == "/health";
+    let websocket = websocket::is_upgrade_request(&request);
+    let in_flight = (!health).then(|| InFlightGuard::new(state.in_flight_requests.clone()));
+    let (inner_in_flight, body_in_flight) = if websocket {
+        (in_flight, None)
+    } else {
+        (None, in_flight)
+    };
     let started = Instant::now();
     if !health {
         state.usage.log_diagnostic(
@@ -2046,7 +2359,8 @@ async fn handle_request(
             format!("event=proxy.http.received request_id={request_id}"),
         );
     }
-    let response = handle_request_inner(request, state.clone()).await?;
+    let response = handle_request_inner(request, state.clone(), inner_in_flight).await?;
+    let response = attach_in_flight_guard(response, body_in_flight);
     if !health || !response.status().is_success() {
         state.usage.log_diagnostic(
             if response.status().is_client_error() || response.status().is_server_error() {
@@ -2064,16 +2378,37 @@ async fn handle_request(
     Ok(response)
 }
 
+fn attach_in_flight_guard(
+    response: Response<BoxBody>,
+    guard: Option<InFlightGuard>,
+) -> Response<BoxBody> {
+    let Some(guard) = guard else {
+        return response;
+    };
+    let (parts, body) = response.into_parts();
+    let body = body
+        .map_frame(move |frame| {
+            // Keep the request counted until the body is fully consumed or
+            // dropped, which includes long-lived HTTP streaming responses.
+            let _keep_alive = &guard;
+            frame
+        })
+        .boxed_unsync();
+    Response::from_parts(parts, body)
+}
+
 async fn handle_request_inner(
     request: Request<Incoming>,
     state: RuntimeState,
+    in_flight: Option<InFlightGuard>,
 ) -> Result<Response<BoxBody>, Infallible> {
+    let config_changed = state.config_changed.subscribe();
     let request_id = *request
         .extensions()
         .get::<Uuid>()
         .expect("assigned by HTTP entry point");
     if websocket::is_upgrade_request(&request) {
-        return Ok(websocket::handle_request(request, state).await);
+        return Ok(websocket::handle_request(request, state, in_flight).await);
     }
     let started = Instant::now();
     let started_at = now_unix();
@@ -2128,6 +2463,9 @@ async fn handle_request_inner(
     };
     forward_request(
         ForwardRequest {
+            websocket: false,
+            upstream_pool: None,
+            config_changed,
             request_id,
             method,
             request_query,
@@ -2144,6 +2482,9 @@ async fn handle_request_inner(
 }
 
 struct ForwardRequest {
+    websocket: bool,
+    upstream_pool: Option<Arc<websocket::pool::Pool>>,
+    config_changed: tokio::sync::watch::Receiver<()>,
     request_id: Uuid,
     method: http::Method,
     request_query: Option<String>,
@@ -2151,6 +2492,11 @@ struct ForwardRequest {
     body: ReplayableRequestBody,
     started: Instant,
     started_at: i64,
+}
+
+#[derive(Clone, Copy)]
+struct UpstreamIdentity {
+    target_id: Uuid,
 }
 
 // Shared HTTP/SSE execution, including conversion, failover and usage tracking.
@@ -2162,6 +2508,9 @@ async fn forward_request(
     pricing: Vec<ModelPricing>,
 ) -> Result<Response<BoxBody>, Infallible> {
     let ForwardRequest {
+        websocket,
+        upstream_pool,
+        config_changed,
         request_id,
         method,
         request_query,
@@ -2190,6 +2539,20 @@ async fn forward_request(
         None
     };
     let request_metadata = body.metadata().await.unwrap_or_default();
+    let tool_summary = body
+        .parse_metadata::<diagnostics::protocol::RequestSummary>()
+        .await;
+    diagnostics::protocol::RequestSummary::log(
+        tool_summary.as_ref(),
+        &state.usage,
+        request_id,
+        if websocket {
+            "ws_bridge_prepared"
+        } else {
+            "http_inbound"
+        },
+    );
+    let session_key = session_affinity_key(&incoming_headers, Some(&request_metadata));
     let streaming_request = request_metadata.stream;
     let model = request_metadata.model;
     let mut last_error = None;
@@ -2207,6 +2570,7 @@ async fn forward_request(
             )
         });
     let mut target_attempts = 0u8;
+    let mut generation_submitted = false;
     let mut hold_round = 0u32;
     let hold_deadline = hold_deadline(&route.config.retry, started);
     'hold: loop {
@@ -2215,12 +2579,20 @@ async fn forward_request(
         }
         let ignore_circuit = hold_round > 0;
         for _round in 0..silent_retry_rounds(&route.config.retry) {
-            let targets = select_route_targets(&state, &route, ignore_circuit);
+            let targets = select_route_targets_with_affinity(
+                &state,
+                &route,
+                ignore_circuit,
+                session_key.as_deref(),
+            );
             if ignore_circuit && targets.is_empty() {
                 // No enabled targets remain, so holding cannot recover.
                 break 'hold;
             }
             for target in targets {
+                if generation_submitted {
+                    break 'hold;
+                }
                 if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                     break 'hold;
                 }
@@ -2231,7 +2603,41 @@ async fn forward_request(
                 ));
                 let attempt_started_at = now_unix();
                 let attempt_started = Instant::now();
-                let attempts = target_attempts;
+                let mut attempts = target_attempts;
+                if method == http::Method::POST
+                    && route.config.inbound_protocol == ProxyProtocol::OpenAiResponses
+                    && target.supports_websockets
+                    && target
+                        .config
+                        .effective_protocol(route.config.upstream_protocol)
+                        == ProxyProtocol::OpenAiResponses
+                {
+                    if let Some(response) =
+                        websocket::upstream::forward(websocket::upstream::RequestContext {
+                            state: &state,
+                            route: &route,
+                            target: &target,
+                            pricing: &pricing,
+                            incoming_headers: &incoming_headers,
+                            query: request_query.as_deref(),
+                            body: &body,
+                            request_id,
+                            attempts: &mut attempts,
+                            hold_deadline,
+                            pool: upstream_pool.clone(),
+                            config_changed: config_changed.clone(),
+                            streaming: streaming_request,
+                        })
+                        .await
+                    {
+                        return Ok(response);
+                    }
+                    if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+                    {
+                        break 'hold;
+                    }
+                    target_attempts = attempts;
+                }
                 let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
                     Ok(client) => client,
                     Err(err) => {
@@ -2254,6 +2660,10 @@ async fn forward_request(
                     .effective_protocol(route.config.upstream_protocol);
                 let conversion = route.config.conversion_enabled
                     && route.config.inbound_protocol != target_protocol;
+                state.usage.log_diagnostic("info", format!(
+                    "event=proxy.request.forwarding request_id={request_id} target_id={} provider_id={} attempt={attempts} transport=http inbound={:?} upstream={target_protocol:?} converted={conversion}",
+                    target.config.id, target.config.provider_entry_id, route.config.inbound_protocol,
+                ));
                 let mut rewritten_payload = None;
                 if conversion {
                     let Some(json_payload) = request_json.clone() else {
@@ -2270,6 +2680,14 @@ async fn forward_request(
                                 json_payload,
                             )
                             .and_then(|value| {
+                                let summary =
+                                    diagnostics::protocol::RequestSummary::deserialize(&value).ok();
+                                diagnostics::protocol::RequestSummary::log(
+                                    summary.as_ref(),
+                                    &state.usage,
+                                    request_id,
+                                    "converted_upstream",
+                                );
                                 serde_json::to_vec(&value).map_err(|err| {
                                     aipass_proxy_conversion::ConversionError::InvalidPayload {
                                         protocol: route.config.inbound_protocol,
@@ -2392,6 +2810,7 @@ async fn forward_request(
                     .body(payload);
                 let first_byte_timeout =
                     Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1));
+                generation_submitted = websocket;
                 let response = match tokio::time::timeout_at(
                     bounded_deadline(first_byte_timeout, hold_deadline),
                     upstream.send(),
@@ -2431,6 +2850,7 @@ async fn forward_request(
                 let status = response.status();
                 let retryable_status = is_retryable_status(status);
                 if retryable_status {
+                    generation_submitted = false; // Explicit rejection before generation.
                     last_error = Some(format!("upstream returned {status}"));
                     if status_affects_circuit(status) {
                         mark_failure(&state, target.config.id, &route.config.retry);
@@ -2456,7 +2876,8 @@ async fn forward_request(
                 // A silent retry must not commit a response before the upstream
                 // stream has completed. Buffer that mode so a mid-stream failure
                 // can be retried without leaking a transport error to the caller.
-                let buffer_streaming = streaming_response && route.config.retry.silent_retry;
+                let buffer_streaming =
+                    streaming_response && route.config.retry.silent_retry && !websocket;
                 let mut upstream_stream: UpstreamBodyStream = Box::pin(response.bytes_stream());
                 let first_event_deadline = bounded_deadline(first_byte_timeout, hold_deadline);
                 let first_chunk =
@@ -2496,53 +2917,53 @@ async fn forward_request(
                     };
                 let stream_idle_timeout =
                     Duration::from_millis(route.config.retry.stream_idle_timeout_ms.max(1));
-                let (first_chunk, first_token_observed) = if streaming_response && !buffer_streaming
-                {
-                    // Once this event is returned to the client, replaying on another target is unsafe.
-                    match prefetch_sse_event(
-                        target_protocol,
-                        first_chunk,
-                        &mut upstream_stream,
-                        first_event_deadline,
-                    )
-                    .await
-                    {
-                        Ok(Some(prefetched)) => {
-                            (Some(prefetched.bytes), prefetched.first_token_observed)
+                let (first_chunk, first_token_observed) =
+                    if streaming_response && !buffer_streaming && !websocket {
+                        // Once this event is returned to the client, replaying on another target is unsafe.
+                        match prefetch_sse_event(
+                            target_protocol,
+                            first_chunk,
+                            &mut upstream_stream,
+                            first_event_deadline,
+                        )
+                        .await
+                        {
+                            Ok(Some(prefetched)) => {
+                                (Some(prefetched.bytes), prefetched.first_token_observed)
+                            }
+                            Ok(None) => {
+                                last_error =
+                                    Some("upstream stream ended before the first event".into());
+                                mark_failure(&state, target.config.id, &route.config.retry);
+                                persist_attempt(
+                                    &state.usage,
+                                    (request_id, route.config.id),
+                                    &target,
+                                    model.as_deref(),
+                                    attempt_started_at,
+                                    attempt_started,
+                                    AttemptOutcome::failure(Some(status), None),
+                                );
+                                continue;
+                            }
+                            Err(err) => {
+                                last_error = Some(err);
+                                mark_failure(&state, target.config.id, &route.config.retry);
+                                persist_attempt(
+                                    &state.usage,
+                                    (request_id, route.config.id),
+                                    &target,
+                                    model.as_deref(),
+                                    attempt_started_at,
+                                    attempt_started,
+                                    AttemptOutcome::failure(Some(status), None),
+                                );
+                                continue;
+                            }
                         }
-                        Ok(None) => {
-                            last_error =
-                                Some("upstream stream ended before the first event".into());
-                            mark_failure(&state, target.config.id, &route.config.retry);
-                            persist_attempt(
-                                &state.usage,
-                                (request_id, route.config.id),
-                                &target,
-                                model.as_deref(),
-                                attempt_started_at,
-                                attempt_started,
-                                AttemptOutcome::failure(Some(status), None),
-                            );
-                            continue;
-                        }
-                        Err(err) => {
-                            last_error = Some(err);
-                            mark_failure(&state, target.config.id, &route.config.retry);
-                            persist_attempt(
-                                &state.usage,
-                                (request_id, route.config.id),
-                                &target,
-                                model.as_deref(),
-                                attempt_started_at,
-                                attempt_started,
-                                AttemptOutcome::failure(Some(status), None),
-                            );
-                            continue;
-                        }
-                    }
-                } else {
-                    (first_chunk, false)
-                };
+                    } else {
+                        (first_chunk, false)
+                    };
                 let first_token_ms =
                     first_token_observed.then(|| attempt_started.elapsed().as_millis() as u64);
                 let upstream_protocol = target_protocol;
@@ -2714,7 +3135,9 @@ async fn forward_request(
                         streaming: streaming_response,
                         started,
                         failure_state: state.clone(),
+                        route_id: route.config.id,
                         target_id: target.config.id,
+                        session_key: session_key.clone(),
                         retry_policy: route.config.retry.clone(),
                         attempt: streaming_attempt,
                     },
@@ -2740,6 +3163,12 @@ async fn forward_request(
                         attempt_started,
                         AttemptOutcome::success(status, first_token_ms),
                     );
+                    remember_affinity_target(
+                        &state,
+                        route.config.id,
+                        session_key.as_deref(),
+                        target.config.id,
+                    );
                 }
                 let frame_stream = output_stream.map(|result| result.map(Frame::data));
                 let stream_body = BodyExt::boxed_unsync(StreamBody::new(frame_stream));
@@ -2754,11 +3183,17 @@ async fn forward_request(
                         builder = builder.header(name, value);
                     }
                 }
-                let response = builder.body(stream_body).unwrap_or_else(|_| {
+                let mut response = builder.body(stream_body).unwrap_or_else(|_| {
                     error_response(StatusCode::BAD_GATEWAY, "failed to build proxy response")
+                });
+                response.extensions_mut().insert(UpstreamIdentity {
+                    target_id: target.config.id,
                 });
                 return Ok(response);
             }
+        }
+        if generation_submitted {
+            break;
         }
         let retry = &route.config.retry;
         if !retry.hold_on_failure || !route.targets.iter().any(|target| target.config.enabled) {
@@ -3310,7 +3745,9 @@ struct UsageTrackingContext {
     streaming: bool,
     started: Instant,
     failure_state: RuntimeState,
+    route_id: Uuid,
     target_id: Uuid,
+    session_key: Option<String>,
     retry_policy: RetryPolicy,
     attempt: Option<(AttemptRecord, Instant)>,
 }
@@ -3331,7 +3768,9 @@ where
         streaming,
         started,
         failure_state,
+        route_id,
         target_id,
+        session_key,
         retry_policy,
         attempt,
     } = context;
@@ -3346,6 +3785,8 @@ where
         let mut protocol_completed = false;
         let mut protocol_terminal = false;
         let mut protocol_failed = false;
+        let mut response_trace = (streaming && protocol == ProxyProtocol::OpenAiResponses)
+            .then(diagnostics::protocol::ResponseTrace::default);
         loop {
             let next = if streaming {
                 tokio::select! {
@@ -3368,11 +3809,12 @@ where
             };
             if let Ok(chunk) = &result {
                 if streaming {
-                    let signals = observe_sse_usage(
+                    let signals = observe_sse_usage_traced(
                         protocol,
                         &mut usage_event_buffer,
                         chunk,
                         &mut observed_usage,
+                        response_trace.as_mut(),
                     );
                     protocol_completed |= signals.completed;
                     protocol_terminal |= signals.terminal;
@@ -3407,6 +3849,14 @@ where
         };
         if stream_succeeded {
             mark_success(&failure_state, target_id);
+            if streaming {
+                remember_affinity_target(
+                    &failure_state,
+                    route_id,
+                    session_key.as_deref(),
+                    target_id,
+                );
+            }
         } else if protocol_failed {
             mark_failure(&failure_state, target_id, &retry_policy);
             set_error(
@@ -3421,6 +3871,9 @@ where
             );
         }
         merge_usage(&mut observed_usage, usage_from_wire_bytes(protocol, &tail));
+        if let Some(trace) = response_trace {
+            trace.log(&store, record.id, "http_sse_upstream");
+        }
         record_recent_tokens(
             &failure_state,
             observed_usage
@@ -3523,11 +3976,22 @@ struct SseSignals {
     failed: bool,
 }
 
+#[cfg(test)]
 fn observe_sse_usage(
     protocol: ProxyProtocol,
     buffer: &mut Vec<u8>,
     chunk: &[u8],
     usage: &mut TokenUsage,
+) -> SseSignals {
+    observe_sse_usage_traced(protocol, buffer, chunk, usage, None)
+}
+
+fn observe_sse_usage_traced(
+    protocol: ProxyProtocol,
+    buffer: &mut Vec<u8>,
+    chunk: &[u8],
+    usage: &mut TokenUsage,
+    mut trace: Option<&mut diagnostics::protocol::ResponseTrace>,
 ) -> SseSignals {
     buffer.extend_from_slice(chunk);
     let mut consumed = 0;
@@ -3540,6 +4004,9 @@ fn observe_sse_usage(
         signals.terminal |= sse_event_is_terminal(protocol, event);
         if let Some(data) = sse_event_data(event) {
             if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&data) {
+                if let Some(trace) = trace.as_deref_mut() {
+                    trace.observe(&value);
+                }
                 merge_usage(usage, usage_from_wire_value(protocol, &value));
             }
         }
@@ -3550,6 +4017,9 @@ fn observe_sse_usage(
     }
     const USAGE_EVENT_BUFFER_LIMIT: usize = 1024 * 1024;
     if buffer.len() > USAGE_EVENT_BUFFER_LIMIT {
+        if let Some(trace) = trace {
+            trace.limited();
+        }
         buffer.clear();
     }
     signals
@@ -3567,7 +4037,7 @@ fn upstream_url(base_url: &str, path: &str) -> Result<String, ProxyError> {
     upstream_url_with_query(base_url, path, None)
 }
 
-fn upstream_url_with_query(
+pub fn upstream_url_with_query(
     base_url: &str,
     path: &str,
     query: Option<&str>,
@@ -3642,26 +4112,162 @@ fn circuit_open(state: &RuntimeState, target_id: Uuid) -> bool {
         }
         target.open_until = None;
         target.consecutive_failures = 0;
+        target.consecutive_successes = 0;
+        target.recovering = true;
     }
     false
 }
 
 fn mark_failure(state: &RuntimeState, target_id: Uuid, policy: &RetryPolicy) {
-    let Ok(mut health) = state.health.lock() else {
-        return;
-    };
-    let target = health.entry(target_id).or_default();
-    target.last_failure_at = Some(Instant::now());
-    target.consecutive_failures = target.consecutive_failures.saturating_add(1);
-    if target.consecutive_failures >= policy.failure_threshold.max(1) {
-        target.open_until = Some(Instant::now() + Duration::from_secs(policy.circuit_open_seconds));
+    if let Ok(mut health) = state.health.lock() {
+        let target = health.entry(target_id).or_default();
+        target.last_failure_at = Some(Instant::now());
+        target.consecutive_successes = 0;
+        target.recovering = false;
+        target.consecutive_failures = target.consecutive_failures.saturating_add(1);
+        if target.consecutive_failures >= policy.failure_threshold.max(1) {
+            target.open_until =
+                Some(Instant::now() + Duration::from_secs(policy.circuit_open_seconds));
+        }
     }
+    // A failed provider must not keep receiving this session's cache-sensitive
+    // traffic merely because its circuit threshold has not opened yet.
+    clear_affinity_for_target(state, target_id);
 }
 
 fn mark_success(state: &RuntimeState, target_id: Uuid) {
     if let Ok(mut health) = state.health.lock() {
+        let Some(target) = health.get_mut(&target_id) else {
+            return;
+        };
+
+        // A request may have started before a newer failure opened the
+        // circuit. Its late success must not close that newer circuit.
+        if target
+            .open_until
+            .is_some_and(|open_until| Instant::now() < open_until)
+        {
+            return;
+        }
+
+        if target.open_until.is_some() {
+            target.open_until = None;
+            target.consecutive_failures = 0;
+            target.consecutive_successes = 0;
+            target.recovering = true;
+        }
+
+        if target.recovering || target.consecutive_failures > 0 {
+            target.consecutive_successes = target.consecutive_successes.saturating_add(1);
+            if target.consecutive_successes < RECOVERY_SUCCESS_THRESHOLD {
+                return;
+            }
+        }
+
         health.remove(&target_id);
     }
+}
+
+// Provider capability is shared across credentials/routes, but is independent
+// of the general target circuit: SSE success must not erase WS failures.
+const WS_FAILURE_THRESHOLD: u8 = 3;
+const WS_COOLDOWN: Duration = Duration::from_secs(30);
+
+struct WsTransportPermit {
+    state: RuntimeState,
+    provider_id: Uuid,
+    probe_id: Option<Uuid>,
+}
+
+impl Drop for WsTransportPermit {
+    fn drop(&mut self) {
+        if let Some(probe_id) = self.probe_id {
+            if let Ok(mut health) = self.state.ws_health.lock() {
+                if let Some(provider) = health.get_mut(&self.provider_id) {
+                    if provider.probe_id == Some(probe_id) {
+                        provider.probe_id = None;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn acquire_ws_transport(state: &RuntimeState, provider_id: Uuid) -> Option<WsTransportPermit> {
+    let mut health = state.ws_health.lock().ok()?;
+    let mut probe_id = None;
+    if let Some(provider) = health.get_mut(&provider_id) {
+        if provider
+            .disabled_until
+            .is_some_and(|until| Instant::now() < until)
+            || provider.probe_id.is_some()
+        {
+            return None;
+        }
+        if provider.disabled_until.is_some() {
+            // Hold the recovery permit through response completion, including
+            // long generations. Cancellation releases it immediately.
+            probe_id = Some(Uuid::new_v4());
+            provider.probe_id = probe_id;
+        }
+    }
+    Some(WsTransportPermit {
+        state: state.clone(),
+        provider_id,
+        probe_id,
+    })
+}
+
+fn mark_ws_failure(state: &RuntimeState, provider_id: Uuid) {
+    let cooling_down = if let Ok(mut health) = state.ws_health.lock() {
+        let provider = health.entry(provider_id).or_default();
+        provider.consecutive_failures = provider.consecutive_failures.saturating_add(1);
+        provider.probe_id = None;
+        if provider.consecutive_failures >= WS_FAILURE_THRESHOLD {
+            provider.disabled_until = Some(Instant::now() + WS_COOLDOWN);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if cooling_down {
+        state.usage.log_diagnostic("warn", format!(
+            "event=proxy.websocket.cooldown provider_entry_id={provider_id} duration_seconds={}", WS_COOLDOWN.as_secs()
+        ));
+    }
+}
+
+fn mark_ws_success(state: &RuntimeState, provider_id: Uuid) {
+    let recovered = if let Ok(mut health) = state.ws_health.lock() {
+        // A late completion on an older live connection cannot cancel a newer
+        // cooldown. Recovery requires a success after its deadline.
+        if health.get(&provider_id).is_some_and(|provider| {
+            provider
+                .disabled_until
+                .is_some_and(|until| Instant::now() < until)
+        }) {
+            return;
+        }
+        health.remove(&provider_id).is_some()
+    } else {
+        false
+    };
+    if recovered {
+        state.usage.log_diagnostic(
+            "info",
+            format!("event=proxy.websocket.recovered provider_entry_id={provider_id}"),
+        );
+    }
+}
+
+fn ws_handshake_affects_transport(status: StatusCode) -> bool {
+    // Auth, quota and policy failures do not establish a protocol capability.
+    !matches!(
+        status,
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
+    )
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {
@@ -3692,6 +4298,11 @@ fn build_upstream_headers(
     let anthropic_upstream = protocol == ProxyProtocol::AnthropicMessages;
     let mut headers = HeaderMap::new();
     for (name, value) in incoming.iter() {
+        // This header is local routing metadata and must never be sent to an
+        // upstream provider as if it were part of the provider API.
+        if name == "x-aipass-session-id" || name == "x-aipass-session" {
+            continue;
+        }
         // Anthropic-specific headers are meaningless (and leaking them is
         // confusing) to an OpenAI-wire upstream after conversion.
         if !anthropic_upstream && (name == "anthropic-version" || name == ANTHROPIC_BETA_HEADER) {
@@ -3924,6 +4535,82 @@ mod tests {
     use std::io::{Read, Write};
 
     #[test]
+    fn route_protocol_scope_keeps_codex_tokens_on_responses_only() {
+        let route = ProxyRouteConfig {
+            id: Uuid::new_v4(),
+            name: "Codex".into(),
+            token: "route-token".into(),
+            inbound_protocol: ProxyProtocol::OpenAiResponses,
+            upstream_protocol: ProxyProtocol::OpenAiResponses,
+            conversion_enabled: false,
+            strategy: RouteStrategy::Fallback,
+            targets: Vec::new(),
+            retry: RetryPolicy::default(),
+            enabled: true,
+        };
+
+        assert!(route_accepts_inbound_protocol(
+            &route,
+            ProxyProtocol::OpenAiResponses
+        ));
+        assert!(!route_accepts_inbound_protocol(
+            &route,
+            ProxyProtocol::OpenAiChatCompletions
+        ));
+        assert!(!route_accepts_inbound_protocol(
+            &route,
+            ProxyProtocol::AnthropicMessages
+        ));
+    }
+
+    #[test]
+    fn route_selection_rejects_codex_token_on_other_http_protocols() {
+        let token = "codex-responses-token";
+        let route = single_target_route(
+            token,
+            "http://127.0.0.1:1/v1".into(),
+            RetryPolicy::default(),
+        );
+        let proxy = start_proxy(available_addr(), route);
+        assert!(select_route(
+            &proxy.state,
+            Some(token),
+            None,
+            Some(ProxyProtocol::OpenAiResponses)
+        )
+        .is_some());
+        assert!(select_route(
+            &proxy.state,
+            Some(token),
+            None,
+            Some(ProxyProtocol::OpenAiChatCompletions)
+        )
+        .is_none());
+        assert!(select_route(
+            &proxy.state,
+            Some(token),
+            None,
+            Some(ProxyProtocol::AnthropicMessages)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn in_flight_guard_tracks_nested_request_lifetimes() {
+        let counter = Arc::new(AtomicU64::new(0));
+        {
+            let _first = InFlightGuard::new(counter.clone());
+            assert_eq!(counter.load(Ordering::Relaxed), 1);
+            {
+                let _second = InFlightGuard::new(counter.clone());
+                assert_eq!(counter.load(Ordering::Relaxed), 2);
+            }
+            assert_eq!(counter.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn proxy_config_defaults_upstream_proxy_to_system_for_legacy_json() {
         let config: ProxyConfig = serde_json::from_str(
             r#"{"enabled":true,"bindAddr":"127.0.0.1:8787","routes":[],"pricing":[]}"#,
@@ -4075,6 +4762,9 @@ mod tests {
 
     fn test_target(base_url: String, priority: u16) -> ResolvedTarget {
         ResolvedTarget {
+            // These fixtures exercise the HTTP retry/streaming pipeline.
+            // WS preference and fallback have dedicated adaptive WS tests.
+            supports_websockets: false,
             config: ProxyTargetConfig {
                 id: Uuid::new_v4(),
                 provider_entry_id: Uuid::new_v4(),
@@ -4420,6 +5110,7 @@ mod tests {
         mark_success(&proxy.state, disabled_target_id);
         assert_eq!(proxy.status().degraded_target_ids, vec![target_id]);
         mark_success(&proxy.state, target_id);
+        mark_success(&proxy.state, target_id);
         assert!(!proxy.status().degraded);
 
         mark_failure(&proxy.state, target_id, &retry);
@@ -4453,6 +5144,40 @@ mod tests {
     }
 
     #[test]
+    fn circuit_recovery_requires_consecutive_successes() {
+        let temp = tempfile::tempdir().unwrap();
+        let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+        let retry = RetryPolicy {
+            failure_threshold: 1,
+            circuit_open_seconds: 60,
+            ..RetryPolicy::default()
+        };
+        let route = single_target_route(
+            "aipass_recovery_threshold_test",
+            "http://127.0.0.1:1/v1".into(),
+            retry.clone(),
+        );
+        let target_id = route.targets[0].config.id;
+        let proxy = ProxyHandle::start(
+            RuntimeConfig::from_routes("127.0.0.1:0", vec![route]),
+            usage,
+        )
+        .unwrap();
+
+        mark_failure(&proxy.state, target_id, &retry);
+        {
+            let mut health = proxy.state.health.lock().unwrap();
+            health.get_mut(&target_id).unwrap().open_until =
+                Some(Instant::now() - Duration::from_secs(1));
+        }
+        assert!(!circuit_open(&proxy.state, target_id));
+        mark_success(&proxy.state, target_id);
+        assert!(proxy.state.health.lock().unwrap().contains_key(&target_id));
+        mark_success(&proxy.state, target_id);
+        assert!(proxy.state.health.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn runtime_config_update_resets_circuit_and_round_robin_state() {
         let bind_addr = available_addr();
         let dead_addr = available_addr();
@@ -4478,8 +5203,10 @@ mod tests {
 
         mark_failure(&proxy.state, target_id, &retry);
         let _ = round_robin_start(&proxy.state, route_id, &[1]);
+        remember_affinity_target(&proxy.state, route_id, Some("session"), target_id);
         assert!(circuit_open(&proxy.state, target_id));
         assert!(!proxy.state.rr_counters.lock().unwrap().is_empty());
+        assert!(!proxy.state.session_affinity.lock().unwrap().is_empty());
         assert_eq!(proxy.status().degraded_target_ids, vec![target_id]);
 
         let mut replacement = single_target_route(
@@ -4498,6 +5225,7 @@ mod tests {
 
         assert!(!circuit_open(&proxy.state, target_id));
         assert!(proxy.state.rr_counters.lock().unwrap().is_empty());
+        assert!(proxy.state.session_affinity.lock().unwrap().is_empty());
         assert!(proxy.status().degraded_target_ids.is_empty());
         assert!(!proxy.status().degraded);
     }
@@ -5399,9 +6127,23 @@ mod tests {
                     let (socket, _) = listener.accept().await.unwrap();
                     let counter = counter.clone();
                     tokio::spawn(async move {
-                        let service = service_fn(move |_: Request<Incoming>| {
-                            let attempt = counter.fetch_add(1, Ordering::SeqCst);
+                        let service = service_fn(move |request: Request<Incoming>| {
+                            let counter = counter.clone();
                             async move {
+                                // Host port discovery can send unrelated GET / probes.
+                                // Only generation submissions belong to this retry count.
+                                if request.method() != http::Method::POST
+                                    || request.uri().path() != "/v1/responses"
+                                {
+                                    return Ok::<_, Infallible>(error_response(
+                                        StatusCode::NOT_FOUND,
+                                        "unknown test endpoint",
+                                    ));
+                                }
+                                // Count complete submissions. Leaving request bodies unread
+                                // can trigger a stale-connection retry inside the HTTP client.
+                                request.into_body().collect().await.unwrap();
+                                let attempt = counter.fetch_add(1, Ordering::SeqCst);
                                 let response = if mode == "backoff" || attempt == 0 {
                                     error_response(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
                                 } else if mode == "headers" {
@@ -5492,7 +6234,8 @@ mod tests {
             assert_eq!(
                 count.load(Ordering::SeqCst),
                 if mode == "backoff" { 1 } else { 2 },
-                "{mode}"
+                "{mode}: {:?}",
+                proxy.logs().unwrap()
             );
             assert_eq!(proxy.status().requests, 1);
         }
@@ -6655,6 +7398,7 @@ mod tests {
         let route_id = Uuid::new_v4();
         let provider_id = Uuid::new_v4();
         let target = |id, base_url, priority| ResolvedTarget {
+            supports_websockets: false,
             config: ProxyTargetConfig {
                 id,
                 provider_entry_id: provider_id,
@@ -6856,6 +7600,83 @@ mod tests {
             counts[index] += 1;
         }
         assert_eq!(counts, [10, 10]);
+    }
+
+    #[test]
+    fn session_affinity_prefers_last_successful_target_across_round_robin() {
+        let mut route = fallback_route(
+            "session_affinity_test",
+            &[
+                "127.0.0.1:1".parse().unwrap(),
+                "127.0.0.1:2".parse().unwrap(),
+            ],
+            RetryPolicy {
+                max_attempts: 1,
+                ..RetryPolicy::default()
+            },
+        );
+        route.config.strategy = RouteStrategy::RoundRobin;
+        let proxy = start_proxy(available_addr(), route.clone());
+        let session = "conversation-1";
+        let first = select_route_targets_with_affinity(&proxy.state, &route, false, Some(session));
+        assert_eq!(first.len(), 1);
+        let target = first[0].config.id;
+        remember_affinity_target(&proxy.state, route.config.id, Some(session), target);
+
+        // Round-robin advances on every selection, but the remembered healthy
+        // target remains first for this session.
+        for _ in 0..4 {
+            let selected =
+                select_route_targets_with_affinity(&proxy.state, &route, false, Some(session));
+            assert_eq!(selected[0].config.id, target);
+        }
+    }
+
+    #[test]
+    fn session_affinity_is_cleared_when_a_target_fails() {
+        let route = fallback_route(
+            "session_affinity_failure_test",
+            &["127.0.0.1:1".parse().unwrap()],
+            RetryPolicy::default(),
+        );
+        let proxy = start_proxy(available_addr(), route.clone());
+        let session = "conversation-1";
+        let target = route.targets[0].config.id;
+        remember_affinity_target(&proxy.state, route.config.id, Some(session), target);
+        assert_eq!(
+            affinity_target(&proxy.state, route.config.id, Some(session), &route.targets),
+            Some(target)
+        );
+        mark_failure(&proxy.state, target, &route.config.retry);
+        assert_eq!(
+            affinity_target(&proxy.state, route.config.id, Some(session), &route.targets),
+            None
+        );
+    }
+
+    #[test]
+    fn session_affinity_key_accepts_headers_and_prompt_cache_fields() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-aipass-session-id",
+            HeaderValue::from_static(" header-session "),
+        );
+        assert_eq!(
+            session_affinity_key(&headers, None).as_deref(),
+            Some("header-session")
+        );
+        let metadata: RequestMetadata =
+            serde_json::from_str(r#"{"prompt_cache_key":"prompt-session"}"#).unwrap();
+        assert_eq!(
+            session_affinity_key(&HeaderMap::new(), Some(&metadata)).as_deref(),
+            Some("prompt-session")
+        );
+        let metadata: RequestMetadata =
+            serde_json::from_str(r#"{"conversation":{"id":"conversation-session"}}"#).unwrap();
+        assert_eq!(
+            session_affinity_key(&HeaderMap::new(), Some(&metadata)).as_deref(),
+            Some("conversation-session")
+        );
     }
 
     #[test]

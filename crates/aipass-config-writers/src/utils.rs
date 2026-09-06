@@ -42,6 +42,7 @@ pub(crate) fn new_plan(
         summary,
         preview,
         extra_writes: Vec::new(),
+        codex_session_migration: None,
         codex_provider_migration: None,
     }
 }

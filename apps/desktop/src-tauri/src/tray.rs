@@ -1248,6 +1248,9 @@ mod tests {
             recent_tokens: 0,
             success_rate_bps: 0,
             average_first_token_ms: None,
+            in_flight_requests: 0,
+            available_channels: active_routes,
+            total_channels: active_routes,
         })
     }
 }

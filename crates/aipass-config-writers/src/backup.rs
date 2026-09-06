@@ -7,7 +7,9 @@ use rusqlite::{params, Connection};
 use std::collections::HashSet;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -32,12 +34,21 @@ pub fn apply_plan_encrypted(
     let prepared = prepare_writes(plan, content)?;
     write_encrypted_backups(plan.operation_id, &prepared, backup_key)?;
     let sqlite_backups = prepare_codex_sqlite_backups(plan, Some(backup_key))?;
+    let session_backups = prepare_codex_session_backups(plan, Some(backup_key))?;
     if let Err(err) = apply_codex_sqlite_migration(plan) {
         let _ = restore_codex_sqlite_backups(&sqlite_backups, Some(backup_key));
+        let _ = restore_codex_session_backups(&session_backups, Some(backup_key));
         return Err(err);
     }
     if let Err(err) = apply_prepared_writes(plan.operation_id, &prepared) {
         let _ = restore_codex_sqlite_backups(&sqlite_backups, Some(backup_key));
+        let _ = restore_codex_session_backups(&session_backups, Some(backup_key));
+        return Err(err);
+    }
+    if let Err(err) = apply_codex_session_migration(plan) {
+        let _ = restore_applied_writes(&prepared);
+        let _ = restore_codex_sqlite_backups(&sqlite_backups, Some(backup_key));
+        let _ = restore_codex_session_backups(&session_backups, Some(backup_key));
         return Err(err);
     }
     Ok(apply_result(plan))
@@ -47,12 +58,21 @@ pub fn apply_plan_with_plain_backup(plan: &ConfigPlan, content: &str) -> Result<
     let prepared = prepare_writes(plan, content)?;
     write_plain_backups(&prepared)?;
     let sqlite_backups = prepare_codex_sqlite_backups(plan, None)?;
+    let session_backups = prepare_codex_session_backups(plan, None)?;
     if let Err(err) = apply_codex_sqlite_migration(plan) {
         let _ = restore_codex_sqlite_backups(&sqlite_backups, None);
+        let _ = restore_codex_session_backups(&session_backups, None);
         return Err(err);
     }
     if let Err(err) = apply_prepared_writes(plan.operation_id, &prepared) {
         let _ = restore_codex_sqlite_backups(&sqlite_backups, None);
+        let _ = restore_codex_session_backups(&session_backups, None);
+        return Err(err);
+    }
+    if let Err(err) = apply_codex_session_migration(plan) {
+        let _ = restore_applied_writes(&prepared);
+        let _ = restore_codex_sqlite_backups(&sqlite_backups, None);
+        let _ = restore_codex_session_backups(&session_backups, None);
         return Err(err);
     }
     Ok(apply_result(plan))
@@ -107,6 +127,7 @@ pub fn rollback_plain(plan: &ConfigPlan) -> Result<()> {
     for write in &plan.extra_writes {
         restore_plain_backup_file(&write.target_path, &write.backup_path)?;
     }
+    restore_codex_session_backups(&codex_session_backup_paths(plan), None)?;
     restore_codex_sqlite_backups(&codex_sqlite_backup_paths(plan), None)?;
     Ok(())
 }
@@ -148,6 +169,169 @@ fn collected_writes(plan: &ConfigPlan, primary_content: &str) -> Vec<PlannedWrit
     });
     writes.extend(plan.extra_writes.iter().cloned());
     writes
+}
+
+type SessionBackup = (PathBuf, PathBuf);
+
+fn codex_session_backup_paths(plan: &ConfigPlan) -> Vec<SessionBackup> {
+    let Some(migration) = plan.codex_session_migration.as_ref() else {
+        return Vec::new();
+    };
+    let Some(codex_dir) = plan.target_path.parent() else {
+        return Vec::new();
+    };
+    migration
+        .files
+        .iter()
+        .map(|target| {
+            (
+                target.clone(),
+                codex_dir
+                    .join(".aipass-backups")
+                    .join(format!("session-{}.aipbackup", path_hash(target))),
+            )
+        })
+        .collect()
+}
+
+fn prepare_codex_session_backups(
+    plan: &ConfigPlan,
+    backup_key: Option<&[u8; KEY_LEN]>,
+) -> Result<Vec<SessionBackup>> {
+    let backups = codex_session_backup_paths(plan);
+    for (target, backup) in &backups {
+        if !target.exists() {
+            continue;
+        }
+        let original = fs::read(target)
+            .with_context(|| format!("backup Codex session {}", target.display()))?;
+        if let Some(key) = backup_key {
+            let encrypted = EncryptedBackup {
+                format: "aipass-config-backup".to_string(),
+                version: 1,
+                operation_id: plan.operation_id,
+                target_path: target.clone(),
+                target_existed: true,
+                created_at: OffsetDateTime::now_utc(),
+                ciphertext: encrypt_bytes(
+                    key,
+                    backup_aad(plan.operation_id, target).as_bytes(),
+                    &original,
+                )?,
+            };
+            write_json(backup, &encrypted)?;
+        } else {
+            if let Some(parent) = backup.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            atomic_write_bytes(backup, &original)?;
+        }
+    }
+    prune_replaced_encrypted_backups(
+        &backups
+            .iter()
+            .map(|(target_path, backup_path)| PreparedWrite {
+                target_path: target_path.clone(),
+                backup_path: backup_path.clone(),
+                content: Vec::new(),
+                original: Vec::new(),
+                target_existed: true,
+            })
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(backups)
+}
+
+fn apply_codex_session_migration(plan: &ConfigPlan) -> Result<()> {
+    let Some(migration) = plan.codex_session_migration.as_ref() else {
+        return Ok(());
+    };
+    for target in &migration.files {
+        if target.exists() {
+            rewrite_codex_session_file(target, &migration.from_provider, &migration.to_provider)?;
+        }
+    }
+    Ok(())
+}
+
+/// Rewrite one JSONL history file through a temporary sibling file. Reading
+/// and writing one record at a time keeps a large Codex history out of the
+/// agent IPC payload and avoids retaining multiple copies in memory.
+fn rewrite_codex_session_file(path: &Path, from_provider: &str, to_provider: &str) -> Result<()> {
+    let input = fs::File::open(path)?;
+    let mut reader = BufReader::new(input);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp = NamedTempFile::new_in(parent)?;
+    {
+        let mut writer = BufWriter::new(temp.as_file_mut());
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let read = reader.read_until(b'\n', &mut line)?;
+            if read == 0 {
+                break;
+            }
+            let has_newline = line.last() == Some(&b'\n');
+            let body_len = if has_newline {
+                line.len() - 1
+            } else {
+                line.len()
+            };
+            let mut replaced = false;
+            if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&line[..body_len]) {
+                let should_update = value.get("type").and_then(serde_json::Value::as_str)
+                    == Some("session_meta")
+                    && value
+                        .get("payload")
+                        .and_then(serde_json::Value::as_object)
+                        .and_then(|payload| payload.get("model_provider"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some(from_provider);
+                if should_update {
+                    if let Some(payload) = value
+                        .get_mut("payload")
+                        .and_then(serde_json::Value::as_object_mut)
+                    {
+                        payload.insert(
+                            "model_provider".to_string(),
+                            serde_json::Value::String(to_provider.to_string()),
+                        );
+                        serde_json::to_writer(&mut writer, &value)?;
+                        if has_newline {
+                            writer.write_all(b"\n")?;
+                        }
+                        replaced = true;
+                    }
+                }
+            }
+            if !replaced {
+                writer.write_all(&line)?;
+            }
+        }
+        writer.flush()?;
+    }
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|err| err.error)?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn restore_codex_session_backups(
+    backups: &[SessionBackup],
+    backup_key: Option<&[u8; KEY_LEN]>,
+) -> Result<()> {
+    for (target, backup) in backups.iter().rev() {
+        if !backup.exists() {
+            continue;
+        }
+        if let Some(key) = backup_key {
+            restore_encrypted_backup_file(backup, key)?;
+        } else {
+            restore_plain_backup_file(target, backup)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_encrypted_backups(

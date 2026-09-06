@@ -291,6 +291,9 @@ pub struct ProviderEntry {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Responses WebSocket capability; absence keeps the default enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_websockets: Option<bool>,
     pub auth_scheme: AuthScheme,
     pub secret_refs: Vec<SecretRef>,
     pub default_model: Option<String>,

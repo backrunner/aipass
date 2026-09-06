@@ -1,9 +1,15 @@
 //! Responses WebSocket transport. Upgrade through the shared reqwest client so
 //! TLS, outbound proxy settings and credential injection match HTTP requests.
 use super::*;
+use diagnostics::protocol::{RequestSummary, ResponseTrace, WsDiagnostic};
 use futures_util::SinkExt;
 
 mod bridge;
+mod keepalive;
+pub(super) mod pool;
+mod probe;
+pub(super) mod upstream;
+pub use probe::{probe_websocket, WebsocketProbeResult};
 use tokio_tungstenite::{
     tungstenite::{
         handshake::{derive_accept_key, server::create_response_with_body},
@@ -27,6 +33,7 @@ fn empty_body() -> BoxBody {
 pub(super) async fn handle_request(
     mut request: Request<Incoming>,
     state: RuntimeState,
+    in_flight: Option<InFlightGuard>,
 ) -> Response<BoxBody> {
     let request_id = request
         .extensions()
@@ -39,6 +46,7 @@ pub(super) async fn handle_request(
         return error_response(StatusCode::NOT_FOUND, "unsupported WebSocket proxy path");
     }
     let (bearer, api_key) = local_proxy_tokens(request.headers());
+    let session_key = session_affinity_key(request.headers(), None);
     let Some((mut route, pricing)) = select_route(
         &state,
         bearer,
@@ -56,28 +64,10 @@ pub(super) async fn handle_request(
         Ok(response) => response,
         Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid WebSocket handshake"),
     };
-    if route.config.conversion_enabled {
-        return bridge::upgrade(
-            request,
-            state,
-            route,
-            pricing,
-            config_changed,
-            downstream_response,
-        );
-    }
-    route.targets.retain(|target| {
-        target
-            .config
-            .effective_protocol(route.config.upstream_protocol)
-            == ProxyProtocol::OpenAiResponses
-    });
-    if !route.targets.iter().any(|target| target.config.enabled) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "WebSocket requires a native Responses upstream or enabled protocol conversion",
-        );
-    }
+    // Select the actual upstream before deciding whether adaptation is needed.
+    // Native Responses sessions remain pinned and application frames stay intact,
+    // including when sibling targets use HTTP or a different protocol.
+    let fallback_route = route.clone();
     let client =
         match upstream_client_for_transport(&state, route.config.retry.connect_timeout_ms, true) {
             Ok(client) => client,
@@ -109,14 +99,71 @@ pub(super) async fn handle_request(
             break;
         }
         for _ in 0..silent_retry_rounds(&route.config.retry) {
-            for mut target in select_route_targets(&state, &route, hold_round > 0) {
+            for mut target in select_route_targets_with_affinity(
+                &state,
+                &route,
+                hold_round > 0,
+                session_key.as_deref(),
+            ) {
                 if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                     break 'hold;
                 }
+                if !target.supports_websockets
+                    || target
+                        .config
+                        .effective_protocol(route.config.upstream_protocol)
+                        != ProxyProtocol::OpenAiResponses
+                {
+                    state.usage.log_diagnostic("info", format!(
+                        "event=proxy.websocket.bridge request_id={request_id} route_id={} reason=selected_target_requires_adaptation",
+                        route.config.id,
+                    ));
+                    return bridge::upgrade(
+                        request,
+                        state,
+                        fallback_route,
+                        pricing,
+                        config_changed,
+                        downstream_response,
+                        in_flight,
+                    );
+                }
+                let Some(ws_transport) =
+                    acquire_ws_transport(&state, target.config.provider_entry_id)
+                else {
+                    WsDiagnostic {
+                        store: &state.usage,
+                        request_id,
+                        route_id: route.config.id,
+                        provider_id: target.config.provider_entry_id,
+                    }
+                    .log("bridge_cooldown", None, None);
+                    return bridge::upgrade(
+                        request,
+                        state,
+                        fallback_route,
+                        pricing,
+                        config_changed,
+                        downstream_response,
+                        in_flight,
+                    );
+                };
                 attempts = attempts.saturating_add(1);
                 let attempt_started = Instant::now();
                 let attempt_started_at = now_unix();
-                let connect = connect_upstream(&client, &request, &target);
+                let diagnostic = WsDiagnostic {
+                    store: &state.usage,
+                    request_id,
+                    route_id: route.config.id,
+                    provider_id: target.config.provider_entry_id,
+                };
+                let connect = connect_upstream(
+                    &client,
+                    request.headers(),
+                    request.uri().query(),
+                    &target,
+                    Some(&diagnostic),
+                );
                 let result = tokio::select! {
                     _ = config_changed.changed() => {
                         return error_response(StatusCode::SERVICE_UNAVAILABLE, "proxy configuration changed; reconnect");
@@ -124,7 +171,10 @@ pub(super) async fn handle_request(
                     result = tokio::time::timeout_at(
                         bounded_deadline(Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1)), hold_deadline),
                         connect,
-                    ) => result.unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT)),
+                    ) => result.unwrap_or_else(|_| {
+                        diagnostic.log("handshake_timeout", Some(StatusCode::GATEWAY_TIMEOUT), None);
+                        Err(StatusCode::GATEWAY_TIMEOUT)
+                    }),
                 };
                 let (upstream, response_headers) = match result {
                     Ok(connected) => connected,
@@ -134,8 +184,8 @@ pub(super) async fn handle_request(
                             target.config.provider_entry_id,
                             target.config.secret_id.clone(),
                         ));
-                        if status_affects_circuit(status) {
-                            mark_failure(&state, target.config.id, &route.config.retry);
+                        if ws_handshake_affects_transport(status) {
+                            mark_ws_failure(&state, target.config.provider_entry_id);
                         }
                         persist_attempt(
                             &state.usage,
@@ -149,7 +199,6 @@ pub(super) async fn handle_request(
                         continue;
                     }
                 };
-                mark_success(&state, target.config.id);
                 // End-to-end headers include OpenAI connection metadata. The
                 // handshake itself and compression are negotiated per hop.
                 let hop_headers = connection_header_names(&response_headers);
@@ -174,16 +223,20 @@ pub(super) async fn handle_request(
                 }
                 target.config.headers.clear();
                 let context = SessionUsage {
+                    connection_id: request_id,
                     state,
                     target,
                     route_id: route.config.id,
                     retry: route.config.retry.clone(),
                     pricing,
                     attempts,
+                    session_key,
                     pending: HashMap::new(),
                     active: HashMap::new(),
                 };
                 tokio::spawn(async move {
+                    let _in_flight = in_flight;
+                    let _ws_transport = ws_transport;
                     if let Ok(downstream) = upgrade.await {
                         relay(TokioIo::new(downstream), upstream, config_changed, context).await;
                     }
@@ -210,6 +263,25 @@ pub(super) async fn handle_request(
             _ = tokio::time::sleep(delay) => {}
         }
         hold_round = hold_round.saturating_add(1);
+    }
+    // Only handshakes have been attempted. Bridge on transport rejection;
+    // auth/rate errors remain visible, and an exhausted hold budget stays final.
+    if ws_handshake_affects_transport(last_status)
+        && !hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+    {
+        state.usage.log_diagnostic("info", format!(
+            "event=proxy.websocket.bridge request_id={request_id} route_id={} reason=handshake_rejected status={}",
+            route.config.id, last_status.as_u16(),
+        ));
+        return bridge::upgrade(
+            request,
+            state,
+            fallback_route,
+            pricing,
+            config_changed,
+            downstream_response,
+            in_flight,
+        );
     }
     record_request(&state, false, None);
     if let Some((provider_entry_id, secret_id)) = failure_target {
@@ -243,25 +315,19 @@ pub(super) async fn handle_request(
 
 async fn connect_upstream(
     client: &reqwest::Client,
-    request: &Request<Incoming>,
+    incoming_headers: &HeaderMap,
+    query: Option<&str>,
     target: &ResolvedTarget,
+    diagnostic: Option<&WsDiagnostic<'_>>,
 ) -> Result<(reqwest::Upgraded, HeaderMap), StatusCode> {
     let path = if target.config.auth_scheme == "azure_api_key" {
         "/responses"
     } else {
         "/v1/responses"
     };
-    let url = upstream_url_with_query(&target.config.base_url, path, request.uri().query())
+    let url = upstream_url_with_query(&target.config.base_url, path, query)
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    let mut headers =
-        build_upstream_headers(request.headers(), target, ProxyProtocol::OpenAiResponses)
-            .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    // Never allow local credentials hidden in browser subprotocols to escape.
-    // Native OpenAI clients authenticate using the existing local token headers.
-    headers.remove(header::SEC_WEBSOCKET_PROTOCOL);
-    headers.remove(header::SEC_WEBSOCKET_EXTENSIONS);
-    headers.remove(header::SEC_WEBSOCKET_ACCEPT);
-    headers.remove(header::CONTENT_TYPE);
+    let mut headers = upstream_headers(incoming_headers, target)?;
     let key = tokio_tungstenite::tungstenite::handshake::client::generate_key();
     headers.insert(
         header::SEC_WEBSOCKET_KEY,
@@ -273,13 +339,53 @@ async fn connect_upstream(
     );
     headers.insert(header::CONNECTION, HeaderValue::from_static("Upgrade"));
     headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
+    connect_with_headers(client, url, headers, &key, diagnostic).await
+}
+
+fn upstream_headers(
+    incoming_headers: &HeaderMap,
+    target: &ResolvedTarget,
+) -> Result<HeaderMap, StatusCode> {
+    let mut headers =
+        build_upstream_headers(incoming_headers, target, ProxyProtocol::OpenAiResponses)
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    // Never allow local credentials hidden in browser subprotocols to escape.
+    // Native OpenAI clients authenticate using the existing local token headers.
+    headers.remove(header::SEC_WEBSOCKET_PROTOCOL);
+    headers.remove(header::SEC_WEBSOCKET_EXTENSIONS);
+    headers.remove(header::SEC_WEBSOCKET_ACCEPT);
+    headers.remove(header::SEC_WEBSOCKET_KEY);
+    headers.remove(header::SEC_WEBSOCKET_VERSION);
+    headers.remove(header::CONTENT_TYPE);
+    headers.remove(header::CONTENT_LENGTH);
+    headers
+        .entry("openai-beta")
+        .or_insert(HeaderValue::from_static("responses_websockets=2026-02-06"));
+    Ok(headers)
+}
+
+async fn connect_with_headers(
+    client: &reqwest::Client,
+    url: String,
+    headers: HeaderMap,
+    key: &str,
+    diagnostic: Option<&WsDiagnostic<'_>>,
+) -> Result<(reqwest::Upgraded, HeaderMap), StatusCode> {
     let response = client
         .get(url)
         .headers(headers)
         .send()
         .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        .map_err(|err| {
+            if let Some(diagnostic) = diagnostic {
+                diagnostic.log("connect_failed", None, Some(&err));
+            }
+            StatusCode::BAD_GATEWAY
+        })?;
     if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        if let Some(diagnostic) = diagnostic {
+            diagnostic.log("http_rejected", Some(response.status()), None);
+        }
         return Err(
             if response.status().is_client_error() || response.status().is_server_error() {
                 response.status()
@@ -299,13 +405,21 @@ async fn connect_upstream(
         || headers.contains_key(header::SEC_WEBSOCKET_EXTENSIONS)
         || headers.contains_key(header::SEC_WEBSOCKET_PROTOCOL)
     {
+        if let Some(diagnostic) = diagnostic {
+            diagnostic.log("invalid_upgrade", Some(response.status()), None);
+        }
         return Err(StatusCode::BAD_GATEWAY);
     }
     let headers = headers.clone();
-    let upgraded = response
-        .upgrade()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let upgraded = response.upgrade().await.map_err(|err| {
+        if let Some(diagnostic) = diagnostic {
+            diagnostic.log("upgrade_failed", None, Some(&err));
+        }
+        StatusCode::BAD_GATEWAY
+    })?;
+    if let Some(diagnostic) = diagnostic {
+        diagnostic.log("connected", Some(StatusCode::SWITCHING_PROTOCOLS), None);
+    }
     Ok((upgraded, headers))
 }
 
@@ -324,6 +438,9 @@ async fn relay(
     let write_timeout = Duration::from_millis(usage.retry.stream_idle_timeout_ms.max(1));
     let close_timeout = write_timeout.min(Duration::from_secs(1));
     let mut upstream_failed = false;
+    let mut close_reason = "configuration_changed";
+    let mut close_code = None;
+    let mut heartbeat = keepalive::Heartbeat::new();
     loop {
         let idle_deadline = usage.idle_deadline(write_timeout);
         let (from_client, message) = tokio::select! {
@@ -335,19 +452,49 @@ async fn relay(
                 break;
             }
             _ = tokio::time::sleep_until(idle_deadline), if usage.has_requests() => {
+                close_reason = "upstream_idle_timeout";
                 upstream_failed = true;
                 let close = Some(CloseFrame { code: CloseCode::Error, reason: "upstream response idle timeout".into() });
                 let _ = tokio::time::timeout(close_timeout, downstream.close(close.clone())).await;
                 let _ = tokio::time::timeout(close_timeout, upstream.close(close)).await;
                 break;
             }
+            _ = tokio::time::sleep_until(heartbeat.deadline()) => {
+                let result = tokio::select! {
+                    biased;
+                    _ = config_changed.changed() => break,
+                    result = heartbeat.ping(&mut upstream) => result,
+                };
+                if result.is_err() {
+                    close_reason = "upstream_heartbeat_failed";
+                    upstream_failed = usage.has_requests();
+                    break;
+                }
+                continue;
+            }
             message = downstream.next() => (true, message),
             message = upstream.next() => (false, message),
         };
-        let Some(Ok(message)) = message else {
-            upstream_failed = !from_client && usage.has_requests();
-            break;
+        let message = match message {
+            Some(Ok(message)) => message,
+            other => {
+                close_reason = if from_client {
+                    "downstream_read_ended"
+                } else {
+                    "upstream_read_ended"
+                };
+                if let Some(Err(err)) = other {
+                    usage.diagnostic().log(close_reason, None, Some(&err));
+                }
+                upstream_failed = !from_client && usage.has_requests();
+                break;
+            }
         };
+        if !from_client {
+            if let Message::Pong(data) = &message {
+                heartbeat.pong(data);
+            }
+        }
         if let Message::Text(text) = &message {
             if let Ok(value) = serde_json::from_str(text) {
                 if from_client {
@@ -358,6 +505,14 @@ async fn relay(
             }
         }
         let closing = message.is_close();
+        if let Message::Close(frame) = &message {
+            close_reason = if from_client {
+                "downstream_close"
+            } else {
+                "upstream_close"
+            };
+            close_code = frame.as_ref().map(|frame| u16::from(frame.code));
+        }
         // Ping/close replies are queued by tungstenite. Flush them on their
         // own hop; application text/binary messages are relayed unchanged.
         let send = tokio::time::timeout(write_timeout, async {
@@ -383,6 +538,18 @@ async fn relay(
             result = send => result,
         };
         if closing || !matches!(result, Ok(Ok(()))) {
+            if !closing {
+                close_reason = if from_client {
+                    "upstream_write_failed"
+                } else {
+                    "downstream_write_failed"
+                };
+                match &result {
+                    Ok(Err(err)) => usage.diagnostic().log(close_reason, None, Some(err)),
+                    Err(_) => usage.diagnostic().log("write_timeout", None, None),
+                    _ => {}
+                }
+            }
             upstream_failed =
                 usage.has_requests() && if closing { !from_client } else { from_client };
             break;
@@ -396,22 +563,26 @@ async fn relay(
             "WebSocket upstream disconnected or timed out before response completion".into(),
         );
     }
+    usage.log_closed(close_reason, close_code);
     usage.disconnected(upstream_failed);
 }
 
 struct ResponseUsage {
+    trace: ResponseTrace,
     request_id: Uuid,
     started: Instant,
     started_at: i64,
     model: Option<String>,
+    session_key: Option<String>,
     first_token_ms: Option<u64>,
     stream_id: String,
     last_event: Instant,
 }
 
 impl ResponseUsage {
-    fn new(value: &serde_json::Value) -> Self {
+    fn new(value: &serde_json::Value, default_session_key: Option<&str>) -> Self {
         Self {
+            trace: ResponseTrace::default(),
             request_id: Uuid::new_v4(),
             started: Instant::now(),
             last_event: Instant::now(),
@@ -420,6 +591,8 @@ impl ResponseUsage {
                 .get("model")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
+            session_key: session_affinity_key_from_value(value)
+                .or_else(|| default_session_key.and_then(normalize_session_affinity_key)),
             first_token_ms: None,
             stream_id: value
                 .get("stream_id")
@@ -431,17 +604,36 @@ impl ResponseUsage {
 }
 
 struct SessionUsage {
+    connection_id: Uuid,
     state: RuntimeState,
     target: ResolvedTarget,
     route_id: Uuid,
     retry: RetryPolicy,
     pricing: Vec<ModelPricing>,
     attempts: u8,
+    session_key: Option<String>,
     pending: HashMap<String, VecDeque<ResponseUsage>>,
     active: HashMap<String, ResponseUsage>,
 }
 
 impl SessionUsage {
+    fn diagnostic(&self) -> WsDiagnostic<'_> {
+        WsDiagnostic {
+            store: &self.state.usage,
+            request_id: self.connection_id,
+            route_id: self.route_id,
+            provider_id: self.target.config.provider_entry_id,
+        }
+    }
+
+    fn log_closed(&self, reason: &'static str, close_code: Option<u16>) {
+        self.state.usage.log_diagnostic("info", format!(
+            "event=proxy.websocket.closed connection_id={} route_id={} provider_id={} reason={reason} close_code={close_code:?} active={} pending={}",
+            self.connection_id, self.route_id, self.target.config.provider_entry_id,
+            self.active.len(), self.pending.values().map(VecDeque::len).sum::<usize>(),
+        ));
+    }
+
     fn has_requests(&self) -> bool {
         !self.pending.is_empty() || !self.active.is_empty()
     }
@@ -476,6 +668,10 @@ impl SessionUsage {
     }
 
     fn client_event(&mut self, value: &serde_json::Value) {
+        self.client_event_with_id(value, Uuid::new_v4());
+    }
+
+    fn client_event_with_id(&mut self, value: &serde_json::Value, request_id: Uuid) {
         // Retain metadata only, never prompts, tool results or full WS events.
         // Cap bookkeeping independently of the upstream's multiplexing limits.
         if value["type"] != "response.create"
@@ -483,13 +679,21 @@ impl SessionUsage {
         {
             return;
         }
-        let request = ResponseUsage::new(value);
+        let mut request = ResponseUsage::new(value, self.session_key.as_deref());
+        request.request_id = request_id;
         self.state.usage.log_diagnostic(
             "info",
             format!(
-                "event=proxy.websocket.request.started request_id={} route_id={}",
-                request.request_id, self.route_id
+                "event=proxy.websocket.request.started request_id={} connection_id={} route_id={} provider_id={}",
+                request.request_id, self.connection_id, self.route_id, self.target.config.provider_entry_id,
             ),
+        );
+        let summary = RequestSummary::deserialize(value).ok();
+        RequestSummary::log(
+            summary.as_ref(),
+            &self.state.usage,
+            request.request_id,
+            "ws_upstream",
         );
         self.pending
             .entry(request.stream_id.clone())
@@ -515,6 +719,18 @@ impl SessionUsage {
             .pointer("/response/id")
             .or_else(|| value.get("response_id"))
             .and_then(|v| v.as_str());
+        let lane = value["stream_id"].as_str().unwrap_or_default();
+        let request = self
+            .active
+            .iter_mut()
+            .find(|(response_id, request)| {
+                id.map_or(request.stream_id == lane, |id| id == response_id.as_str())
+            })
+            .map(|(_, request)| request)
+            .or_else(|| self.pending.get_mut(lane).and_then(VecDeque::front_mut));
+        if let Some(request) = request {
+            request.trace.observe(value);
+        }
         if kind.starts_with("response.") {
             let lane = value["stream_id"].as_str().unwrap_or_default();
             for (response_id, request) in &mut self.active {
@@ -583,6 +799,7 @@ impl SessionUsage {
                 usage_from_wire_value(ProxyProtocol::OpenAiResponses, value),
                 status,
                 Some(status.is_success()),
+                false,
             );
         } else if kind == "error" {
             let lane = value["stream_id"].as_str().unwrap_or_default();
@@ -609,7 +826,7 @@ impl SessionUsage {
                 .filter(|status| status.is_client_error() || status.is_server_error())
                 .unwrap_or(StatusCode::BAD_GATEWAY);
             self.advance_lane(&request.stream_id);
-            self.finish(request, TokenUsage::default(), status, Some(false));
+            self.finish(request, TokenUsage::default(), status, Some(false), false);
         }
     }
 
@@ -619,11 +836,22 @@ impl SessionUsage {
         usage: TokenUsage,
         status: StatusCode,
         outcome: Option<bool>,
+        transport_failure: bool,
     ) {
+        request
+            .trace
+            .log(&self.state.usage, request.request_id, "websocket_upstream");
         let success = status.is_success();
         if success {
+            mark_ws_success(&self.state, self.target.config.provider_entry_id);
             mark_success(&self.state, self.target.config.id);
-        } else if outcome == Some(false) && status_affects_circuit(status) {
+            remember_affinity_target(
+                &self.state,
+                self.route_id,
+                request.session_key.as_deref(),
+                self.target.config.id,
+            );
+        } else if !transport_failure && outcome == Some(false) && status_affects_circuit(status) {
             mark_failure(&self.state, self.target.config.id, &self.retry);
         }
         record_request(&self.state, success, request.first_token_ms);
@@ -679,6 +907,9 @@ impl SessionUsage {
     }
 
     fn disconnected(&mut self, upstream_failed: bool) {
+        if upstream_failed && self.has_requests() {
+            mark_ws_failure(&self.state, self.target.config.provider_entry_id);
+        }
         let unfinished: Vec<_> = self
             .active
             .drain()
@@ -691,6 +922,7 @@ impl SessionUsage {
                 TokenUsage::default(),
                 StatusCode::BAD_GATEWAY,
                 upstream_failed.then_some(false),
+                true,
             );
         }
     }

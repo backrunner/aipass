@@ -267,6 +267,7 @@ fn persist_account(
             _ => Vec::new(),
         };
         let new_id = vault.add_provider(ProviderEntryInput {
+            supports_websockets: None,
             title,
             provider_kind: ProviderKind::Official,
             provider_id: Some(account.provider_id.to_string()),
@@ -1230,6 +1231,7 @@ mod tests {
     #[test]
     fn secret_less_entry_reports_an_error_instead_of_a_false_refresh() {
         let summary = aipass_vault::EntrySummary {
+            supports_websockets: None,
             id: uuid::Uuid::new_v4(),
             title: "desynced".to_string(),
             favorite: false,

@@ -137,6 +137,8 @@ pub(crate) struct ChangePasswordRequest {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderAddRequest {
+    #[serde(default)]
+    pub(crate) supports_websockets: Option<bool>,
     pub(crate) title: String,
     pub(crate) provider_id: Option<String>,
     #[serde(default)]
@@ -172,6 +174,8 @@ pub(crate) struct ProviderAddRequest {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderUpdateRequest {
+    #[serde(default)]
+    pub(crate) supports_websockets: Option<bool>,
     pub(crate) id: Uuid,
     pub(crate) title: String,
     pub(crate) provider_id: Option<String>,
@@ -213,6 +217,8 @@ pub(crate) struct ProbeResult {
     pub(crate) status: Option<u16>,
     pub(crate) endpoint: Option<String>,
     pub(crate) model_count: Option<usize>,
+    #[serde(default)]
+    pub(crate) websocket: Option<aipass_proxy::WebsocketProbeResult>,
     pub(crate) error: Option<String>,
 }
 

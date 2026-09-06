@@ -228,6 +228,9 @@ pub struct ProviderEntryInput {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Responses WebSocket capability; absence keeps the default enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_websockets: Option<bool>,
     pub auth_scheme: AuthScheme,
     pub api_key: String,
     #[serde(default)]
@@ -262,6 +265,9 @@ pub struct ProviderEntryUpdateInput {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Responses WebSocket capability; absence keeps the default enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_websockets: Option<bool>,
     pub auth_scheme: AuthScheme,
     pub api_key: Option<String>,
     #[serde(default)]
@@ -299,6 +305,9 @@ pub struct EntrySummary {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Responses WebSocket capability; absence keeps the default enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_websockets: Option<bool>,
     pub auth_scheme: AuthScheme,
     pub masked_secret: String,
     pub fingerprint: String,
@@ -885,6 +894,7 @@ impl Vault {
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
+            supports_websockets: input.supports_websockets,
             interface_type: input.interface_type,
             auth_scheme: input.auth_scheme,
             secret_refs: vec![primary_secret],
@@ -1150,6 +1160,7 @@ impl Vault {
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
+            supports_websockets: input.supports_websockets.or(old.entry.supports_websockets),
             interface_type: input.interface_type,
             auth_scheme: input.auth_scheme,
             secret_refs,
@@ -2202,6 +2213,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
     let entry = &plaintext.entry;
     let primary = entry.secret_refs.first();
     EntrySummary {
+        supports_websockets: entry.supports_websockets,
         id: entry.id,
         title: entry.title.clone(),
         favorite: entry.favorite,
@@ -2534,6 +2546,7 @@ mod tests {
 
     fn input(secret: &str) -> ProviderEntryInput {
         ProviderEntryInput {
+            supports_websockets: None,
             title: "Anthropic Prod".to_string(),
             provider_kind: ProviderKind::Official,
             provider_id: Some("anthropic".to_string()),
@@ -2567,6 +2580,7 @@ mod tests {
 
     fn update_input(secret: Option<&str>) -> ProviderEntryUpdateInput {
         ProviderEntryUpdateInput {
+            supports_websockets: None,
             title: "Anthropic Prod Renamed".to_string(),
             provider_kind: ProviderKind::Official,
             provider_id: Some("anthropic".to_string()),

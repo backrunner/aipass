@@ -907,6 +907,7 @@ pub(crate) async fn provider_probe(
         status: result.status,
         endpoint: result.endpoint,
         model_count: result.model_count,
+        websocket: result.websocket,
         error: result.error,
     })
 }

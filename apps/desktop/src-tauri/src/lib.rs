@@ -283,6 +283,7 @@ fn agent_error_to_string(err: AgentCommandError) -> String {
 fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
     let provider_kind = provider_kind_for_id(request.provider_id.as_deref());
     ProviderEntryInput {
+        supports_websockets: request.supports_websockets,
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
         provider_id: request.provider_id,
@@ -314,6 +315,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
 fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateInput {
     let provider_kind = provider_kind_for_id(request.provider_id.as_deref());
     ProviderEntryUpdateInput {
+        supports_websockets: request.supports_websockets,
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
         provider_id: request.provider_id,
@@ -392,6 +394,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
             status: None,
             endpoint: None,
             model_count: None,
+            websocket: None,
             error: Some("provider has no API endpoint".to_string()),
         };
     };
@@ -410,6 +413,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
                 status: None,
                 endpoint: Some(endpoint),
                 model_count: None,
+                websocket: None,
                 error: Some(err.to_string()),
             };
         }
@@ -442,11 +446,13 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
                 status: None,
                 endpoint: Some(endpoint),
                 model_count: None,
+                websocket: None,
                 error: Some("probe is not supported for this interface".to_string()),
             };
         }
     };
 
+    let websocket = None;
     match request.send() {
         Ok(response) => {
             let status = response.status().as_u16();
@@ -461,6 +467,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
                 status: Some(status),
                 endpoint: Some(display_url),
                 model_count: json.as_ref().and_then(model_count),
+                websocket,
                 error: None,
             }
         }
@@ -471,6 +478,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
             status: None,
             endpoint: Some(display_url),
             model_count: None,
+            websocket,
             error: Some(redact_error(&err.to_string(), &secret)),
         },
     }
@@ -2689,6 +2697,7 @@ mod tests {
     fn gemini_summary() -> EntrySummary {
         let now = time::OffsetDateTime::now_utc();
         EntrySummary {
+            supports_websockets: None,
             id: Uuid::new_v4(),
             title: "Gemini".to_string(),
             favorite: false,

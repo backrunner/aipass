@@ -663,6 +663,7 @@ fn save_detected_secret(
     );
     let entry_id = vault
         .add_provider(ProviderEntryInput {
+            supports_websockets: None,
             title: preview.title,
             provider_kind,
             provider_id: preview.provider_id,
@@ -1129,6 +1130,7 @@ fn build_tool_config_plan(
     }
     let home = home_dir()?;
     let mut tool_entry = ToolEntry {
+        supports_websockets: entry.supports_websockets,
         id: entry.id,
         title: entry.title.clone(),
         provider_id: entry.provider_id.clone(),
@@ -1285,6 +1287,7 @@ fn build_tool_config_proxy_plan(
         ));
     }
     let tool_entry = ToolEntry {
+        supports_websockets: Some(true),
         id: route.id,
         title: route.name.clone(),
         provider_id: None,
@@ -1548,6 +1551,7 @@ fn plan_tool_env_helper(
         summary: format!("Configure {tool_name} env helper for {}", entry.title),
         preview: redacted_diff_preview(&diff_preview_for_path(&target, &content), &[]),
         extra_writes: Vec::new(),
+        codex_session_migration: None,
         codex_provider_migration: None,
     };
     Ok((plan, content))
@@ -1895,7 +1899,21 @@ fn favicon_content_type_is_image(value: &str) -> bool {
     value.starts_with("image/") || value.contains("svg") || value.contains("icon")
 }
 
-fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> ProbeResult {
+fn probe_entry(
+    entry: EntrySummary,
+    secret: String,
+    timeout_seconds: u64,
+    headers: Vec<(String, String)>,
+    outbound: aipass_proxy::UpstreamProxyConfig,
+) -> ProbeResult {
+    let secret = zeroize::Zeroizing::new(secret);
+    let mut headers = zeroize::Zeroizing::new(headers);
+    let started = Instant::now();
+    let budget = Duration::from_secs(timeout_seconds.clamp(1, 120));
+    let ws_interface = matches!(
+        entry.interface_type,
+        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi
+    );
     let endpoint = endpoint_url(&entry.endpoints);
     let Some(endpoint) = endpoint.clone() else {
         return ProbeResult {
@@ -1905,12 +1923,46 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
             status: None,
             endpoint: None,
             model_count: None,
+            websocket: None,
             error: Some("provider has no API endpoint".to_string()),
         };
     };
 
+    let endpoint = crate::proxy_service::pinned_official_oauth_endpoint(
+        &entry.provider_kind,
+        &entry.credential_kind,
+        entry.provider_id.as_deref(),
+    )
+    .map(str::to_owned)
+    .unwrap_or(endpoint);
+    let target = ws_interface.then(|| aipass_proxy::ResolvedTarget {
+        supports_websockets: true,
+        api_key: secret.to_string(),
+        config: aipass_proxy::ProxyTargetConfig {
+            id: entry.id,
+            provider_entry_id: entry.id,
+            secret_id: entry
+                .secret_refs
+                .first()
+                .map(|secret| secret.id.clone())
+                .unwrap_or_default(),
+            label: String::new(),
+            base_url: endpoint.clone(),
+            auth_scheme: crate::proxy_service::proxy_auth_scheme(&entry.auth_scheme)
+                .unwrap_or("bearer")
+                .into(),
+            headers: std::mem::take(&mut *headers),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            protocol: Some(ProxyProtocol::OpenAiResponses),
+        },
+    });
+    let default_model = entry.default_model.clone();
     let client = match reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds.clamp(1, 120)))
+        .timeout(if ws_interface { budget / 2 } else { budget })
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("AIPass/1.0")
         .build()
     {
@@ -1923,6 +1975,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
                 status: None,
                 endpoint: Some(endpoint),
                 model_count: None,
+                websocket: None,
                 error: Some(err.to_string()),
             };
         }
@@ -1930,7 +1983,13 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
 
     let (display_url, request) = match entry.interface_type {
         InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => {
-            let url = join_url(&endpoint, "models");
+            let path = if entry.auth_scheme == AuthScheme::AzureApiKey {
+                "/models"
+            } else {
+                "/v1/models"
+            };
+            let url = aipass_proxy::upstream_url_with_query(&endpoint, path, None)
+                .unwrap_or_else(|_| join_url(&endpoint, "models"));
             let request = apply_auth(client.get(&url), &entry.auth_scheme, &secret);
             (url, request)
         }
@@ -1955,18 +2014,35 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
                 status: None,
                 endpoint: Some(endpoint),
                 model_count: None,
+                websocket: None,
                 error: Some("probe is not supported for this interface".to_string()),
             };
         }
     };
 
-    match request.send() {
+    let mut request = request;
+    for (name, value) in target
+        .as_ref()
+        .map(|target| target.config.headers.as_slice())
+        .unwrap_or(&headers)
+    {
+        request = request.header(name, value);
+    }
+    let mut probe_model = default_model;
+    let mut result = match request.send() {
         Ok(response) => {
             let status = response.status().as_u16();
             let json = response
                 .text()
                 .ok()
                 .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok());
+            if probe_model.is_none() {
+                probe_model = json
+                    .as_ref()
+                    .and_then(|json| json.pointer("/data/0/id"))
+                    .and_then(|id| id.as_str())
+                    .map(str::to_owned);
+            }
             ProbeResult {
                 ok: (200..300).contains(&status),
                 provider_id: entry.provider_id,
@@ -1974,6 +2050,7 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
                 status: Some(status),
                 endpoint: Some(display_url),
                 model_count: json.as_ref().and_then(model_count),
+                websocket: None,
                 error: None,
             }
         }
@@ -1984,9 +2061,19 @@ fn probe_entry(entry: EntrySummary, secret: String, timeout_seconds: u64) -> Pro
             status: None,
             endpoint: Some(display_url),
             model_count: None,
+            websocket: None,
             error: Some(redact_error(&err.to_string(), &secret)),
         },
+    };
+    if let Some(target) = target {
+        result.websocket = Some(aipass_proxy::probe_websocket(
+            target,
+            &outbound,
+            budget.saturating_sub(started.elapsed()),
+            probe_model.as_deref(),
+        ));
     }
+    result
 }
 
 fn apply_auth(request: RequestBuilder, auth_scheme: &AuthScheme, secret: &str) -> RequestBuilder {
@@ -2534,6 +2621,7 @@ mod tests {
             summary: "preview".to_string(),
             preview: aipass_config_writers::diff_preview_for_path(&target, content),
             extra_writes: Vec::new(),
+            codex_session_migration: None,
             codex_provider_migration: None,
         };
 
@@ -2604,6 +2692,7 @@ mod tests {
 
     fn sync_test_provider(title: &str, api_key: &str) -> ProviderEntryInput {
         ProviderEntryInput {
+            supports_websockets: None,
             title: title.to_string(),
             provider_kind: ProviderKind::Unknown,
             provider_id: Some("openai".to_string()),
@@ -2837,6 +2926,7 @@ mod tests {
 
     fn favicon_test_entry() -> EntrySummary {
         EntrySummary {
+            supports_websockets: None,
             id: Uuid::new_v4(),
             title: "Example".to_string(),
             favorite: false,
@@ -2962,5 +3052,73 @@ mod tests {
 
         entry.favicon_url = Some("data:image/png;base64,iVBORw0KGgo=".to_string());
         assert!(favicon_backfill_entry_is_skippable(&entry));
+    }
+    #[test]
+    fn provider_probe_shares_responses_endpoint_and_credentials_with_the_proxy() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for ws in [false, true] {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0; 1024];
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let count = socket.read(&mut chunk).unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&chunk[..count]);
+                }
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(request.contains("authorization: bearer probe-test-key"));
+                assert!(request.contains("x-provider-test: required"));
+                assert!(request.starts_with(if ws {
+                    "get /v1/responses "
+                } else {
+                    "get /v1/models "
+                }));
+                let response = if ws {
+                    assert!(request.contains("upgrade: websocket"));
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_owned()
+                } else {
+                    let body = r#"{"data":[{"id":"test-model"}]}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let mut entry = favicon_test_entry();
+        entry.interface_type = InterfaceType::OpenAiCompatible;
+        entry.auth_scheme = AuthScheme::Bearer;
+        entry.provider_kind = ProviderKind::Unknown;
+        entry.endpoints = vec![ProviderEndpoint {
+            kind: EndpointKind::Api,
+            url: Some(format!("http://{address}")),
+            id: "api".into(),
+            region: None,
+            deployment: None,
+            api_version: None,
+        }];
+        let result = probe_entry(
+            entry,
+            "probe-test-key".into(),
+            3,
+            vec![("x-provider-test".into(), "required".into())],
+            aipass_proxy::UpstreamProxyConfig {
+                mode: aipass_proxy::UpstreamProxyMode::Direct,
+                custom_url: None,
+            },
+        );
+        assert!(result.ok);
+        assert_eq!(result.model_count, Some(1));
+        let websocket = result.websocket.unwrap();
+        assert_eq!(websocket.supported, Some(false));
+        assert_eq!(websocket.status, Some(404));
+        server.join().unwrap();
     }
 }

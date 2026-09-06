@@ -627,12 +627,17 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
         out.insert("system".into(), json!(system_parts.join("\n")));
     }
 
-    if let Some(tools) = src.get("tools").and_then(Value::as_array) {
-        let am_tools: Vec<Value> = tools
+    if let Some(tools) = src.get("tools") {
+        let tools = tools
+            .as_array()
+            .ok_or_else(|| invalid(RS, "tools must be an array"))?;
+        if tools
             .iter()
-            .filter(|tool| tool.get("type").and_then(Value::as_str) == Some("function"))
-            .map(cc_function_to_am_tool)
-            .collect();
+            .any(|tool| tool.get("type").and_then(Value::as_str) != Some("function"))
+        {
+            return Err(invalid(RS, "Responses to Anthropic conversion supports only function tools; use a native Responses upstream for other tool types"));
+        }
+        let am_tools: Vec<Value> = tools.iter().map(cc_function_to_am_tool).collect();
         if !am_tools.is_empty() {
             out.insert("tools".into(), Value::Array(am_tools));
         }
@@ -691,6 +696,9 @@ fn rs_item_to_am(
                     "content": content,
                 })],
             ));
+        }
+        Some(kind) if kind.ends_with("_call") || kind.ends_with("_call_output") => {
+            return Err(invalid(RS, "Responses to Anthropic conversion cannot preserve this tool call or result; use a native Responses upstream"));
         }
         Some("message") | None if item.get("role").is_some() => {
             let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
@@ -1012,6 +1020,33 @@ mod tests {
             out["messages"],
             json!([{"role": "user", "content": [{"type": "text", "text": "hello"}]}])
         );
+    }
+
+    #[test]
+    fn responses_conversion_rejects_unsupported_tools_and_history_without_silently_dropping_them() {
+        for kind in ["custom", "shell", "local_shell", "namespace", "web_search"] {
+            let result = rs_to_am(json!({"model":"test", "input":"run a command",
+                "tools":[{"type":"function","name":"supported","parameters":{}},
+                    {"type":kind,"name":"exec"}]}));
+            assert!(
+                result.is_err(),
+                "unsupported tool {kind} must not disappear"
+            );
+        }
+        for kind in [
+            "custom_tool_call",
+            "custom_tool_call_output",
+            "shell_call",
+            "shell_call_output",
+            "local_shell_call",
+        ] {
+            let result = rs_to_am(json!({"model":"test", "input":[
+                {"type":kind,"name":"exec","call_id":"call-1","input":"pwd","output":"/tmp"}]}));
+            assert!(
+                result.is_err(),
+                "unsupported history {kind} must not disappear"
+            );
+        }
     }
 
     #[test]

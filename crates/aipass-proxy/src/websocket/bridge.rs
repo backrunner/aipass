@@ -17,6 +17,7 @@ pub(super) fn upgrade(
     pricing: Vec<ModelPricing>,
     config_changed: tokio::sync::watch::Receiver<()>,
     response: Response<BoxBody>,
+    in_flight: Option<InFlightGuard>,
 ) -> Response<BoxBody> {
     route.targets.retain(|target| {
         supports(
@@ -48,14 +49,22 @@ pub(super) fn upgrade(
         headers.remove(name);
     }
     let context = Arc::new(Context {
+        connection_id: request
+            .extensions()
+            .get::<Uuid>()
+            .copied()
+            .unwrap_or_else(Uuid::new_v4),
         state,
         route,
         pricing,
         headers,
         query: request.uri().query().map(str::to_owned),
+        upstream_pool: Arc::new(pool::Pool::default()),
+        config_changed: config_changed.clone(),
     });
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
+        let _in_flight = in_flight;
         if let Ok(downstream) = upgrade.await {
             serve(TokioIo::new(downstream), context, config_changed).await;
         }
@@ -64,11 +73,21 @@ pub(super) fn upgrade(
 }
 
 struct Context {
+    connection_id: Uuid,
     state: RuntimeState,
     route: ResolvedRoute,
     pricing: Vec<ModelPricing>,
     headers: HeaderMap,
     query: Option<String>,
+    upstream_pool: Arc<pool::Pool>,
+    config_changed: tokio::sync::watch::Receiver<()>,
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        // Client close also cancels idle workers currently checking liveness.
+        self.upstream_pool.close();
+    }
 }
 
 struct QueuedRequest {
@@ -82,6 +101,16 @@ struct QueuedRequest {
 struct CachedResponse {
     id: String,
     history: Zeroizing<Vec<u8>>,
+    bound_target: Option<Uuid>,
+    origin_target: Option<Uuid>,
+}
+
+struct PreparedRequest {
+    body: Value,
+    history: Vec<Value>,
+    generate: bool,
+    bound_target: Option<Uuid>,
+    origin_target: Option<Uuid>,
 }
 
 #[derive(Default)]
@@ -195,7 +224,7 @@ impl Session {
         Some(request)
     }
 
-    fn prepare(&self, mut value: Value) -> Result<(Value, Vec<Value>, bool), BridgeError> {
+    fn prepare(&self, mut value: Value) -> Result<PreparedRequest, BridgeError> {
         let object = value
             .as_object_mut()
             .ok_or_else(|| BridgeError::invalid("invalid_request", "request must be an object"))?;
@@ -222,6 +251,8 @@ impl Session {
                 ))
             }
         };
+        let mut bound_target = None;
+        let mut origin_target = None;
         let mut history: Vec<Value> = match object.remove("previous_response_id") {
             None | Some(Value::Null) => Vec::new(),
             Some(Value::String(id)) => {
@@ -235,6 +266,8 @@ impl Session {
                             "previous response is not cached on this connection; resend full input",
                         )
                     })?;
+                bound_target = cached.bound_target;
+                origin_target = cached.origin_target;
                 serde_json::from_slice(&cached.history).map_err(|_| BridgeError::upstream())?
             }
             _ => {
@@ -258,6 +291,25 @@ impl Session {
             }
         };
         history.extend(input);
+        validate_tool_history(&history)?;
+        if bound_target.is_none() && history.iter().any(has_provider_state) {
+            // Codex sends full input again when tools/settings change. Preserve
+            // the lane's known origin even without previous_response_id.
+            if origin_target.is_none() {
+                let lane = object
+                    .get("stream_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                origin_target = self.cache.get(lane).and_then(|cached| cached.origin_target);
+            }
+            bound_target = origin_target;
+            if bound_target.is_none() {
+                return Err(BridgeError::invalid(
+                    "previous_response_not_found",
+                    "provider-bound input has no origin on this connection; use native Responses mode or resend portable input",
+                ));
+            }
+        }
         object.remove("type");
         object.remove("stream_id");
         object.remove("background");
@@ -265,7 +317,13 @@ impl Session {
         object.insert("input".into(), json!(history));
         // All continuations are reconstructed locally, including store=false.
         // HTTP targets never need a response id issued by another target.
-        Ok((value, history, generate))
+        Ok(PreparedRequest {
+            body: value,
+            history,
+            generate,
+            bound_target,
+            origin_target,
+        })
     }
 
     fn remember(&mut self, lane: &str, cached: CachedResponse) -> bool {
@@ -343,15 +401,14 @@ async fn serve_session(
                 .as_str()
                 .map(str::to_owned);
             match session.prepare(request.value) {
-                Ok((body, history, generate)) => {
+                Ok(prepared) => {
                     session.active.insert(request.lane.clone());
                     let context = context.clone();
                     let tx = tx.clone();
                     tasks.push(
                         async move {
                             let lane = request.lane;
-                            let result =
-                                run_response(context, &lane, body, history, generate, &tx).await;
+                            let result = run_response(context, &lane, prepared, &tx).await;
                             let _ = tx
                                 .send(Output::Finished {
                                     lane,
@@ -380,7 +437,7 @@ async fn serve_session(
                         session.active.remove(&lane);
                         match result {
                             Ok((value, cached)) => {
-                                if matches!(value["type"].as_str(), Some("error" | "response.failed")) {
+                                if matches!(value["type"].as_str(), Some("error" | "response.failed" | "response.cancelled")) {
                                     session.failed(&lane, previous_id.as_deref());
                                 } else {
                                     session.cache.remove(&lane);
@@ -440,11 +497,16 @@ async fn send(
 async fn run_response(
     context: Arc<Context>,
     lane: &str,
-    body: Value,
-    mut history: Vec<Value>,
-    generate: bool,
+    prepared: PreparedRequest,
     tx: &mpsc::Sender<Output>,
 ) -> Result<(Value, Option<CachedResponse>), BridgeError> {
+    let PreparedRequest {
+        body,
+        mut history,
+        generate,
+        bound_target,
+        origin_target,
+    } = prepared;
     let id = format!("resp_aipass_{}", Uuid::new_v4().simple());
     if !generate {
         let response = json!({"id":id,"object":"response","created_at":now_unix(),"status":"completed","model":body["model"],"output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}});
@@ -463,7 +525,7 @@ async fn run_response(
         }
         return Ok((
             json!({"type":"response.completed","sequence_number":2,"response":response}),
-            cache(&id, &history)?,
+            cache(&id, &history, bound_target, origin_target)?,
         ));
     }
     let payload = serde_json::to_vec(&body).map_err(|_| BridgeError::upstream())?;
@@ -473,9 +535,30 @@ async fn run_response(
             "converted request exceeds the session context limit",
         ));
     }
+    let request_id = Uuid::new_v4();
+    context.state.usage.log_diagnostic(
+        "info",
+        format!(
+        "event=proxy.websocket.bridge.request request_id={request_id} connection_id={} route_id={}",
+        context.connection_id, context.route.config.id,
+    ),
+    );
+    let mut route = context.route.clone();
+    if let Some(target_id) = bound_target {
+        route.targets.retain(|target| target.config.id == target_id);
+        if !route.targets.iter().any(|target| target.config.enabled) {
+            return Err(BridgeError::invalid(
+                "previous_response_not_found",
+                "provider-bound context is unavailable; reconnect and resend full input",
+            ));
+        }
+    }
     let response = forward_request(
         ForwardRequest {
-            request_id: Uuid::new_v4(),
+            websocket: true,
+            upstream_pool: Some(context.upstream_pool.clone()),
+            config_changed: context.config_changed.clone(),
+            request_id,
             method: http::Method::POST,
             request_query: context.query.clone(),
             incoming_headers: context.headers.clone(),
@@ -484,7 +567,7 @@ async fn run_response(
             started_at: now_unix(),
         },
         context.state.clone(),
-        context.route.clone(),
+        route,
         context.pricing.clone(),
     )
     .await
@@ -496,6 +579,7 @@ async fn run_response(
             message: "converted upstream request failed",
         });
     }
+    let identity = response.extensions().get::<UpstreamIdentity>().copied();
     let mut stream = response.into_body().into_data_stream();
     let mut buffer = Vec::new();
     let idle_timeout =
@@ -536,21 +620,82 @@ async fn run_response(
                         .and_then(Value::as_array)
                         .ok_or_else(BridgeError::upstream)?;
                     history.extend(output.iter().cloned());
-                    return Ok((value, cache(&id, &history)?));
+                    let bound_target = bound_target.or_else(|| {
+                        history
+                            .iter()
+                            .any(has_provider_state)
+                            .then(|| identity.map(|identity| identity.target_id))
+                            .flatten()
+                    });
+                    return Ok((
+                        value,
+                        cache(
+                            &id,
+                            &history,
+                            bound_target,
+                            identity.map(|identity| identity.target_id),
+                        )?,
+                    ));
                 }
-                Some("response.failed" | "error") => return Ok((value, None)),
+                Some("response.failed" | "response.cancelled" | "error") => {
+                    return Ok((value, None))
+                }
                 _ => emit(tx, lane, value).await?,
             }
         }
     }
 }
 
-fn cache(id: &str, history: &[Value]) -> Result<Option<CachedResponse>, BridgeError> {
+fn cache(
+    id: &str,
+    history: &[Value],
+    bound_target: Option<Uuid>,
+    origin_target: Option<Uuid>,
+) -> Result<Option<CachedResponse>, BridgeError> {
     let bytes = Zeroizing::new(serde_json::to_vec(history).map_err(|_| BridgeError::upstream())?);
     Ok((bytes.len() <= MAX_SESSION_BYTES).then(|| CachedResponse {
         id: id.to_owned(),
         history: bytes,
+        bound_target,
+        origin_target,
     }))
+}
+
+fn has_provider_state(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object
+                .get("encrypted_content")
+                .is_some_and(|value| !value.is_null())
+                || object.contains_key("file_id")
+                || object.get("type").and_then(Value::as_str) == Some("item_reference")
+                || object.values().any(has_provider_state)
+        }
+        Value::Array(values) => values.iter().any(has_provider_state),
+        _ => false,
+    }
+}
+
+fn validate_tool_history(history: &[Value]) -> Result<(), BridgeError> {
+    let mut calls = HashSet::new();
+    for item in history {
+        let kind = item["type"].as_str().unwrap_or_default();
+        if kind.ends_with("_call") {
+            if let Some(id) = item["call_id"].as_str() {
+                calls.insert(id);
+            }
+        } else if kind.ends_with("_call_output")
+            && !item["call_id"]
+                .as_str()
+                .is_some_and(|id| calls.contains(id))
+        {
+            return Err(BridgeError::invalid(
+                "previous_response_not_found",
+                "tool result has no matching call in this connection's history; resend full input",
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn emit(tx: &mpsc::Sender<Output>, lane: &str, value: Value) -> Result<(), BridgeError> {
