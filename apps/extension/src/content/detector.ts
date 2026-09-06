@@ -54,6 +54,17 @@ const ENDPOINT_PATTERN =
   /\/v\d+|chat\/completions|messages|embeddings|models|anthropic|generativelanguage|openrouter|openai|gateway|one[-_ ]?api|new[-_ ]?api|litellm|sub2api|replicate|veloera|omniroute|metapi|onehub|donehub|anyrouter|siliconflow|deepseek|moonshot|dashscope|qwen|bigmodel|zhipu|volcengine|together|fireworks|groq|x\.ai|mistral|cohere|perplexity|cerebras|nvidia|nim|novita|minimax|huggingface|hugging\s*face/i;
 const ENDPOINT_CONTEXT_PATTERN =
   /(?:api\s*(?:base|endpoint|url)|base\s*url|endpoint|接口(?:地址|端点)|端点|中转地址|请求地址|入口地址)/i;
+// New API consoles often show a channel's "测速地址" alongside the actual
+// API address.  Both are ordinary HTTP URLs, so selecting the first URL (or
+// the first URL with a versioned path) can silently save the health-check
+// target as the provider endpoint. Keep this separate from the positive
+// endpoint context so an explicitly labelled or externally wrapped speed-test
+// URL is always ignored.
+const SPEED_TEST_CONTEXT_PATTERN =
+  /测速|测试(?:地址|端点|接口)|检测(?:地址|端点|接口)|探测(?:地址|端点|接口)|(?:speed[\s_-]*test|speedtest|latency|health[\s_-]*check|test[\s_-]*(?:url|endpoint)|probe[\s_-]*(?:url|endpoint)|ping[\s_-]*(?:url|endpoint))/i;
+const SPEED_TEST_PATH_PATTERN =
+  /\/(?:speed(?:-?test)?|latency|health(?:z|check)?|probe|ping|test(?:-?(?:connection|endpoint|url))?|api\/(?:channel|channels)\/(?:speed|test|probe))(?:\/|$|[?#])/i;
+const EXTERNAL_SPEED_TEST_URL_PATTERN = /https?:\/\/(?:www\.)?tcptest\.cn\/http\//i;
 const HTTP_URL_PATTERN = /https?:\/\/[^\s"'<>`)\]}]+/gi;
 const KEY_PAGE_TEXT_PATTERN =
   /(\bapi\s*keys?\b|\btokens?\b|\bsecret\s*key\b|\bvirtual\s+key\b|令牌|密钥|系统访问令牌|下游密钥|下游\s*api\s*key)/i;
@@ -519,7 +530,7 @@ function findEndpoint(doc: Document): string | undefined {
     .flatMap((input) =>
       endpointCandidates(
         [input.value, input.placeholder, input.getAttribute("data-endpoint") ?? "", input.getAttribute("data-base-url") ?? ""],
-        `${input.name} ${input.id} ${input.placeholder} ${input.getAttribute("aria-label") ?? ""}`
+        endpointInputContext(input)
       )
     );
   const textCandidates = limitedElements<HTMLElement>(
@@ -535,15 +546,36 @@ function findEndpoint(doc: Document): string | undefined {
         element.getAttribute("data-base-url") ?? "",
         element.getAttribute("data-api-base-url") ?? ""
       ],
-      `${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""} ${element.parentElement?.textContent?.slice(0, 180) ?? ""}`
+      endpointElementContext(element)
     )
   );
   const candidates = [...fieldCandidates, ...textCandidates];
-  const contextual = candidates.find((candidate) => ENDPOINT_CONTEXT_PATTERN.test(candidate.context));
+  // Prefer a real API/base URL even when the page also exposes a channel
+  // health-check URL. If only a speed-test URL exists, let the provider
+  // fallback use the page origin rather than persisting the test target.
+  const usableCandidates = candidates.filter((candidate) => !isSpeedTestCandidate(candidate));
+  const contextual = usableCandidates.find((candidate) => ENDPOINT_CONTEXT_PATTERN.test(candidate.context));
   if (contextual) return contextual.url;
-  const explicit = candidates.find((candidate) => ENDPOINT_PATTERN.test(candidate.url));
+  const explicit = usableCandidates.find((candidate) => ENDPOINT_PATTERN.test(candidate.url));
   if (explicit) return explicit.url;
   return undefined;
+}
+
+function endpointInputContext(input: HTMLInputElement | HTMLTextAreaElement): string {
+  const label = input.closest("label")?.textContent ?? "";
+  const nearby = [
+    input.previousElementSibling?.textContent ?? "",
+    input.parentElement?.previousElementSibling?.textContent ?? ""
+  ].join(" ");
+  return `${input.name} ${input.id} ${input.placeholder} ${input.getAttribute("aria-label") ?? ""} ${label} ${nearby.slice(0, 180)}`;
+}
+
+function endpointElementContext(element: HTMLElement): string {
+  const nearby = [
+    element.previousElementSibling?.textContent ?? "",
+    element.parentElement?.previousElementSibling?.textContent ?? ""
+  ].join(" ");
+  return `${element.getAttribute("aria-label") ?? ""} ${element.getAttribute("title") ?? ""} ${element.closest("label")?.textContent ?? ""} ${nearby.slice(0, 180)}`;
 }
 
 function endpointCandidates(values: string[], context: string): Array<{ url: string; context: string }> {
@@ -552,6 +584,14 @@ function endpointCandidates(values: string[], context: string): Array<{ url: str
       url: match[0].replace(/[.,;:]+$/, ""),
       context
     }))
+  );
+}
+
+function isSpeedTestCandidate(candidate: { url: string; context: string }): boolean {
+  return (
+    SPEED_TEST_CONTEXT_PATTERN.test(candidate.context) ||
+    SPEED_TEST_PATH_PATTERN.test(candidate.url) ||
+    EXTERNAL_SPEED_TEST_URL_PATTERN.test(candidate.url)
   );
 }
 
@@ -2075,7 +2115,8 @@ function findEndpointTarget(doc: Document): HTMLInputElement | undefined {
   const inputs = limitedElements<HTMLInputElement>(doc, "input", FILL_TARGET_SCAN_LIMIT);
   return inputs.find((input) => {
     const label = `${input.name} ${input.id} ${input.placeholder} ${input.getAttribute("aria-label") ?? ""}`.toLowerCase();
-    return label.includes("endpoint") || label.includes("base") || label.includes("url");
+    return !SPEED_TEST_CONTEXT_PATTERN.test(endpointInputContext(input)) &&
+      (label.includes("endpoint") || label.includes("base") || label.includes("url"));
   });
 }
 

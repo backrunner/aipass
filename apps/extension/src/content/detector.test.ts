@@ -221,6 +221,61 @@ describe("content detector", () => {
     assert.equal(draft?.apiKey, "sk-newapiResolvedSecret1234567890");
   });
 
+  it("does not save a New API speed-test URL as the API endpoint", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>令牌</h1><span>渠道</span>
+       <label>接口地址<input value="https://relay.example.test/v1" /></label>
+       <label>测速地址<input value="https://relay.example.test/api/channel/test" /></label>
+       <label>API Key<input name="api-key" value="sk-newapiSpeedTestSecret1234567890" /></label>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.providerId, "new_api");
+    assert.equal(draft?.endpoint, "https://relay.example.test/v1");
+  });
+
+  it("falls back to the New API origin when only a speed-test URL is visible", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>令牌</h1><span>渠道</span>
+       <input name="test_url" value="https://relay.example.test/v1" />
+       <label>API Key<input name="api-key" value="sk-newapiOnlySpeedTestSecret1234567890" /></label>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.endpoint, "https://newapi.example.test/v1");
+  });
+
+  it("keeps a neighbouring API URL when a speed-test URL shares its container", async () => {
+    setLocation("newapi.example.test", "/console/token");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>令牌</h1><span>渠道</span>
+       <div><span>测速地址</span><code>https://speed-target.example.test/v1</code>
+       <span>接口地址</span><code>https://relay.example.test/v1</code></div>
+       <label>API Key<input name="api-key" value="sk-newapiNeighbourSecret1234567890" /></label>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.endpoint, "https://relay.example.test/v1");
+  });
+
+  it("ignores New API external speed-test links", async () => {
+    setLocation("newapi.example.test", "/dashboard");
+    const { detectFromDocument } = await import("./detector");
+    const doc = new DOMParser().parseFromString(
+      `<title>New API</title><h1>API 地址</h1>
+       <a title="External Speed Test" href="https://www.tcptest.cn/http/https%3A%2F%2Frelay.example.test%2Fv1">测速</a>
+       <label>API Key<input name="api-key" value="sk-newapiExternalSpeedTestSecret1234567890" /></label>`,
+      "text/html"
+    );
+    const draft = detectFromDocument(doc);
+    assert.equal(draft?.endpoint, "https://newapi.example.test/v1");
+  });
+
   it("detects New API console token routes without relying on the hostname", async () => {
     setLocation("relay.example.test", "/console/token");
     const { detectAllFromDocument } = await import("./detector");
