@@ -39,9 +39,24 @@ pub struct ProxyService {
     /// A stop requested while locked cannot rewrite encrypted configuration.
     /// Keep the intent until the next unlocked config load can persist it.
     pending_disabled_persist: bool,
+    pending_ws_events: Vec<aipass_proxy::WebsocketCapabilityEvent>,
+    /// A provider write can commit before auditing or runtime refresh fails.
+    /// Such refreshes must survive later WS success clearing the live evidence.
+    pending_ws_refresh: HashSet<Uuid>,
 }
 
 impl ProxyService {
+    pub(crate) fn begin_ws_probe(
+        &self,
+        key: [u8; 32],
+    ) -> Option<aipass_proxy::WebsocketObservation> {
+        self.handle.as_ref()?.begin_websocket_probe(key)
+    }
+    pub(crate) fn confirm_ws_probe(&self, observation: Option<aipass_proxy::WebsocketObservation>) {
+        if let Some(handle) = &self.handle {
+            handle.confirm_websocket_probe(observation);
+        }
+    }
     pub fn new(vault_dir: &Path) -> anyhow::Result<Self> {
         let usage = Arc::new(UsageStore::open(vault_dir.join("proxy-usage.sqlite"))?);
         Ok(Self {
@@ -50,7 +65,117 @@ impl ProxyService {
             handle: None,
             usage,
             pending_disabled_persist: false,
+            pending_ws_events: Vec::new(),
+            pending_ws_refresh: HashSet::new(),
         })
+    }
+
+    fn capture_ws_events(&mut self) {
+        if let Some(handle) = &mut self.handle {
+            // The live ledger is authoritative: concurrent WS success may have
+            // invalidated a previously pending write before shutdown.
+            self.pending_ws_events = handle.stop_with_websocket_capability_events();
+        }
+    }
+
+    /// Called by the agent, even when no desktop is running. Keep events while
+    /// locked or after a write failure; validate against fresh vault config.
+    pub(crate) fn persist_ws_capabilities(&mut self, vault: &Vault) -> ServiceResult<bool> {
+        if let Some(id) = self.pending_ws_refresh.iter().next().copied() {
+            let saved = match vault.get_provider_summary(id) {
+                Ok(summary) => summary.supports_websockets == Some(false),
+                // Deletion supersedes the attempted preference write. Still
+                // refresh any running snapshot before dropping the retry.
+                Err(aipass_vault::VaultError::RecordNotFound) => true,
+                Err(error) => return Err(map_vault_error(error)),
+            };
+            self.reload_if_running(vault)?;
+            self.pending_ws_refresh.remove(&id);
+            if saved {
+                if let Some(handle) = &self.handle {
+                    for event in handle.websocket_capability_events() {
+                        if event.provider_entry_id == id {
+                            handle.acknowledge_websocket_capability_event(&event);
+                        }
+                    }
+                }
+                self.pending_ws_events
+                    .retain(|event| event.provider_entry_id != id);
+                // Publish a committed change even when its original capability
+                // event has since been invalidated by a concurrent WS success.
+                return Ok(true);
+            }
+        }
+        if let Some(handle) = &self.handle {
+            self.pending_ws_events = handle.websocket_capability_events();
+        }
+        if self.pending_ws_events.is_empty() {
+            return Ok(false);
+        }
+        self.load_config(vault)?;
+        let runtime = self.runtime_config(vault)?;
+        for event in self.pending_ws_events.clone() {
+            let current = runtime
+                .routes
+                .iter()
+                .flat_map(|route| &route.targets)
+                .any(|target| {
+                    target.config.provider_entry_id == event.provider_entry_id
+                        && aipass_proxy::websocket_config_key(target, &runtime.upstream_proxy)
+                            == event.config_key
+                });
+            if !current {
+                if let Some(handle) = &self.handle {
+                    handle.acknowledge_websocket_capability_event(&event);
+                }
+                self.pending_ws_events
+                    .retain(|pending| pending.id != event.id);
+                continue;
+            }
+            let summary = vault
+                .get_provider_summary(event.provider_entry_id)
+                .map_err(map_vault_error)?;
+            let already_saved = summary.supports_websockets == Some(false);
+            if !already_saved {
+                let mut write = || {
+                    // Register before the write: an error can mean either an
+                    // uncommitted record or a committed record with failed audit.
+                    self.pending_ws_refresh.insert(event.provider_entry_id);
+                    vault.disable_provider_websocket(
+                        event.provider_entry_id,
+                        aipass_provider_registry::WebsocketWarning {
+                            reason: "responses_ws_rejected".into(),
+                            status: event.status,
+                            detected_at: event.detected_at,
+                            config_key: event.config_key,
+                        },
+                    )
+                };
+                let result = match &self.handle {
+                    Some(handle) => handle.with_websocket_capability_event(&event, write),
+                    None => Some(write()),
+                };
+                match result {
+                    Some(result) => result.map_err(map_vault_error)?,
+                    None => {
+                        self.pending_ws_events
+                            .retain(|pending| pending.id != event.id);
+                        continue;
+                    }
+                }
+            }
+            self.pending_ws_refresh.insert(event.provider_entry_id);
+            self.reload_if_running(vault)?;
+            self.pending_ws_refresh.remove(&event.provider_entry_id);
+            if let Some(handle) = &self.handle {
+                handle.acknowledge_websocket_capability_event(&event);
+            }
+            self.pending_ws_events
+                .retain(|pending| pending.id != event.id);
+            // Publish this revision before attempting another potentially failing write.
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     pub fn status(&self) -> ProxyStatus {
@@ -73,6 +198,7 @@ impl ProxyService {
                 last_error: None,
                 degraded: false,
                 degraded_target_ids: Vec::new(),
+                channels: Vec::new(),
                 recent_requests: 0,
                 recent_tokens: 0,
                 success_rate_bps: 0,
@@ -184,6 +310,7 @@ impl ProxyService {
                 "proxy server is already running",
             ));
         }
+        self.capture_ws_events();
         self.handle.take();
         self.load_config(vault)?;
         validate_config(&self.config)?;
@@ -214,6 +341,9 @@ impl ProxyService {
             drop(handle);
             return Err(err);
         }
+        for event in &self.pending_ws_events {
+            handle.restore_websocket_capability_event(event);
+        }
         self.handle = Some(handle);
         Ok(self.status())
     }
@@ -238,6 +368,7 @@ impl ProxyService {
     }
 
     pub fn stop(&mut self) -> ServiceResult<ProxyStatus> {
+        self.capture_ws_events();
         self.handle.take();
         self.config.enabled = false;
         Ok(self.status())
@@ -313,6 +444,7 @@ impl ProxyService {
             self.config.enabled = previous_enabled;
             return Err(err);
         }
+        self.capture_ws_events();
         self.handle.take();
         Ok(self.status())
     }
@@ -328,6 +460,8 @@ impl ProxyService {
     }
 
     pub fn reset(&mut self) -> ServiceResult<()> {
+        self.pending_ws_events.clear();
+        self.pending_ws_refresh.clear();
         self.handle.take();
         self.config = ProxyConfig::default();
         self.usage
@@ -346,8 +480,13 @@ impl ProxyService {
                 return Ok(self.status());
             }
         }
+        self.capture_ws_events();
+        self.handle.take();
         let next = ProxyHandle::start(runtime, self.usage.clone())
             .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))?;
+        for event in &self.pending_ws_events {
+            next.restore_websocket_capability_event(event);
+        }
         self.handle = Some(next);
         Ok(self.status())
     }
@@ -741,6 +880,7 @@ impl ProxyService {
         if result.is_err() && running {
             // The vault update has already committed. Never keep serving the
             // previous credential snapshot when the replacement cannot load.
+            self.capture_ws_events();
             self.handle.take();
             self.config.enabled = false;
             let _ = self.save_config(vault);
@@ -1211,6 +1351,190 @@ mod tests {
             tags: Vec::new(),
             notes: None,
             secret_metadata: SecretMetadataInput::default(),
+        }
+    }
+
+    #[test]
+    fn websocket_capability_survives_lock_stop_retry_and_vault_reopen() {
+        for mode in ["record_failure", "config_change", "audit_failure"] {
+            let changed_endpoint = mode == "config_change";
+            let temp = tempfile::tempdir().unwrap();
+            let password = SecretString::new("capability-test-password");
+            let vault = Vault::create(temp.path(), &password).unwrap().vault;
+            let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = upstream.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                // Two WS refusals and one successful Responses HTTP generation.
+                for index in 0..3 {
+                    let (mut socket, _) = upstream.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut byte = [0];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        socket.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
+                    }
+                    let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                    if index < 2 {
+                        assert!(request.contains("upgrade: websocket"));
+                        socket.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    } else {
+                        assert!(request.starts_with("post /v1/responses"));
+                        let length: usize = request
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                        socket.read_exact(&mut vec![0; length]).unwrap();
+                        let body = r#"{"id":"response-test","status":"completed","output":[]}"#;
+                        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                    }
+                }
+            });
+            let mut input =
+                provider_input("test-key", format!("http://{address}/v1"), "test-header");
+            input.supports_websockets = Some(true);
+            let id = vault.add_provider(input.clone()).unwrap();
+            let summary = vault.get_provider_summary(id).unwrap();
+            let mut service = ProxyService::new(temp.path()).unwrap();
+            service.config = config_with_token("capability-local-token");
+            let reserved = TcpListener::bind("127.0.0.1:0").unwrap();
+            service.config.bind_addr = reserved.local_addr().unwrap().to_string();
+            drop(reserved);
+            service.config.upstream_proxy.mode = aipass_proxy::UpstreamProxyMode::Direct;
+            service.config.routes[0].targets = vec![ProxyTargetConfig {
+                id: Uuid::new_v4(),
+                provider_entry_id: id,
+                secret_id: summary.secret_refs[0].id.clone(),
+                label: "primary".into(),
+                base_url: format!("http://{address}/v1"),
+                auth_scheme: "bearer".into(),
+                headers: Vec::new(),
+                group: None,
+                priority: 0,
+                weight: 1,
+                enabled: true,
+                protocol: None,
+            }];
+            service.save_config(&vault).unwrap();
+            let status = service.start(&vault).unwrap();
+            service.lock_for_session();
+            drop(vault);
+            let response = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .post(format!("http://{}/v1/responses", status.bind_addr))
+                .bearer_auth("capability-local-token")
+                .json(&serde_json::json!({"model":"test","input":"hello","stream":false}))
+                .send()
+                .unwrap();
+            assert!(response.status().is_success());
+            assert!(response.text().unwrap().contains("completed"));
+            server.join().unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while service
+                .handle
+                .as_ref()
+                .unwrap()
+                .websocket_capability_events()
+                .is_empty()
+            {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if mode != "audit_failure" {
+                service.stop_while_locked().unwrap();
+                assert_eq!(service.pending_ws_events.len(), 1);
+            }
+            let vault = Vault::open(temp.path(), &password).unwrap();
+            assert_eq!(
+                vault.get_provider_summary(id).unwrap().supports_websockets,
+                Some(true)
+            );
+            if changed_endpoint {
+                let mut edit: ProviderEntryUpdateInput =
+                    serde_json::from_value(serde_json::to_value(input).unwrap()).unwrap();
+                edit.supports_websockets = None;
+                edit.endpoints = vec![ProviderEndpoint::api("http://127.0.0.1:9/v1")];
+                vault.update_provider(id, edit).unwrap();
+            }
+            #[cfg(unix)]
+            if mode == "record_failure" {
+                use std::os::unix::fs::PermissionsExt;
+                let objects = temp.path().join("objects");
+                let permissions = std::fs::metadata(&objects).unwrap().permissions();
+                std::fs::set_permissions(&objects, std::fs::Permissions::from_mode(0o500)).unwrap();
+                let result = service.persist_ws_capabilities(&vault);
+                std::fs::set_permissions(&objects, permissions).unwrap();
+                assert!(result.is_err());
+                assert_eq!(service.pending_ws_events.len(), 1);
+                assert_eq!(
+                    vault.get_provider_summary(id).unwrap().supports_websockets,
+                    Some(true)
+                );
+            }
+            #[cfg(unix)]
+            if mode == "audit_failure" {
+                use std::os::unix::fs::PermissionsExt;
+                let event = service
+                    .handle
+                    .as_ref()
+                    .unwrap()
+                    .websocket_capability_events()[0]
+                    .clone();
+                let observation = service.begin_ws_probe(event.config_key);
+                assert!(observation.is_some());
+                let audit = temp.path().join("audit");
+                let permissions = std::fs::metadata(&audit).unwrap().permissions();
+                std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o500)).unwrap();
+                let result = service.persist_ws_capabilities(&vault);
+                std::fs::set_permissions(&audit, permissions).unwrap();
+                assert!(result.is_err());
+                assert_eq!(
+                    vault.get_provider_summary(id).unwrap().supports_websockets,
+                    Some(false)
+                );
+                assert!(service.pending_ws_refresh.contains(&id));
+                // A completion that arrives after the durable write can clear
+                // live evidence, but it must not erase the pending refresh.
+                service.confirm_ws_probe(observation);
+                assert!(service
+                    .handle
+                    .as_ref()
+                    .unwrap()
+                    .websocket_capability_events()
+                    .is_empty());
+                // A failed refresh must keep the retry without interrupting
+                // the listener or republishing a stale capability event.
+                let config_path = temp.path().join(CONFIG_FILE);
+                let backup_path = temp.path().join("ws-test-config-backup");
+                std::fs::rename(&config_path, &backup_path).unwrap();
+                std::fs::create_dir(&config_path).unwrap();
+                let result = service.persist_ws_capabilities(&vault);
+                std::fs::remove_dir(&config_path).unwrap();
+                std::fs::rename(&backup_path, &config_path).unwrap();
+                assert!(result.is_err());
+                assert!(service.status().running);
+                assert!(service.pending_ws_refresh.contains(&id));
+            }
+            assert_eq!(
+                service.persist_ws_capabilities(&vault).unwrap(),
+                !changed_endpoint
+            );
+            assert!(!service.persist_ws_capabilities(&vault).unwrap()); // Duplicate tick is a no-op.
+            assert!(service.pending_ws_refresh.is_empty());
+            drop(vault);
+            let vault = Vault::open(temp.path(), &password).unwrap();
+            let saved = vault.get_provider_summary(id).unwrap();
+            assert_eq!(saved.supports_websockets, Some(changed_endpoint));
+            assert_eq!(saved.websocket_warning.is_some(), !changed_endpoint);
+            assert_eq!(saved.title, summary.title);
+            assert_eq!(vault.reveal_secret(id).unwrap(), "test-key");
         }
     }
 

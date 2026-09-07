@@ -1247,6 +1247,7 @@ mod tests {
             last_error: None,
             degraded: false,
             degraded_target_ids: Vec::new(),
+            channels: Vec::new(),
             recent_requests: 0,
             recent_tokens: 0,
             success_rate_bps: 0,

@@ -98,6 +98,16 @@ async fn connect(
         "x-api-key",
         HeaderValue::from_static("another-local-secret"),
     );
+    for (name, value) in [
+        ("user-agent", "codex_cli_rs/1.0.0"),
+        ("originator", "codex_cli_rs"),
+        ("x-aipass-trace-id", "local-trace"),
+    ] {
+        request.headers_mut().insert(
+            header::HeaderName::from_static(name),
+            HeaderValue::from_static(value),
+        );
+    }
     let (socket, _) = client_async(request, stream).await?;
     Ok(socket)
 }
@@ -129,6 +139,39 @@ fn assert_rejection(
 }
 
 #[tokio::test]
+async fn websocket_url_adds_v1_only_when_absent_from_the_configured_path() {
+    for (base_path, expected_path) in [
+        ("", "/v1/responses"),
+        ("/gateway", "/gateway/v1/responses"),
+        ("/gateway/v1/", "/gateway/v1/responses"),
+        ("/v1/gateway", "/v1/gateway/responses"),
+        ("/api/v3", "/api/v3/v1/responses"),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(stream, |request: &Request<()>, response| {
+                assert_eq!(request.uri().path(), expected_path);
+                assert_eq!(request.uri().query(), Some("configured=v1&client=yes"));
+                Ok(response)
+            })
+            .await
+            .unwrap();
+            assert!(receive(&mut socket).await.is_close());
+            let _ = socket.flush().await;
+        });
+        let route = test_route(format!("http://{addr}{base_path}?configured=v1"));
+        let (handle, _, _dir) = start_proxy(vec![route], direct());
+        let mut socket = connect(&handle, "/v1/responses?client=yes", LOCAL_TOKEN)
+            .await
+            .unwrap();
+        socket.close(None).await.unwrap();
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn responses_websocket_relays_multiplexed_turns_and_records_each_response() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -146,6 +189,12 @@ async fn responses_websocket_relays_multiplexed_turns_and_records_each_response(
                     format!("Bearer {UPSTREAM_KEY}")
                 );
                 assert_eq!(request.headers()["chatgpt-account-id"], "test-account");
+                assert_eq!(request.headers()[header::USER_AGENT], "codex_cli_rs/1.0.0");
+                assert_eq!(request.headers()["originator"], "codex_cli_rs");
+                assert!(!request
+                    .headers()
+                    .keys()
+                    .any(|name| name.as_str().contains("aipass")));
                 assert_eq!(
                     request.headers()["openai-beta"],
                     "responses_websockets=2026-02-06"
@@ -206,7 +255,12 @@ async fn responses_websocket_relays_multiplexed_turns_and_records_each_response(
         .unwrap();
         assert!(receive(&mut ws).await.is_close());
     });
-    let route = test_route(format!("http://{addr}/backend-api/codex?configured=yes"));
+    let mut route = test_route(format!("http://{addr}/backend-api/codex?configured=yes"));
+    route.targets[0].config.headers.extend([
+        ("User-Agent".into(), "AIPass/1.0".into()),
+        ("Originator".into(), "aipass".into()),
+        ("X-AIPass-Version".into(), "1.0".into()),
+    ]);
     let (handle, store, _dir) = start_proxy(vec![route], direct());
     let mut ws = connect(&handle, "/v1/responses?client=yes", LOCAL_TOKEN)
         .await
@@ -374,7 +428,7 @@ async fn websocket_falls_back_on_bad_accept() {
     ws.close(None).await.unwrap();
     bad_server.await.unwrap();
     good_server.await.unwrap();
-    assert_eq!(store.summary(|_| 0).unwrap().attempt_count, 1);
+    assert_eq!(store.summary(|_| 0).unwrap().attempt_count, 2);
 }
 
 #[tokio::test]
@@ -447,47 +501,59 @@ async fn websocket_config_reload_closes_existing_session() {
 }
 
 #[tokio::test]
-async fn websocket_idle_budget_applies_to_pending_responses_only() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut route = test_route(format!("http://{}/v1", listener.local_addr().unwrap()));
-    route.config.retry.stream_idle_timeout_ms = 50;
-    let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-        // Tool execution can exceed the response idle budget between turns.
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        ws.send(Message::text("still-connected")).await.unwrap();
-        assert!(receive(&mut ws).await.is_text());
+async fn websocket_slow_generation_stays_active_beyond_legacy_idle_timeout() {
+    for adapted in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut route = test_route(format!("http://{}/v1", listener.local_addr().unwrap()));
+        route.config.retry.stream_idle_timeout_ms = 50;
+        route.config.conversion_enabled = adapted;
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            receive(&mut ws).await;
+            ws.send(event(
+                serde_json::json!({"type":"response.created","response":{"id":"slow"}}),
+            ))
+            .await
+            .unwrap();
+            wait.await.unwrap();
+            ws.send(event(serde_json::json!({"type":"response.completed","response":{"id":"slow","output":[],"usage":{"input_tokens":2,"output_tokens":1}}}))).await.unwrap();
+            receive(&mut ws).await;
+        });
+        let (handle, store, _dir) = start_proxy(vec![route], direct());
+        let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+            .await
+            .unwrap();
         assert_eq!(
-            receive(&mut ws).await,
-            Message::Close(Some(CloseFrame {
-                code: CloseCode::Error,
-                reason: "upstream response idle timeout".into(),
-            }))
+            handle.status().in_flight_requests,
+            0,
+            "idle sockets are not generations"
         );
-    });
-    let (handle, store, _dir) = start_proxy(vec![route], direct());
-    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        ws.send(event(
+            serde_json::json!({"type":"response.create","model":"test","input":"hello"}),
+        ))
         .await
         .unwrap();
-    assert_eq!(receive(&mut ws).await, Message::text("still-connected"));
-    ws.send(event(
-        serde_json::json!({"type":"response.create","model":"test","input":"hello"}),
-    ))
-    .await
-    .unwrap();
-    assert!(receive(&mut ws).await.is_close());
-    server.await.unwrap();
-    // The close reaches the client just before final bookkeeping completes.
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while store.count().unwrap() == 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(store.summary(|_| 0).unwrap().request_count, 1);
-    assert_eq!(handle.status().failures, 1);
+        receive(&mut ws).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let status = handle.status();
+        assert_eq!(status.in_flight_requests, 1);
+        assert_eq!(status.channels[0].in_flight_requests, 1);
+        assert_eq!(status.available_channels, 1);
+        assert!(!status.channels[0].degraded);
+        release.send(()).unwrap();
+        assert_eq!(
+            receive_response(&mut ws).await.last().unwrap()["type"],
+            "response.completed"
+        );
+        assert_eq!(handle.status().in_flight_requests, 0);
+        assert_eq!(handle.status().channels[0].in_flight_requests, 0);
+        assert_eq!(store.summary(|_| 0).unwrap().request_count, 1);
+        assert_eq!(handle.status().failures, 0);
+        ws.close(None).await.unwrap();
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -590,6 +656,7 @@ async fn websocket_request_error_keeps_connection_available_for_next_turn() {
 async fn websocket_upstream_rejection_preserves_http_status_without_error_secrets() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let route = test_route(format!("http://{}/v1", listener.local_addr().unwrap()));
+    let provider_id = route.targets[0].config.provider_entry_id;
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let result = accept_hdr_async(stream, |_: &Request<()>, _| {
@@ -612,6 +679,16 @@ async fn websocket_upstream_rejection_preserves_http_status_without_error_secret
         other => panic!("expected rejection, got {other:?}"),
     }
     server.await.unwrap();
+    let logs = handle.logs().unwrap();
+    let detail = logs
+        .iter()
+        .find(|entry| entry.message.contains("event=proxy.upstream.rejected"))
+        .unwrap();
+    assert!(detail
+        .message
+        .contains(&format!("provider_id={provider_id}")));
+    assert!(detail.message.contains("status=401"));
+    assert!(detail.message.contains("rejected"));
     assert!(!format!("{:?}", handle.logs().unwrap()).contains(UPSTREAM_KEY));
 }
 
@@ -835,6 +912,12 @@ async fn websocket_conversion_preserves_tool_calls_results_and_forked_context() 
     );
     assert!(!first_call.headers.contains_key("sec-websocket-key"));
     assert!(!first_call.headers.contains_key("x-api-key"));
+    assert_eq!(first_call.headers[header::USER_AGENT], "codex_cli_rs/1.0.0");
+    assert_eq!(first_call.headers["originator"], "codex_cli_rs");
+    assert!(!first_call
+        .headers
+        .keys()
+        .any(|name| name.as_str().contains("aipass")));
     assert_eq!(first_call.body["tools"][0]["name"], "lookup");
     let mut events = anthropic_text_events();
     events.truncate(4);
@@ -963,7 +1046,13 @@ async fn websocket_conversion_orders_lanes_and_recovers_after_upstream_failure()
     assert_eq!(summary.request_count, 3);
     assert_eq!(summary.attempt_count, 3);
     assert_eq!(summary.successful_attempts, 2);
-    assert!(handle.state.health.lock().unwrap().is_empty());
+    // The parallel response began before the failure, so only the new main
+    // request counts toward recovery; old work cannot heal newer failures.
+    assert_eq!(
+        handle.state.health.lock().unwrap()[&target_id].consecutive_successes,
+        1
+    );
+    assert!(handle.state.health.lock().unwrap()[&target_id].degraded());
     server.abort();
 }
 
@@ -979,6 +1068,8 @@ async fn websocket_conversion_warmup_and_error_cache_eviction_are_connection_loc
     let warmup = receive_response(&mut ws).await;
     assert_eq!(warmup[1]["type"], "response.in_progress");
     let parent = warmup.last().unwrap()["response"]["id"].clone();
+    assert!(parent.as_str().unwrap().starts_with("resp_"));
+    assert!(!parent.as_str().unwrap().contains("aipass"));
     assert_eq!(warmup.last().unwrap()["response"]["output"], json!([]));
     ws.send(event(json!({"type":"response.create","stream_id":"fork","model":"claude","previous_response_id":parent,"background":true}))).await.unwrap();
     assert_eq!(
@@ -1229,7 +1320,7 @@ async fn websocket_conversion_config_reload_cancels_pending_http_and_queued_turn
     let call = next_http_call(&mut calls).await;
     let mut config = RuntimeConfig::from_routes(&handle.bind_addr, vec![route]);
     config.upstream_proxy = direct();
-    config.routes[0].targets[0].api_key = "rotated-upstream-key".into();
+    config.routes[0].targets[0].api_key = "revoked-conversion-credential".into();
     handle.update_config(config).unwrap();
     assert_eq!(
         receive(&mut socket).await,
@@ -1245,7 +1336,7 @@ async fn websocket_conversion_config_reload_cancels_pending_http_and_queued_turn
 }
 
 #[tokio::test]
-async fn websocket_busy_lane_and_pings_do_not_mask_another_lanes_timeout() {
+async fn websocket_parallel_lanes_remain_active_until_completion_or_cancellation() {
     use serde_json::json;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut route = test_route(format!("http://{}", listener.local_addr().unwrap()));
@@ -1287,15 +1378,22 @@ async fn websocket_busy_lane_and_pings_do_not_mask_another_lanes_timeout() {
             .await
             .unwrap();
     }
+    let until = tokio::time::Instant::now() + Duration::from_millis(200);
+    while tokio::time::Instant::now() < until {
+        assert!(!receive(&mut socket).await.is_close());
+    }
+    assert_eq!(handle.status().in_flight_requests, 2);
+    assert_eq!(handle.status().channels[0].in_flight_requests, 2);
+    socket.close(None).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if receive(&mut socket).await.is_close() {
-                break;
-            }
+        while handle.status().in_flight_requests > 0 {
+            tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("a busy lane must not keep a stalled response alive");
+    .unwrap();
+    assert_eq!(handle.status().channels[0].in_flight_requests, 0);
+    assert_eq!(handle.status().failures, 0);
     server.await.unwrap();
 }
 
@@ -1342,7 +1440,7 @@ async fn websocket_hold_deadline_bounds_backoff_and_handshake() {
             }
             other => panic!("expected HTTP rejection: {other:?}"),
         }
-        assert_eq!(count.load(Ordering::SeqCst), if stall { 2 } else { 1 });
+        assert_eq!(count.load(Ordering::SeqCst), 2);
         assert_eq!(store.count().unwrap(), 1);
     }
 }

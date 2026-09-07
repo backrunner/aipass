@@ -5,10 +5,12 @@ struct Mock {
     address: String,
     upgrades: Arc<AtomicU64>,
     status: Arc<AtomicU64>,
+    handshake_script: Arc<Mutex<VecDeque<u16>>>,
     disconnect: Arc<AtomicU64>,
     pings: Arc<AtomicU64>,
     live: Arc<AtomicU64>,
     output: Arc<Mutex<Option<Vec<Value>>>>,
+    events: Arc<Mutex<Option<Vec<Value>>>>,
     calls: Arc<Mutex<Vec<(bool, Value)>>>,
     server: tokio::task::JoinHandle<()>,
 }
@@ -32,6 +34,8 @@ async fn mock(status_code: u64) -> Mock {
     let address = format!("http://{}", listener.local_addr().unwrap());
     let upgrades = Arc::new(AtomicU64::new(0));
     let status = Arc::new(AtomicU64::new(status_code));
+    let handshake_script = Arc::new(Mutex::new(VecDeque::<u16>::new()));
+    let script = handshake_script.clone();
     let disconnect = Arc::new(AtomicU64::new(0));
     let calls = Arc::new(Mutex::new(Vec::new()));
     let pings = Arc::new(AtomicU64::new(0));
@@ -40,6 +44,8 @@ async fn mock(status_code: u64) -> Mock {
     let active = live.clone();
     let output = Arc::new(Mutex::new(None::<Vec<Value>>));
     let output_override = output.clone();
+    let events = Arc::new(Mutex::new(None::<Vec<Value>>));
+    let events_override = events.clone();
     let (count, reject, mode, history) = (
         upgrades.clone(),
         status.clone(),
@@ -51,14 +57,18 @@ async fn mock(status_code: u64) -> Mock {
             let (socket, _) = listener.accept().await.unwrap();
             let (count, reject, mode, history) =
                 (count.clone(), reject.clone(), mode.clone(), history.clone());
+            let script = script.clone();
             let ping_count = ping_count.clone();
             let active = active.clone();
             let output_override = output_override.clone();
+            let events_override = events_override.clone();
             tokio::spawn(async move {
                 let service = service_fn(move |mut request: Request<Incoming>| {
+                    let script = script.clone();
                     let ping_count = ping_count.clone();
                     let active = active.clone();
                     let output_override = output_override.clone();
+                    let events_override = events_override.clone();
                     let (count, reject, mode, history) =
                         (count.clone(), reject.clone(), mode.clone(), history.clone());
                     async move {
@@ -69,7 +79,12 @@ async fn mock(status_code: u64) -> Mock {
                         assert_eq!(request.headers()["chatgpt-account-id"], "test-account");
                         if is_upgrade_request(&request) {
                             count.fetch_add(1, Ordering::SeqCst);
-                            let status = reject.load(Ordering::SeqCst);
+                            let status = script
+                                .lock()
+                                .unwrap()
+                                .pop_front()
+                                .map(u64::from)
+                                .unwrap_or_else(|| reject.load(Ordering::SeqCst));
                             if status != 0 {
                                 return Ok::<_, Infallible>(
                                     Response::builder()
@@ -127,6 +142,10 @@ async fn mock(status_code: u64) -> Mock {
                                         events.last_mut().unwrap()["response"]["output"] =
                                             json!(output);
                                     }
+                                    if let Some(scripted) = events_override.lock().unwrap().clone()
+                                    {
+                                        events = scripted;
+                                    }
                                     for event in events {
                                         if ws.send(super::event(event)).await.is_err() {
                                             return;
@@ -144,6 +163,14 @@ async fn mock(status_code: u64) -> Mock {
                                 }
                             });
                             return Ok(response);
+                        }
+                        if request.uri().path().ends_with("/models") {
+                            return Ok(Response::builder()
+                                .header("content-type", "application/json")
+                                .body(Full::new(Bytes::from_static(
+                                    br#"{"data":[{"id":"test"}]}"#,
+                                )))
+                                .unwrap());
                         }
                         let body: Value = serde_json::from_slice(
                             &request.into_body().collect().await.unwrap().to_bytes(),
@@ -176,11 +203,13 @@ async fn mock(status_code: u64) -> Mock {
         address,
         upgrades,
         status,
+        handshake_script,
         disconnect,
         calls,
         pings,
         live,
         output,
+        events,
         server,
     }
 }
@@ -198,9 +227,67 @@ async fn mixed_ws_turns_reuse_the_upstream_socket() {
         assert_eq!(events.last().unwrap()["type"], "response.completed");
         previous = events;
     }
-    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 2);
+    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 1);
     assert_eq!(upstream.calls.lock().unwrap().len(), 4);
     assert_eq!(store.count().unwrap(), 4);
+}
+
+#[tokio::test]
+async fn adapted_ws_without_session_key_keeps_one_provider_across_round_robin_turns() {
+    let first = mock(0).await;
+    let second = mock(0).await;
+    let mut route = test_route(first.address.clone());
+    route
+        .targets
+        .push(test_route(second.address.clone()).targets.remove(0));
+    route.config.strategy = RouteStrategy::RoundRobin;
+    for target in &mut route.targets {
+        target.supports_websockets = false;
+    }
+    let (handle, _, _dir) = start_proxy(vec![route], direct());
+    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    let mut previous = Value::Null;
+    for _ in 0..6 {
+        let events = turn(&mut ws, Some(&previous)).await;
+        assert_eq!(events.last().unwrap()["type"], "response.completed");
+        previous = events.last().unwrap()["response"]["id"].clone();
+    }
+    let counts = [
+        first.calls.lock().unwrap().len(),
+        second.calls.lock().unwrap().len(),
+    ];
+    assert!(
+        counts == [6, 0] || counts == [0, 6],
+        "session must stay on one provider: {counts:?}"
+    );
+    ws.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn native_ws_rejects_new_generations_while_target_is_blacklisted() {
+    let upstream = mock(0).await;
+    let mut route = test_route(upstream.address.clone());
+    route.config.retry.failure_threshold = 1;
+    let id = route.targets[0].config.id;
+    let retry = route.config.retry.clone();
+    let (handle, _, _dir) = start_proxy(vec![route], direct());
+    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    assert_eq!(
+        turn(&mut ws, None).await.last().unwrap()["type"],
+        "response.completed"
+    );
+    mark_failure(&handle.state, id, &retry);
+    let events = turn(&mut ws, None).await;
+    assert_eq!(
+        events.last().unwrap()["error"]["code"],
+        "provider_temporarily_unavailable"
+    );
+    assert_eq!(upstream.calls.lock().unwrap().len(), 1);
+    ws.close(None).await.unwrap();
 }
 
 #[tokio::test]
@@ -264,6 +351,160 @@ async fn http_requests_never_share_upstream_ws_state() {
     assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 6);
 }
 
+fn notified_responses() -> Vec<Value> {
+    let mut events = responses();
+    events.insert(
+        0,
+        json!({"type":"codex.rate_limits","rate_limits":{"remaining":42}}),
+    );
+    events.insert(
+        2,
+        json!({"type":"provider.notification","metadata":{"opaque":[1,"value"]}}),
+    );
+    events
+}
+
+#[tokio::test]
+async fn http_ws_preserves_auxiliary_events_and_waits_for_response_completion() {
+    let upstream = mock(0).await;
+    let events = notified_responses();
+    *upstream.events.lock().unwrap() = Some(events.clone());
+    let (handle, store, _dir) = start_proxy(vec![test_route(upstream.address.clone())], direct());
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for streaming in [true, false] {
+        let response = client
+            .post(format!("http://{}/v1/responses", handle.bind_addr))
+            .bearer_auth(LOCAL_TOKEN)
+            .json(&json!({"model":"test","input":"hello","stream":streaming}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        if streaming {
+            let actual: Vec<Value> = response
+                .text()
+                .await
+                .unwrap()
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .map(|data| serde_json::from_str(data).unwrap())
+                .collect();
+            assert_eq!(actual, events);
+        } else {
+            assert_eq!(
+                response.json::<Value>().await.unwrap(),
+                events.last().unwrap()["response"]
+            );
+        }
+    }
+    assert_eq!(upstream.calls.lock().unwrap().len(), 2);
+    assert_eq!(store.summary(|_| 0).unwrap().successful_attempts, 2);
+}
+
+#[tokio::test]
+async fn native_and_adapted_ws_preserve_auxiliary_notifications() {
+    for adapted in [false, true] {
+        let upstream = mock(0).await;
+        let expected = notified_responses();
+        *upstream.events.lock().unwrap() = Some(expected.clone());
+        let (handle, store, _dir) =
+            start_proxy(vec![test_route(upstream.address.clone())], direct());
+        let mut ws = if adapted {
+            fallback_session(&handle, &upstream).await
+        } else {
+            connect(&handle, "/v1/responses", LOCAL_TOKEN)
+                .await
+                .unwrap()
+        };
+        let events = turn(&mut ws, None).await;
+        assert_eq!(events.len(), expected.len());
+        assert_eq!(events[0], expected[0]);
+        assert_eq!(events[2], expected[2]);
+        assert_eq!(events.last().unwrap()["type"], "response.completed");
+        assert_eq!(store.summary(|_| 0).unwrap().successful_attempts, 1);
+        assert_eq!(upstream.calls.lock().unwrap().len(), 1);
+        ws.close(None).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn http_ws_auxiliary_or_malformed_events_cannot_finish_or_replay_a_request() {
+    for streaming in [true, false] {
+        for event in [
+            json!({"type":"codex.rate_limits","rate_limits":{"remaining":42}}),
+            json!({"type":"response.completed"}),
+            json!({"type":""}),
+            json!({"type":42}),
+            json!([]),
+        ] {
+            let upstream = mock(0).await;
+            *upstream.events.lock().unwrap() = Some(vec![event]);
+            upstream.disconnect.store(3, Ordering::SeqCst);
+            let mut route = test_route(upstream.address.clone());
+            route.config.retry.silent_retry = true;
+            let (handle, store, _dir) = start_proxy(vec![route], direct());
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .post(format!("http://{}/v1/responses", handle.bind_addr))
+                .bearer_auth(LOCAL_TOKEN)
+                .json(&json!({"model":"test","input":"hello","stream":streaming}))
+                .send()
+                .await
+                .unwrap();
+            if streaming {
+                assert!(response.bytes().await.is_err());
+            } else {
+                assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            }
+            assert_eq!(upstream.calls.lock().unwrap().len(), 1);
+            let summary = store.summary(|_| 0).unwrap();
+            assert_eq!(summary.request_count, 1);
+            assert_eq!(summary.successful_attempts, 0);
+            assert_eq!(summary.average_first_token_ms, None);
+            assert!(handle.websocket_capability_events().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn probe_skips_auxiliary_events_but_requires_a_valid_empty_warmup_completion() {
+    for ending in [
+        Some(json!({"type":"response.completed","response":{"id":"warmup","output":[]}})),
+        Some(json!({"type":"response.completed"})),
+        Some(json!({"type":"response.completed","response":{"id":"","output":[]}})),
+        Some(
+            json!({"type":"response.completed","response":{"id":"warmup","output":[{"type":"message"}]}}),
+        ),
+        Some(json!({"type":"error","error":{"code":"rate_limit_exceeded"}})),
+        None,
+    ] {
+        let upstream = mock(0).await;
+        let mut events = notified_responses();
+        events.truncate(3); // Notification, response.created, notification.
+        let expected = ending.as_ref().is_some_and(|event| {
+            event.pointer("/response/output") == Some(&json!([]))
+                && event["response"]["id"] == "warmup"
+        });
+        events.extend(ending);
+        *upstream.events.lock().unwrap() = Some(events);
+        upstream.disconnect.store(3, Ordering::SeqCst);
+        let target = test_route(upstream.address.clone()).targets.remove(0);
+        let result = tokio::task::spawn_blocking(move || {
+            probe_websocket(target, &direct(), Duration::from_secs(2), Some("test"))
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.supported, expected.then_some(true));
+        assert_eq!(result.status, Some(101));
+        let calls = upstream.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1["generate"], false);
+        assert_eq!(calls[0].1["input"], json!([]));
+    }
+}
+
 #[tokio::test]
 async fn closed_idle_socket_reconnects_before_sending_the_next_generation() {
     let upstream = mock(0).await;
@@ -278,7 +519,7 @@ async fn closed_idle_socket_reconnects_before_sending_the_next_generation() {
             "response.completed"
         );
     }
-    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 4);
+    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 3);
     assert_eq!(upstream.calls.lock().unwrap().len(), 3);
     assert_eq!(store.count().unwrap(), 3);
 }
@@ -312,10 +553,7 @@ async fn native_and_mixed_ws_connections_send_idle_heartbeats_and_remain_reusabl
             turn(&mut ws, None).await.last().unwrap()["type"],
             "response.completed"
         );
-        assert_eq!(
-            upstream.upgrades.load(Ordering::SeqCst),
-            if mixed { 2 } else { 1 }
-        );
+        assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 1);
     }
     tokio::join!(check(false), check(true));
 }
@@ -376,7 +614,7 @@ async fn configuration_refresh_discards_idle_upstream_connections() {
         turn(&mut ws, None).await.last().unwrap()["type"],
         "response.completed"
     );
-    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 3);
+    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 2);
 }
 
 async fn turn(ws: &mut WebSocketStream<TcpStream>, previous: Option<&Value>) -> Vec<Value> {
@@ -431,84 +669,65 @@ async fn native_handshake_rejection_keeps_the_client_on_ws_and_falls_back_to_sse
             "response.completed"
         );
     }
-    assert_eq!(
-        upstream.upgrades.load(Ordering::SeqCst),
-        u64::from(WS_FAILURE_THRESHOLD)
-    );
+    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 2);
     assert_eq!(upstream.calls.lock().unwrap().len(), 4);
     assert!(upstream.calls.lock().unwrap().iter().all(|(ws, _)| !ws));
     assert_eq!(store.count().unwrap(), 4);
 }
 
 #[tokio::test]
-async fn ws_failures_cool_down_only_that_provider_and_recover_on_same_client_connection() {
-    let upstream = mock(404).await;
-    let mut route = test_route(upstream.address.clone());
-    route.config.conversion_enabled = true; // Request-scoped transport selection.
-    let provider_id = route.targets[0].config.provider_entry_id;
-    let target_id = route.targets[0].config.id;
-    let (handle, _store, _dir) = start_proxy(vec![route], direct());
-    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
-        .await
-        .unwrap();
-    for _ in 0..5 {
+async fn temporary_handshake_failures_stay_in_the_session_and_new_sessions_retry_ws() {
+    for status in [426, 502, 503] {
+        let upstream = mock(status).await;
+        let route = test_route(upstream.address.clone());
+        let (handle, _, _dir) = start_proxy(vec![route], direct());
+        for round in 0..4 {
+            let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+                .await
+                .unwrap();
+            upstream.status.store(0, Ordering::SeqCst);
+            for _ in 0..2 {
+                assert_eq!(
+                    turn(&mut ws, None).await.last().unwrap()["type"],
+                    "response.completed"
+                );
+                assert!(!upstream.calls.lock().unwrap().last().unwrap().0);
+            }
+            assert_eq!(upstream.upgrades.load(Ordering::SeqCst), (round + 1) * 2);
+            assert!(handle.websocket_capability_events().is_empty());
+            ws.close(None).await.unwrap();
+            upstream.status.store(status, Ordering::SeqCst);
+        }
+        upstream.status.store(0, Ordering::SeqCst);
+        let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+            .await
+            .unwrap();
         assert_eq!(
             turn(&mut ws, None).await.last().unwrap()["type"],
             "response.completed"
         );
+        assert!(upstream.calls.lock().unwrap().last().unwrap().0);
     }
-    assert_eq!(
-        upstream.upgrades.load(Ordering::SeqCst),
-        u64::from(WS_FAILURE_THRESHOLD)
-    );
-    assert!(!circuit_open(&handle.state, target_id)); // HTTP success does not erase WS cooldown.
-    assert!(acquire_ws_transport(&handle.state, Uuid::new_v4()).is_some());
-    upstream.status.store(0, Ordering::SeqCst);
-    handle
-        .state
-        .ws_health
-        .lock()
-        .unwrap()
-        .get_mut(&provider_id)
-        .unwrap()
-        .disabled_until = Some(Instant::now() - Duration::from_secs(1));
-    assert_eq!(
-        turn(&mut ws, None).await.last().unwrap()["type"],
-        "response.completed"
-    );
-    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 4);
-    assert!(!handle
-        .state
-        .ws_health
-        .lock()
-        .unwrap()
-        .contains_key(&provider_id));
-    assert!(upstream.calls.lock().unwrap().last().unwrap().0);
 }
 
 #[tokio::test]
-async fn repeated_ws_disconnects_leave_sse_available_after_cooldown() {
+async fn repeated_submitted_ws_disconnects_never_disable_or_fall_back() {
     let upstream = mock(0).await;
     upstream.disconnect.store(1, Ordering::SeqCst);
-    let mut route = test_route(upstream.address.clone());
-    route.config.conversion_enabled = true;
-    let target_id = route.targets[0].config.id;
-    let (handle, _store, _dir) = start_proxy(vec![route], direct());
+    let route = test_route(upstream.address.clone());
+    let (handle, _, _dir) = start_proxy(vec![route], direct());
     let mut ws = fallback_session(&handle, &upstream).await;
-    for _ in 0..WS_FAILURE_THRESHOLD - 1 {
+    for _ in 0..4 {
         assert_eq!(turn(&mut ws, None).await.last().unwrap()["type"], "error");
     }
-    assert!(!circuit_open(&handle.state, target_id));
     upstream.disconnect.store(0, Ordering::SeqCst);
     assert_eq!(
         turn(&mut ws, None).await.last().unwrap()["type"],
         "response.completed"
     );
-    assert_eq!(
-        upstream.upgrades.load(Ordering::SeqCst),
-        u64::from(WS_FAILURE_THRESHOLD)
-    );
-    assert!(!upstream.calls.lock().unwrap().last().unwrap().0);
+    assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 5);
+    assert!(upstream.calls.lock().unwrap().iter().all(|(ws, _)| *ws));
+    assert!(handle.websocket_capability_events().is_empty());
 }
 
 #[tokio::test]
@@ -559,6 +778,7 @@ async fn probe_requires_a_responses_warmup_and_distinguishes_rejection_from_unce
         (404, Some(false)),
         (401, None),
         (429, None),
+        (426, None),
     ] {
         upstream.status.store(status, Ordering::SeqCst);
         let target = test_route(upstream.address.clone()).targets.remove(0);
@@ -592,41 +812,44 @@ async fn probe_does_not_infer_responses_support_from_a_successful_upgrade_alone(
     assert_eq!(upstream.calls.lock().unwrap().len(), 1);
 }
 
-#[test]
-fn ws_cooldown_shares_provider_identity_allows_one_recovery_and_resets_on_reload() {
-    let route = test_route("http://127.0.0.1:1".into());
-    let provider_id = route.targets[0].config.provider_entry_id;
-    let (handle, _, _dir) = start_proxy(vec![route.clone()], direct());
-    for _ in 0..WS_FAILURE_THRESHOLD {
-        mark_ws_failure(&handle.state, provider_id);
-    }
-    assert!(acquire_ws_transport(&handle.state, provider_id).is_none());
-    handle
-        .state
-        .ws_health
-        .lock()
+// Exercise the bridge's upstream-WS path directly. A native handshake failure
+// deliberately pins the real downstream session to HTTP, so it cannot be used
+// as a fixture for socket reuse, heartbeats or submitted WS failures.
+async fn fallback_session(handle: &ProxyHandle, _upstream: &Mock) -> WebSocketStream<TcpStream> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = handle.state.clone();
+    let route = state.config.read().unwrap().routes[0].clone();
+    tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let service = service_fn(move |request: Request<Incoming>| {
+            let state = state.clone();
+            let route = route.clone();
+            async move {
+                let response = create_response_with_body(&request, empty_body).unwrap();
+                let mut changed = ConfigWatch::subscribe(&state);
+                changed.scope(route.config.id);
+                Ok::<_, Infallible>(bridge::upgrade(
+                    request,
+                    state,
+                    route,
+                    vec![],
+                    changed,
+                    response,
+                    Arc::new(pool::Pool::default()),
+                ))
+            }
+        });
+        let _ = hyper::server::conn::http1::Builder::new()
+            .serve_connection(TokioIo::new(socket), service)
+            .with_upgrades()
+            .await;
+    });
+    let stream = TcpStream::connect(address).await.unwrap();
+    client_async(format!("ws://{address}/v1/responses"), stream)
+        .await
         .unwrap()
-        .get_mut(&provider_id)
-        .unwrap()
-        .disabled_until = Some(Instant::now() - Duration::from_secs(1));
-    let permit = acquire_ws_transport(&handle.state, provider_id).expect("recovery permitted");
-    assert!(acquire_ws_transport(&handle.state, provider_id).is_none());
-    drop(permit);
-    assert!(acquire_ws_transport(&handle.state, provider_id).is_some());
-    handle
-        .update_config(RuntimeConfig::from_routes(
-            handle.bind_addr.clone(),
-            vec![route],
-        ))
-        .unwrap();
-    assert!(acquire_ws_transport(&handle.state, provider_id).is_some());
-}
-
-async fn fallback_session(handle: &ProxyHandle, upstream: &Mock) -> WebSocketStream<TcpStream> {
-    let original = upstream.status.swap(404, Ordering::SeqCst);
-    let ws = connect(handle, "/v1/responses", LOCAL_TOKEN).await.unwrap();
-    upstream.status.store(original, Ordering::SeqCst);
-    ws
+        .0
 }
 
 async fn wait_for_no_connections(upstream: &Mock) {
@@ -644,7 +867,6 @@ async fn client_close_ends_native_and_fallback_connections_including_active_turn
     for (fallback, active) in [(false, false), (true, false), (false, true), (true, true)] {
         let upstream = mock(0).await;
         let route = test_route(upstream.address.clone());
-        let provider_id = route.targets[0].config.provider_entry_id;
         let target_id = route.targets[0].config.id;
         let (handle, _, _dir) = start_proxy(vec![route], direct());
         let mut ws = if fallback {
@@ -676,16 +898,7 @@ async fn client_close_ends_native_and_fallback_connections_including_active_turn
         .unwrap();
         wait_for_no_connections(&upstream).await;
         assert!(!circuit_open(&handle.state, target_id));
-        assert_eq!(
-            handle
-                .state
-                .ws_health
-                .lock()
-                .unwrap()
-                .get(&provider_id)
-                .map_or(0, |health| health.consecutive_failures),
-            if active && fallback { 1 } else { 0 }
-        );
+        assert!(handle.websocket_capability_events().is_empty());
         upstream.disconnect.store(0, Ordering::SeqCst);
         let before = upstream.upgrades.load(Ordering::SeqCst);
         let mut next = connect(&handle, "/v1/responses", LOCAL_TOKEN)
@@ -701,17 +914,18 @@ async fn client_close_ends_native_and_fallback_connections_including_active_turn
 
 #[tokio::test]
 async fn fallback_across_providers_reconstructs_incremental_tools_and_closes_every_socket() {
-    let first = mock(404).await;
-    let second = mock(404).await;
+    let first = mock(0).await;
+    let second = mock(0).await;
     let mut route = test_route(first.address.clone());
     route.config.strategy = RouteStrategy::RoundRobin;
     route
         .targets
         .push(test_route(second.address.clone()).targets.remove(0));
+    route.config.retry.failure_threshold = 1;
+    let targets = route.targets.clone();
+    let retry = route.config.retry.clone();
     let (handle, store, _dir) = start_proxy(vec![route], direct());
-    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
-        .await
-        .unwrap();
+    let mut ws = fallback_session(&handle, &first).await;
     first.status.store(0, Ordering::SeqCst);
     second.status.store(0, Ordering::SeqCst);
     let tools = json!([{"type":"function","name":"exec_command","parameters":{"type":"object"}}]);
@@ -731,12 +945,21 @@ async fn fallback_across_providers_reconstructs_incremental_tools_and_closes_eve
         let events = receive_response(&mut ws).await;
         assert_eq!(events.last().unwrap()["type"], "response.completed");
         previous = events.last().unwrap()["response"]["id"].clone();
+        if index == 1 {
+            // Provider changes require a real failure, not round-robin churn.
+            let failed = if first.calls.lock().unwrap().len() == 2 {
+                0
+            } else {
+                1
+            };
+            mark_failure(&handle.state, targets[failed].config.id, &retry);
+        }
     }
     for upstream in [&first, &second] {
         assert_eq!(
             upstream.upgrades.load(Ordering::SeqCst),
-            2,
-            "one rejected handshake and one retained socket per provider"
+            1,
+            "one retained socket per provider"
         );
         let calls = upstream.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
@@ -779,8 +1002,8 @@ async fn fallback_rejects_orphan_tool_results_before_generation() {
 
 #[tokio::test]
 async fn fallback_keeps_provider_bound_reasoning_on_the_originating_target() {
-    let first = mock(404).await;
-    let second = mock(404).await;
+    let first = mock(0).await;
+    let second = mock(0).await;
     let mut route = test_route(first.address.clone());
     route.config.strategy = RouteStrategy::RoundRobin;
     route
@@ -830,17 +1053,15 @@ async fn fallback_keeps_provider_bound_reasoning_on_the_originating_target() {
 
 #[tokio::test]
 async fn fallback_binds_client_supplied_state_to_the_parent_origin() {
-    let first = mock(404).await;
-    let second = mock(404).await;
+    let first = mock(0).await;
+    let second = mock(0).await;
     let mut route = test_route(first.address.clone());
     route.config.strategy = RouteStrategy::RoundRobin;
     route
         .targets
         .push(test_route(second.address.clone()).targets.remove(0));
     let (handle, _, _dir) = start_proxy(vec![route], direct());
-    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
-        .await
-        .unwrap();
+    let mut ws = fallback_session(&handle, &first).await;
     first.status.store(0, Ordering::SeqCst);
     second.status.store(0, Ordering::SeqCst);
     ws.send(event(json!({"type":"response.create","model":"test","input":[{"type":"item_reference","id":"unknown"}]}))).await.unwrap();
@@ -864,4 +1085,218 @@ async fn fallback_binds_client_supplied_state_to_the_parent_origin() {
         counts == [2, 0] || counts == [0, 2],
         "client-supplied state must stay with its parent provider: {counts:?}"
     );
+}
+
+#[tokio::test]
+async fn first_handshake_failure_reconnects_once_before_any_generation() {
+    for bridge in [false, true] {
+        let upstream = mock(0).await;
+        upstream.handshake_script.lock().unwrap().extend([503, 0]);
+        let (handle, _, _dir) = start_proxy(vec![test_route(upstream.address.clone())], direct());
+        let mut ws = if bridge {
+            fallback_session(&handle, &upstream).await
+        } else {
+            connect(&handle, "/v1/responses", LOCAL_TOKEN)
+                .await
+                .unwrap()
+        };
+        assert_eq!(
+            turn(&mut ws, None).await.last().unwrap()["type"],
+            "response.completed"
+        );
+        assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 2);
+        assert_eq!(upstream.calls.lock().unwrap().len(), 1);
+        assert!(upstream.calls.lock().unwrap()[0].0);
+        assert!(handle.websocket_capability_events().is_empty());
+    }
+}
+
+async fn http_turn(handle: &ProxyHandle, session: Option<&str>) -> (StatusCode, String) {
+    let mut request = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("http://{}/v1/responses", handle.bind_addr))
+        .bearer_auth(LOCAL_TOKEN)
+        .json(&json!({"model":"test","input":"hello","stream":true}));
+    if let Some(session) = session {
+        request = request.header("x-aipass-session-id", session);
+    }
+    let response = request.send().await.unwrap();
+    (response.status(), response.text().await.unwrap_or_default())
+}
+
+#[tokio::test]
+async fn http_fallback_uses_session_identity_or_only_the_current_request() {
+    let upstream = mock(503).await;
+    let (handle, _, _dir) = start_proxy(vec![test_route(upstream.address.clone())], direct());
+    for (session, attempts) in [
+        (Some("one"), 2),
+        (Some("one"), 2),
+        (Some("two"), 4),
+        (None, 6),
+        (None, 8),
+    ] {
+        assert!(http_turn(&handle, session)
+            .await
+            .1
+            .contains("response.completed"));
+        assert_eq!(upstream.upgrades.load(Ordering::SeqCst), attempts);
+        assert!(handle.websocket_capability_events().is_empty());
+    }
+    upstream.status.store(0, Ordering::SeqCst);
+    http_turn(&handle, Some("three")).await;
+    assert!(upstream.calls.lock().unwrap().last().unwrap().0);
+}
+
+#[tokio::test]
+async fn only_repeated_protocol_rejection_with_responses_http_success_confirms_unsupported() {
+    for status in [404, 405, 501] {
+        let upstream = mock(status).await;
+        upstream.disconnect.store(2, Ordering::SeqCst); // Incomplete HTTP is insufficient.
+        let (handle, _, _dir) = start_proxy(vec![test_route(upstream.address.clone())], direct());
+        http_turn(&handle, Some("one")).await;
+        assert!(handle.websocket_capability_events().is_empty());
+        let models = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{}/v1/models", handle.bind_addr))
+            .bearer_auth(LOCAL_TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert!(models.status().is_success());
+        assert!(handle.websocket_capability_events().is_empty());
+        upstream.disconnect.store(0, Ordering::SeqCst);
+        http_turn(&handle, Some("one")).await;
+        let events = handle.websocket_capability_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, status as u16);
+        http_turn(&handle, Some("two")).await;
+        assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 2);
+        assert_eq!(handle.websocket_capability_events(), events);
+        handle.acknowledge_websocket_capability_event(&events[0]);
+        assert!(handle.websocket_capability_events().is_empty());
+    }
+    let upstream = mock(503).await;
+    upstream.handshake_script.lock().unwrap().extend([404, 503]);
+    let (handle, _, _dir) = start_proxy(vec![test_route(upstream.address.clone())], direct());
+    http_turn(&handle, None).await;
+    assert!(handle.websocket_capability_events().is_empty());
+}
+
+#[tokio::test]
+async fn auth_and_quota_handshake_errors_preserve_status_without_http_replay() {
+    for status in [400, 401, 403, 429] {
+        let upstream = mock(status).await;
+        let (handle, _, _dir) = start_proxy(vec![test_route(upstream.address.clone())], direct());
+        assert_eq!(http_turn(&handle, None).await.0.as_u16(), status as u16);
+        assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 1);
+        assert!(upstream.calls.lock().unwrap().is_empty());
+        assert!(handle.websocket_capability_events().is_empty());
+    }
+}
+
+#[test]
+fn capability_evidence_isolated_by_config_and_invalidated_by_success_or_reload() {
+    let route = test_route("http://127.0.0.1:1/v1".into());
+    let target = &route.targets[0];
+    let (handle, _, _dir) = start_proxy(vec![route.clone()], direct());
+    let key = capability::key(&handle.state, target);
+    let observation = capability::observe(&handle.state, key);
+    let started = Instant::now();
+    let evidence = capability::candidate(
+        &handle.state,
+        target,
+        observation,
+        started,
+        StatusCode::NOT_FOUND,
+    )
+    .unwrap();
+    assert!(handle.websocket_capability_events().is_empty());
+    capability::success(&handle.state, observation);
+    capability::http_success(&handle.state, Some(&evidence));
+    assert!(handle.websocket_capability_events().is_empty());
+    assert!(capability::candidate(
+        &handle.state,
+        target,
+        observation,
+        started,
+        StatusCode::NOT_FOUND
+    )
+    .is_none());
+    let mut next = route.clone();
+    next.targets[0].api_key = "rotated".into();
+    let mut config = RuntimeConfig::from_routes(handle.bind_addr.clone(), vec![next]);
+    config.upstream_proxy = direct();
+    handle.update_config(config.clone()).unwrap();
+    assert!(capability::candidate(
+        &handle.state,
+        target,
+        observation,
+        Instant::now(),
+        StatusCode::NOT_FOUND
+    )
+    .is_none());
+    config.routes = vec![route.clone()];
+    handle.update_config(config).unwrap();
+    // Even switching away and back cannot admit old operations.
+    assert!(capability::candidate(
+        &handle.state,
+        target,
+        observation,
+        Instant::now(),
+        StatusCode::NOT_FOUND
+    )
+    .is_none());
+    let fresh = capability::observe(&handle.state, key);
+    let evidence = capability::candidate(
+        &handle.state,
+        target,
+        fresh,
+        Instant::now(),
+        StatusCode::NOT_FOUND,
+    )
+    .unwrap();
+    capability::success(&handle.state, observation); // Stale success cannot erase new evidence.
+    capability::http_success(&handle.state, Some(&evidence));
+    assert_eq!(handle.websocket_capability_events().len(), 1);
+    let event = handle.websocket_capability_events().remove(0);
+    capability::success(&handle.state, fresh);
+    assert!(handle
+        .with_websocket_capability_event(&event, || panic!("stale event must not persist"))
+        .is_none());
+    assert!(capability::candidate(
+        &handle.state,
+        target,
+        fresh,
+        Instant::now() - SESSION_AFFINITY_TTL,
+        StatusCode::NOT_FOUND
+    )
+    .is_none());
+    let mut sibling = target.clone();
+    sibling.config.provider_entry_id = Uuid::new_v4();
+    assert_ne!(websocket_config_key(&sibling, &direct()), key);
+}
+
+#[tokio::test]
+async fn preference_only_refresh_keeps_native_and_fallback_sessions_alive() {
+    for status in [0, 404] {
+        let upstream = mock(status).await;
+        let mut route = test_route(upstream.address.clone());
+        let (handle, _, _dir) = start_proxy(vec![route.clone()], direct());
+        let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+            .await
+            .unwrap();
+        turn(&mut ws, None).await;
+        route.targets[0].supports_websockets = false;
+        let mut config = RuntimeConfig::from_routes(handle.bind_addr.clone(), vec![route]);
+        config.upstream_proxy = direct();
+        handle.update_config(config).unwrap();
+        assert_eq!(
+            turn(&mut ws, None).await.last().unwrap()["type"],
+            "response.completed"
+        );
+    }
 }

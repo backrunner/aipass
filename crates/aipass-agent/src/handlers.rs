@@ -492,12 +492,118 @@ fn dispatch_request(
             vault.add_provider(input).map_err(map_vault_error)
         })
         .map(AgentResponse::success),
-        AgentRequest::ProviderUpdate { id, input } => with_vault(state, false, |vault| {
-            vault.update_provider(id, input).map_err(map_vault_error)?;
-            refresh_proxy_provider_credentials(state, vault, id)?;
-            Ok(())
-        })
-        .map(|_| AgentResponse::empty()),
+        AgentRequest::ProviderUpdate { id, input } => {
+            // Snapshot under the vault lock, probe outside it, then compare before
+            // committing. Forms cannot bypass recovery by sending true directly.
+            let recovery = with_vault(state, false, |vault| {
+                let mut entry = vault.get_provider_summary(id).map_err(map_vault_error)?;
+                if input.supports_websockets != Some(true)
+                    || entry.supports_websockets != Some(false)
+                {
+                    return Ok(None);
+                }
+                let revision = entry.updated_at;
+                let outbound = state
+                    .proxy
+                    .lock()
+                    .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy lock poisoned")))?
+                    .config(vault)?
+                    .upstream_proxy;
+                let secret = zeroize::Zeroizing::new(match input.api_key.as_ref() {
+                    Some(secret) => secret.clone(),
+                    None => vault.reveal_secret(id).map_err(map_vault_error)?,
+                });
+                let headers = zeroize::Zeroizing::new(match &input.headers {
+                    Some(headers) => headers.clone(),
+                    None => vault.reveal_provider_headers(id).map_err(map_vault_error)?,
+                });
+                entry.endpoints.clone_from(&input.endpoints);
+                entry.interface_type = input.interface_type.clone();
+                if let Some(primary) = entry.secret_refs.first_mut() {
+                    input.secret_metadata.apply_to(primary);
+                }
+                entry.auth_scheme = input.auth_scheme.clone();
+                entry.default_model.clone_from(&input.default_model);
+                entry.provider_id.clone_from(&input.provider_id);
+                entry.provider_kind = input.provider_kind.clone();
+                if let Some(kind) = &input.credential_kind {
+                    entry.credential_kind = *kind;
+                }
+                Ok(Some((revision, entry, secret, headers, outbound)))
+            })?;
+            let verified =
+                if let Some((revision, entry, mut secret, mut headers, outbound)) = recovery {
+                    let result = probe_entry(
+                        entry,
+                        std::mem::take(&mut *secret),
+                        15,
+                        std::mem::take(&mut *headers),
+                        outbound.clone(),
+                        Some(state),
+                    );
+                    if result.websocket.as_ref().and_then(|ws| ws.supported) != Some(true) {
+                        return Err(ServiceError::new(
+                            AgentErrorCode::ValidationFailed,
+                            format!(
+                                "websocket_probe_unconfirmed: status={}; {}",
+                                result
+                                    .websocket
+                                    .as_ref()
+                                    .and_then(|ws| ws.status)
+                                    .map(|status| status.to_string())
+                                    .unwrap_or_else(|| "unknown".into()),
+                                result
+                                    .websocket
+                                    .as_ref()
+                                    .and_then(|ws| ws.error.clone())
+                                    .or(result.error)
+                                    .unwrap_or_else(|| {
+                                        "Responses WS support could not be confirmed".into()
+                                    }),
+                            ),
+                        ));
+                    }
+                    Some((revision, outbound))
+                } else {
+                    None
+                };
+            with_vault(state, false, |vault| {
+                if let Some((revision, outbound)) = verified {
+                    let current = vault.get_provider_summary(id).map_err(map_vault_error)?;
+                    let current_outbound = state
+                        .proxy
+                        .lock()
+                        .map_err(|_| {
+                            ServiceError::internal(anyhow::anyhow!("proxy lock poisoned"))
+                        })?
+                        .config(vault)?
+                        .upstream_proxy;
+                    if current.updated_at != revision || current_outbound != outbound {
+                        return Err(ServiceError::new(
+                            AgentErrorCode::Conflict,
+                            "provider configuration changed during WS probe; retry saving",
+                        ));
+                    }
+                } else if input.supports_websockets == Some(true)
+                    && vault
+                        .get_provider_summary(id)
+                        .map_err(map_vault_error)?
+                        .supports_websockets
+                        == Some(false)
+                {
+                    return Err(ServiceError::new(
+                        AgentErrorCode::Conflict,
+                        "provider WS preference changed; reload before enabling",
+                    ));
+                }
+                vault.update_provider(id, input).map_err(map_vault_error)?;
+                refresh_proxy_provider_credentials(state, vault, id)?;
+                Ok(())
+            })?;
+            state.sync_revision.fetch_add(1, Ordering::Relaxed);
+            state.sync_wake.fetch_add(1, Ordering::Relaxed);
+            Ok(AgentResponse::empty())
+        }
         AgentRequest::ProviderArchive { id } => with_vault(state, false, |vault| {
             vault.archive_provider(id).map_err(map_vault_error)?;
             refresh_proxy_provider_credentials(state, vault, id)?;
@@ -652,6 +758,7 @@ fn dispatch_request(
                 timeout_seconds.max(1),
                 headers,
                 outbound,
+                Some(state),
             )))
         }
         AgentRequest::ProviderUsageProbe {

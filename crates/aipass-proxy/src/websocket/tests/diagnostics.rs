@@ -61,6 +61,65 @@ fn assert_summaries(logs: &[ProxyLogEntry], transport: &str) {
 }
 
 #[tokio::test]
+async fn http_ws_adaptation_matches_native_request_headers_and_payload() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let upstream_captured = captured.clone();
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut headers = HeaderMap::new();
+            let mut socket = accept_hdr_async(stream, |request: &Request<()>, response| {
+                headers = request.headers().clone();
+                headers.remove(header::SEC_WEBSOCKET_KEY);
+                Ok(response)
+            })
+            .await
+            .unwrap();
+            let request = receive(&mut socket).await;
+            let payload: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+            upstream_captured.lock().unwrap().push((headers, payload));
+            socket.send(event(json!({"type":"response.completed","response":{"id":"resp_test","status":"completed","output":[]}}))).await.unwrap();
+        }
+    });
+    let (handle, _, _dir) = start_proxy(vec![test_route(format!("http://{addr}"))], direct());
+    let mut body = json!({"model":"test","instructions":"Reply with OK only.","input":[{"role":"user","content":[{"type":"input_text","text":"Connection check."}]}],"store":false,"stream":true});
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("http://{}/v1/responses", handle.bind_addr))
+        .bearer_auth(LOCAL_TOKEN)
+        .header("user-agent", "codex_cli_rs/1.0.0")
+        .header("originator", "codex_cli_rs")
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(response.contains("response.completed"));
+    body.as_object_mut().unwrap().remove("stream");
+    body["type"] = json!("response.create");
+    let mut socket = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    socket.send(event(body.clone())).await.unwrap();
+    assert!(receive(&mut socket)
+        .await
+        .to_text()
+        .unwrap()
+        .contains("response.completed"));
+    server.await.unwrap();
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].1, body);
+    assert_eq!(requests[0], requests[1]);
+}
+
+#[tokio::test]
 async fn websocket_diagnostics_preserve_frames_and_correlate_tools_events_and_close() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

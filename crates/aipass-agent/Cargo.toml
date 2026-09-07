@@ -55,3 +55,4 @@ block2 = "0.6"
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio-tungstenite.workspace = true

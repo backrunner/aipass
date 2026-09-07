@@ -7,6 +7,8 @@ pub struct WebsocketProbeResult {
     /// None means inconclusive (e.g. auth, quota, timeout, or no model).
     pub supported: Option<bool>,
     pub status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Probe with no user input and generate=false. Share routing, proxy settings,
@@ -20,6 +22,7 @@ pub fn probe_websocket(
     let unknown = WebsocketProbeResult {
         supported: None,
         status: None,
+        error: Some("WS probe timed out or transport could not be established".into()),
     };
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -43,6 +46,7 @@ async fn probe(
     let unknown = WebsocketProbeResult {
         supported: None,
         status: None,
+        error: Some("WS probe timed out or transport could not be established".into()),
     };
     let builder = reqwest::Client::builder()
         .http1_only()
@@ -56,27 +60,37 @@ async fn probe(
     let (upgraded, _) = match connect_upstream(&client, &HeaderMap::new(), None, target, None).await
     {
         Ok(connected) => connected,
-        Err(status) => {
+        Err(error) => {
+            let status = error.status();
             return WebsocketProbeResult {
                 // HTTP auth/quota and transient server failures do not prove absence.
                 supported: matches!(
                     status,
                     StatusCode::NOT_FOUND
                         | StatusCode::METHOD_NOT_ALLOWED
-                        | StatusCode::UPGRADE_REQUIRED
                         | StatusCode::NOT_IMPLEMENTED
                 )
                 .then_some(false),
                 status: Some(status.as_u16()),
+                error: Some(format!(
+                    "WS handshake rejected with HTTP {}",
+                    status.as_u16()
+                )),
             };
         }
     };
     let unknown = WebsocketProbeResult {
         supported: None,
         status: Some(101),
+        error: Some("WS connected but no valid empty Responses completion was received".into()),
     };
     let Some(model) = model.filter(|model| !model.trim().is_empty()) else {
-        return unknown;
+        return WebsocketProbeResult {
+            error: Some(
+                "a default model or a model from discovery is required for WS validation".into(),
+            ),
+            ..unknown
+        };
     };
     let config = WebSocketConfig::default()
         .max_message_size(Some(1024 * 1024))
@@ -103,9 +117,7 @@ async fn probe(
                 };
                 match event["type"].as_str() {
                     Some("response.completed")
-                        if event
-                            .pointer("/response/id")
-                            .is_some_and(|id| id.is_string())
+                        if capability::valid_completion(&event)
                             && event.pointer("/response/output").is_some_and(|output| {
                                 output.as_array().is_some_and(Vec::is_empty)
                             }) =>
@@ -113,10 +125,14 @@ async fn probe(
                         return WebsocketProbeResult {
                             supported: Some(true),
                             status: Some(101),
+                            error: None,
                         };
                     }
                     Some("error" | "response.failed" | "response.incomplete") => return unknown,
                     Some("response.created" | "response.in_progress") => {}
+                    // Auxiliary notifications (e.g. codex.rate_limits) are not
+                    // generation output or evidence of Responses support.
+                    Some(kind) if !kind.trim().is_empty() && !kind.starts_with("response.") => {}
                     _ => return unknown,
                 }
             }

@@ -24,7 +24,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 4 requires authenticated vault snapshots, first-run sync import,
 // and background sync status. Older residents cannot implement these semantics.
 // Version 5 adds the signed native CloudKit transport.
-pub const AGENT_PROTOCOL_VERSION: u32 = 5;
+// Version 6 requires verified WS preference recovery and automatic capability warnings.
+pub const AGENT_PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]

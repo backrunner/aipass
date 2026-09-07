@@ -226,6 +226,8 @@ pub fn primary_secret_ref_mut(refs: &mut [SecretRef]) -> Option<&mut SecretRef> 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
     pub label: Option<String>,
     pub limit: Option<String>,
     #[serde(default)]
@@ -274,6 +276,16 @@ pub struct GatewayMetadata {
     pub rate: Option<String>,
 }
 
+/// Agent-owned explanation for an automatically disabled WS preference.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebsocketWarning {
+    pub reason: String,
+    pub status: u16,
+    pub detected_at: i64,
+    pub config_key: [u8; 32],
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderEntry {
@@ -294,6 +306,8 @@ pub struct ProviderEntry {
     /// Responses WebSocket capability; absence keeps the default enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_websockets: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_warning: Option<WebsocketWarning>,
     pub auth_scheme: AuthScheme,
     pub secret_refs: Vec<SecretRef>,
     pub default_model: Option<String>,

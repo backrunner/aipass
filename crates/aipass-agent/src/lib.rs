@@ -17,6 +17,7 @@ pub mod session;
 pub(crate) mod sync_watch;
 pub(crate) mod usage_probe;
 pub(crate) mod vault_sync;
+pub(crate) mod websocket_capability;
 pub mod windows_service;
 
 #[cfg(target_os = "macos")]

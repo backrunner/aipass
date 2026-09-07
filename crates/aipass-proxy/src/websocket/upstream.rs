@@ -7,6 +7,7 @@ pub(crate) struct RequestContext<'a> {
     pub route: &'a ResolvedRoute,
     pub target: &'a ResolvedTarget,
     pub pricing: &'a [ModelPricing],
+    pub session_key: Option<&'a str>,
     pub incoming_headers: &'a HeaderMap,
     pub query: Option<&'a str>,
     pub body: &'a ReplayableRequestBody,
@@ -18,58 +19,95 @@ pub(crate) struct RequestContext<'a> {
     pub streaming: bool,
 }
 
-/// None is safe HTTP fallback: only a handshake has been attempted. Once the
-/// returned body starts sending response.create, no caller may replay it.
-pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxBody>> {
+pub(crate) enum ForwardOutcome {
+    Response(Response<BoxBody>),
+    HttpFallback(Option<capability::Evidence>),
+    Rejected(StatusCode),
+}
+
+/// HTTP fallback is explicit and only possible before submission.
+pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> ForwardOutcome {
     let diagnostic = WsDiagnostic {
         store: &ctx.state.usage,
         request_id: ctx.request_id,
         route_id: ctx.route.config.id,
         provider_id: ctx.target.config.provider_entry_id,
     };
-    let permit = acquire_ws_transport(ctx.state, ctx.target.config.provider_entry_id)?;
-    let mut payload = ctx.body.json().await?;
-    let object = payload.as_object_mut()?;
+    let capability_key = capability::key(ctx.state, ctx.target);
+    let observation = capability::observe(ctx.state, capability_key);
+    if !capability::allowed(ctx.state, capability_key) {
+        return ForwardOutcome::HttpFallback(None);
+    }
+    if let Some(fallback) = ctx
+        .pool
+        .as_ref()
+        .and_then(|pool| pool.fallback(capability_key))
+    {
+        return ForwardOutcome::HttpFallback(fallback);
+    }
+    if ctx.pool.is_none() {
+        if let Some(evidence) = capability::http_fallback(
+            ctx.state,
+            ctx.route.config.id,
+            ctx.session_key,
+            capability_key,
+            None,
+        ) {
+            return ForwardOutcome::HttpFallback(evidence);
+        }
+    }
+    let Some(mut payload) = ctx.body.json().await else {
+        return ForwardOutcome::HttpFallback(None);
+    };
+    let Some(object) = payload.as_object_mut() else {
+        return ForwardOutcome::HttpFallback(None);
+    };
     // Background execution is an HTTP API operation, not a WS generation.
     if object.get("background") == Some(&Value::Bool(true)) {
-        return None;
+        return ForwardOutcome::HttpFallback(None);
     }
     object.remove("stream");
     object.insert("type".into(), Value::String("response.create".into()));
-    let key = pool::key(
+    let Some(key) = pool::key(
         ctx.route.config.id,
         ctx.target,
         ctx.incoming_headers,
         ctx.query,
-    )?;
+    ) else {
+        return ForwardOutcome::Rejected(StatusCode::BAD_REQUEST);
+    };
     let started = Instant::now();
-    let started_at = now_unix();
-    let client =
-        upstream_client_for_transport(ctx.state, ctx.route.config.retry.connect_timeout_ms, true)
-            .ok()?;
-    let deadline = bounded_deadline(
-        Duration::from_millis(ctx.route.config.retry.first_byte_timeout_ms.max(1)),
-        ctx.hold_deadline,
-    );
+    let client = match upstream_client_for_transport(
+        ctx.state,
+        ctx.route.config.retry.connect_timeout_ms,
+        true,
+    ) {
+        Ok(client) => client,
+        Err(_) => return ForwardOutcome::Rejected(StatusCode::BAD_GATEWAY),
+    };
     if ctx.config_changed.has_changed().unwrap_or(true) {
-        return Some(error_response(
+        return ForwardOutcome::Response(error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "proxy configuration changed; reconnect",
         ));
     }
     let result = tokio::select! {
         biased;
-        _ = ctx.config_changed.changed() => return Some(error_response(StatusCode::SERVICE_UNAVAILABLE, "proxy configuration changed; reconnect")),
-        result = tokio::time::timeout_at(deadline, async {
+        _ = ctx.config_changed.changed() => return ForwardOutcome::Response(error_response(StatusCode::SERVICE_UNAVAILABLE, "proxy configuration changed; reconnect")),
+        result = async {
             if let Some(pool) = &ctx.pool {
                 if let Some(socket) = pool.take(key).await {
                     diagnostic.log("reused", None, None);
                     return Ok(socket);
                 }
             }
-            let (upgraded, _) = connect_upstream(
-                &client, ctx.incoming_headers, ctx.query, ctx.target, Some(&diagnostic),
-            ).await?;
+            let (upgraded, _) = capability::connect_twice(ConnectContext {
+                client: &client, headers: ctx.incoming_headers, query: ctx.query,
+                target: ctx.target, diagnostic: &diagnostic,
+                timeout: Duration::from_millis(ctx.route.config.retry.first_byte_timeout_ms.max(1)),
+                hold_deadline: ctx.hold_deadline,
+                attempts: ctx.attempts, model: payload["model"].as_str(),
+            }).await?;
             let config = WebSocketConfig::default()
                 .max_message_size(Some(MAX_BUFFERED_RESPONSE_BYTES))
                 .max_frame_size(Some(MAX_BUFFERED_RESPONSE_BYTES));
@@ -77,29 +115,32 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxB
                 id: ctx.request_id,
                 socket: WebSocketStream::from_raw_socket(upgraded, Role::Client, Some(config)).await,
             })
-        }) => result,
-    }.unwrap_or_else(|_| {
-        diagnostic.log("handshake_timeout", Some(StatusCode::GATEWAY_TIMEOUT), None);
-        Err(StatusCode::GATEWAY_TIMEOUT)
-    });
+        } => result,
+    };
     let socket = match result {
         Ok(connected) => connected,
-        Err(status) => {
+        Err((error, repeated)) => {
+            let status = error.status();
             diagnostic.log("bridge_handshake_failed", Some(status), None);
-            if ws_handshake_affects_transport(status) {
-                mark_ws_failure(ctx.state, ctx.target.config.provider_entry_id);
+            if !error.permits_fallback() {
+                return ForwardOutcome::Rejected(status);
             }
-            persist_attempt(
-                &ctx.state.usage,
-                (ctx.request_id, ctx.route.config.id),
-                ctx.target,
-                payload["model"].as_str(),
-                started_at,
-                started,
-                AttemptOutcome::failure(Some(status), None),
-            );
             *ctx.attempts = ctx.attempts.saturating_add(1);
-            return None;
+            let evidence = repeated
+                .then(|| capability::candidate(ctx.state, ctx.target, observation, started, status))
+                .flatten();
+            if let Some(pool) = &ctx.pool {
+                pool.set_fallback(capability_key, evidence.clone());
+            } else {
+                capability::http_fallback(
+                    ctx.state,
+                    ctx.route.config.id,
+                    ctx.session_key,
+                    capability_key,
+                    Some(evidence.clone()),
+                );
+            }
+            return ForwardOutcome::HttpFallback(evidence);
         }
     };
     ctx.state.usage.log_diagnostic("info", format!(
@@ -121,13 +162,14 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxB
     target.config.headers.clear();
     let mut usage = SessionUsage {
         connection_id: socket.id,
+        observation,
         state: ctx.state.clone(),
         target,
         route_id: ctx.route.config.id,
         retry: ctx.route.config.retry.clone(),
         pricing: ctx.pricing.to_vec(),
         attempts: *ctx.attempts,
-        session_key: session_affinity_key(ctx.incoming_headers, None),
+        session_key: ctx.session_key.map(str::to_owned),
         pending: HashMap::new(),
         active: HashMap::new(),
     };
@@ -139,18 +181,12 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxB
         .or_default()
         .push_back(request);
     let mut source = ResponseStream {
-        permit,
         socket: Some(socket),
         pool: ctx.pool,
         key,
         config_changed: ctx.config_changed,
         heartbeat: keepalive::Heartbeat::new(),
         invalidated: false,
-        hold_deadline: if ctx.streaming {
-            None
-        } else {
-            ctx.hold_deadline
-        },
         usage,
         payload: Some(payload),
         done: false,
@@ -168,7 +204,7 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxB
                         StatusCode::BAD_GATEWAY
                     };
                     let value = event.get("response").unwrap_or(&event);
-                    return Some(
+                    return ForwardOutcome::Response(
                         Response::builder()
                             .status(status)
                             .header(header::CONTENT_TYPE, "application/json")
@@ -182,7 +218,7 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxB
                 }
                 Ok(_) => {}
                 Err(_) => {
-                    return Some(error_response(
+                    return ForwardOutcome::Response(error_response(
                         StatusCode::BAD_GATEWAY,
                         "upstream WebSocket failed before response completion",
                     ))
@@ -205,7 +241,7 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxB
         let bytes = Bytes::from(format!("data: {event}\n\n"));
         Some((Ok(Frame::data(bytes)), source))
     });
-    Some(
+    ForwardOutcome::Response(
         Response::builder()
             .extension(UpstreamIdentity {
                 target_id: ctx.target.config.id,
@@ -217,14 +253,12 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> Option<Response<BoxB
 }
 
 struct ResponseStream {
-    permit: WsTransportPermit,
     socket: Option<pool::Connection>,
     pool: Option<Arc<pool::Pool>>,
     key: pool::Key,
     config_changed: ConfigWatch,
     heartbeat: keepalive::Heartbeat,
     invalidated: bool,
-    hold_deadline: Option<tokio::time::Instant>,
     usage: SessionUsage,
     payload: Option<Value>,
     done: bool,
@@ -232,32 +266,21 @@ struct ResponseStream {
 
 impl ResponseStream {
     async fn read_event(&mut self) -> Result<Value, ()> {
-        let timeout = Duration::from_millis(
-            if self.payload.is_some() {
-                self.usage.retry.first_byte_timeout_ms
-            } else {
-                self.usage.retry.stream_idle_timeout_ms
-            }
-            .max(1),
-        );
         let mut changed = self.config_changed.clone();
-        let deadline = bounded_deadline(timeout, self.hold_deadline);
         let result = tokio::select! {
             biased;
             _ = changed.changed() => {
                 self.invalidated = true;
-                Ok(Err(()))
+                Err(())
             }
-            result = tokio::time::timeout_at(deadline, self.next_event()) => result,
+            result = self.next_event() => result,
         };
         let event = match result {
-            Ok(Ok(event)) => event,
+            Ok(event) => event,
             _ => {
                 self.usage.log_closed(
                     if self.invalidated {
                         "configuration_changed"
-                    } else if result.is_err() {
-                        "upstream_idle_timeout"
                     } else {
                         "upstream_event_failed"
                     },
@@ -333,10 +356,13 @@ impl ResponseStream {
                     if !value.is_object()
                         || !value["type"]
                             .as_str()
-                            .is_some_and(|kind| kind == "error" || kind.starts_with("response."))
+                            .is_some_and(|kind| !kind.trim().is_empty())
                     {
                         return Err(());
                     }
+                    // Providers also send auxiliary events such as
+                    // codex.rate_limits. Preserve typed notifications for SSE
+                    // clients; only response terminal events finish the request.
                     if matches!(
                         value["type"].as_str(),
                         Some("response.completed" | "response.incomplete")
@@ -375,6 +401,5 @@ impl Drop for ResponseStream {
             self.usage.log_closed("downstream_dropped", None);
         }
         self.usage.disconnected(false);
-        let _keep_recovery_permit = &self.permit;
     }
 }

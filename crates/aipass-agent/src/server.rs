@@ -179,6 +179,7 @@ fn run_server_with_state(
     crate::session::spawn_power_watcher(state.clone());
     crate::pricing::spawn_list_price_refresh(state.clone());
     crate::oauth::spawn_token_refresh(state.clone());
+    crate::websocket_capability::spawn(state.clone());
     spawn_initial_sync(state.clone());
     crate::sync_watch::start_sync_watcher_for_current_settings(&state);
     if launch_desktop_tray {
@@ -1939,12 +1940,20 @@ fn favicon_content_type_is_image(value: &str) -> bool {
 }
 
 fn probe_entry(
-    entry: EntrySummary,
+    mut entry: EntrySummary,
     secret: String,
     timeout_seconds: u64,
     headers: Vec<(String, String)>,
     outbound: aipass_proxy::UpstreamProxyConfig,
+    state: Option<&Arc<AgentState>>,
 ) -> ProbeResult {
+    if let Some(interface) = entry
+        .secret_refs
+        .first()
+        .and_then(|secret| secret.interface_type.as_ref())
+    {
+        entry.interface_type = interface.clone();
+    }
     let secret = zeroize::Zeroizing::new(secret);
     let mut headers = zeroize::Zeroizing::new(headers);
     let started = Instant::now();
@@ -1998,13 +2007,27 @@ fn probe_entry(
             protocol: Some(ProxyProtocol::OpenAiResponses),
         },
     });
+    let observation = state.and_then(|state| {
+        let target = target.as_ref()?;
+        state
+            .proxy
+            .lock()
+            .ok()?
+            .begin_ws_probe(aipass_proxy::websocket_config_key(target, &outbound))
+    });
     let default_model = entry.default_model.clone();
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(if ws_interface { budget / 2 } else { budget })
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("AIPass/1.0")
-        .build()
-    {
+    let client = match aipass_proxy::upstream_proxy_rules(&outbound).and_then(|rules| {
+        let mut builder = reqwest::blocking::Client::builder()
+            .timeout(if ws_interface { budget / 2 } else { budget })
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(proxies) = rules {
+            builder = builder.no_proxy();
+            for proxy in proxies {
+                builder = builder.proxy(proxy);
+            }
+        }
+        builder.build().map_err(|err| err.to_string())
+    }) {
         Ok(client) => client,
         Err(err) => {
             return ProbeResult {
@@ -2033,7 +2056,8 @@ fn probe_entry(
             (url, request)
         }
         InterfaceType::AnthropicMessages => {
-            let url = join_url(&endpoint, "v1/models");
+            let url = aipass_proxy::upstream_url_with_query(&endpoint, "/v1/models", None)
+                .unwrap_or_else(|_| join_url(&endpoint, "v1/models"));
             let request = apply_auth(client.get(&url), &entry.auth_scheme, &secret)
                 .header("anthropic-version", "2023-06-01");
             (url, request)
@@ -2111,6 +2135,13 @@ fn probe_entry(
             budget.saturating_sub(started.elapsed()),
             probe_model.as_deref(),
         ));
+    }
+    if result.websocket.as_ref().and_then(|ws| ws.supported) == Some(true) {
+        if let Some(state) = state {
+            if let Ok(proxy) = state.proxy.lock() {
+                proxy.confirm_ws_probe(observation);
+            }
+        }
     }
     result
 }
@@ -2901,6 +2932,7 @@ pub(crate) mod tests {
     fn favicon_test_entry() -> EntrySummary {
         EntrySummary {
             supports_websockets: None,
+            websocket_warning: None,
             id: Uuid::new_v4(),
             title: "Example".to_string(),
             favorite: false,
@@ -3087,6 +3119,7 @@ pub(crate) mod tests {
                 mode: aipass_proxy::UpstreamProxyMode::Direct,
                 custom_url: None,
             },
+            None,
         );
         assert!(result.ok);
         assert_eq!(result.model_count, Some(1));
@@ -3096,3 +3129,7 @@ pub(crate) mod tests {
         server.join().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "websocket_recovery_tests.rs"]
+mod websocket_recovery_tests;

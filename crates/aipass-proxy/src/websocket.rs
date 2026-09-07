@@ -5,6 +5,8 @@ use diagnostics::protocol::{RequestSummary, ResponseTrace, WsDiagnostic};
 use futures_util::SinkExt;
 
 mod bridge;
+pub(super) mod capability;
+use capability::{ConnectContext, HandshakeError};
 mod keepalive;
 pub(super) mod pool;
 mod probe;
@@ -33,7 +35,6 @@ fn empty_body() -> BoxBody {
 pub(super) async fn handle_request(
     mut request: Request<Incoming>,
     state: RuntimeState,
-    in_flight: Option<InFlightGuard>,
 ) -> Response<BoxBody> {
     let request_id = request
         .extensions()
@@ -69,6 +70,7 @@ pub(super) async fn handle_request(
     // Native Responses sessions remain pinned and application frames stay intact,
     // including when sibling targets use HTTP or a different protocol.
     let fallback_route = route.clone();
+    let fallback_pool = Arc::new(pool::Pool::default());
     let client =
         match upstream_client_for_transport(&state, route.config.retry.connect_timeout_ms, true) {
             Ok(client) => client,
@@ -100,12 +102,9 @@ pub(super) async fn handle_request(
             break;
         }
         for _ in 0..silent_retry_rounds(&route.config.retry) {
-            for mut target in select_route_targets_with_affinity(
-                &state,
-                &route,
-                hold_round > 0,
-                session_key.as_deref(),
-            ) {
+            for mut target in
+                select_route_targets_with_affinity(&state, &route, session_key.as_deref())
+            {
                 if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                     break 'hold;
                 }
@@ -126,19 +125,14 @@ pub(super) async fn handle_request(
                         pricing,
                         config_changed,
                         downstream_response,
-                        in_flight,
+                        fallback_pool,
                     );
                 }
-                let Some(ws_transport) =
-                    acquire_ws_transport(&state, target.config.provider_entry_id)
-                else {
-                    WsDiagnostic {
-                        store: &state.usage,
-                        request_id,
-                        route_id: route.config.id,
-                        provider_id: target.config.provider_entry_id,
-                    }
-                    .log("bridge_cooldown", None, None);
+                let capability_key = capability::key(&state, &target);
+                let observation = capability::observe(&state, capability_key);
+                if !capability::allowed(&state, capability_key)
+                    || fallback_pool.fallback(capability_key).is_some()
+                {
                     return bridge::upgrade(
                         request,
                         state,
@@ -146,57 +140,52 @@ pub(super) async fn handle_request(
                         pricing,
                         config_changed,
                         downstream_response,
-                        in_flight,
+                        fallback_pool,
                     );
-                };
+                }
                 attempts = attempts.saturating_add(1);
                 let attempt_started = Instant::now();
-                let attempt_started_at = now_unix();
                 let diagnostic = WsDiagnostic {
                     store: &state.usage,
                     request_id,
                     route_id: route.config.id,
                     provider_id: target.config.provider_entry_id,
                 };
-                let connect = connect_upstream(
-                    &client,
-                    request.headers(),
-                    request.uri().query(),
-                    &target,
-                    Some(&diagnostic),
-                );
                 let result = tokio::select! {
                     _ = config_changed.changed() => {
                         return error_response(StatusCode::SERVICE_UNAVAILABLE, "proxy configuration changed; reconnect");
                     }
-                    result = tokio::time::timeout_at(
-                        bounded_deadline(Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1)), hold_deadline),
-                        connect,
-                    ) => result.unwrap_or_else(|_| {
-                        diagnostic.log("handshake_timeout", Some(StatusCode::GATEWAY_TIMEOUT), None);
-                        Err(StatusCode::GATEWAY_TIMEOUT)
-                    }),
+                    result = capability::connect_twice(ConnectContext {
+                        client: &client, headers: request.headers(), query: request.uri().query(),
+                        target: &target, diagnostic: &diagnostic,
+                        timeout: Duration::from_millis(route.config.retry.first_byte_timeout_ms.max(1)),
+                        hold_deadline,
+                        attempts: &mut attempts, model: None,
+                    }) => result,
                 };
                 let (upstream, response_headers) = match result {
                     Ok(connected) => connected,
-                    Err(status) => {
+                    Err((error, repeated)) => {
+                        let status = error.status();
                         last_status = status;
                         failure_target = Some((
                             target.config.provider_entry_id,
                             target.config.secret_id.clone(),
                         ));
-                        if ws_handshake_affects_transport(status) {
-                            mark_ws_failure(&state, target.config.provider_entry_id);
+                        if error.permits_fallback() {
+                            let evidence = repeated
+                                .then(|| {
+                                    capability::candidate(
+                                        &state,
+                                        &target,
+                                        observation,
+                                        attempt_started,
+                                        status,
+                                    )
+                                })
+                                .flatten();
+                            fallback_pool.set_fallback(capability_key, evidence);
                         }
-                        persist_attempt(
-                            &state.usage,
-                            (request_id, route.config.id),
-                            &target,
-                            None,
-                            attempt_started_at,
-                            attempt_started,
-                            AttemptOutcome::failure(Some(status), None),
-                        );
                         continue;
                     }
                 };
@@ -225,6 +214,7 @@ pub(super) async fn handle_request(
                 target.config.headers.clear();
                 let context = SessionUsage {
                     connection_id: request_id,
+                    observation,
                     state,
                     target,
                     route_id: route.config.id,
@@ -236,8 +226,6 @@ pub(super) async fn handle_request(
                     active: HashMap::new(),
                 };
                 tokio::spawn(async move {
-                    let _in_flight = in_flight;
-                    let _ws_transport = ws_transport;
                     if let Ok(downstream) = upgrade.await {
                         relay(TokioIo::new(downstream), upstream, config_changed, context).await;
                     }
@@ -267,7 +255,7 @@ pub(super) async fn handle_request(
     }
     // Only handshakes have been attempted. Bridge on transport rejection;
     // auth/rate errors remain visible, and an exhausted hold budget stays final.
-    if ws_handshake_affects_transport(last_status)
+    if HandshakeError::from_status(last_status).permits_fallback()
         && !hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
     {
         state.usage.log_diagnostic("info", format!(
@@ -281,7 +269,7 @@ pub(super) async fn handle_request(
             pricing,
             config_changed,
             downstream_response,
-            in_flight,
+            fallback_pool,
         );
     }
     record_request(&state, false, None);
@@ -320,15 +308,16 @@ async fn connect_upstream(
     query: Option<&str>,
     target: &ResolvedTarget,
     diagnostic: Option<&WsDiagnostic<'_>>,
-) -> Result<(reqwest::Upgraded, HeaderMap), StatusCode> {
+) -> Result<(reqwest::Upgraded, HeaderMap), HandshakeError> {
     let path = if target.config.auth_scheme == "azure_api_key" {
         "/responses"
     } else {
         "/v1/responses"
     };
     let url = upstream_url_with_query(&target.config.base_url, path, query)
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    let mut headers = upstream_headers(incoming_headers, target)?;
+        .map_err(|_| HandshakeError::Transport(StatusCode::BAD_GATEWAY))?;
+    let mut headers =
+        upstream_headers(incoming_headers, target).map_err(HandshakeError::Rejected)?;
     let key = tokio_tungstenite::tungstenite::handshake::client::generate_key();
     headers.insert(
         header::SEC_WEBSOCKET_KEY,
@@ -340,7 +329,7 @@ async fn connect_upstream(
     );
     headers.insert(header::CONNECTION, HeaderValue::from_static("Upgrade"));
     headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
-    connect_with_headers(client, url, headers, &key, diagnostic).await
+    connect_with_headers(client, url, headers, &key, diagnostic, target).await
 }
 
 fn upstream_headers(
@@ -371,7 +360,8 @@ async fn connect_with_headers(
     headers: HeaderMap,
     key: &str,
     diagnostic: Option<&WsDiagnostic<'_>>,
-) -> Result<(reqwest::Upgraded, HeaderMap), StatusCode> {
+    target: &ResolvedTarget,
+) -> Result<(reqwest::Upgraded, HeaderMap), HandshakeError> {
     let response = client
         .get(url)
         .headers(headers)
@@ -381,19 +371,27 @@ async fn connect_with_headers(
             if let Some(diagnostic) = diagnostic {
                 diagnostic.log("connect_failed", None, Some(&err));
             }
-            StatusCode::BAD_GATEWAY
+            HandshakeError::Transport(StatusCode::BAD_GATEWAY)
         })?;
     if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        let status = response.status();
         if let Some(diagnostic) = diagnostic {
-            diagnostic.log("http_rejected", Some(response.status()), None);
+            diagnostic.log("http_rejected", Some(status), None);
+            let detail = diagnostics::upstream::read_error(response, target, &[]).await;
+            diagnostic.store.log_upstream_error(
+                diagnostic.request_id,
+                diagnostic.route_id,
+                &target.config,
+                status,
+                "websocket",
+                &detail,
+            );
         }
-        return Err(
-            if response.status().is_client_error() || response.status().is_server_error() {
-                response.status()
-            } else {
-                StatusCode::BAD_GATEWAY
-            },
-        );
+        return Err(if status.is_client_error() || status.is_server_error() {
+            HandshakeError::from_status(status)
+        } else {
+            HandshakeError::Transport(StatusCode::BAD_GATEWAY)
+        });
     }
     let headers = response.headers();
     if !connection_header_names(headers).contains(&header::UPGRADE)
@@ -409,14 +407,14 @@ async fn connect_with_headers(
         if let Some(diagnostic) = diagnostic {
             diagnostic.log("invalid_upgrade", Some(response.status()), None);
         }
-        return Err(StatusCode::BAD_GATEWAY);
+        return Err(HandshakeError::Transport(StatusCode::BAD_GATEWAY));
     }
     let headers = headers.clone();
     let upgraded = response.upgrade().await.map_err(|err| {
         if let Some(diagnostic) = diagnostic {
             diagnostic.log("upgrade_failed", None, Some(&err));
         }
-        StatusCode::BAD_GATEWAY
+        HandshakeError::Transport(StatusCode::BAD_GATEWAY)
     })?;
     if let Some(diagnostic) = diagnostic {
         diagnostic.log("connected", Some(StatusCode::SWITCHING_PROTOCOLS), None);
@@ -443,19 +441,10 @@ async fn relay(
     let mut close_code = None;
     let mut heartbeat = keepalive::Heartbeat::new();
     loop {
-        let idle_deadline = usage.idle_deadline(write_timeout);
         let (from_client, message) = tokio::select! {
             biased;
             _ = config_changed.changed() => {
                 let close = Some(CloseFrame { code: CloseCode::Restart, reason: "proxy configuration changed; reconnect".into() });
-                let _ = tokio::time::timeout(close_timeout, downstream.close(close.clone())).await;
-                let _ = tokio::time::timeout(close_timeout, upstream.close(close)).await;
-                break;
-            }
-            _ = tokio::time::sleep_until(idle_deadline), if usage.has_requests() => {
-                close_reason = "upstream_idle_timeout";
-                upstream_failed = true;
-                let close = Some(CloseFrame { code: CloseCode::Error, reason: "upstream response idle timeout".into() });
                 let _ = tokio::time::timeout(close_timeout, downstream.close(close.clone())).await;
                 let _ = tokio::time::timeout(close_timeout, upstream.close(close)).await;
                 break;
@@ -499,7 +488,23 @@ async fn relay(
         if let Message::Text(text) = &message {
             if let Ok(value) = serde_json::from_str(text) {
                 if from_client {
-                    usage.client_event(&value);
+                    if !usage.client_event(&value) {
+                        let mut error = serde_json::json!({"type":"error","status":503,"error":{"type":"server_error","code":"provider_temporarily_unavailable","message":"provider is cooling down or recovering; reconnect and resend full input"}});
+                        if let Some(lane) = value.get("stream_id") {
+                            error["stream_id"] = lane.clone();
+                        }
+                        if !matches!(
+                            tokio::time::timeout(
+                                write_timeout,
+                                downstream.send(Message::text(error.to_string())),
+                            )
+                            .await,
+                            Ok(Ok(()))
+                        ) {
+                            break;
+                        }
+                        continue;
+                    }
                 } else {
                     usage.server_event(&value);
                 }
@@ -570,11 +575,13 @@ async fn relay(
 
 struct ResponseUsage {
     trace: ResponseTrace,
+    activity: Option<(TargetActivityGuard, RecoveryPermit, InFlightGuard)>,
     request_id: Uuid,
     started: Instant,
     started_at: i64,
     model: Option<String>,
     session_key: Option<String>,
+    response_id: Option<String>,
     first_token_ms: Option<u64>,
     stream_id: String,
     last_event: Instant,
@@ -584,6 +591,7 @@ impl ResponseUsage {
     fn new(value: &serde_json::Value, default_session_key: Option<&str>) -> Self {
         Self {
             trace: ResponseTrace::default(),
+            activity: None,
             request_id: Uuid::new_v4(),
             started: Instant::now(),
             last_event: Instant::now(),
@@ -594,6 +602,7 @@ impl ResponseUsage {
                 .map(str::to_owned),
             session_key: session_affinity_key_from_value(value)
                 .or_else(|| default_session_key.and_then(normalize_session_affinity_key)),
+            response_id: None,
             first_token_ms: None,
             stream_id: value
                 .get("stream_id")
@@ -605,6 +614,7 @@ impl ResponseUsage {
 }
 
 struct SessionUsage {
+    observation: Option<capability::Observation>,
     connection_id: Uuid,
     state: RuntimeState,
     target: ResolvedTarget,
@@ -639,49 +649,34 @@ impl SessionUsage {
         !self.pending.is_empty() || !self.active.is_empty()
     }
 
-    fn idle_deadline(&self, timeout: Duration) -> tokio::time::Instant {
-        // Queued requests on an active lane wait for that lane's response.
-        // Activity on a different lane (or a WS ping) cannot extend its budget.
-        let last_event = self
-            .active
-            .values()
-            .map(|request| request.last_event)
-            .chain(
-                self.pending
-                    .iter()
-                    .filter(|(lane, _)| {
-                        !self
-                            .active
-                            .values()
-                            .any(|request| request.stream_id == **lane)
-                    })
-                    .filter_map(|(_, queue)| queue.front().map(|request| request.last_event)),
-            )
-            .min()
-            .unwrap_or_else(Instant::now);
-        tokio::time::Instant::from_std(last_event + timeout)
-    }
-
     fn advance_lane(&mut self, lane: &str) {
         if let Some(request) = self.pending.get_mut(lane).and_then(VecDeque::front_mut) {
             request.last_event = Instant::now();
         }
     }
 
-    fn client_event(&mut self, value: &serde_json::Value) {
-        self.client_event_with_id(value, Uuid::new_v4());
+    fn client_event(&mut self, value: &serde_json::Value) -> bool {
+        self.client_event_with_id(value, Uuid::new_v4())
     }
 
-    fn client_event_with_id(&mut self, value: &serde_json::Value, request_id: Uuid) {
+    fn client_event_with_id(&mut self, value: &serde_json::Value, request_id: Uuid) -> bool {
         // Retain metadata only, never prompts, tool results or full WS events.
         // Cap bookkeeping independently of the upstream's multiplexing limits.
         if value["type"] != "response.create"
             || self.active.len() + self.pending.values().map(VecDeque::len).sum::<usize>() >= 1024
         {
-            return;
+            return true;
         }
+        let Some(recovery) = RecoveryPermit::acquire(&self.state, self.target.config.id) else {
+            return false;
+        };
         let mut request = ResponseUsage::new(value, self.session_key.as_deref());
         request.request_id = request_id;
+        request.activity = Some((
+            TargetActivityGuard::new(&self.state, self.target.config.id),
+            recovery,
+            InFlightGuard::new(self.state.in_flight_requests.clone()),
+        ));
         self.state.usage.log_diagnostic(
             "info",
             format!(
@@ -700,6 +695,7 @@ impl SessionUsage {
             .entry(request.stream_id.clone())
             .or_default()
             .push_back(request);
+        true
     }
 
     fn take_pending(&mut self, value: &serde_json::Value) -> Option<ResponseUsage> {
@@ -730,7 +726,26 @@ impl SessionUsage {
             .map(|(_, request)| request)
             .or_else(|| self.pending.get_mut(lane).and_then(VecDeque::front_mut));
         if let Some(request) = request {
+            if let Some(id) = id.and_then(normalize_session_affinity_key) {
+                request.response_id = Some(id);
+            }
             request.trace.observe(value);
+            if kind == "error" || kind == "response.failed" {
+                let status = value["status"]
+                    .as_u64()
+                    .and_then(|status| u16::try_from(status).ok())
+                    .and_then(|status| StatusCode::from_u16(status).ok())
+                    .unwrap_or(StatusCode::BAD_GATEWAY);
+                diagnostics::upstream::log_wire_error(
+                    &self.state,
+                    request.request_id,
+                    self.route_id,
+                    self.target.config.id,
+                    status,
+                    "websocket",
+                    value,
+                );
+            }
         }
         if kind.starts_with("response.") {
             let lane = value["stream_id"].as_str().unwrap_or_default();
@@ -794,6 +809,9 @@ impl SessionUsage {
             } else {
                 StatusCode::BAD_GATEWAY
             };
+            if capability::valid_completion(value) {
+                capability::success(&self.state, self.observation);
+            }
             self.advance_lane(&request.stream_id);
             self.finish(
                 request,
@@ -844,18 +862,20 @@ impl SessionUsage {
             .log(&self.state.usage, request.request_id, "websocket_upstream");
         let success = status.is_success();
         if success {
-            mark_ws_success(&self.state, self.target.config.provider_entry_id);
-            mark_success(&self.state, self.target.config.id);
-            remember_affinity_target(
+            complete_target_success(
                 &self.state,
                 self.route_id,
                 request.session_key.as_deref(),
                 self.target.config.id,
+                request.started,
+                request.response_id.as_deref(),
             );
         } else if !transport_failure && outcome == Some(false) && status_affects_circuit(status) {
             mark_failure(&self.state, self.target.config.id, &self.retry);
         }
-        record_request(&self.state, success, request.first_token_ms);
+        if outcome.is_some() {
+            record_request(&self.state, success, request.first_token_ms);
+        }
         record_recent_tokens(
             &self.state,
             usage
@@ -908,9 +928,6 @@ impl SessionUsage {
     }
 
     fn disconnected(&mut self, upstream_failed: bool) {
-        if upstream_failed && self.has_requests() {
-            mark_ws_failure(&self.state, self.target.config.provider_entry_id);
-        }
         let unfinished: Vec<_> = self
             .active
             .drain()

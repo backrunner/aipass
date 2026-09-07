@@ -1232,6 +1232,7 @@ mod tests {
     fn secret_less_entry_reports_an_error_instead_of_a_false_refresh() {
         let summary = aipass_vault::EntrySummary {
             supports_websockets: None,
+            websocket_warning: None,
             id: uuid::Uuid::new_v4(),
             title: "desynced".to_string(),
             favorite: false,

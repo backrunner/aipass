@@ -15,6 +15,7 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) struct Pool {
     idle: Mutex<Vec<(Key, Idle)>>,
+    fallback: Mutex<HashMap<capability::Key, Option<capability::Evidence>>>,
     closed: tokio::sync::watch::Sender<bool>,
 }
 
@@ -22,6 +23,7 @@ impl Default for Pool {
     fn default() -> Self {
         Self {
             idle: Mutex::new(Vec::new()),
+            fallback: Mutex::new(HashMap::new()),
             closed: tokio::sync::watch::channel(false).0,
         }
     }
@@ -69,6 +71,18 @@ pub(super) fn key(
 }
 
 impl Pool {
+    pub(crate) fn fallback(&self, key: capability::Key) -> Option<Option<capability::Evidence>> {
+        self.fallback.lock().ok()?.get(&key).cloned()
+    }
+    pub(crate) fn set_fallback(
+        &self,
+        key: capability::Key,
+        evidence: Option<capability::Evidence>,
+    ) {
+        if let Ok(mut fallback) = self.fallback.lock() {
+            fallback.insert(key, evidence);
+        }
+    }
     pub(super) fn close(&self) {
         self.closed.send_replace(true);
         if let Ok(mut idle) = self.idle.lock() {

@@ -17,7 +17,7 @@ pub(super) fn upgrade(
     pricing: Vec<ModelPricing>,
     config_changed: ConfigWatch,
     response: Response<BoxBody>,
-    in_flight: Option<InFlightGuard>,
+    upstream_pool: Arc<pool::Pool>,
 ) -> Response<BoxBody> {
     route.targets.retain(|target| {
         supports(
@@ -59,12 +59,11 @@ pub(super) fn upgrade(
         pricing,
         headers,
         query: request.uri().query().map(str::to_owned),
-        upstream_pool: Arc::new(pool::Pool::default()),
+        upstream_pool,
         config_changed: config_changed.clone(),
     });
     let upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
-        let _in_flight = in_flight;
         if let Ok(downstream) = upgrade.await {
             serve(TokioIo::new(downstream), context, config_changed).await;
         }
@@ -507,7 +506,7 @@ async fn run_response(
         bound_target,
         origin_target,
     } = prepared;
-    let id = format!("resp_aipass_{}", Uuid::new_v4().simple());
+    let id = format!("resp_{}", Uuid::new_v4().simple());
     if !generate {
         let response = json!({"id":id,"object":"response","created_at":now_unix(),"status":"completed","model":body["model"],"output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}});
         let mut created = response.clone();
@@ -557,6 +556,7 @@ async fn run_response(
         ForwardRequest {
             websocket: true,
             upstream_pool: Some(context.upstream_pool.clone()),
+            affinity_fallback: Some(format!("bridge:{}:{lane}", context.connection_id)),
             config_changed: context.config_changed.clone(),
             request_id,
             method: http::Method::POST,
@@ -582,11 +582,9 @@ async fn run_response(
     let identity = response.extensions().get::<UpstreamIdentity>().copied();
     let mut stream = response.into_body().into_data_stream();
     let mut buffer = Vec::new();
-    let idle_timeout =
-        Duration::from_millis(context.route.config.retry.stream_idle_timeout_ms.max(1));
     loop {
-        let chunk = match tokio::time::timeout(idle_timeout, stream.next()).await {
-            Ok(Some(Ok(chunk))) => chunk,
+        let chunk = match stream.next().await {
+            Some(Ok(chunk)) => chunk,
             _ => return Err(BridgeError::upstream()),
         };
         if buffer.len().saturating_add(chunk.len()) > MAX_SESSION_BYTES {

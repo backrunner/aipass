@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) mod protocol;
+pub(super) mod upstream;
 
 const RETAINED_EVENTS: i64 = 10_000;
 
@@ -17,7 +18,8 @@ impl UsageStore {
     }
 
     /// Callers supply only fixed event names, UUIDs, status codes and numbers.
-    /// URLs, models, credential labels and arbitrary upstream errors stay out.
+    /// URLs, models and credential labels stay out. Upstream error text must
+    /// pass through diagnostics::upstream before reaching this method.
     pub(super) fn log_diagnostic(&self, level: &'static str, message: String) {
         if self.append_diagnostic(level, &message).is_err() {
             eprintln!("AIPass: failed to persist proxy diagnostics");

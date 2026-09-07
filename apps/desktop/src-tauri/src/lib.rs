@@ -2705,6 +2705,7 @@ mod tests {
         let now = time::OffsetDateTime::now_utc();
         EntrySummary {
             supports_websockets: None,
+            websocket_warning: None,
             id: Uuid::new_v4(),
             title: "Gemini".to_string(),
             favorite: false,

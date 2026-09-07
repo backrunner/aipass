@@ -311,6 +311,8 @@ pub struct EntrySummary {
     /// Responses WebSocket capability; absence keeps the default enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_websockets: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_warning: Option<aipass_provider_registry::WebsocketWarning>,
     pub auth_scheme: AuthScheme,
     pub masked_secret: String,
     pub fingerprint: String,
@@ -907,6 +909,7 @@ impl Vault {
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
             supports_websockets: input.supports_websockets,
+            websocket_warning: None,
             interface_type: input.interface_type,
             auth_scheme: input.auth_scheme,
             secret_refs: vec![primary_secret],
@@ -1156,6 +1159,14 @@ impl Vault {
         if let Some(primary) = primary_secret_ref_mut(&mut secret_refs) {
             input.secret_metadata.apply_to(primary);
         }
+        // Keep the historical auto-disable explanation until recovery succeeds.
+        // Changed transport settings invalidate runtime evidence by config key,
+        // but do not turn this into an unexplained manual opt-out.
+        let websocket_warning = if input.supports_websockets == Some(true) {
+            None
+        } else {
+            old.entry.websocket_warning.clone()
+        };
         let entry = ProviderEntry {
             id,
             title: input.title,
@@ -1173,6 +1184,7 @@ impl Vault {
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
             supports_websockets: input.supports_websockets.or(old.entry.supports_websockets),
+            websocket_warning,
             interface_type: input.interface_type,
             auth_scheme: input.auth_scheme,
             secret_refs,
@@ -1194,6 +1206,24 @@ impl Vault {
         secrets.insert(secret_id, api_key);
         self.write_provider_record(id, &ProviderRecordPlaintext { entry, secrets })?;
         self.audit("provider.update", Some(id), None)?;
+        Ok(())
+    }
+
+    /// Change only transport preference and its agent-owned explanation.
+    pub fn disable_provider_websocket(
+        &self,
+        id: Uuid,
+        warning: aipass_provider_registry::WebsocketWarning,
+    ) -> Result<(), VaultError> {
+        let mut plaintext = self.decrypt_provider_path(&self.record_path(id))?;
+        if plaintext.entry.supports_websockets == Some(false) {
+            return Ok(());
+        }
+        plaintext.entry.supports_websockets = Some(false);
+        plaintext.entry.websocket_warning = Some(warning);
+        plaintext.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &plaintext)?;
+        self.audit("provider.websocket.disable", Some(id), None)?;
         Ok(())
     }
 
@@ -2275,6 +2305,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
     let primary = entry.secret_refs.first();
     EntrySummary {
         supports_websockets: entry.supports_websockets,
+        websocket_warning: entry.websocket_warning.clone(),
         id: entry.id,
         title: entry.title.clone(),
         favorite: entry.favorite,
@@ -2605,6 +2636,67 @@ mod tests {
     use aipass_provider_registry::{EndpointKind, SubscriptionWindow};
     use tempfile::tempdir;
 
+    #[test]
+    fn websocket_auto_disable_is_narrow_durable_and_cleared_only_by_recovery() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("test password");
+        let creation = create_test_vault(dir.path(), &password);
+        let id = creation.add_provider(input("test-secret")).unwrap();
+        let before = creation.get_provider_summary(id).unwrap();
+        let warning = aipass_provider_registry::WebsocketWarning {
+            reason: "responses_ws_rejected".into(),
+            status: 405,
+            detected_at: 123,
+            config_key: [42; 32],
+        };
+        creation
+            .disable_provider_websocket(id, warning.clone())
+            .unwrap();
+        creation
+            .disable_provider_websocket(
+                id,
+                aipass_provider_registry::WebsocketWarning {
+                    status: 404,
+                    ..warning.clone()
+                },
+            )
+            .unwrap();
+        drop(creation);
+        let vault = Vault::open(dir.path(), &password).unwrap();
+        let disabled = vault.get_provider_summary(id).unwrap();
+        assert_eq!(disabled.supports_websockets, Some(false));
+        assert_eq!(disabled.websocket_warning, Some(warning.clone()));
+        assert_eq!(disabled.title, before.title);
+        assert_eq!(disabled.secret_refs, before.secret_refs);
+        assert_eq!(disabled.notes, before.notes);
+        assert_eq!(vault.reveal_secret(id).unwrap(), "test-secret");
+        let mut edit = update_input(None);
+        edit.endpoints[0].url = Some("https://changed.example/v1".into());
+        vault.update_provider(id, edit).unwrap();
+        let edited = vault.get_provider_summary(id).unwrap();
+        assert_eq!(edited.supports_websockets, Some(false));
+        assert_eq!(edited.websocket_warning, Some(warning));
+        let mut verified = update_input(None);
+        verified.supports_websockets = Some(true); // Agent owns the successful probe gate.
+        vault.update_provider(id, verified).unwrap();
+        assert!(vault
+            .get_provider_summary(id)
+            .unwrap()
+            .websocket_warning
+            .is_none());
+        let manual_id = vault
+            .add_provider(ProviderEntryInput {
+                supports_websockets: Some(false),
+                ..input("manual")
+            })
+            .unwrap();
+        assert!(vault
+            .get_provider_summary(manual_id)
+            .unwrap()
+            .websocket_warning
+            .is_none());
+    }
+
     fn input(secret: &str) -> ProviderEntryInput {
         ProviderEntryInput {
             supports_websockets: None,
@@ -2665,6 +2757,7 @@ mod tests {
             model_aliases: Vec::new(),
             headers: None,
             quota: Some(QuotaInfo {
+                unit: None,
                 label: Some("team-monthly".to_string()),
                 limit: Some("1000000".to_string()),
                 used: None,
@@ -2719,6 +2812,30 @@ mod tests {
             requires_reauth: false,
             authenticated_at: OffsetDateTime::now_utc(),
         }
+    }
+
+    #[test]
+    fn websocket_opt_out_survives_updates_and_vault_reopen() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("fixture-password");
+        let vault = create_test_vault(dir.path(), &password);
+        let mut initial = input("fixture-key");
+        initial.supports_websockets = Some(true);
+        let id = vault.add_provider(initial).unwrap();
+        let mut update = update_input(None);
+        update.supports_websockets = Some(false);
+        vault.update_provider(id, update).unwrap();
+        drop(vault);
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        assert_eq!(
+            reopened.list_provider_summaries().unwrap()[0].supports_websockets,
+            Some(false)
+        );
+        reopened.update_provider(id, update_input(None)).unwrap();
+        assert_eq!(
+            reopened.list_provider_summaries().unwrap()[0].supports_websockets,
+            Some(false)
+        );
     }
 
     #[test]
@@ -2872,6 +2989,7 @@ mod tests {
         let mut input = input("sk-ant-api03-searchable");
         input.model_aliases = vec![("fast".to_string(), "claude-haiku-4-5".to_string())];
         input.quota = Some(QuotaInfo {
+            unit: None,
             label: Some("team-monthly".to_string()),
             limit: Some("1000000".to_string()),
             used: None,
@@ -2966,6 +3084,7 @@ mod tests {
             .update_provider_usage(
                 id,
                 Some(QuotaInfo {
+                    unit: None,
                     label: Some("vip".to_string()),
                     limit: Some("20".to_string()),
                     used: Some("12.5".to_string()),
@@ -3009,6 +3128,7 @@ mod tests {
             .update_provider_usage(
                 id,
                 Some(QuotaInfo {
+                    unit: None,
                     label: Some("钱包余额".to_string()),
                     limit: None,
                     used: None,
