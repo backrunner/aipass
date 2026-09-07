@@ -1738,6 +1738,10 @@ mod tests {
                     vault,
                     aipass_proxy::ProxyConfig {
                         bind_addr: address.to_string(),
+                        upstream_proxy: aipass_proxy::UpstreamProxyConfig {
+                            mode: aipass_proxy::UpstreamProxyMode::Direct,
+                            custom_url: None,
+                        },
                         routes: vec![aipass_proxy::ProxyRouteConfig {
                             id: uuid::Uuid::new_v4(),
                             name: "test".into(),
@@ -1849,11 +1853,30 @@ mod tests {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
-                let mut request = vec![0; 8192];
-                let length = stream.read(&mut request).unwrap();
+                // TCP reads can split the headers and body. Consume the whole
+                // request before closing so unread bytes cannot reset the reply.
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    assert!(request.len() < 8192);
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(request.starts_with("post /v1/responses "));
+                let length: usize = request
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(length, 2);
+                let mut input = [0; 2];
+                stream.read_exact(&mut input).unwrap();
+                assert_eq!(&input, b"{}");
                 let body = r#"{"id":"ok","status":"completed","output":[]}"#;
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
-                String::from_utf8_lossy(&request[..length]).to_ascii_lowercase()
+                request
             });
             let response = reqwest::blocking::Client::builder()
                 .no_proxy()
