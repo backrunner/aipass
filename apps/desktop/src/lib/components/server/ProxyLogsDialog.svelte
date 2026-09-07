@@ -5,10 +5,9 @@
 
   import { t } from "../../stores/i18n";
   import type { ProxyConfig, ProxyLogEntry } from "../../types";
-  import { highlightPreview } from "../../utils/highlight";
 
   import type { ProviderEntry } from "@aipass/schemas";
-  import { formatProxyLog } from "../../utils/proxyLogs";
+  import { highlightProxyLog } from "../../utils/proxyLogs";
 
   export let providers: ProviderEntry[] = [];
   export let config: ProxyConfig;
@@ -92,13 +91,7 @@
   onDestroy(stopRefreshing);
 
   $: highlightedLogs = logs
-    .map((entry) => {
-      const line = formatProxyLog(entry, providers, config);
-      const highlighted = highlightPreview(line, "proxy.log");
-      return entry.level.toLowerCase() === "error"
-        ? `<span class="log-error">${highlighted}</span>`
-        : highlighted;
-    })
+    .map((entry) => highlightProxyLog(entry, providers, config))
     .join("\n");
 </script>
 
@@ -176,7 +169,15 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  :global(.proxy-log-code .log-error) { color: var(--danger); }
+  :global(.proxy-log-code .log-level) { font-weight: 700; }
+  :global(.proxy-log-code .log-identity) { color: var(--text); font-weight: 600; }
+  :global(.proxy-log-code .log-key),
+  :global(.proxy-log-code .log-muted) { color: var(--text-tertiary); }
+  :global(.proxy-log-code .log-text) { color: var(--text); }
+  :global(.proxy-log-code .log-info) { color: var(--accent); }
+  :global(.proxy-log-code .log-success) { color: var(--success); }
+  :global(.proxy-log-code .log-warning) { color: var(--warning); }
+  :global(.proxy-log-code .log-danger) { color: var(--danger); }
   .proxy-log-notice { flex: 0 0 auto; padding: 8px 20px; color: var(--danger); font-size: 12px; }
   .proxy-log-empty { padding: 32px 20px; color: var(--text-tertiary); font-size: 13px; }
 </style>
