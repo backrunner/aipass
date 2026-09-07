@@ -406,6 +406,13 @@ Newest entries last within each section.
 
 ## Build toolchain
 
+### CI silently omitted the DMG installation layout
+- **Symptom**: published DMGs opened without the configured background or icon positions; the original 1x PNG also looked soft on Retina displays.
+- **Root cause**: `.github/workflows/release.yml` set `CI=true`, which makes Tauri pass `--skip-jenkins` to create-dmg and skip saving Finder's layout. The background generator downsampled everything to 660×400 pixels.
+- **Fix**: set `TAURI_BUNDLER_DMG_IGNORE_CI=true` in both macOS workflows, generate a TIFF with 1x/2x representations at the same logical size, and verify the mounted DMG with `scripts/verify-macos-dmg.mjs`.
+- **Guardrail**: build and mount the actual DMG on macOS with Finder; verify saved background selection, both image resolutions, window/icon positions, Applications link, and executable payloads. A copied image file alone does not prove Finder uses it.
+- **Watch points**: both workflows, `tauri.conf.json`, the background generator, and the local macOS bundle gate.
+
 ### Homebrew Rust's objcopy dependency produced misaligned macro libraries
 - **Symptom**: macOS 27 Tauri release builds failed to load procedural macros with `mis-aligned LINKEDIT string pool`, including after rebuilding their caches.
 - **Root cause**: Homebrew's Rust 1.98.0 formula links `lib/rustlib/<host>/bin/rust-objcopy` to LLVM 22's `llvm-objcopy`, whose debug-info stripping has the Mach-O alignment defect in [rust-lang/rust#157750](https://github.com/rust-lang/rust/issues/157750). LLVM 23.1.0 contains [the alignment fix](https://github.com/llvm/llvm-project/pull/203680). Both `scripts/build-desktop-sidecars.mjs:15` and Tauri inherit the same compiler and dependency.

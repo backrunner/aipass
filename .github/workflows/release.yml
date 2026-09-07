@@ -253,12 +253,17 @@ jobs:
       - name: Build signed and notarized macOS desktop app
         env:
           CI: true
+          # Keep the configured background and installation layout on CI.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
           AIPASS_MACOS_UNIVERSAL: true
           AIPASS_EXTENSION_RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm --dir apps/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.generated.json
+
+      - name: Verify DMG installation window
+        run: node scripts/verify-macos-dmg.mjs target/universal-apple-darwin/release/bundle/dmg
 
       - name: Verify macOS app signing and notarization
         shell: bash

@@ -215,6 +215,10 @@ The installer writes Chrome `allowed_origins` and the native-host extension ID a
 
 Release artifacts are produced by the `Release` GitHub Actions workflow on `vX.Y.Z` official tags, `vX.Y.Z-beta.N` beta tags, or manual dispatch with an existing tag. The current desktop release path supports macOS first: it stamps the tag version into workspace manifests, builds a universal Tauri app, signs and notarizes the app and DMG, creates updater artifacts, and publishes them to GitHub Releases.
 
+On macOS, open the DMG and double-click AIPass inside it to copy the app to `/Applications` and launch it. Dragging AIPass onto the Applications folder is also supported. Both macOS workflows set `TAURI_BUNDLER_DMG_IGNORE_CI=true` so Tauri saves the Finder background and icon layout even with `CI=true`. They mount the finished DMG read-only and run `scripts/verify-macos-dmg.mjs` to check the background, layout, Applications link, and bundled executables. This check requires a macOS Finder session.
+
+The DMG background is a TIFF with 660×400 (72 dpi) and 1320×800 (144 dpi) representations, so it stays sharp on Retina screens at the same window size. Regenerate it on macOS with Pillow installed using `python3 scripts/generate-dmg-background.py`; the DMG check verifies both image representations.
+
 The desktop updater reads `latest.json` from these feeds:
 
 ```text

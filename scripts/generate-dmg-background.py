@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Render the DMG installer window background (apps/desktop/src-tauri/dmg/background.png).
+"""Render the Retina DMG background (apps/desktop/src-tauri/dmg/background.tiff).
 
-Finder renders DMG backgrounds at 1 image pixel = 1 point, so the output is
-exactly 660x400 to match the windowSize in tauri.conf.json. Everything is drawn
-at 4x and downscaled for antialiasing. Requires Pillow.
+The TIFF contains 1x and 2x representations with the same 660x400 point size.
+Finder selects the Retina representation without enlarging or cropping the
+layout. Render at 4x, then downsample each representation. Requires macOS and
+Pillow; tiffutil checks that both representations have matching logical sizes.
 """
 
 from pathlib import Path
+import subprocess
+from tempfile import TemporaryDirectory
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H = 660, 400
 S = 4  # supersampling factor
@@ -38,7 +41,7 @@ def vertical_gradient(size, top, bottom):
 def main():
     out_path = (
         Path(__file__).resolve().parent.parent
-        / "apps/desktop/src-tauri/dmg/background.png"
+        / "apps/desktop/src-tauri/dmg/background.tiff"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -56,6 +59,17 @@ def main():
 
     d = ImageDraw.Draw(img)
 
+    def centered_text(text, y, size, color, font_path):
+        font = ImageFont.truetype(font_path, size * S)
+        d.text((W * S / 2, y * S), text, font=font, fill=color, anchor="mm")
+
+    latin_font = "/System/Library/Fonts/Helvetica.ttc"
+    chinese_font = "/System/Library/Fonts/STHeiti Medium.ttc"
+    centered_text("AIPass", 52, 28, (30, 41, 59), latin_font)
+    centered_text("Double-click AIPass to install", 284, 19, (30, 41, 59), latin_font)
+    centered_text("双击 AIPass 即可安装", 313, 17, (30, 41, 59), chinese_font)
+    centered_text("Or drag to Applications  /  或拖入「应用程序」", 340, 13, (100, 116, 139), chinese_font)
+
     # Arrow from the app icon to the Applications alias
     y = 170 * S
     x0, x1 = 258 * S, 388 * S
@@ -68,9 +82,20 @@ def main():
         fill=ACCENT + (255,),
     )
 
-    img = img.convert("RGB").resize((W, H), Image.LANCZOS)
-    img.save(out_path, dpi=(72, 72))
-    print(f"Wrote {out_path} ({W}x{H})")
+    img = img.convert("RGB")
+    with TemporaryDirectory(prefix="aipass-dmg-background-") as temp_dir:
+        representations = []
+        for scale in (1, 2):
+            path = Path(temp_dir) / f"background@{scale}x.tiff"
+            img.resize((W * scale, H * scale), Image.LANCZOS).save(
+                path, compression="tiff_lzw", dpi=(72 * scale, 72 * scale)
+            )
+            representations.append(str(path))
+        subprocess.run(
+            ["/usr/bin/tiffutil", "-cathidpicheck", *representations, "-out", str(out_path)],
+            check=True,
+        )
+    print(f"Wrote {out_path} ({W}x{H} points; 1x + 2x Retina)")
 
 
 if __name__ == "__main__":

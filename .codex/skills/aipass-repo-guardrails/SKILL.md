@@ -138,13 +138,14 @@ pnpm build
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm --dir apps/desktop tauri build --ci --bundles app
+TAURI_BUNDLER_DMG_IGNORE_CI=true pnpm --dir apps/desktop tauri build --ci --bundles app,dmg
 set -euo pipefail
 app_path="$(find target -path "*/release/bundle/macos/AIPass.app" -type d -print -quit)"
 test -n "${app_path}"
 test -x "${app_path}/Contents/MacOS/aipass-desktop"
 test -x "${app_path}/Contents/Resources/aipass-agent"
 test -x "${app_path}/Contents/Resources/aipass-native-host"
+node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
 ```
 
 Report each completed local job as `rust (macOS)`, `node (macOS)`, and `macOS desktop bundle`, including failures or required checks that could not run. Report remote GitHub Actions results separately; never claim local Ubuntu checks ran.

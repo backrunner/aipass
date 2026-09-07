@@ -51,8 +51,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Verify native CloudKit transport boundary
         run: cargo test -p aipass-desktop cloudkit
-      - name: Build unsigned macOS app bundle
-        run: pnpm --dir apps/desktop tauri build --ci --bundles app
+      - name: Build unsigned macOS app and DMG
+        env:
+          # CI normally skips Finder's background and icon layout in Tauri.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: pnpm --dir apps/desktop tauri build --ci --bundles app,dmg
       - name: Verify app bundle
         shell: bash
         run: |
@@ -65,3 +68,5 @@ jobs:
           test -x "${app_path}/Contents/MacOS/aipass-desktop"
           test -x "${app_path}/Contents/Resources/aipass-agent"
           test -x "${app_path}/Contents/Resources/aipass-native-host"
+      - name: Verify DMG installation window
+        run: node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
