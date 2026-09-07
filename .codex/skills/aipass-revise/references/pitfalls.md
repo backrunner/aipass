@@ -36,9 +36,59 @@ Newest entries last within each section.
 ### No remote-change awareness for folder sync
 - **Symptom**: iCloud Drive changes made on another device only appeared after a manual "sync now".
 - **Root cause**: no file watching existed; iCloud Drive materializes files via the OS and the app never noticed.
-- **Fix**: `sync_watch.rs` uses `notify` (FSEvents) with a 2s debounce to trigger `run_sync_local` plus the reload/restart follow-ups; watcher restarts when sync settings change and exits on shutdown.
+- **Fix**: `sync_watch.rs` uses `notify` (FSEvents) with a 350ms debounce and a bounded 2s maximum to trigger `run_sync_local` plus the reload/restart follow-ups; watcher restarts when sync settings change and exits on shutdown.
 - **Guardrail**: realtime triggers must reuse the exact same post-sync path (vault reload + proxy reconcile) as manual sync — never fork a second "sync completed" flow.
-- **Watch points**: WebDAV has no watcher by design; new folder-based backends must opt into `folder_sync_dir` resolution.
+- **Watch points**: all backends watch local writes; WebDAV polls remotely every 5 seconds with error backoff while transport credentials are available. CloudKit uses native push wake plus 60-second recovery polls. Folder backends also use `folder_sync_dir` and notifications, with polling for missed events and late mounts.
+
+### Updated desktop reused an older resident Agent
+- **Symptom**: WS opt-out reverted after saving; Codex preview still failed after installing a fixed desktop build.
+- **Root cause**: `crates/aipass-agent/src/client.rs:207` accepted any successful SessionStatus as readiness. A resident started before the update kept protocol v2 while replacement binaries existed at the same paths; older schemas silently discarded `supportsWebsockets`.
+- **Fix**: require protocol v3 for WS persistence and configuration-only preview; validate response versions, retire older residents through authenticated legacy shutdown, and wait for their socket to stop before replacement. Never retire a newer resident for an older client.
+- **Guardrail**: raise the required Agent protocol when new client behavior depends on semantics that older residents silently ignore; never treat an incompatible success response as readiness or replay mutations with a legacy protocol. Cover authenticated retirement and mismatch readiness in `client::tests`, WS edit/save/reopen in `App.test.ts`, and vault reload in `websocket_opt_out_survives_updates_and_vault_reopen`.
+- **Watch points**: desktop/CLI/native-host startup, direct and supervised agents, protocol response decoding, and packaged sidecar builds.
+
+### Record-only sync could not recover a fresh installation
+- **Symptom**: first-run iCloud skipped sync without a manifest; downloaded records lacked the wrapped keys needed to open a vault. WebDAV and local edits did not automatically sync.
+- **Root cause**: `server.rs::run_initial_sync` returned early for an absent manifest; `aipass-sync/src/local.rs::SYNC_DIRS` excluded the manifest; `sync_watch.rs::restart_sync_watcher` watched only an existing remote folder.
+- **Fix**: authenticated whole-vault snapshots with immutable parent histories, local three-way merge, crash replay, durable outbox, explicit first-run import and a create-time cloud recheck. See `docs/vault-sync.md` and `vault_sync::tests`.
+- **Guardrail**: transfer wrapped keys and records in one authenticated unit; never overwrite an existing locked vault with unauthenticated downloads. Validate snapshots before merge, keep divergent edits recoverable, quarantine tampered inputs, and test restore on an absent vault. Journal legacy migration, preserve the incoming branch through the conflict API (records live in nested directories), and keep unresolved legacy conflicts visible across polls. Do not hold the session lock across network work or refresh session activity from background polling.
+- **Watch points**: initial sync, create/unlock/recovery, file and WebDAV imports, reset caches, conflict resolution, proxy reconciliation, `SessionStatus`/protocol v5, and frontend revision refresh. Native fixtures must persist isolated sync settings before calling `session::create_vault`.
+
+
+### CloudKit identity and sync refresh must stay outside session lifecycle
+- **Symptom**: raw Agent sidecars cannot use app-scoped CloudKit identity; unconditional proxy refresh cancelled unrelated streams; IO failures locked the vault and stopped its running proxy.
+- **Root cause**: CloudKit requires a provisioned signed application process; `ProxyHandle::update_config` broadcast every refresh globally; `vault_sync::run` coupled pending-journal recovery to session/proxy shutdown.
+- **Fix**: signed native desktop ciphertext worker over authenticated protocol v5; profile/schema release checks; native timeout and replay-safe task IDs; route generations and unchanged-config no-op; rollback journals with vault-access gating only when rollback also fails. Lock stages established vault changes before key disposal, with a separate zeroizing WebDAV transport credential cache.
+- **Guardrail**: keep CloudKit off raw sidecars and the WebView; embed and verify the matching production profile. Do not advance an unauthenticated imported checkpoint by pre-queuing it. Test wrong/late native completions, account changes, immediate edit/lock/upload, failed apply rollback, and unrelated WS continuity alongside actual credential revocation. Preserve activity timestamps and listening sockets on normal sync/network errors. Test the Swift FFI entitlement guard through the macOS desktop Rust test harness; it works with Command Line Tools without XCTest.
+- **Watch points**: `cloudkit.rs` in Agent and desktop, `CloudKitTransport.swift`, signing scripts/release workflow, initial/create/import flows, `sync_watch.rs`, `session.rs`, proxy HTTP usage streams, native/adapted WS and idle upstream pools. See `docs/cloudkit-release.md` and `docs/vault-sync.md`.
+
+### Applied snapshots must refresh readers even when checkpoint IO fails
+- **Symptom**: sync or conflict acceptance returned an IO error after installing new data, leaving the proxy with stale credentials; conflict failure also stopped the proxy and locked the session.
+- **Root cause**: `vault_sync.rs::run_inner` refreshed only on an overall successful report; `resolve` refreshed after fallible checkpoint writes and retained the old forced lock path.
+- **Fix**: recover local journals before network work, track successful apply/bootstrap/journal recovery separately from later failures, refresh readers while preserving session activity and sockets, and join identical authenticated heads after failed checkpoint persistence.
+- **Guardrail**: refresh successfully applied data even if later bookkeeping fails, but never read a vault with an unresolved apply journal into the proxy. Test download, conflict acceptance, recovery, updated outbound credentials, unchanged activity and eventual convergence in `applied_snapshots_refresh_proxy_even_when_followup_io_fails`.
+- **Watch points**: `vault_sync::run_inner`, `synchronize`, `resolve`, vault journal replay, proxy credential reconciliation.
+
+### Proxy reconciliation must not create synchronized mutations
+- **Symptom**: starting or refreshing the proxy rewrote provider last-used timestamps and audit records, creating extra snapshots and conflicts with another device's real edits.
+- **Root cause**: `proxy_service.rs::runtime_config_inner` used user-facing `reveal_secret_field` and `reveal_provider_headers`, which write synced records.
+- **Fix**: a Rust-only, non-serializable, zeroizing `runtime_provider_credentials` reader supplies the proxy without writes and rejects archived/deleted entries. Runtime target exclusions log only target IDs and error codes.
+- **Guardrail**: use pure reads when reconciling runtime state. Assert repeated refreshes preserve the vault revision and do not publish new snapshots; retain audited reveal behavior for explicit user actions.
+- **Watch points**: proxy start/reload, all sync transports, `aipass-vault` runtime vs user reveal APIs, `applied_snapshots_refresh_proxy_even_when_followup_io_fails`.
+
+### Late CloudKit completions must retain their account boundary
+- **Symptom**: a timed-out native operation could resume after an account change and mutate cursor/subscription state; the Agent accepted a successful write reply without checking its account.
+- **Root cause**: Swift actors are reentrant across CloudKit awaits, and task account validation covered dispatch but not the returned acknowledgement.
+- **Fix**: synchronously invalidate account generations on notification, check cancellation/generation after awaits, verify the account before committing results, and reject missing or mismatched account acknowledgements in the Agent.
+- **Guardrail**: check account and cancellation before every shared cursor/ID/subscription mutation; only remove outbox data after an acknowledgement for the pinned account. Regression: `bridge_rejects_missing_or_changed_account_acknowledgements`.
+- **Watch points**: `CloudKitTransport.swift`, Agent `cloudkit::CloudKitBridge::request`, native timeout and notification paths.
+
+### Import settings and configured sync must share the vault transaction boundary
+- **Symptom**: a failed import settings write could leave an imported vault using the previous vault's remote; a waiting background sync could resume using settings read before an import or target change.
+- **Root cause**: `vault_sync::import_file` and `import_sync` installed sibling settings separately from the vault directory, while `server::run_sync_configured` resolved its destination before taking `sync_lock`.
+- **Fix**: stage an encrypted-settings journal inside the incoming vault, prefer it until the sibling write completes, clear transport credentials on installation, and select configured targets under the sync lock. Creation rejects old remote records without recovery keys.
+- **Guardrail**: serialize target selection with settings changes/import/reset; install vault identity and its sync settings together. Test failed settings persistence, recovery with stale sibling settings, queued sync target changes, and record-only first installation in `vault_sync::tests`.
+- **Watch points**: configured startup/watcher/manual sync, file/backup/WebDAV/CloudKit import, `load_sync_settings`, `save_sync_settings`, and create-time discovery.
 
 ## Tool configuration writes (aipass-agent / config-writers)
 

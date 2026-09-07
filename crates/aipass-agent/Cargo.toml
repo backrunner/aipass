@@ -37,6 +37,7 @@ toml = "1"
 url = "2"
 uuid.workspace = true
 zeroize.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-service.workspace = true

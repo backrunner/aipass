@@ -151,6 +151,17 @@ impl AgentClient {
         request: &AgentRequest,
         request_id: uuid::Uuid,
     ) -> std::result::Result<AgentResponse, AgentCommandError> {
+        self.send_versioned_request(request, request_id, AGENT_PROTOCOL_VERSION)
+    }
+
+    // The only caller using a legacy version is the authenticated shutdown
+    // below. Never retry a provider mutation against an older schema.
+    fn send_versioned_request(
+        &self,
+        request: &AgentRequest,
+        request_id: uuid::Uuid,
+        protocol_version: u32,
+    ) -> std::result::Result<AgentResponse, AgentCommandError> {
         let mut stream = ipc::connect(&self.config.vault_dir).map_err(|err| AgentCommandError {
             code: Some(AgentErrorCode::ServiceUnavailable),
             message: err.to_string(),
@@ -165,7 +176,7 @@ impl AgentClient {
         // stuck read is never recovered from.
         apply_request_timeouts(&stream, request.response_timeout())?;
         let payload = AuthenticatedAgentRequest {
-            protocol_version: AGENT_PROTOCOL_VERSION,
+            protocol_version,
             auth_token,
             request_id: Some(request_id),
             request: request.clone(),
@@ -202,17 +213,27 @@ impl AgentClient {
         let _startup_guard = AGENT_START_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let initial_connection_error =
-            match self.request::<SessionStatus>(&AgentRequest::SessionStatus) {
-                Ok(status) if !status.initial_sync_pending => return Ok(()),
-                Ok(_) => {
-                    // The agent is already up but still running its first
-                    // sync: wait for readiness without launching a second
-                    // instance underneath it.
-                    return self.wait_for_ready(None, &[], "agent initial sync pending", false);
-                }
-                Err(err) => err.to_string(),
-            };
+        let initial_response = self.request_raw(&AgentRequest::SessionStatus);
+        if let Ok(response) = &initial_response {
+            anyhow::ensure!(
+                response.protocol_version <= AGENT_PROTOCOL_VERSION,
+                "a newer AIPass agent is running; update this client instead of replacing it"
+            );
+        }
+        let startup_status = match initial_response {
+            Ok(response) => self.compatible_startup_status(response),
+            Err(error) => Err(error.into()),
+        };
+        let initial_connection_error = match startup_status {
+            Ok(status) if !status.initial_sync_pending => return Ok(()),
+            Ok(_) => {
+                // The agent is already up but still running its first
+                // sync: wait for readiness without launching a second
+                // instance underneath it.
+                return self.wait_for_ready(None, &[], "agent initial sync pending", false);
+            }
+            Err(err) => err.to_string(),
+        };
         #[cfg(target_os = "windows")]
         let (launched_binary, binary_candidates) = if mode.install_autostart() {
             let candidates = launcher::agent_binary_candidates();
@@ -283,6 +304,51 @@ impl AgentClient {
             &initial_connection_error,
             mode.install_autostart(),
         )
+    }
+
+    fn compatible_startup_status(&self, response: AgentResponse) -> Result<SessionStatus> {
+        if response.protocol_version >= AGENT_PROTOCOL_VERSION {
+            return decode_response(response).map_err(Into::into);
+        }
+        // Confirm a replacement exists before retiring the per-vault resident.
+        // This also handles directly launched agents that launchd does not own.
+        launcher::agent_binary_path()?;
+        let previous_version = response.protocol_version;
+        self.shutdown_older_agent(previous_version)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.request_raw(&AgentRequest::SessionStatus) {
+                Ok(response) if response.protocol_version == AGENT_PROTOCOL_VERSION => {
+                    return decode_response(response).map_err(Into::into);
+                }
+                Err(_) => anyhow::bail!("older agent stopped; starting compatible agent"),
+                _ if Instant::now() >= deadline => {
+                    anyhow::bail!("older agent did not stop after authenticated shutdown");
+                }
+                _ => thread::sleep(AGENT_READY_POLL_INTERVAL),
+            }
+        }
+    }
+
+    fn shutdown_older_agent(&self, version: u32) -> Result<()> {
+        anyhow::ensure!(
+            version > 0 && version < AGENT_PROTOCOL_VERSION,
+            "only older agents can be replaced"
+        );
+        crate::logging::write_component_log(
+            crate::logging::CLIENT_LOG, "INFO",
+            &format!("event=agent.compatibility outcome=replacing protocol={version} required={AGENT_PROTOCOL_VERSION}"),
+        );
+        let response = self.send_versioned_request(
+            &AgentRequest::AgentShutdown,
+            uuid::Uuid::new_v4(),
+            version,
+        )?;
+        anyhow::ensure!(
+            response.ok && response.protocol_version == version,
+            "older agent rejected shutdown"
+        );
+        Ok(())
     }
 
     fn wait_for_ready(
@@ -398,6 +464,15 @@ impl AgentCommandError {
 fn decode_response<T: DeserializeOwned>(
     response: AgentResponse,
 ) -> std::result::Result<T, AgentCommandError> {
+    if response.protocol_version != AGENT_PROTOCOL_VERSION {
+        return Err(AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: format!(
+                "agent protocol mismatch: running {}, required {}; restart with the matching AIPass agent",
+                response.protocol_version, AGENT_PROTOCOL_VERSION
+            ),
+        });
+    }
     if !response.ok {
         return Err(AgentCommandError {
             code: response.code,
@@ -471,6 +546,48 @@ mod tests {
         assert!(companion.suppress_desktop_tray);
         assert!(!app.suppress_desktop_tray);
         assert!(autostart.suppress_desktop_tray);
+    }
+
+    #[test]
+    fn successful_legacy_response_is_not_readiness() {
+        let mut response = AgentResponse::success(serde_json::json!({
+            "exists": true, "locked": false,
+            "policy": {"idleLockMinutes": 60, "lockOnSleep": true, "lockOnScreenLock": true}
+        }));
+        response.protocol_version = AGENT_PROTOCOL_VERSION - 1;
+        let error = decode_response::<SessionStatus>(response).unwrap_err();
+        assert_eq!(error.code, Some(AgentErrorCode::ServiceUnavailable));
+        assert!(error.message.contains("protocol mismatch"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn retiring_an_older_agent_uses_only_authenticated_legacy_shutdown() {
+        use interprocess::local_socket::traits::Listener as _;
+        let dir = tempfile::tempdir().unwrap();
+        let client = AgentClient::for_vault(dir.path().join("vault")).unwrap();
+        let token = ipc::load_or_create_auth_token(&client.config.vault_dir).unwrap();
+        let listener = ipc::listen(&client.config.vault_dir).unwrap();
+        let version = AGENT_PROTOCOL_VERSION - 1;
+        let server = thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let request: AuthenticatedAgentRequest = read_frame(&mut stream).unwrap();
+            assert_eq!(request.protocol_version, version);
+            assert!(request.auth_token == token);
+            assert!(matches!(request.request, AgentRequest::AgentShutdown));
+            let mut response = AgentResponse::empty();
+            response.protocol_version = version;
+            write_frame(&mut stream, &response).unwrap();
+        });
+        crate::logging::with_test_log_dir(&dir.path().join("logs"), || {
+            client.shutdown_older_agent(version).unwrap();
+        });
+        server.join().unwrap();
+        ipc::clear_auth_token(&client.config.vault_dir).unwrap();
+        assert!(client.shutdown_older_agent(AGENT_PROTOCOL_VERSION).is_err());
+        assert!(client
+            .shutdown_older_agent(AGENT_PROTOCOL_VERSION + 1)
+            .is_err());
     }
 
     #[test]

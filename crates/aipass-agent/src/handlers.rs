@@ -1,8 +1,7 @@
 use super::*;
 use crate::paths::cloud_sync_dir;
 use aipass_agent_protocol::{
-    endpoint_url, CloudSyncProvider, OAuthAccountSummary, OAuthDeviceStart, OAuthLoginPoll,
-    OAuthLoginStatus,
+    endpoint_url, OAuthAccountSummary, OAuthDeviceStart, OAuthLoginPoll, OAuthLoginStatus,
 };
 use aipass_provider_registry::{primary_secret_ref, OAuthProvider};
 use aipass_vault::ManagedOAuthAccount;
@@ -11,7 +10,12 @@ const BROWSER_FILL_GRANT_LIMIT: usize = 5;
 
 pub(crate) fn handle_request(state: &Arc<AgentState>, request: AgentRequest) -> AgentResponse {
     let operation = crate::operation_log::OperationLog::start(&request);
-    if let Err(err) = lock_if_idle(state) {
+    if let Err(err) = if matches!(request, AgentRequest::CloudKitExchange { .. }) {
+        // Native transport housekeeping neither unlocks nor drives session policy.
+        Ok(())
+    } else {
+        lock_if_idle(state).map(|_| ())
+    } {
         let response = err.response();
         operation.finish(&response);
         return response;
@@ -29,6 +33,19 @@ fn dispatch_request(
     request: AgentRequest,
 ) -> ServiceResult<AgentResponse> {
     match request {
+        AgentRequest::CloudKitExchange {
+            completion,
+            changed,
+        } => {
+            if changed {
+                state.sync_wake.fetch_add(1, Ordering::Relaxed);
+            }
+            state
+                .cloudkit
+                .exchange(completion)
+                .map(AgentResponse::success)
+                .map_err(ServiceError::internal)
+        }
         AgentRequest::SessionStatus | AgentRequest::VaultStatus => {
             Ok(AgentResponse::success(session_status(state)?))
         }
@@ -376,8 +393,11 @@ fn dispatch_request(
             proxy.delete_pricing_group_version(vault, group_id, effective_from)
         })
         .map(AgentResponse::success),
-        AgentRequest::VaultCreate { password } => {
-            let response = create_vault(state, password.into_inner())?;
+        AgentRequest::VaultCreate {
+            password,
+            local_only,
+        } => {
+            let response = create_vault(state, password.into_inner(), local_only)?;
             Ok(AgentResponse::success(response))
         }
         AgentRequest::VaultRecover {
@@ -431,36 +451,11 @@ fn dispatch_request(
             input,
             export_password,
         } => {
-            let root = state.vault_dir.clone();
-            let export: EncryptedVaultExport =
-                serde_json::from_slice(&fs::read(&input).map_err(ServiceError::internal)?)
-                    .map_err(ServiceError::internal)?;
-            let backup = if root.exists() {
-                let backup = root.with_file_name(format!(
-                    "vault-import-backup-{}",
-                    OffsetDateTime::now_utc().unix_timestamp()
-                ));
-                fs::rename(&root, &backup).map_err(ServiceError::internal)?;
-                Some(backup)
-            } else {
-                None
-            };
-            let export_password = SecretString::new(export_password.into_inner());
-            if let Err(err) = Vault::import_encrypted(&root, &export_password, &export) {
-                if let Some(backup) = backup {
-                    let _ = fs::remove_dir_all(&root);
-                    let _ = fs::rename(backup, &root);
-                }
-                return Err(map_vault_error(err));
-            }
-            // The proxy runtime snapshot was resolved from the pre-import
-            // vault. Stop it before locking so stale credentials cannot serve
-            // while locked; the next unlock rebuilds it from the imported
-            // vault (start_if_enabled only short-circuits on a live handle).
-            if let Ok(mut proxy) = state.proxy.lock() {
-                let _ = proxy.stop();
-            }
-            lock_session(state, LockReason::Import);
+            crate::vault_sync::import_file(state, &input, export_password)?;
+            Ok(AgentResponse::success(json!({ "imported": true })))
+        }
+        AgentRequest::VaultImportSync { settings, password } => {
+            crate::vault_sync::import_sync(state, settings, password)?;
             Ok(AgentResponse::success(json!({ "imported": true })))
         }
         AgentRequest::EntriesList { archived } => with_vault(state, true, |vault| {
@@ -1169,6 +1164,10 @@ fn dispatch_request(
             .map(|settings| AgentResponse::success(sync_settings_view(&settings)))
             .map_err(ServiceError::internal),
         AgentRequest::SyncSettingsSet { settings } => {
+            let _sync = state
+                .sync_lock
+                .lock()
+                .map_err(|_| ServiceError::internal(anyhow::anyhow!("sync lock poisoned")))?;
             let current = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
             let updated = apply_sync_settings_update(current, settings);
             let saved = with_vault(state, true, |vault| {
@@ -1180,51 +1179,14 @@ fn dispatch_request(
             crate::sync_watch::restart_sync_watcher(state, &saved);
             Ok(AgentResponse::success(sync_settings_view(&saved)))
         }
-        AgentRequest::SyncConfigured => {
-            let settings = load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
-            match settings.mode {
-                SyncMode::Local => {
-                    let dir = settings.sync_folder.ok_or_else(|| {
-                        ServiceError::new(
-                            AgentErrorCode::ValidationFailed,
-                            "local sync target is not configured",
-                        )
-                    })?;
-                    run_sync_local(state, &dir).map(AgentResponse::success)
-                }
-                SyncMode::ICloud => {
-                    let dir = cloud_sync_dir(CloudSyncProvider::ICloud)
-                        .map_err(ServiceError::internal)?;
-                    run_sync_local(state, &dir).map(AgentResponse::success)
-                }
-                SyncMode::OneDrive => {
-                    let dir = cloud_sync_dir(CloudSyncProvider::OneDrive)
-                        .map_err(ServiceError::internal)?;
-                    run_sync_local(state, &dir).map(AgentResponse::success)
-                }
-                SyncMode::WebDav => {
-                    let url = settings.webdav_url.clone().ok_or_else(|| {
-                        ServiceError::new(
-                            AgentErrorCode::ValidationFailed,
-                            "webdav sync target url is not configured",
-                        )
-                    })?;
-                    let password = with_vault(state, false, |vault| {
-                        sync_settings_password(&settings, vault).map_err(ServiceError::internal)
-                    })?;
-                    let client = HttpWebDavClient::new(
-                        &url,
-                        settings.webdav_username.clone(),
-                        password.map(|value| value.into_inner()),
-                    )
-                    .map_err(ServiceError::internal)?;
-                    Ok(AgentResponse::success(run_sync_webdav(state, &client)))
-                }
-            }
-        }
+        AgentRequest::SyncConfigured => run_sync_configured(state).map(AgentResponse::success),
         AgentRequest::SyncCloud { provider } => {
-            let dir = cloud_sync_dir(provider).map_err(ServiceError::internal)?;
-            run_sync_local(state, &dir).map(AgentResponse::success)
+            if provider == aipass_agent_protocol::CloudSyncProvider::ICloud {
+                crate::vault_sync::run_cloudkit(state).map(AgentResponse::success)
+            } else {
+                let dir = cloud_sync_dir(provider).map_err(ServiceError::internal)?;
+                run_sync_local(state, &dir).map(AgentResponse::success)
+            }
         }
         AgentRequest::SyncWebDav {
             url,
@@ -1234,10 +1196,69 @@ fn dispatch_request(
             let client =
                 HttpWebDavClient::new(&url, username, password.map(|value| value.into_inner()))
                     .map_err(ServiceError::internal)?;
-            Ok(AgentResponse::success(run_sync_webdav(state, &client)))
+            Ok(AgentResponse::success(run_sync_webdav_target(
+                state,
+                &client,
+                &format!("webdav:{url}"),
+            )))
         }
         AgentRequest::SyncConflicts { dir, provider } => with_vault(state, true, |vault| {
             let mut conflicts = conflict_responses(ConflictScope::Vault, &state.vault_dir, vault)?;
+            for id in
+                crate::vault_sync::conflicts(&state.vault_dir).map_err(ServiceError::internal)?
+            {
+                let bytes = fs::read(
+                    crate::vault_sync::cache_path(&state.vault_dir, &id)
+                        .map_err(ServiceError::internal)?,
+                )
+                .map_err(ServiceError::internal)?;
+                let snapshot =
+                    aipass_vault::VaultSyncSnapshot::parse(&bytes).map_err(map_vault_error)?;
+                conflicts.push(SyncConflictResponse {
+                    scope: ConflictScope::Vault,
+                    origin: "snapshot".into(),
+                    conflict_path: PathBuf::from(format!("sync-cache/{id}.aipsnapshot")),
+                    target_path: PathBuf::from("manifest.aipmanifest"),
+                    object: aipass_sync::SyncObject {
+                        object_id: Some(snapshot.header.vault_id),
+                        object_type: "vault_snapshot".into(),
+                        lamport: 0,
+                        hash_hex: id,
+                        etag: None,
+                        updated_at: snapshot.created_at,
+                        relative_path: PathBuf::from("manifest.aipmanifest"),
+                    },
+                    conflict_summary: None,
+                    target_summary: None,
+                    snapshot_summary: Some(
+                        vault
+                            .sync_snapshot_summary(&bytes)
+                            .map_err(map_vault_error)?,
+                    ),
+                });
+            }
+            for id in
+                crate::vault_sync::quarantined(&state.vault_dir).map_err(ServiceError::internal)?
+            {
+                conflicts.push(SyncConflictResponse {
+                    scope: ConflictScope::Vault,
+                    origin: "quarantine".into(),
+                    conflict_path: PathBuf::from(format!("sync-quarantine/{id}.aipsnapshot")),
+                    target_path: PathBuf::from("manifest.aipmanifest"),
+                    object: aipass_sync::SyncObject {
+                        object_id: None,
+                        object_type: "invalid_snapshot".into(),
+                        lamport: 0,
+                        hash_hex: id,
+                        etag: None,
+                        updated_at: OffsetDateTime::now_utc(),
+                        relative_path: PathBuf::from("manifest.aipmanifest"),
+                    },
+                    conflict_summary: None,
+                    target_summary: None,
+                    snapshot_summary: None,
+                });
+            }
             if let Some(dir) = dir {
                 conflicts.extend(conflict_responses(ConflictScope::Sync, &dir, vault)?);
             }
@@ -1248,12 +1269,45 @@ fn dispatch_request(
             Ok(conflicts)
         })
         .map(AgentResponse::success),
-        AgentRequest::SyncAcceptConflict { request } => with_vault(state, true, |vault| {
+        AgentRequest::SyncAcceptConflict { request }
+            if request
+                .conflict_path
+                .extension()
+                .and_then(|value| value.to_str())
+                == Some("aipsnapshot") =>
+        {
+            let id = request
+                .conflict_path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            crate::vault_sync::resolve(state, id, true)?;
+            Ok(AgentResponse::empty())
+        }
+        AgentRequest::SyncDiscardConflict { request }
+            if request
+                .conflict_path
+                .extension()
+                .and_then(|value| value.to_str())
+                == Some("aipsnapshot") =>
+        {
+            let id = request
+                .conflict_path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            crate::vault_sync::resolve(state, id, false)?;
+            Ok(AgentResponse::empty())
+        }
+        AgentRequest::SyncAcceptConflict { request } => with_vault_mut(state, true, |vault| {
             let root = conflict_root(&state.vault_dir, &request)?;
             accept_conflict_with_validator(&root, &request.conflict_path, &|bytes| {
                 vault.validate_sync_object_bytes(bytes).map_err(Into::into)
             })
             .map_err(ServiceError::internal)?;
+            vault.reload_from_disk().map_err(map_vault_error)?;
+            reload_running_proxy(state, vault)?;
+            state.sync_revision.fetch_add(1, Ordering::Relaxed);
             Ok(AgentResponse::empty())
         }),
         AgentRequest::SyncDiscardConflict { request } => {

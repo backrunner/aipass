@@ -378,6 +378,40 @@ async fn websocket_falls_back_on_bad_accept() {
 }
 
 #[tokio::test]
+async fn websocket_survives_identical_sync_and_changes_to_another_route() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let route = test_route(format!("http://{}/v1", listener.local_addr().unwrap()));
+    let mut other = route.clone();
+    other.config.id = Uuid::new_v4();
+    other.local_token = "another-route-token".into();
+    other.targets[0].config.id = Uuid::new_v4();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        ws.send(Message::text("ready")).await.unwrap();
+        for _ in 0..2 {
+            let frame = receive(&mut ws).await;
+            assert_eq!(frame, Message::text("still serving"));
+            ws.send(frame).await.unwrap();
+        }
+    });
+    let (handle, _, _dir) = start_proxy(vec![route, other], direct());
+    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    assert_eq!(receive(&mut ws).await, Message::text("ready"));
+    let mut config = handle.state.config.read().unwrap().clone();
+    handle.update_config(config.clone()).unwrap();
+    ws.send(Message::text("still serving")).await.unwrap();
+    assert_eq!(receive(&mut ws).await, Message::text("still serving"));
+    config.routes[1].targets[0].api_key = "rotated unrelated key".into();
+    handle.update_config(config).unwrap();
+    ws.send(Message::text("still serving")).await.unwrap();
+    assert_eq!(receive(&mut ws).await, Message::text("still serving"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn websocket_config_reload_closes_existing_session() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let route = test_route(format!("http://{}/v1", listener.local_addr().unwrap()));
@@ -400,6 +434,7 @@ async fn websocket_config_reload_closes_existing_session() {
     assert_eq!(receive(&mut ws).await, Message::text("ready"));
     let mut config = RuntimeConfig::from_routes(&handle.bind_addr, vec![route]);
     config.upstream_proxy = direct();
+    config.routes[0].targets[0].api_key = "rotated-upstream-key".into();
     handle.update_config(config).unwrap();
     assert_eq!(
         receive(&mut ws).await,
@@ -1194,6 +1229,7 @@ async fn websocket_conversion_config_reload_cancels_pending_http_and_queued_turn
     let call = next_http_call(&mut calls).await;
     let mut config = RuntimeConfig::from_routes(&handle.bind_addr, vec![route]);
     config.upstream_proxy = direct();
+    config.routes[0].targets[0].api_key = "rotated-upstream-key".into();
     handle.update_config(config).unwrap();
     assert_eq!(
         receive(&mut socket).await,

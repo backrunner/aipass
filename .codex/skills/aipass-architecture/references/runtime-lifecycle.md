@@ -24,7 +24,7 @@ The singleton implementation distinguishes release, packaged-development, and li
 
 ## Agent Startup
 
-`AgentClient::ensure_running*` first sends and decodes `SessionStatus`. A successful typed response means startup is complete; an error response, including a protocol mismatch, is not readiness. On macOS it first ensures the LaunchAgent configuration without reloading an already-current service and gives the existing supervisor a short restart window. If the agent remains unavailable, it falls back to force repair within the same readiness loop.
+`AgentClient::ensure_running*` first sends and decodes `SessionStatus`. A successful typed response with the required protocol means startup is complete. Before replacement, a newer client sends only authenticated shutdown using the older resident protocol and waits for it to exit; mutations never use an older schema. A newer resident is not downgraded by an older client. Errors and incompatible success responses are not readiness. On macOS it first ensures the LaunchAgent configuration without reloading an already-current service and gives the existing supervisor a short restart window. If the agent remains unavailable, it falls back to force repair within the same readiness loop.
 
 The agent startup path is:
 
@@ -79,3 +79,7 @@ When startup is slow, measure these intervals before editing:
 5. any launchd unload/bootstrap interval.
 
 Avoid timing fixes that weaken singleton, authentication, update replacement, or protocol-mismatch recovery.
+
+## Vault Sync And First Installation
+
+The agent discovers a recoverable CloudKit snapshot before first-run creation; the signed native desktop shell transports ciphertext over protocol v5, using its own app entitlements and private CloudKit database. Empty CloudKit storage can migrate the previous iCloud Drive snapshot. Startup readiness has a 15-second bound; downloads may complete later and creation rechecks the remote. Full encrypted snapshots carry wrapped keys and authenticated parent links; independent record changes merge locally, while divergent records remain reviewable conflicts. Network work runs outside the session mutex. Applying a downloaded snapshot journals the transaction, rolls back ordinary IO failures without locking or stopping the proxy, and advances the desktop sync revision. Unchanged proxy configurations retain live streams; revoked route credentials invalidate only that route. WebDAV credentials remain vault-encrypted on disk; only the transport password is retained in zeroizing process memory across lock. After restart it requires one normal unlock. CloudKit pushes plus a 60-second fallback, WebDAV 5-second polling with failure backoff, and local write notifications share the same sync engine. Background work never touches the inactivity timer. See [vault sync](../../../../docs/vault-sync.md).

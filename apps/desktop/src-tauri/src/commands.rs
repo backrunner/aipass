@@ -98,6 +98,10 @@ pub(crate) async fn vault_status(app: AppHandle) -> Result<VaultStatus, String> 
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
+        initial_sync_pending: status.initial_sync_pending,
+        initial_sync_failed: status.initial_sync_failed,
+        sync_revision: status.sync_revision,
+        sync_status: status.sync_status,
     })
 }
 
@@ -108,6 +112,10 @@ pub(crate) async fn session_touch(app: AppHandle) -> Result<VaultStatus, String>
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
+        initial_sync_pending: status.initial_sync_pending,
+        initial_sync_failed: status.initial_sync_failed,
+        sync_revision: status.sync_revision,
+        sync_status: status.sync_status,
     })
 }
 
@@ -384,7 +392,13 @@ pub(crate) async fn vault_create(
     )?;
     tauri::async_runtime::spawn(async move {
         let result = run_blocking(move || {
-            agent_request_no_unlock(&request_app, AgentRequest::VaultCreate { password })
+            agent_request_no_unlock(
+                &request_app,
+                AgentRequest::VaultCreate {
+                    password,
+                    local_only: request.local_only,
+                },
+            )
         })
         .await;
         finish_vault_create_task(app_handle, auth_tasks, task_id, result);
@@ -526,6 +540,10 @@ pub(crate) async fn vault_lock(
     Ok(VaultStatus {
         exists: status.exists,
         locked: status.locked,
+        initial_sync_pending: status.initial_sync_pending,
+        initial_sync_failed: status.initial_sync_failed,
+        sync_revision: status.sync_revision,
+        sync_status: status.sync_status,
     })
 }
 
@@ -1075,6 +1093,47 @@ pub(crate) async fn vault_import_encrypted(
 }
 
 #[tauri::command]
+pub(crate) async fn vault_import_sync(
+    app: AppHandle,
+    settings: SaveSyncSettingsRequest,
+    password: SensitiveString,
+) -> Result<(), String> {
+    let _: serde_json::Value = agent_request_no_unlock_async(
+        app,
+        AgentRequest::VaultImportSync {
+            settings: into_agent_sync_settings_update(settings),
+            password,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn vault_import_pick_path(
+    app: AppHandle,
+    directory: bool,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    run_blocking(move || {
+        let picker = app.dialog().file();
+        let selected = if directory {
+            picker.blocking_pick_folder()
+        } else {
+            picker.blocking_pick_file()
+        };
+        selected
+            .map(|path| {
+                path.into_path()
+                    .map(|path| path.display().to_string())
+                    .map_err(|err| err.to_string())
+            })
+            .transpose()
+    })
+    .await
+}
+
+#[tauri::command]
 pub(crate) async fn sync_local(
     app: AppHandle,
     request: SyncLocalRequest,
@@ -1106,7 +1165,7 @@ pub(crate) async fn sync_settings_save(
 
 #[tauri::command]
 pub(crate) async fn sync_run_configured(app: AppHandle) -> Result<SyncReport, String> {
-    agent_request_async(app, AgentRequest::SyncConfigured).await
+    agent_request_no_unlock_async(app, AgentRequest::SyncConfigured).await
 }
 
 #[tauri::command]
@@ -1114,7 +1173,7 @@ pub(crate) async fn sync_cloud(
     app: AppHandle,
     request: SyncCloudRequest,
 ) -> Result<SyncReport, String> {
-    agent_request_async(
+    agent_request_no_unlock_async(
         app,
         AgentRequest::SyncCloud {
             provider: into_agent_cloud_sync_provider(request.provider),

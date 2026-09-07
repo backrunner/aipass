@@ -141,6 +141,7 @@ jobs:
       - name: Validate signing and updater secrets
         shell: bash
         env:
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.CSC_LINK }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || secrets.CSC_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -154,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY; do
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_PROVISIONING_PROFILE_BASE64 TAURI_SIGNING_PRIVATE_KEY; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing ${name}. Configure the matching GitHub secret before publishing a macOS desktop release."
               exit 1
@@ -238,6 +239,9 @@ jobs:
 
       - name: Prepare Tauri release config
         env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          AIPASS_CLOUDKIT_CONTAINER: ${{ vars.AIPASS_CLOUDKIT_CONTAINER }}
           AIPASS_DESKTOP_BUILD_NUMBER: ${{ needs.resolve-release.outputs.build_number }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
         run: node scripts/prepare-tauri-macos-release-config.mjs
@@ -275,6 +279,7 @@ jobs:
 
           lipo target/release/aipass-agent -verify_arch arm64 x86_64
           lipo target/release/aipass-native-host -verify_arch arm64 x86_64
+          node scripts/verify-cloudkit-bundle.mjs "${app_path}"
           codesign --verify --deep --strict --verbose=2 "${app_path}"
           spctl --assess --type execute --verbose=4 "${app_path}"
           xcrun stapler validate "${app_path}"
@@ -357,6 +362,7 @@ jobs:
         shell: bash
         run: |
           find "${RUNNER_TEMP}" -maxdepth 1 -type f -name 'AuthKey_*.p8' -delete
+          rm -rf apps/desktop/src-tauri/.cloudkit-build
 
   cli:
     name: CLI ${{ matrix.name }}

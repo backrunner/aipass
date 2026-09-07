@@ -111,6 +111,8 @@ fn build_swift_tray() {
     println!("cargo:rustc-link-lib=framework=AppKit");
     println!("cargo:rustc-link-lib=framework=SwiftUI");
     println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=CloudKit");
+    println!("cargo:rustc-link-lib=framework=Security");
 }
 
 fn run_swift(package_dir: &std::path::Path, config: &str, arch: &str, args: &[&str]) {

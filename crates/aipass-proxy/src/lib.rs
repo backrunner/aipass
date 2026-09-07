@@ -1058,7 +1058,7 @@ pub enum ProxyError {
     Poisoned,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedTarget {
     /// Provider-owned capability, resolved from the vault on every refresh.
     pub supports_websockets: bool,
@@ -1075,7 +1075,7 @@ impl Drop for ResolvedTarget {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedRoute {
     pub config: ProxyRouteConfig,
     pub local_token: String,
@@ -1094,7 +1094,7 @@ impl Drop for ResolvedRoute {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeConfig {
     pub enabled: bool,
     pub bind_addr: String,
@@ -1127,8 +1127,47 @@ struct RuntimeState {
     rr_counters: Arc<Mutex<HashMap<Uuid, AtomicU64>>>,
     session_affinity: Arc<Mutex<HashMap<(Uuid, String), SessionAffinity>>>,
     clients: Arc<Mutex<UpstreamClientCache>>,
-    config_changed: tokio::sync::watch::Sender<()>,
+    config_changed: tokio::sync::watch::Sender<Arc<HashMap<Uuid, u64>>>,
     in_flight_requests: Arc<AtomicU64>,
+}
+
+#[derive(Clone)]
+struct ConfigWatch {
+    receiver: tokio::sync::watch::Receiver<Arc<HashMap<Uuid, u64>>>,
+    baseline: Arc<HashMap<Uuid, u64>>,
+    route: Uuid,
+}
+impl ConfigWatch {
+    fn subscribe(state: &RuntimeState) -> Self {
+        let receiver = state.config_changed.subscribe();
+        let baseline = receiver.borrow().clone();
+        Self {
+            receiver,
+            baseline,
+            route: Uuid::nil(),
+        }
+    }
+    fn scope(&mut self, route: Uuid) {
+        self.route = route;
+    }
+    fn has_changed(&self) -> Result<bool, tokio::sync::watch::error::RecvError> {
+        self.receiver.has_changed()?;
+        Ok(self
+            .receiver
+            .borrow()
+            .get(&self.route)
+            .copied()
+            .unwrap_or(0)
+            != self.baseline.get(&self.route).copied().unwrap_or(0))
+    }
+    async fn changed(&mut self) -> Result<(), tokio::sync::watch::error::RecvError> {
+        loop {
+            if self.has_changed()? {
+                return Ok(());
+            }
+            self.receiver.changed().await?;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1227,7 +1266,7 @@ impl ProxyHandle {
             rr_counters: Arc::new(Mutex::new(HashMap::new())),
             session_affinity: Arc::new(Mutex::new(HashMap::new())),
             clients: Arc::new(Mutex::new(HashMap::new())),
-            config_changed: tokio::sync::watch::channel(()).0,
+            config_changed: tokio::sync::watch::channel(Arc::new(HashMap::new())).0,
             in_flight_requests: Arc::new(AtomicU64::new(0)),
         };
         let thread_state = state.clone();
@@ -1445,6 +1484,10 @@ impl ProxyHandle {
             .config
             .write()
             .map_err(|_| ProxyError::Poisoned)?;
+        if *current == config {
+            // Unrelated vault changes do not interrupt active requests.
+            return Ok(());
+        }
         let mut health = self.state.health.lock().map_err(|_| ProxyError::Poisoned)?;
         let mut ws_health = self
             .state
@@ -1461,12 +1504,38 @@ impl ProxyHandle {
             .session_affinity
             .lock()
             .map_err(|_| ProxyError::Poisoned)?;
+        let unchanged_routes: HashSet<_> = current
+            .routes
+            .iter()
+            .filter(|route| {
+                current.enabled == config.enabled
+                    && current.bind_addr == config.bind_addr
+                    && current.upstream_proxy == config.upstream_proxy
+                    && config.routes.iter().any(|next| next == *route)
+            })
+            .map(|route| route.config.id)
+            .collect();
+        let unchanged_targets: HashSet<_> = current
+            .routes
+            .iter()
+            .filter(|route| unchanged_routes.contains(&route.config.id))
+            .flat_map(|route| route.targets.iter().map(|target| target.config.id))
+            .collect();
+        health.retain(|id, _| unchanged_targets.contains(id));
+        ws_health.retain(|id, _| unchanged_targets.contains(id));
+        rr_counters.retain(|id, _| unchanged_routes.contains(id));
+        session_affinity.retain(|(route, _), _| unchanged_routes.contains(route));
+        let mut generations = (**self.state.config_changed.borrow()).clone();
+        *generations.entry(Uuid::nil()).or_default() += 1;
+        for route in &current.routes {
+            if !unchanged_routes.contains(&route.config.id) {
+                *generations.entry(route.config.id).or_default() += 1;
+            }
+        }
         *current = config;
-        self.state.config_changed.send_replace(());
-        health.clear();
-        ws_health.clear();
-        rr_counters.clear();
-        session_affinity.clear();
+        self.state
+            .config_changed
+            .send_replace(Arc::new(generations));
         self.state
             .usage
             .log_diagnostic("info", "event=proxy.config.reloaded".into());
@@ -2402,7 +2471,7 @@ async fn handle_request_inner(
     state: RuntimeState,
     in_flight: Option<InFlightGuard>,
 ) -> Result<Response<BoxBody>, Infallible> {
-    let config_changed = state.config_changed.subscribe();
+    let mut config_changed = ConfigWatch::subscribe(&state);
     let request_id = *request
         .extensions()
         .get::<Uuid>()
@@ -2442,6 +2511,7 @@ async fn handle_request_inner(
             "invalid local proxy token or route",
         ));
     };
+    config_changed.scope(route.config.id);
     route.local_token.zeroize();
     let body = match read_replayable_request_body(request.into_body()).await {
         Ok(body) => body,
@@ -2484,7 +2554,7 @@ async fn handle_request_inner(
 struct ForwardRequest {
     websocket: bool,
     upstream_pool: Option<Arc<websocket::pool::Pool>>,
-    config_changed: tokio::sync::watch::Receiver<()>,
+    config_changed: ConfigWatch,
     request_id: Uuid,
     method: http::Method,
     request_query: Option<String>,
@@ -3127,6 +3197,7 @@ async fn forward_request(
                 let body_stream = track_usage_stream(
                     body_stream,
                     UsageTrackingContext {
+                        config_changed: config_changed.clone(),
                         protocol: upstream_protocol,
                         store: state.usage.clone(),
                         record,
@@ -3737,6 +3808,7 @@ where
 }
 
 struct UsageTrackingContext {
+    config_changed: ConfigWatch,
     protocol: ProxyProtocol,
     store: Arc<UsageStore>,
     record: UsageRecord,
@@ -3760,6 +3832,7 @@ where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
 {
     let UsageTrackingContext {
+        mut config_changed,
         protocol,
         store,
         mut record,
@@ -3788,13 +3861,11 @@ where
         let mut response_trace = (streaming && protocol == ProxyProtocol::OpenAiResponses)
             .then(diagnostics::protocol::ResponseTrace::default);
         loop {
-            let next = if streaming {
-                tokio::select! {
-                    _ = sender.closed() => break,
-                    result = tokio::time::timeout(stream_idle_timeout, source.next()) => result,
-                }
-            } else {
-                tokio::time::timeout(stream_idle_timeout, source.next()).await
+            let next = tokio::select! {
+                biased;
+                _ = config_changed.changed() => break,
+                _ = sender.closed() => break,
+                result = tokio::time::timeout(stream_idle_timeout, source.next()) => result,
             };
             let result: Result<Bytes, BoxError> = match next {
                 Ok(Some(result)) => result.map_err(|err| Box::new(err) as BoxError),
@@ -3833,8 +3904,10 @@ where
                 mark_failure(&failure_state, target_id, &retry_policy);
                 set_error(&failure_state, err.to_string());
             }
-            if sender.send(result).await.is_err() {
-                break;
+            tokio::select! {
+                biased;
+                _ = config_changed.changed() => break,
+                sent = sender.send(result) => if sent.is_err() { break; },
             }
             if transport_failed || (streaming && (protocol_terminal || protocol_failed)) {
                 break;

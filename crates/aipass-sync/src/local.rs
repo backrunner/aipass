@@ -563,6 +563,15 @@ fn quarantine_remote_conflict(root: &Path, target_path: &str, bytes: &[u8]) -> R
     quarantine_conflict_bytes(root, "remote", Path::new(target_path), bytes).map(|_| ())
 }
 
+pub fn quarantine_sync_object(
+    root: &Path,
+    target_path: &Path,
+    bytes: &[u8],
+) -> Result<ConflictRecord> {
+    validate_sync_target_path(target_path)?;
+    quarantine_conflict_bytes(root, "remote", target_path, bytes)
+}
+
 fn quarantine_conflict_bytes(
     root: &Path,
     origin: &str,

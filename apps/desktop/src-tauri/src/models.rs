@@ -21,6 +21,10 @@ use uuid::Uuid;
 pub(crate) struct VaultStatus {
     pub(crate) exists: bool,
     pub(crate) locked: bool,
+    pub(crate) initial_sync_pending: bool,
+    pub(crate) initial_sync_failed: bool,
+    pub(crate) sync_revision: u64,
+    pub(crate) sync_status: Option<aipass_sync::SyncStatus>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -113,6 +117,8 @@ pub(crate) struct SavePreferencesRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CreateVaultRequest {
     pub(crate) password: SensitiveString,
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -311,6 +317,7 @@ pub(crate) struct SyncConflictResponse {
     pub(crate) object: SyncObject,
     pub(crate) conflict_summary: Option<EntrySummary>,
     pub(crate) target_summary: Option<EntrySummary>,
+    pub(crate) snapshot_summary: Option<aipass_vault::VaultSnapshotSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -546,6 +553,7 @@ pub(crate) fn from_agent_sync_conflict_response(
         object: response.object,
         conflict_summary: response.conflict_summary,
         target_summary: response.target_summary,
+        snapshot_summary: response.snapshot_summary,
     }
 }
 

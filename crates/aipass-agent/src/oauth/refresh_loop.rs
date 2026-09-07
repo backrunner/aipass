@@ -359,7 +359,12 @@ mod tests {
             proxy: Mutex::new(crate::proxy_service::ProxyService::new(&vault_dir).unwrap()),
             favicon_backfill: Mutex::new(()),
             sync_lock: Mutex::new(()),
+            cloudkit: Default::default(),
+            webdav_transport: Mutex::new(None),
+            sync_wake: std::sync::atomic::AtomicU64::new(0),
             initial_sync: Mutex::new(InitialSyncState::Done),
+            sync_revision: std::sync::atomic::AtomicU64::new(0),
+            sync_status: Mutex::new(None),
             sync_watcher: Mutex::new(None),
             shutdown: AtomicBool::new(false),
         });

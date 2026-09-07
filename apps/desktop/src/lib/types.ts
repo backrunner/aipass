@@ -89,7 +89,8 @@ export type ToolConfigTarget =
 export type ToolConfigMode = "official" | "helper" | "env" | "plaintext";
 export type CodexApiKeyMode = "experimental_bearer_token" | "auth_json";
 
-export type VaultStatus = { exists: boolean; locked: boolean };
+export type VaultStatus = { exists: boolean; locked: boolean; initialSyncPending?: boolean; initialSyncFailed?: boolean; syncRevision?: number; syncStatus?: SyncReport["status"] };
+export type VaultImportSource = { source: "backup" | "vault" | "local" | "icloud" | "webdav"; path: string; password: string; url: string; username: string; webdavPassword: string };
 
 export type ProxyProtocol = "open_ai_responses" | "open_ai_chat_completions" | "anthropic_messages";
 
@@ -443,6 +444,7 @@ export type SyncConflict = {
   object: SyncObject;
   conflictSummary?: EntrySummary;
   targetSummary?: EntrySummary;
+  snapshotSummary?: { providerCount: number; titles: string[] };
 };
 
 export type ProviderFilter =

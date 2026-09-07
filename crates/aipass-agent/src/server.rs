@@ -5,10 +5,9 @@ use crate::paths::{canonical_vault_dir, cloud_sync_dir, namespace_for_vault_dir}
 use crate::session::{
     apply_sync_settings_update, clamp_policy, current_policy, load_policy, load_sync_settings,
     lock_if_idle, lock_session, map_vault_error, native_host_settings_path, reset_vault,
-    save_policy, save_sync_settings, session_status, shutdown_requested, sync_settings_password,
-    sync_settings_view, touch_session, unlock_with_password, wait_for_unlock, with_vault,
-    with_vault_mut, AgentState, InitialSyncState, NativeHostSettings, ServiceError, ServiceResult,
-    SessionState,
+    save_policy, save_sync_settings, session_status, shutdown_requested, sync_settings_view,
+    touch_session, unlock_with_password, wait_for_unlock, with_vault, with_vault_mut, AgentState,
+    InitialSyncState, NativeHostSettings, ServiceError, ServiceResult, SessionState,
 };
 use aipass_agent_protocol::{
     endpoint_url as protocol_endpoint_url, AgentErrorCode, AgentRequest, AgentResponse,
@@ -40,15 +39,10 @@ use aipass_provider_registry::{
 };
 use aipass_storage::atomic_write_bytes;
 use aipass_sync::{
-    accept_conflict_with_validator, classify_webdav_error, discard_conflict, list_conflicts,
-    sync_local_folder_with_validator, sync_webdav_with_validator,
-    validate_sync_object_bytes_for_vault, ConflictRecord, HttpWebDavClient, SyncReport, SyncStatus,
-    WebDavClient,
+    accept_conflict_with_validator, discard_conflict, list_conflicts, ConflictRecord,
+    HttpWebDavClient, SyncReport, SyncStatus, WebDavClient,
 };
-use aipass_vault::{
-    EncryptedVaultExport, EntrySummary, ProviderEntryInput, SecretMetadataInput, TtlGrantSummary,
-    Vault,
-};
+use aipass_vault::{EntrySummary, ProviderEntryInput, SecretMetadataInput, TtlGrantSummary, Vault};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use interprocess::local_socket::{prelude::*, Listener, ListenerNonblockingMode, Stream};
@@ -151,7 +145,12 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         proxy: Mutex::new(crate::proxy_service::ProxyService::new(&vault_dir.clone())?),
         favicon_backfill: Mutex::new(()),
         sync_lock: Mutex::new(()),
+        cloudkit: Default::default(),
+        webdav_transport: Mutex::new(None),
+        sync_wake: std::sync::atomic::AtomicU64::new(0),
         initial_sync: Mutex::new(InitialSyncState::Pending),
+        sync_revision: std::sync::atomic::AtomicU64::new(0),
+        sync_status: Mutex::new(None),
         sync_watcher: Mutex::new(None),
         shutdown: AtomicBool::new(false),
     });
@@ -438,19 +437,28 @@ fn spawn_idle_lock_watcher(state: Arc<AgentState>) {
 /// initial_sync_pending until this settles; a failure clears the flag too —
 /// readiness must never be blocked by an unreachable sync folder.
 fn spawn_initial_sync(state: Arc<AgentState>) {
+    let (done, finished) = std::sync::mpsc::channel();
+    let timeout_state = state.clone();
+    thread::spawn(move || {
+        if finished.recv_timeout(Duration::from_secs(15)).is_err() {
+            if let Ok(mut slot) = timeout_state.initial_sync.lock() {
+                if *slot == InitialSyncState::Pending {
+                    *slot = InitialSyncState::Failed;
+                }
+            }
+        }
+    });
     thread::spawn(move || {
         let outcome = run_initial_sync(&state);
         match state.initial_sync.lock() {
             Ok(mut slot) => *slot = outcome,
             Err(poisoned) => *poisoned.into_inner() = outcome,
         }
+        let _ = done.send(());
     });
 }
 
 fn run_initial_sync(state: &Arc<AgentState>) -> InitialSyncState {
-    if !crate::session::manifest_path(&state.vault_dir).exists() {
-        return InitialSyncState::Done;
-    }
     let settings = match load_sync_settings(&state.vault_dir) {
         Ok(settings) => settings,
         Err(_) => {
@@ -462,8 +470,18 @@ fn run_initial_sync(state: &Arc<AgentState>) -> InitialSyncState {
             return InitialSyncState::Failed;
         }
     };
+    if settings.mode == SyncMode::ICloud {
+        return match crate::vault_sync::run_cloudkit(state) {
+            Ok(report) if report.status == SyncStatus::Idle => InitialSyncState::Done,
+            _ => InitialSyncState::Failed,
+        };
+    }
     let Some(dir) = crate::sync_watch::folder_sync_dir(&settings) else {
-        return InitialSyncState::Done;
+        return if matches!(settings.mode, SyncMode::ICloud | SyncMode::OneDrive) {
+            InitialSyncState::Failed
+        } else {
+            InitialSyncState::Done
+        };
     };
     match run_sync_local(state, &dir) {
         Ok(report) => {
@@ -475,7 +493,11 @@ fn run_initial_sync(state: &Arc<AgentState>) -> InitialSyncState {
                     report.uploaded, report.downloaded, report.conflicts
                 ),
             );
-            InitialSyncState::Done
+            if report.status == SyncStatus::Idle {
+                InitialSyncState::Done
+            } else {
+                InitialSyncState::Failed
+            }
         }
         Err(err) => {
             write_component_log(
@@ -488,8 +510,13 @@ fn run_initial_sync(state: &Arc<AgentState>) -> InitialSyncState {
     }
 }
 
-fn create_vault(state: &Arc<AgentState>, password: String) -> ServiceResult<VaultCreateResponse> {
-    let (recovery_kit, session) = crate::session::create_vault(state, password)?;
+fn create_vault(
+    state: &Arc<AgentState>,
+    password: String,
+    local_only: bool,
+) -> ServiceResult<VaultCreateResponse> {
+    let (recovery_kit, session) =
+        crate::session::create_vault_with_options(state, password, local_only)?;
     Ok(VaultCreateResponse {
         recovery_kit,
         session,
@@ -2151,6 +2178,7 @@ fn conflict_response(
         object: record.object,
         conflict_summary,
         target_summary,
+        snapshot_summary: None,
     })
 }
 
@@ -2194,7 +2222,18 @@ fn home_dir() -> ServiceResult<PathBuf> {
 
 pub(crate) fn run_sync_local(state: &Arc<AgentState>, dir: &Path) -> ServiceResult<SyncReport> {
     let operation = crate::operation_log::OperationLog::background("sync.local");
+    if let Ok(mut status) = state.sync_status.lock() {
+        *status = Some(SyncStatus::Syncing);
+    }
     let result = run_sync_local_inner(state, dir);
+    if let Ok(mut status) = state.sync_status.lock() {
+        *status = Some(
+            result
+                .as_ref()
+                .map(|report| report.status.clone())
+                .unwrap_or(SyncStatus::ServerError),
+        );
+    }
     if let Some(operation) = operation {
         operation.finish(&match &result {
             Ok(report) => AgentResponse::success(report),
@@ -2205,182 +2244,54 @@ pub(crate) fn run_sync_local(state: &Arc<AgentState>, dir: &Path) -> ServiceResu
 }
 
 fn run_sync_local_inner(state: &Arc<AgentState>, dir: &Path) -> ServiceResult<SyncReport> {
-    // Lock order is sync_lock -> session -> proxy everywhere: a sync in flight
-    // and its follow-up vault/proxy reloads stay atomic against vault writes,
-    // which all go through the session lock.
-    let _guard = state
-        .sync_lock
-        .lock()
-        .map_err(|_| ServiceError::internal(anyhow::anyhow!("sync lock poisoned")))?;
-    let report = {
-        let mut session = state
-            .session
-            .lock()
-            .map_err(|_| ServiceError::internal(anyhow::anyhow!("session lock poisoned")))?;
-        match &mut *session {
-            SessionState::Locked => {
-                let vault_id = Vault::vault_id_from_manifest(&state.vault_dir)
-                    .map_err(ServiceError::internal)?;
-                sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
-                    validate_sync_object_bytes_for_vault(bytes, vault_id)
-                })
-                .map_err(ServiceError::internal)?
-            }
-            SessionState::Unlocked(info) => {
-                let report = sync_local_folder_with_validator(&state.vault_dir, dir, &|bytes| {
-                    info.vault
-                        .validate_sync_object_bytes(bytes)
-                        .map_err(Into::into)
-                })
-                .map_err(ServiceError::internal)?;
-                if report.downloaded > 0 {
-                    // The sync may have replaced records (and key wrapping) on
-                    // disk; refresh the in-memory vault before any later write
-                    // can persist stale state over the downloaded files.
-                    info.vault.reload_from_disk().map_err(map_vault_error)?;
-                }
-                report
-            }
-        }
-    };
-    if report.downloaded > 0 {
-        reload_proxy_after_sync_download(state);
-    }
-    Ok(report)
+    crate::vault_sync::run(
+        state,
+        &aipass_sync::FolderSnapshotRemote(dir),
+        &format!("folder:{}", dir.display()),
+    )
 }
 
-pub(crate) fn run_sync_webdav(state: &Arc<AgentState>, client: &impl WebDavClient) -> SyncReport {
+pub(crate) fn run_sync_webdav_target(
+    state: &Arc<AgentState>,
+    client: &impl WebDavClient,
+    target: &str,
+) -> SyncReport {
     let operation = crate::operation_log::OperationLog::background("sync.webdav");
-    let report = run_sync_webdav_inner(state, client);
+    if let Ok(mut status) = state.sync_status.lock() {
+        *status = Some(SyncStatus::Syncing);
+    }
+    let report =
+        match crate::vault_sync::run(state, &aipass_sync::WebDavSnapshotRemote(client), target) {
+            Ok(report) => report,
+            Err(err) => SyncReport {
+                uploaded: 0,
+                downloaded: 0,
+                conflicts: 0,
+                quarantined: 0,
+                status: match err.code {
+                    AgentErrorCode::PermissionDenied => SyncStatus::AuthFailed,
+                    AgentErrorCode::ServiceUnavailable => SyncStatus::Offline,
+                    AgentErrorCode::Conflict => SyncStatus::Conflict,
+                    _ => SyncStatus::ServerError,
+                },
+                message: Some(err.message),
+            },
+        };
+    if let Ok(mut status) = state.sync_status.lock() {
+        *status = Some(report.status.clone());
+    }
     if let Some(operation) = operation {
         operation.finish(&AgentResponse::success(&report));
     }
     report
 }
 
-fn run_sync_webdav_inner(state: &Arc<AgentState>, client: &impl WebDavClient) -> SyncReport {
-    let sync_error = |message: &str| SyncReport {
-        uploaded: 0,
-        downloaded: 0,
-        conflicts: 0,
-        quarantined: 0,
-        status: SyncStatus::ServerError,
-        message: Some(message.to_string()),
-    };
-    let Ok(_guard) = state.sync_lock.lock() else {
-        return sync_error("sync lock poisoned");
-    };
-    let report = {
-        let Ok(mut session) = state.session.lock() else {
-            return sync_error("session lock poisoned");
-        };
-        match &mut *session {
-            SessionState::Locked => {
-                let Ok(vault_id) = Vault::vault_id_from_manifest(&state.vault_dir) else {
-                    return sync_error("vault manifest unavailable");
-                };
-                match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
-                    validate_sync_object_bytes_for_vault(bytes, vault_id)
-                }) {
-                    Ok(report) => report,
-                    Err(err) => {
-                        let message = err.to_string();
-                        let status = classify_webdav_error(&err);
-                        SyncReport {
-                            uploaded: 0,
-                            downloaded: 0,
-                            conflicts: 0,
-                            quarantined: 0,
-                            status,
-                            message: Some(message),
-                        }
-                    }
-                }
-            }
-            SessionState::Unlocked(info) => {
-                match sync_webdav_with_validator(&state.vault_dir, client, &|bytes| {
-                    info.vault
-                        .validate_sync_object_bytes(bytes)
-                        .map_err(Into::into)
-                }) {
-                    Ok(report) => {
-                        if report.downloaded > 0 {
-                            if let Err(err) = info.vault.reload_from_disk() {
-                                write_component_log(
-                                    AGENT_LOG,
-                                    "WARN",
-                                    &format!("vault reload after webdav sync failed: {err}"),
-                                );
-                            }
-                        }
-                        report
-                    }
-                    Err(err) => {
-                        let message = err.to_string();
-                        let status = classify_webdav_error(&err);
-                        SyncReport {
-                            uploaded: 0,
-                            downloaded: 0,
-                            conflicts: 0,
-                            quarantined: 0,
-                            status,
-                            message: Some(message),
-                        }
-                    }
-                }
-            }
-        }
-    };
-    if report.downloaded > 0 {
-        reload_proxy_after_sync_download(state);
-    }
-    report
-}
-
-/// Downloaded sync objects can carry changed provider credentials; rebuild the
-/// running proxy's runtime snapshot so it does not keep serving stale keys.
-/// Failures are logged rather than failing the sync: reload_if_running has
-/// already stopped the proxy safely when the new snapshot cannot load.
-fn reload_proxy_after_sync_download(state: &Arc<AgentState>) {
-    let session = match state.session.lock() {
-        Ok(session) => session,
-        Err(_) => {
-            write_component_log(
-                AGENT_LOG,
-                "WARN",
-                "proxy reload after sync skipped: session lock poisoned",
-            );
-            return;
-        }
-    };
-    let SessionState::Unlocked(info) = &*session else {
-        return;
-    };
-    let mut proxy = match state.proxy.lock() {
-        Ok(proxy) => proxy,
-        Err(poisoned) => {
-            write_component_log(
-                AGENT_LOG,
-                "WARN",
-                "recovering poisoned proxy lock after sync download",
-            );
-            poisoned.into_inner()
-        }
-    };
-    if let Err(err) = proxy.reload_if_running(&info.vault) {
-        write_component_log(
-            AGENT_LOG,
-            "WARN",
-            &format!(
-                "proxy reload after sync download failed code={:?}",
-                err.code
-            ),
-        );
-    }
+pub(crate) fn run_sync_configured(state: &Arc<AgentState>) -> ServiceResult<SyncReport> {
+    crate::vault_sync::run_configured(state)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use aipass_agent_protocol::{SessionPolicy, SessionStatus};
     use aipass_crypto::SecretString;
@@ -2392,6 +2303,35 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn explicit_local_creation_disables_cloud_and_keeps_the_typed_response_contract() {
+        let temp = tempdir().unwrap();
+        let state = sync_test_state(temp.path().join("vault"));
+        let settings = crate::session::PersistedSyncSettings {
+            mode: SyncMode::ICloud,
+            ..Default::default()
+        };
+        aipass_storage::atomic_write_bytes(
+            crate::session::sync_settings_path(&state.vault_dir),
+            &serde_json::to_vec(&settings).unwrap(),
+        )
+        .unwrap();
+        let response = handle_request(
+            &state,
+            AgentRequest::VaultCreate {
+                password: "local-master-password".into(),
+                local_only: true,
+            },
+        );
+        assert!(response.ok);
+        let created: VaultCreateResponse = serde_json::from_value(response.data).unwrap();
+        assert!(created.session.exists && !created.session.locked);
+        assert_eq!(
+            load_sync_settings(&state.vault_dir).unwrap().mode,
+            SyncMode::Local
+        );
     }
 
     #[test]
@@ -2663,14 +2603,17 @@ mod tests {
             thread::sleep(Duration::from_millis(50));
         }
 
-        // The vault was synced into the configured local folder. A fresh vault
-        // has no provider objects, but it always has a device record.
-        let sync_devices = agent.root.join("sync").join("devices");
-        assert!(sync_devices.is_dir());
-        assert!(fs::read_dir(sync_devices).expect("sync devices").count() > 0);
+        // A locked vault has no root key with which to authenticate a new
+        // snapshot. Startup remains responsive and publication waits for unlock.
+        assert!(!agent.root.join("sync/snapshots").exists());
     }
 
-    fn sync_test_state(vault_dir: PathBuf) -> Arc<AgentState> {
+    pub(crate) fn sync_test_state(vault_dir: PathBuf) -> Arc<AgentState> {
+        atomic_write_bytes(
+            crate::session::sync_settings_path(&vault_dir),
+            &serde_json::to_vec(&crate::session::PersistedSyncSettings::default()).unwrap(),
+        )
+        .unwrap();
         Arc::new(AgentState {
             policy: Mutex::new(SessionPolicy::default()),
             vault_dir: vault_dir.clone(),
@@ -2684,13 +2627,18 @@ mod tests {
             ),
             favicon_backfill: Mutex::new(()),
             sync_lock: Mutex::new(()),
+            cloudkit: Default::default(),
+            webdav_transport: Mutex::new(None),
+            sync_wake: std::sync::atomic::AtomicU64::new(0),
             initial_sync: Mutex::new(InitialSyncState::Done),
+            sync_revision: std::sync::atomic::AtomicU64::new(0),
+            sync_status: Mutex::new(None),
             sync_watcher: Mutex::new(None),
             shutdown: AtomicBool::new(false),
         })
     }
 
-    fn sync_test_provider(title: &str, api_key: &str) -> ProviderEntryInput {
+    pub(crate) fn sync_test_provider(title: &str, api_key: &str) -> ProviderEntryInput {
         ProviderEntryInput {
             supports_websockets: None,
             title: title.to_string(),
@@ -2867,30 +2815,33 @@ mod tests {
         let first = run_sync_local(&state, &sync_dir).expect("initial sync");
         assert_eq!(first.downloaded, 0);
 
-        // A second writer adds provider B; the object reaches the sync folder
-        // without the local vault copy, simulating a download from another
-        // device.
-        let provider_b = {
-            let other = Vault::open(&vault_dir, &password).expect("second vault handle");
-            other
+        // A second device restores the complete encrypted snapshot, changes
+        // it, and publishes a descendant while the first proxy stays running.
+        let other_dir = temp.path().join("other/vault");
+        fs::create_dir_all(&other_dir).unwrap();
+        let other = sync_test_state(other_dir.clone());
+        run_sync_local(&other, &sync_dir).unwrap();
+        let other_vault = Vault::open(&other_dir, &password).unwrap();
+        crate::session::set_session_vault(&other, other_vault);
+        // Establish the imported revision before mutating it.
+        run_sync_local(&other, &sync_dir).unwrap();
+        with_vault(&other, false, |vault| {
+            vault
                 .add_provider(sync_test_provider("Upstream B", "key-b"))
-                .expect("add provider B")
-        };
-        let object_b = vault_dir
-            .join("objects")
-            .join(format!("{provider_b}.aipobj"));
-        fs::create_dir_all(sync_dir.join("objects")).expect("sync objects dir");
-        fs::copy(
-            &object_b,
-            sync_dir
-                .join("objects")
-                .join(format!("{provider_b}.aipobj")),
-        )
-        .expect("seed remote object");
-        fs::remove_file(&object_b).expect("remove local object B");
+                .map_err(map_vault_error)
+        })
+        .unwrap();
+        run_sync_local(&other, &sync_dir).unwrap();
 
+        let activity_before = match &*state.session.lock().unwrap() {
+            SessionState::Unlocked(info) => info.last_activity_at,
+            _ => panic!("session must remain unlocked"),
+        };
         let second = run_sync_local(&state, &sync_dir).expect("sync with download");
         assert_eq!(second.downloaded, 1);
+        assert!(
+            matches!(&*state.session.lock().unwrap(), SessionState::Unlocked(info) if info.last_activity_at == activity_before)
+        );
 
         // The in-memory session vault sees the downloaded record, and the
         // running proxy rebuilt its snapshot without going down.
@@ -2903,6 +2854,17 @@ mod tests {
         .collect::<Vec<_>>();
         assert!(titles.iter().any(|title| title == "Upstream B"));
         assert!(state.proxy.lock().expect("proxy lock").status().running);
+        // Removing a synced credential must not disable the listening service.
+        with_vault(&other, false, |vault| {
+            vault
+                .delete_provider_permanently(provider_a)
+                .map_err(map_vault_error)
+        })
+        .unwrap();
+        run_sync_local(&other, &sync_dir).unwrap();
+        run_sync_local(&state, &sync_dir).unwrap();
+        assert!(state.proxy.lock().unwrap().status().running);
+        assert!(!session_status(&state).unwrap().locked);
     }
 
     #[test]

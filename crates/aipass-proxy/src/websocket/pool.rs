@@ -105,7 +105,7 @@ impl Pool {
         &self,
         key: Key,
         mut connection: Connection,
-        mut config_changed: tokio::sync::watch::Receiver<()>,
+        mut config_changed: ConfigWatch,
     ) {
         let Ok(mut pool) = self.idle.lock() else {
             return;

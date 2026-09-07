@@ -8,7 +8,7 @@ pub use aipass_proxy::{
     ProxyConfig, ProxyLogEntry, ProxyRouteConfig, ProxyStatus, ProxyTargetConfig, RetryPolicy,
     RouteStrategy, UsageAggregate, UsageGranularity, UsageTimeseriesModel, UsageTimeseriesPoint,
 };
-use aipass_sync::SyncObject;
+use aipass_sync::{SyncObject, SyncStatus};
 use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, ProviderEntryUpdateInput, RecoveryKit,
     SecretMetadataInput, TtlGrantSummary,
@@ -21,7 +21,10 @@ use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
-pub const AGENT_PROTOCOL_VERSION: u32 = 2;
+// Version 4 requires authenticated vault snapshots, first-run sync import,
+// and background sync status. Older residents cannot implement these semantics.
+// Version 5 adds the signed native CloudKit transport.
+pub const AGENT_PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -117,6 +120,12 @@ pub struct SessionStatus {
     /// Clients waiting for readiness must keep polling until this clears.
     #[serde(default)]
     pub initial_sync_pending: bool,
+    #[serde(default)]
+    pub initial_sync_failed: bool,
+    #[serde(default)]
+    pub sync_revision: u64,
+    #[serde(default)]
+    pub sync_status: Option<SyncStatus>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -178,6 +187,46 @@ pub struct SyncSettingsUpdate {
     pub clear_webdav_password: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CloudKitCommand {
+    List,
+    Get { id: String },
+    Put { id: String, bytes_b64: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CloudKitTask {
+    pub id: Uuid,
+    pub command: CloudKitCommand,
+    pub account: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CloudKitReply {
+    #[serde(default)]
+    pub ids: Vec<String>,
+    pub account: Option<String>,
+    pub bytes_b64: Option<String>,
+    pub error: Option<String>,
+    pub error_kind: Option<CloudKitErrorKind>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudKitErrorKind {
+    Unavailable,
+    Authentication,
+    AccountChanged,
+    InvalidData,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CloudKitCompletion {
+    pub id: Uuid,
+    pub reply: CloudKitReply,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncConflictActionRequest {
@@ -198,6 +247,8 @@ pub struct SyncConflictResponse {
     pub object: SyncObject,
     pub conflict_summary: Option<EntrySummary>,
     pub target_summary: Option<EntrySummary>,
+    #[serde(default)]
+    pub snapshot_summary: Option<aipass_vault::VaultSnapshotSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -558,7 +609,11 @@ pub enum AgentRequest {
     #[serde(rename = "vault.status")]
     VaultStatus,
     #[serde(rename = "vault.create")]
-    VaultCreate { password: SensitiveString },
+    VaultCreate {
+        password: SensitiveString,
+        #[serde(default)]
+        local_only: bool,
+    },
     #[serde(rename = "vault.recover")]
     VaultRecover {
         recovery_key: SensitiveString,
@@ -579,6 +634,11 @@ pub enum AgentRequest {
     VaultImport {
         input: PathBuf,
         export_password: SensitiveString,
+    },
+    #[serde(rename = "vault.import_sync")]
+    VaultImportSync {
+        settings: SyncSettingsUpdate,
+        password: SensitiveString,
     },
     #[serde(rename = "entries.list")]
     EntriesList { archived: bool },
@@ -730,6 +790,10 @@ pub enum AgentRequest {
     SyncSettingsSet { settings: SyncSettingsUpdate },
     #[serde(rename = "sync.configured")]
     SyncConfigured,
+    CloudKitExchange {
+        completion: Option<CloudKitCompletion>,
+        changed: bool,
+    },
     #[serde(rename = "sync.cloud")]
     SyncCloud { provider: CloudSyncProvider },
     #[serde(rename = "sync.webdav")]
@@ -902,6 +966,7 @@ impl AgentRequest {
             Self::VaultRotate { .. } => "vault.rotate",
             Self::VaultExport { .. } => "vault.export",
             Self::VaultImport { .. } => "vault.import",
+            Self::VaultImportSync { .. } => "vault.import_sync",
             Self::EntriesList { .. } => "entries.list",
             Self::EntriesTrash => "entries.trash",
             Self::EntriesFavorites => "entries.favorites",
@@ -946,6 +1011,7 @@ impl AgentRequest {
             Self::SyncSettingsGet => "sync.settings.get",
             Self::SyncSettingsSet { .. } => "sync.settings.set",
             Self::SyncConfigured => "sync.configured",
+            Self::CloudKitExchange { .. } => "sync.cloudkit.exchange",
             Self::SyncCloud { .. } => "sync.cloud",
             Self::SyncWebDav { .. } => "sync.webdav",
             Self::SyncConflicts { .. } => "sync.conflicts",
@@ -969,7 +1035,8 @@ impl AgentRequest {
     pub fn is_background_poll(&self) -> bool {
         matches!(
             self,
-            Self::SessionStatus
+            Self::CloudKitExchange { .. }
+                | Self::SessionStatus
                 | Self::VaultStatus
                 | Self::SessionTouch
                 | Self::ServerStatus
@@ -1008,6 +1075,7 @@ impl AgentRequest {
             | Self::VaultRotate { .. }
             | Self::VaultExport { .. }
             | Self::VaultImport { .. }
+            | Self::VaultImportSync { .. }
             | Self::VaultReset
             // Network and whole-collection work.
             | Self::SyncLocal { .. }

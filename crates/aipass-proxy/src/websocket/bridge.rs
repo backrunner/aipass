@@ -15,7 +15,7 @@ pub(super) fn upgrade(
     state: RuntimeState,
     mut route: ResolvedRoute,
     pricing: Vec<ModelPricing>,
-    config_changed: tokio::sync::watch::Receiver<()>,
+    config_changed: ConfigWatch,
     response: Response<BoxBody>,
     in_flight: Option<InFlightGuard>,
 ) -> Response<BoxBody> {
@@ -80,7 +80,7 @@ struct Context {
     headers: HeaderMap,
     query: Option<String>,
     upstream_pool: Arc<pool::Pool>,
-    config_changed: tokio::sync::watch::Receiver<()>,
+    config_changed: ConfigWatch,
 }
 
 impl Drop for Context {
@@ -368,7 +368,7 @@ enum Output {
 async fn serve(
     downstream: TokioIo<hyper::upgrade::Upgraded>,
     context: Arc<Context>,
-    mut config_changed: tokio::sync::watch::Receiver<()>,
+    mut config_changed: ConfigWatch,
 ) {
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_SESSION_BYTES))

@@ -86,7 +86,7 @@
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { emptyServerUsage, loadServerUsage } from "./lib/services/serverUsage";
   import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
-  import type { MessageValue } from "./lib/types";
+  import type { VaultImportSource, MessageValue } from "./lib/types";
 
   const hasTauriRuntime = () =>
     typeof window !== "undefined" && Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -561,14 +561,21 @@
   }
 
   async function reconcileVaultStatus() {
-    if (!statusReady || authBusy || lockTransitioning || sessionRefreshInFlight) return;
+    if (!statusReady || authBusy || onboardingImportBusy || cloudCheckBusy || lockTransitioning || sessionRefreshInFlight) return;
     sessionRefreshInFlight = true;
     const wasUnlocked = status.exists && !status.locked;
     try {
       const next = await invokeTauri<VaultStatus>("vault_status");
       const nowUnlocked = next.exists && !next.locked;
-      if (next.exists === status.exists && next.locked === status.locked) return;
+      const syncChanged = next.syncRevision !== undefined && next.syncRevision !== status.syncRevision;
+      const authChanged = next.exists !== status.exists || next.locked !== status.locked;
       status = next;
+      if (next.syncStatus) syncState = next.syncStatus;
+      if (!authChanged) {
+        if (syncChanged && nowUnlocked) { await loadEntries(); await loadServer(); }
+        return;
+      }
+      if (next.exists && next.locked) setAuthMode("unlock");
       if (wasUnlocked && !nowUnlocked) {
         clearSensitiveUnlockedState();
         password = "";
@@ -771,9 +778,44 @@
     clearInterval(usageRefreshTimer);
   });
 
+  let onboardingImportBusy = false;
+  let cloudCheckBusy = false;
+
+  async function importExistingVault(request: VaultImportSource) {
+    if (onboardingImportBusy || authBusy) return;
+    onboardingImportBusy = true;
+    error = "";
+    try {
+      if (request.source === "backup" || request.source === "vault") {
+        await invokeTauri("vault_import_encrypted", { request: { input: request.path, exportPassword: request.password } });
+      } else {
+        await invokeTauri("vault_import_sync", {
+          settings: { mode: request.source, syncFolder: request.path || undefined, webdavUrl: request.url || undefined, webdavUsername: request.username || undefined, webdavPassword: request.webdavPassword || undefined, clearWebdavPassword: false },
+          password: request.password
+        });
+      }
+      await refreshStatus();
+      await loadSyncSettings();
+    } catch (err) { error = String(err); }
+    finally { onboardingImportBusy = false; }
+  }
+
+  async function checkCloudForVault() {
+    if (cloudCheckBusy || onboardingImportBusy) return;
+    cloudCheckBusy = true;
+    error = "";
+    try {
+      const report = await invokeTauri<SyncReport>("sync_cloud", { request: { provider: "icloud" } });
+      if (report.message) error = report.message;
+      await refreshStatus();
+    } catch (err) { error = String(err); }
+    finally { cloudCheckBusy = false; }
+  }
+
   async function refreshStatus() {
     try {
       status = await invokeTauri<VaultStatus>("vault_status");
+      if (status.syncStatus) syncState = status.syncStatus;
       if (!status.exists) {
         setAuthMode("create");
         pendingRecoveryKey = "";
@@ -791,7 +833,7 @@
     }
   }
 
-  async function createVault() {
+  async function createVault(localOnly = false) {
     if (authBusy) return;
     error = "";
     if (createPassword !== createPasswordConfirm) {
@@ -802,11 +844,13 @@
     await flushUiBeforeBlockingWork();
     try {
       const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_create", {
-        request: { password: createPassword }
+        request: { password: createPassword, localOnly }
       });
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        error = response.error ?? localizedMessage("error.vaultCreationFailed");
+        const message = response.error ?? localizedMessage("error.vaultCreationFailed");
+        await refreshStatus();
+        if (!status.exists) error = message;
         return;
       }
       status = {
@@ -2718,6 +2762,7 @@
         }
       });
       notice = action === "accept" ? localizedMessage("notice.conflictAccepted") : localizedMessage("notice.currentKept");
+      await invokeTauri<SyncReport>("sync_run_configured");
       await loadSyncConflicts();
       await loadEntries();
       setTimeout(() => (notice = ""), 1800);
@@ -3026,7 +3071,7 @@
     onLock={lockVault}
   />
 
-  {#if !statusReady}
+  {#if !statusReady || status.initialSyncPending}
     <main class="boot-shell" aria-live="polite" aria-busy="true">
       <div class="boot-content">
         <Brand size="md" />
@@ -3056,6 +3101,11 @@
         {recoveryPasswordStrength}
         onModeChange={setAuthMode}
         onCreate={createVault}
+        importBusy={onboardingImportBusy}
+        {cloudCheckBusy}
+        cloudDefault={syncMode === "icloud"}
+        onImport={importExistingVault}
+        onCheckCloud={checkCloudForVault}
         onUnlock={unlockVault}
         onRecover={recoverVault}
         bind:resetOpen

@@ -6,6 +6,8 @@
   import HeroBackground from "./HeroBackground.svelte";
   import PasswordField from "./PasswordField.svelte";
   import PasswordStrengthMeter from "./PasswordStrengthMeter.svelte";
+  import ImportVaultForm from "./ImportVaultForm.svelte";
+  import type { VaultImportSource } from "../../types";
 
   export let status: VaultStatus;
   export let authMode: AuthMode;
@@ -24,7 +26,7 @@
   export let createPasswordStrength: PasswordStrength;
   export let recoveryPasswordStrength: PasswordStrength;
   export let onModeChange: (mode: AuthMode) => MaybePromise = () => {};
-  export let onCreate: () => MaybePromise = () => {};
+  export let onCreate: (localOnly?: boolean) => MaybePromise = () => {};
   export let onUnlock: () => MaybePromise = () => {};
   export let onRecover: () => MaybePromise = () => {};
   export let resetOpen = false;
@@ -33,11 +35,17 @@
   export let onResetRequest: () => MaybePromise = () => {};
   export let onReset: () => MaybePromise = () => {};
   export let onResetCancel: () => MaybePromise = () => {};
+  export let importBusy = false;
+  export let cloudCheckBusy = false;
+  export let cloudDefault = false;
+  export let onImport: (request: VaultImportSource) => Promise<void> = async () => {};
+  export let onCheckCloud: () => MaybePromise = () => {};
+  let setupMode: "choose" | "create" | "import" = "choose";
 
   $: showCreate = !status.exists;
   $: showRecover = status.exists && authMode === "recover";
   $: showUnlock = status.exists && !showRecover;
-  $: busy = busyMode !== "";
+  $: busy = busyMode !== "" || importBusy || cloudCheckBusy;
   $: createBusy = busyMode === "create";
   $: unlockBusy = busyMode === "unlock";
   $: recoverBusy = busyMode === "recover";
@@ -59,7 +67,19 @@
       <Brand size="md" />
     </div>
 
-    {#if showCreate}
+    {#if showCreate && setupMode === "choose"}
+      <div class="form">
+        <div class="copy"><h1>{$t("auth.setup.title")}</h1><p>{$t("auth.setup.desc")}</p></div>
+        {#if cloudDefault}
+          <p class="setup-note" role="status">{status.initialSyncFailed ? $t("auth.setup.cloudFailed") : $t("auth.setup.cloudEmpty")}</p>
+          <Button variant="ghost" block disabled={busy} loading={cloudCheckBusy} on:click={() => onCheckCloud()}>{$t("auth.setup.checkCloud")}</Button>
+        {/if}
+        <Button variant="primary" block disabled={busy} on:click={() => setupMode = "import"}>{$t("auth.import.title")}</Button>
+        <Button variant="secondary" block disabled={busy} on:click={() => setupMode = "create"}>{$t("auth.create.title")}</Button>
+      </div>
+    {:else if showCreate && setupMode === "import"}
+      <ImportVaultForm busy={importBusy} {onImport} onBack={() => setupMode = "choose"} />
+    {:else if showCreate}
       <form class="form" on:submit|preventDefault={() => onCreate()}>
         <div class="copy">
           <h1>{$t("auth.create.title")}</h1>
@@ -94,6 +114,10 @@
         <Button variant="primary" type="submit" block loading={createBusy} disabled={!createReady || busy}>
           {createBusy ? $t("auth.create.busy") : $t("auth.create.submit")}
         </Button>
+        {#if cloudDefault}
+          <Button variant="secondary" block disabled={!createReady || busy} on:click={() => onCreate(true)}>{$t("auth.create.localOnly")}</Button>
+        {/if}
+        <Button variant="ghost" block disabled={busy} on:click={() => setupMode = "choose"}>{$t("auth.setup.back")}</Button>
       </form>
     {:else if showRecover}
       <form class="form" on:submit|preventDefault={() => onRecover()}>
@@ -245,6 +269,8 @@
     position: relative;
     z-index: 1;
     width: min(420px, 100%);
+    max-height: 100%;
+    overflow-y: auto;
     padding: 28px;
     display: flex;
     flex-direction: column;
@@ -290,6 +316,8 @@
     font-size: 13px;
     line-height: 1.5;
   }
+
+  .setup-note { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 
   .field {
     display: grid;

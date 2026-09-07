@@ -161,7 +161,7 @@ The Rust agent owns final vault access, sync, and configuration writes. The Svel
 | `crates/aipass-agent`       | Trusted local core service                         |
 | `crates/aipass-cli`         | Command-line interface                             |
 | `crates/aipass-vault`       | Encrypted vault model and operations               |
-| `crates/aipass-sync`        | Local folder, iCloud-style folder, and WebDAV sync |
+| `crates/aipass-sync`        | Encrypted snapshots for CloudKit, local folders, OneDrive, and WebDAV |
 | `crates/aipass-native-host` | Browser Native Messaging boundary                  |
 | `packages/ui`               | Shared Svelte UI components                        |
 

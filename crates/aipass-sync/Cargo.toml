@@ -17,5 +17,8 @@ time.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSError", "NSFileManager"] }
+
 [dev-dependencies]
 tempfile.workspace = true

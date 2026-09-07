@@ -49,6 +49,8 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
+      - name: Test native CloudKit transport boundary
+        run: cargo test -p aipass-desktop cloudkit
       - name: Build unsigned macOS app bundle
         run: pnpm --dir apps/desktop tauri build --ci --bundles app
       - name: Verify app bundle

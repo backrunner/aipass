@@ -1198,6 +1198,9 @@ mod tests {
                 last_lock_reason: None,
                 vault_namespace: Some("test".to_string()),
                 initial_sync_pending: false,
+                initial_sync_failed: false,
+                sync_revision: 0,
+                sync_status: None,
             }),
             proxy,
             routes: vec![TrayRoute {

@@ -759,17 +759,16 @@ impl ProxyService {
         if !running {
             return Ok(());
         }
-        let result = self
-            .load_config(vault)
-            .and_then(|_| self.restart(vault).map(|_| ()));
-        if result.is_err() {
-            // Synced vault changes have already committed. Never keep serving
-            // the previous credential snapshot when the replacement fails.
-            self.handle.take();
-            self.config.enabled = false;
-            let _ = self.save_config(vault);
-        }
-        result
+        self.load_config(vault)?;
+        let runtime = self.runtime_config_inner(vault, true)?;
+        // Sync does not own the listening socket or enabled preference. Missing
+        // remote credentials remove only their runtime routes/targets; the
+        // remaining proxy stays live and the stored selection can recover later.
+        self.handle
+            .as_ref()
+            .unwrap()
+            .update_config(runtime)
+            .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))
     }
 
     fn remove_pricing_assignments(
@@ -791,74 +790,87 @@ impl ProxyService {
     }
 
     fn runtime_config(&self, vault: &Vault) -> ServiceResult<RuntimeConfig> {
+        self.runtime_config_inner(vault, false)
+    }
+
+    fn runtime_config_inner(
+        &self,
+        vault: &Vault,
+        skip_unavailable: bool,
+    ) -> ServiceResult<RuntimeConfig> {
         let mut routes = Vec::new();
         for route in self.config.routes.iter().filter(|route| route.enabled) {
             let mut targets = Vec::new();
             for target in route.targets.iter().filter(|target| target.enabled) {
-                let entry = vault
-                    .get_provider_summary(target.provider_entry_id)
-                    .map_err(map_vault_error)?;
-                let credential = entry
-                    .secret_refs
-                    .iter()
-                    .find(|secret| secret.id == target.secret_id)
-                    .ok_or_else(|| {
-                        ServiceError::new(
-                            aipass_agent_protocol::AgentErrorCode::NotFound,
-                            "proxy target credential no longer exists",
-                        )
-                    })?;
-                let interface = credential
-                    .interface_type
-                    .as_ref()
-                    .unwrap_or(&entry.interface_type);
-                if !matches!(
-                    interface,
-                    InterfaceType::AnthropicMessages
-                        | InterfaceType::OpenAiCompatible
-                        | InterfaceType::AzureOpenAi
-                ) {
-                    return Err(ServiceError::new(
-                        aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-                        format!(
-                            "proxy target {} uses an unsupported {:?} interface",
-                            target.label, interface
-                        ),
-                    ));
-                }
-                // The route owns the wire format. A self-hosted endpoint may
-                // support both OpenAI and Anthropic protocols, so inferring a
-                // target's "native" protocol from provider metadata would
-                // reject valid configurations and silently enable conversion
-                // for the wrong format. An explicit target protocol remains
-                // available for legacy/advanced configs; otherwise use the
-                // route's configured upstream protocol verbatim.
-                let target_protocol = target.protocol.unwrap_or(route.upstream_protocol);
-                let mut provider_headers = vault
-                    .reveal_provider_headers(target.provider_entry_id)
-                    .map_err(map_vault_error)?;
-                let api_key =
-                    match vault.reveal_secret_field(target.provider_entry_id, &target.secret_id) {
-                        Ok(api_key) => api_key,
-                        Err(err) => {
-                            for (_, value) in &mut provider_headers {
-                                value.zeroize();
-                            }
-                            return Err(map_vault_error(err));
-                        }
-                    };
-                let mut target_config = target.clone();
-                target_config.protocol = Some(target_protocol);
-                if let Some(pinned) = pinned_official_oauth_endpoint(
-                    &entry.provider_kind,
-                    &entry.credential_kind,
-                    entry.provider_id.as_deref(),
-                ) {
-                    target_config.base_url = pinned.to_string();
-                } else if entry.provider_kind == ProviderKind::Official
-                    && entry.credential_kind == CredentialKind::OAuth
-                {
-                    write_component_log(
+                let resolved = (|| -> ServiceResult<ResolvedTarget> {
+                    let entry = vault
+                        .get_provider_summary(target.provider_entry_id)
+                        .map_err(map_vault_error)?;
+                    let credential = entry
+                        .secret_refs
+                        .iter()
+                        .find(|secret| secret.id == target.secret_id)
+                        .ok_or_else(|| {
+                            ServiceError::new(
+                                aipass_agent_protocol::AgentErrorCode::NotFound,
+                                "proxy target credential no longer exists",
+                            )
+                        })?;
+                    let interface = credential
+                        .interface_type
+                        .as_ref()
+                        .unwrap_or(&entry.interface_type);
+                    if !matches!(
+                        interface,
+                        InterfaceType::AnthropicMessages
+                            | InterfaceType::OpenAiCompatible
+                            | InterfaceType::AzureOpenAi
+                    ) {
+                        return Err(ServiceError::new(
+                            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                            format!(
+                                "proxy target {} uses an unsupported {:?} interface",
+                                target.label, interface
+                            ),
+                        ));
+                    }
+                    // The route owns the wire format. A self-hosted endpoint may
+                    // support both OpenAI and Anthropic protocols, so inferring a
+                    // target's "native" protocol from provider metadata would
+                    // reject valid configurations and silently enable conversion
+                    // for the wrong format. An explicit target protocol remains
+                    // available for legacy/advanced configs; otherwise use the
+                    // route's configured upstream protocol verbatim.
+                    let target_protocol = target.protocol.unwrap_or(route.upstream_protocol);
+                    let mut credentials = vault
+                        .runtime_provider_credentials(target.provider_entry_id, &target.secret_id)
+                        .map_err(map_vault_error)?;
+                    let api_key = credentials.secret.expose().to_owned();
+                    let provider_headers = std::mem::take(&mut *credentials.headers);
+                    let mut target_config = target.clone();
+                    target_config.protocol = Some(target_protocol);
+                    if let Some(url) = entry
+                        .endpoints
+                        .iter()
+                        .find(|endpoint| endpoint.kind == EndpointKind::Api)
+                        .and_then(|endpoint| endpoint.url.as_deref())
+                    {
+                        target_config.base_url = url.to_owned();
+                    }
+                    if let Some(auth) = proxy_auth_scheme(&entry.auth_scheme) {
+                        target_config.auth_scheme = auth.to_owned();
+                    }
+
+                    if let Some(pinned) = pinned_official_oauth_endpoint(
+                        &entry.provider_kind,
+                        &entry.credential_kind,
+                        entry.provider_id.as_deref(),
+                    ) {
+                        target_config.base_url = pinned.to_string();
+                    } else if entry.provider_kind == ProviderKind::Official
+                        && entry.credential_kind == CredentialKind::OAuth
+                    {
+                        write_component_log(
                         AGENT_LOG,
                         "WARN",
                         &format!(
@@ -866,26 +878,44 @@ impl ProxyService {
                             entry.id
                         ),
                     );
-                }
-                for (name, value) in provider_headers {
-                    if let Some((_, existing)) = target_config
-                        .headers
-                        .iter_mut()
-                        .find(|(existing, _)| existing.eq_ignore_ascii_case(&name))
-                    {
-                        existing.zeroize();
-                        *existing = value;
-                    } else {
-                        target_config.headers.push((name, value));
                     }
+                    for (name, value) in provider_headers {
+                        if let Some((_, existing)) = target_config
+                            .headers
+                            .iter_mut()
+                            .find(|(existing, _)| existing.eq_ignore_ascii_case(&name))
+                        {
+                            existing.zeroize();
+                            *existing = value;
+                        } else {
+                            target_config.headers.push((name, value));
+                        }
+                    }
+                    Ok(ResolvedTarget {
+                        supports_websockets: entry.supports_websockets.unwrap_or(true),
+                        config: target_config,
+                        api_key,
+                    })
+                })();
+                match resolved {
+                    Ok(target) => targets.push(target),
+                    Err(error) if skip_unavailable => {
+                        write_component_log(
+                            AGENT_LOG,
+                            "WARN",
+                            &format!(
+                                "proxy target unavailable during refresh target_id={} code={:?}",
+                                target.id, error.code
+                            ),
+                        );
+                    }
+                    Err(error) => return Err(error),
                 }
-                targets.push(ResolvedTarget {
-                    supports_websockets: entry.supports_websockets.unwrap_or(true),
-                    config: target_config,
-                    api_key,
-                });
             }
             if targets.is_empty() {
+                if skip_unavailable {
+                    continue;
+                }
                 return Err(ServiceError::new(
                     aipass_agent_protocol::AgentErrorCode::ValidationFailed,
                     format!("route {} has no enabled targets", route.name),
@@ -1526,6 +1556,16 @@ mod tests {
             .save_config(&creation.vault)
             .expect("save proxy config");
         service.start(&creation.vault).expect("start proxy");
+
+        let revision = creation.vault.sync_revision().unwrap();
+        for _ in 0..3 {
+            service.reload_if_running(&creation.vault).unwrap();
+        }
+        assert_eq!(
+            creation.vault.sync_revision().unwrap(),
+            revision,
+            "runtime reconciliation must not rewrite provider records or create audit entries"
+        );
 
         let request = || {
             reqwest::blocking::Client::new()

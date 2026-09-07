@@ -1,4 +1,6 @@
 mod auth_tasks;
+#[cfg(target_os = "macos")]
+mod cloudkit;
 mod commands;
 mod deeplink;
 mod logging;
@@ -2277,6 +2279,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(move |app| {
             let _ = logging::log_event("desktop.setup.begin", &[]);
@@ -2314,6 +2317,8 @@ pub fn run() {
                 return Err(err.into());
             }
             let _ = logging::log_event("desktop.tray.ready", &[]);
+            #[cfg(target_os = "macos")]
+            cloudkit::start(app.handle().clone());
             ensure_agent_resident_async(app.handle().clone());
             let extension_sync_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -2404,6 +2409,8 @@ pub fn run() {
             browser_extension_install,
             vault_export_encrypted,
             vault_import_encrypted,
+            vault_import_sync,
+            vault_import_pick_path,
             sync_settings_load,
             sync_settings_save,
             sync_run_configured,

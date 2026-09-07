@@ -40,6 +40,9 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                         last_lock_reason: Some(LockReason::AgentRestart),
                         vault_namespace: None,
                         initial_sync_pending: false,
+                        initial_sync_failed: false,
+                        sync_revision: 0,
+                        sync_status: None,
                     });
                 output(
                     json,
@@ -238,6 +241,9 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                         last_lock_reason: Some(LockReason::AgentRestart),
                         vault_namespace: None,
                         initial_sync_pending: false,
+                        initial_sync_failed: false,
+                        sync_revision: 0,
+                        sync_status: None,
                     });
                 output(
                     json,
@@ -284,6 +290,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             let dir = vault_dir(vault.clone())?;
             let creation: VaultCreateResponse =
                 agent.request_no_unlock(AgentRequest::VaultCreate {
+                    local_only: false,
                     password: password.into(),
                 })?;
             let recovery_key = creation.recovery_kit.recovery_key;

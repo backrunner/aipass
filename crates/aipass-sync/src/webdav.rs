@@ -69,8 +69,24 @@ pub struct HttpWebDavClient {
 }
 
 impl HttpWebDavClient {
+    pub fn validate_url(base_url: &str) -> Result<()> {
+        let url = reqwest::Url::parse(base_url.trim())?;
+        if !url.username().is_empty() || url.password().is_some() {
+            anyhow::bail!("use the separate WebDAV username and password fields");
+        }
+        if url.query().is_some() || url.fragment().is_some() {
+            anyhow::bail!("webdav URL must not contain a query or fragment");
+        }
+        let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+        if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+            anyhow::bail!("webdav URL must use HTTPS");
+        }
+        Ok(())
+    }
+
     pub fn new(base_url: &str, username: Option<String>, password: Option<String>) -> Result<Self> {
         let base_url = base_url.trim().trim_end_matches('/');
+        Self::validate_url(base_url)?;
         if base_url.contains(['?', '#']) {
             anyhow::bail!("webdav URL must not contain a query or fragment")
         }
@@ -85,11 +101,21 @@ impl HttpWebDavClient {
         if !is_https && !is_local_http {
             anyhow::bail!("webdav URL must use HTTPS")
         }
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent("AIPass/1.0")
-            .build()?;
+        // A shared pool survives scheduler ticks; authentication is attached
+        // only to each individual request, never to the pooled client.
+        static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+        let client = if let Some(client) = CLIENT.get() {
+            client.clone()
+        } else {
+            let client = Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .user_agent("AIPass/1.0")
+                .build()?;
+            let _ = CLIENT.set(client.clone());
+            client
+        };
         Ok(Self {
             base_path: url_path(base_url),
             base_url: format!("{base_url}/"),
@@ -152,9 +178,6 @@ impl HttpWebDavClient {
 impl WebDavClient for HttpWebDavClient {
     fn list(&self, prefix: &str) -> Result<Vec<WebDavEntry>> {
         let prefix = prefix.trim_matches('/');
-        if !prefix.is_empty() {
-            self.ensure_collection(prefix)?;
-        }
         let body = r#"<?xml version="1.0" encoding="utf-8" ?>
 <D:propfind xmlns:D="DAV:">
   <D:prop>

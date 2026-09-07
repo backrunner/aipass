@@ -2,6 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { prepareCloudKitProfile } from "./cloudkit-profile.mjs";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptsDir, "..");
@@ -19,7 +20,7 @@ const config = {
     createUpdaterArtifacts: true,
     macOS: {
       bundleVersion: buildNumber,
-      entitlements: "Entitlements.plist",
+      ...await prepareCloudKitProfile(join(dirname(outputPath), ".cloudkit-build")),
       hardenedRuntime: true
     }
   }

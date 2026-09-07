@@ -14,7 +14,7 @@ pub(crate) struct RequestContext<'a> {
     pub attempts: &'a mut u8,
     pub hold_deadline: Option<tokio::time::Instant>,
     pub pool: Option<Arc<pool::Pool>>,
-    pub config_changed: tokio::sync::watch::Receiver<()>,
+    pub config_changed: ConfigWatch,
     pub streaming: bool,
 }
 
@@ -221,7 +221,7 @@ struct ResponseStream {
     socket: Option<pool::Connection>,
     pool: Option<Arc<pool::Pool>>,
     key: pool::Key,
-    config_changed: tokio::sync::watch::Receiver<()>,
+    config_changed: ConfigWatch,
     heartbeat: keepalive::Heartbeat,
     invalidated: bool,
     hold_deadline: Option<tokio::time::Instant>,

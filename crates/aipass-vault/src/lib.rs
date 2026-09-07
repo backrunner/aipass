@@ -21,6 +21,9 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
+mod sync_snapshot;
+pub use sync_snapshot::{VaultSnapshotSummary, VaultSyncSnapshot};
+
 const VAULT_FORMAT: &str = "aipass-vault";
 const VAULT_VERSION: u16 = 2;
 /// Selects an entry's first key when a caller has no specific secret id.
@@ -430,6 +433,13 @@ struct ProviderRecordPlaintext {
     secrets: BTreeMap<String, String>,
 }
 
+/// Short-lived input to the trusted agent's runtime credential snapshot.
+/// Intentionally neither serializable nor printable.
+pub struct RuntimeProviderCredentials {
+    pub secret: SecretString,
+    pub headers: zeroize::Zeroizing<Vec<(String, String)>>,
+}
+
 /// Encrypted-at-rest record of an in-app OAuth device-code login. Holds the
 /// full refreshable token bundle so the agent can self-refresh without the
 /// external CLI. Contains secrets: never serialize this to the frontend; the
@@ -688,14 +698,16 @@ impl Vault {
         error: VaultError,
     ) -> Result<Self, VaultError> {
         let (epoch_key, index_key) = unwrap_epoch_and_index_keys(&root_key, &header, error)?;
-        Ok(Self {
+        let mut vault = Self {
             root,
             epoch_key,
             header,
             root_key,
             index_key,
             device_id: Uuid::new_v4(),
-        })
+        };
+        vault.finish_pending_sync()?;
+        Ok(vault)
     }
 
     pub fn vault_id(&self) -> Uuid {
@@ -1449,6 +1461,29 @@ impl Vault {
         Ok(plaintext.entry.headers)
     }
 
+    /// Refresh a running service without recording a user reveal or changing
+    /// last_used_at. Sync reconciliation must never create new synced writes.
+    pub fn runtime_provider_credentials(
+        &self,
+        id: Uuid,
+        secret_id: &str,
+    ) -> Result<RuntimeProviderCredentials, VaultError> {
+        self.ensure_sync_ready()?;
+        let mut plaintext = self.decrypt_provider_path(&self.record_path(id))?;
+        let secret = plaintext.secrets.remove(secret_id).map(SecretString::new);
+        for value in plaintext.secrets.values_mut() {
+            value.zeroize();
+        }
+        let headers = zeroize::Zeroizing::new(plaintext.entry.headers);
+        if plaintext.entry.archived_at.is_some() || plaintext.entry.deleted_at.is_some() {
+            return Err(VaultError::RecordNotFound);
+        }
+        Ok(RuntimeProviderCredentials {
+            secret: secret.ok_or(VaultError::RecordNotFound)?,
+            headers,
+        })
+    }
+
     pub fn create_secret_grant(
         &self,
         entry_id: Uuid,
@@ -1859,6 +1894,10 @@ impl Vault {
         if root.join("manifest.aipmanifest").exists() {
             return Err(VaultError::AlreadyExists);
         }
+        if export.format != "aipass-encrypted-vault-export" || export.version != 1 {
+            return Err(VaultError::InvalidExport);
+        }
+        sync_snapshot::validate_import_kdf(&export.kdf)?;
         let export_key = derive_master_key(export_password, &export.kdf)?;
         let bytes = decrypt_bytes(
             export_key.as_bytes(),
@@ -1866,14 +1905,36 @@ impl Vault {
             &export.payload,
         )?;
         let payload: VaultExportPayload = serde_json::from_slice(&bytes)?;
+        let mut files = BTreeMap::new();
         for file in payload.files {
             let relative_path = checked_relative_path(&file.relative_path)?;
+            if !sync_snapshot::sync_path_allowed(&relative_path)
+                && relative_path != Path::new("manifest.aipmanifest")
+                && relative_path != Path::new("sync-checkpoint.aipcheckpoint")
+                && relative_path != Path::new("server-config.aipstate")
+            {
+                return Err(VaultError::InvalidExport);
+            }
             let bytes = STANDARD_NO_PAD
                 .decode(file.bytes_b64.as_bytes())
                 .map_err(|_| VaultError::InvalidExport)?;
-            let path = root.join(relative_path);
-            atomic_write_bytes(&path, &bytes)?;
+            if files.insert(relative_path, bytes).is_some() {
+                return Err(VaultError::InvalidExport);
+            }
         }
+        let manifest = files
+            .remove(Path::new("manifest.aipmanifest"))
+            .ok_or(VaultError::InvalidExport)?;
+        let header: VaultHeader = serde_json::from_slice(&manifest)?;
+        validate_header(&header)?;
+        if header.vault_id != export.vault_id {
+            return Err(VaultError::InvalidExport);
+        }
+        for (relative_path, bytes) in files {
+            atomic_write_bytes(root.join(relative_path), &bytes)?;
+        }
+        // Publish existence only after every validated encrypted file is in place.
+        atomic_write_bytes(root.join("manifest.aipmanifest"), &manifest)?;
         create_dirs(root)?;
         Ok(())
     }
@@ -2658,6 +2719,28 @@ mod tests {
             requires_reauth: false,
             authenticated_at: OffsetDateTime::now_utc(),
         }
+    }
+
+    #[test]
+    fn runtime_credentials_are_read_only_and_exclude_inactive_providers() {
+        let dir = tempdir().unwrap();
+        let vault = create_test_vault(dir.path(), &SecretString::new("test-master"));
+        let id = vault.add_provider(input("runtime-fixture-secret")).unwrap();
+        let secret_id = vault.get_provider_summary(id).unwrap().secret_refs[0]
+            .id
+            .clone();
+        let revision = vault.sync_revision().unwrap();
+        for _ in 0..3 {
+            let credential = vault.runtime_provider_credentials(id, &secret_id).unwrap();
+            assert_eq!(credential.secret.expose(), "runtime-fixture-secret");
+        }
+        assert_eq!(vault.sync_revision().unwrap(), revision);
+        vault.archive_provider(id).unwrap();
+        assert!(vault.runtime_provider_credentials(id, &secret_id).is_err());
+        vault.restore_provider(id).unwrap();
+        assert!(vault.runtime_provider_credentials(id, &secret_id).is_ok());
+        vault.trash_provider(id).unwrap();
+        assert!(vault.runtime_provider_credentials(id, &secret_id).is_err());
     }
 
     #[test]

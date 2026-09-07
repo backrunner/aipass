@@ -1,0 +1,13 @@
+DEFINE SCHEMA
+
+    RECORD TYPE VaultSnapshot (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        ciphertext      ASSET,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_creator"
+    );

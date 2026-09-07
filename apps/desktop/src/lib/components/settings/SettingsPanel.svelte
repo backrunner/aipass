@@ -196,6 +196,8 @@
   }
 
   function conflictTitle(conflict: SyncConflict): string {
+    if (conflict.object.objectType === "invalid_snapshot") return $t("settings.invalidSnapshot");
+    if (conflict.object.objectType === "vault_snapshot") return $t("settings.vaultSnapshot");
     return conflict.conflictSummary?.title ?? conflict.targetSummary?.title ?? conflict.object.objectType;
   }
 
@@ -608,12 +610,17 @@
                           <strong>{conflictTitle(conflict)}</strong>
                           <span class="text-tertiary">{conflict.scope} · {$t("settings.incomingOrigin", { origin: conflict.origin })}</span>
                         </div>
+                        {#if conflict.object.objectType === "vault_snapshot"}<p class="hint">{$t("settings.snapshotConflictHint")}</p>{/if}
+                        {#if conflict.snapshotSummary}
+                          <div class="hint">{new Date(conflict.object.updatedAt).toLocaleString()} · {$t("settings.snapshotCount", { count: conflict.snapshotSummary.providerCount })}<br />{conflict.snapshotSummary.titles.join(" · ")}</div>
+                        {:else}
                         <div class="conflict-versions">
                           <div><span class="kv-label">{$t("settings.current")}</span><code class="mono">{conflictDetail(conflict.targetSummary, `target ${conflict.object.hashHex.slice(0, 12)}`)}</code></div>
                           <div><span class="kv-label">{$t("settings.incoming")}</span><code class="mono">{conflictDetail(conflict.conflictSummary, conflict.object.hashHex.slice(0, 12))}</code></div>
                         </div>
+                        {/if}
                         <div class="conflict-actions">
-                          <Button variant="secondary" size="sm" disabled={!!conflictBusy} on:click={() => onResolveSyncConflict(conflict, "accept")}>
+                          <Button variant="secondary" size="sm" disabled={!!conflictBusy || conflict.object.objectType === "invalid_snapshot"} on:click={() => onResolveSyncConflict(conflict, "accept")}>
                             <Check size={13} /> {$t("settings.acceptIncoming")}
                           </Button>
                           <Button variant="ghost" size="sm" disabled={!!conflictBusy} on:click={() => onResolveSyncConflict(conflict, "discard")}>

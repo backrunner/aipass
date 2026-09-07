@@ -1,10 +1,14 @@
 mod local;
+mod snapshot;
 mod webdav;
+pub use snapshot::{
+    snapshot_id, valid_snapshot_id, FolderSnapshotRemote, SnapshotRemote, WebDavSnapshotRemote,
+};
 
 pub use local::{
     accept_conflict, accept_conflict_with_validator, discard_conflict, get_conflict, hash_file,
-    list_conflicts, list_sync_files, list_webdav_sync_files, sync_local_folder,
-    sync_local_folder_with_validator, sync_server_visibility_scan, sync_webdav,
+    list_conflicts, list_sync_files, list_webdav_sync_files, quarantine_sync_object,
+    sync_local_folder, sync_local_folder_with_validator, sync_server_visibility_scan, sync_webdav,
     sync_webdav_with_validator, validate_sync_object_bytes, validate_sync_object_bytes_for_vault,
     ConflictRecord, SyncCheckpoint, SyncObject, SyncObjectValidator, SyncReport, SyncStatus,
 };
@@ -342,5 +346,8 @@ mod tests {
     fn webdav_rejects_plain_http_except_loopback() {
         assert!(HttpWebDavClient::new("http://dav.example/aipass", None, None).is_err());
         assert!(HttpWebDavClient::new("http://127.0.0.1:8080/aipass", None, None).is_ok());
+        assert!(
+            HttpWebDavClient::new("https://user:password@dav.example/aipass", None, None).is_err()
+        );
     }
 }

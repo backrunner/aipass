@@ -41,7 +41,7 @@ pub(super) async fn handle_request(
         .copied()
         .unwrap_or_else(Uuid::new_v4);
     // Subscribe before resolving credentials, including changes during handshake.
-    let mut config_changed = state.config_changed.subscribe();
+    let mut config_changed = ConfigWatch::subscribe(&state);
     if request.uri().path().trim_end_matches('/') != "/v1/responses" {
         return error_response(StatusCode::NOT_FOUND, "unsupported WebSocket proxy path");
     }
@@ -58,6 +58,7 @@ pub(super) async fn handle_request(
             "invalid local proxy token or route",
         );
     };
+    config_changed.scope(route.config.id);
     route.local_token.zeroize();
     route.config.token.zeroize();
     let mut downstream_response = match create_response_with_body(&request, empty_body) {
@@ -426,7 +427,7 @@ async fn connect_with_headers(
 async fn relay(
     downstream: TokioIo<hyper::upgrade::Upgraded>,
     upstream: reqwest::Upgraded,
-    mut config_changed: tokio::sync::watch::Receiver<()>,
+    mut config_changed: ConfigWatch,
     mut usage: SessionUsage,
 ) {
     let config = WebSocketConfig::default()
