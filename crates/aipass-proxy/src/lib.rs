@@ -2,6 +2,7 @@ use aipass_proxy_conversion::{
     BuiltinConversionPlugin, ConversionPlugin, ProxyProtocol, StreamConverter, TokenUsage,
 };
 use bytes::Bytes;
+use concurrency::{capacity_response, ProviderAtCapacity, ProviderPermit};
 use futures_util::{stream, Stream, StreamExt};
 use http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full, StreamBody};
@@ -28,6 +29,7 @@ use zeroize::Zeroize;
 
 pub use aipass_proxy_conversion::{supports, ConversionError, ProxyProtocol as Protocol};
 
+mod concurrency;
 mod diagnostics;
 mod images;
 mod routing;
@@ -1082,6 +1084,8 @@ pub enum ProxyError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedTarget {
+    /// Provider-owned concurrency limit; missing/zero is unlimited.
+    pub max_concurrent_requests: Option<u32>,
     /// Provider-owned capability, resolved from the vault on every refresh.
     pub supports_websockets: bool,
     pub config: ProxyTargetConfig,
@@ -1195,6 +1199,7 @@ struct RuntimeState {
     config_changed: tokio::sync::watch::Sender<Arc<HashMap<Uuid, u64>>>,
     in_flight_requests: Arc<AtomicU64>,
     target_activity: Arc<Mutex<HashMap<Uuid, u64>>>,
+    provider_activity: Arc<Mutex<HashMap<Uuid, u64>>>,
 }
 
 #[derive(Default)]
@@ -1323,6 +1328,7 @@ impl ProxyHandle {
             config_changed: tokio::sync::watch::channel(Arc::new(HashMap::new())).0,
             in_flight_requests: Arc::new(AtomicU64::new(0)),
             target_activity: Arc::new(Mutex::new(HashMap::new())),
+            provider_activity: Arc::new(Mutex::new(HashMap::new())),
         };
         let thread_state = state.clone();
         let (stop_tx, stop_rx) = oneshot::channel();
@@ -2241,6 +2247,16 @@ fn select_route_targets_with_affinity(
     route: &ResolvedRoute,
     session_key: Option<&str>,
 ) -> Vec<ResolvedTarget> {
+    let mut targets = ordered_route_targets(state, route, session_key);
+    targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
+    targets
+}
+
+fn ordered_route_targets(
+    state: &RuntimeState,
+    route: &ResolvedRoute,
+    session_key: Option<&str>,
+) -> Vec<ResolvedTarget> {
     let mut targets = route.targets.clone();
     targets.retain(|target| target.config.enabled);
     targets.sort_by_key(|target| target.config.priority);
@@ -2296,7 +2312,6 @@ fn select_route_targets_with_affinity(
             targets.insert(0, preferred);
         }
     }
-    targets.truncate(usize::from(route.config.retry.max_attempts.max(1)));
     targets
 }
 
@@ -2333,12 +2348,22 @@ async fn handle_models_request(
     let mut last_error = None;
     let mut saw_not_found = false;
     let mut saw_other_failure = false;
+    let mut capacity_skipped = false;
     for _round in 0..silent_retry_rounds(&route.config.retry) {
-        let targets = select_route_targets_with_affinity(&state, &route, session_key.as_deref());
+        let targets = ordered_route_targets(&state, &route, session_key.as_deref());
+        let mut attempts = 0;
         for target in targets {
+            if attempts >= route.config.retry.max_attempts.max(1) {
+                break;
+            }
             let Some(_recovery) = RecoveryPermit::acquire(&state, target.config.id) else {
                 continue;
             };
+            let Some(_permit) = ProviderPermit::acquire(&state, &target) else {
+                capacity_skipped = true;
+                continue;
+            };
+            attempts += 1;
             let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
                 Ok(client) => client,
                 Err(err) => {
@@ -2457,6 +2482,9 @@ async fn handle_models_request(
         }
     }
 
+    if capacity_skipped && !saw_not_found && !saw_other_failure {
+        return capacity_response();
+    }
     // Model discovery is optional and several upstreams (notably Anthropic)
     // legitimately do not expose a /v1/models endpoint. Keep that client
     // response visible without treating it as a proxy health failure.
@@ -2831,6 +2859,7 @@ async fn forward_request_inner(
         });
     let mut target_attempts = 0u8;
     let mut generation_submitted = false;
+    let mut capacity_skipped = false;
     let mut hold_round = 0u32;
     let hold_deadline = hold_deadline(&route.config.retry, started);
     'hold: loop {
@@ -2838,9 +2867,12 @@ async fn forward_request_inner(
             break;
         }
         for _round in 0..silent_retry_rounds(&route.config.retry) {
-            let targets =
-                select_route_targets_with_affinity(&state, &route, session_key.as_deref());
+            let targets = ordered_route_targets(&state, &route, session_key.as_deref());
+            let mut round_attempts = 0u8;
             for target in targets {
+                if round_attempts >= route.config.retry.max_attempts.max(1) {
+                    break;
+                }
                 if generation_submitted {
                     break 'hold;
                 }
@@ -2850,8 +2882,16 @@ async fn forward_request_inner(
                 let Some(recovery) = RecoveryPermit::acquire(&state, target.config.id) else {
                     continue;
                 };
-                let target_activity =
-                    (TargetActivityGuard::new(&state, target.config.id), recovery);
+                let Some(provider_permit) = ProviderPermit::acquire(&state, &target) else {
+                    capacity_skipped = true;
+                    continue;
+                };
+                round_attempts += 1;
+                let target_activity = (
+                    TargetActivityGuard::new(&state, target.config.id),
+                    recovery,
+                    provider_permit,
+                );
                 target_attempts = target_attempts.saturating_add(1);
                 failure_target = Some((
                     target.config.provider_entry_id,
@@ -3509,8 +3549,18 @@ async fn forward_request_inner(
         hold_round = hold_round.saturating_add(1);
     }
 
-    let final_status = ws_rejection.unwrap_or(StatusCode::BAD_GATEWAY);
-    let diagnostic = last_error.unwrap_or_else(|| "all upstream targets failed".into());
+    let at_capacity = capacity_skipped && target_attempts == 0;
+    let final_status = if at_capacity {
+        StatusCode::TOO_MANY_REQUESTS
+    } else {
+        ws_rejection.unwrap_or(StatusCode::BAD_GATEWAY)
+    };
+    let message = if at_capacity {
+        "all available providers are at their concurrency limit"
+    } else {
+        "all upstream targets failed"
+    };
+    let diagnostic = last_error.unwrap_or_else(|| message.into());
     record_request(&state, false, None);
     set_error(&state, diagnostic);
     if let Some((provider_entry_id, secret_id)) = failure_target {
@@ -3534,7 +3584,11 @@ async fn forward_request_inner(
             estimated_cost_micros: 0,
         });
     }
-    Ok(error_response(final_status, "all upstream targets failed"))
+    Ok(if at_capacity {
+        capacity_response()
+    } else {
+        error_response(final_status, message)
+    })
 }
 
 struct AttemptOutcome {
@@ -4753,6 +4807,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    mod concurrency;
     mod image_api;
     mod runtime_status;
     mod stability;
@@ -4988,6 +5043,7 @@ mod tests {
         ResolvedTarget {
             // These fixtures exercise the HTTP retry/streaming pipeline.
             // WS preference and fallback have dedicated adaptive WS tests.
+            max_concurrent_requests: None,
             supports_websockets: false,
             config: ProxyTargetConfig {
                 id: Uuid::new_v4(),
@@ -7519,6 +7575,7 @@ mod tests {
         let route_id = Uuid::new_v4();
         let provider_id = Uuid::new_v4();
         let target = |id, base_url, priority| ResolvedTarget {
+            max_concurrent_requests: None,
             supports_websockets: false,
             config: ProxyTargetConfig {
                 id,

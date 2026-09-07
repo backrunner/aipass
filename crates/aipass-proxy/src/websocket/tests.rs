@@ -12,6 +12,7 @@ const UPSTREAM_KEY: &str = "upstream-ws-test-key";
 
 fn test_route(base_url: String) -> ResolvedRoute {
     let target = ResolvedTarget {
+        max_concurrent_requests: None,
         supports_websockets: true,
         config: ProxyTargetConfig {
             id: Uuid::new_v4(),

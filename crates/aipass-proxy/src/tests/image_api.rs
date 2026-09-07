@@ -614,3 +614,69 @@ async fn image_stream_is_cancelled_on_credential_revocation_without_learning_fai
         .any(|e| e.message.contains("support=")));
     assert_eq!(proxy.status().failures, 0);
 }
+
+#[tokio::test]
+async fn provider_concurrency_images_skip_busy_targets_and_wait_only_before_submission() {
+    for hold in [false, true] {
+        let primary = Provider::new(Reply::json(StatusCode::OK, IMAGE)).await;
+        let backup = Provider::new(Reply::json(StatusCode::OK, IMAGE)).await;
+        let mut route = fallback_route(
+            "image-local-token",
+            &[primary.addr, backup.addr],
+            RetryPolicy {
+                max_attempts: 1,
+                hold_on_failure: hold,
+                hold_initial_delay_ms: 10,
+                hold_max_delay_ms: 10,
+                hold_max_duration_ms: 1000,
+                ..RetryPolicy::default()
+            },
+        );
+        for target in &mut route.targets {
+            target.max_concurrent_requests = Some(1);
+        }
+        let targets = route.targets.clone();
+        let (_temp, proxy) = proxy(route);
+        let a = ProviderPermit::acquire(&proxy.state, &targets[0]).unwrap();
+        let response = image_request(&proxy, "generations", "image-model")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.text().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while proxy
+                .state
+                .provider_activity
+                .lock()
+                .unwrap()
+                .contains_key(&targets[1].config.provider_entry_id)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(primary.count(), 0);
+        assert_eq!(backup.count(), 1);
+        let b = ProviderPermit::acquire(&proxy.state, &targets[1]).unwrap();
+        let request = image_request(&proxy, "edits", "image-model");
+        let pending = tokio::spawn(async move { request.send().await.unwrap() });
+        if hold {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(!pending.is_finished());
+            drop(a);
+            let response = pending.await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.text().await.unwrap();
+            assert_eq!(primary.count(), 1);
+        } else {
+            assert_eq!(
+                pending.await.unwrap().status(),
+                StatusCode::TOO_MANY_REQUESTS
+            );
+        }
+        drop(b);
+        assert!(proxy.status().degraded_target_ids.is_empty());
+    }
+}

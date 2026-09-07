@@ -1463,6 +1463,8 @@
       credentialKind: entry.credentialKind ?? "api",
       accountIdentity: entry.accountIdentity ?? "",
       interfaceType: entry.interfaceType,
+      maxConcurrentRequests: entry.maxConcurrentRequests,
+      concurrencyLimitTouched: false,
       supportsWebsockets: entry.supportsWebsockets ?? true,
       websocketWarning: entry.websocketWarning,
       websocketPreferenceTouched: false,
@@ -1542,6 +1544,11 @@
       error = localizedMessage("providers.invalidEndpoint");
       return;
     }
+    const concurrencyLimit = draft.maxConcurrentRequests ?? 0;
+    if (!Number.isInteger(concurrencyLimit) || concurrencyLimit < 0 || concurrencyLimit > 4_294_967_295) {
+      error = $t("providerForm.invalidConcurrencyLimit");
+      return;
+    }
     const provider = providerDefinitions.find((item) => item.id === draft.providerId);
     const request = {
       title: draft.title || provider?.displayName || $t("providerList.customProvider"),
@@ -1551,6 +1558,9 @@
       consoleEndpoints: splitEndpointList(draft.consoleUrl),
       faviconUrl: draft.faviconUrl || undefined,
       interfaceType: draft.interfaceType,
+      maxConcurrentRequests: formMode === "add" || draft.concurrencyLimitTouched
+        ? draft.maxConcurrentRequests ?? 0
+        : undefined,
       supportsWebsockets: formMode === "add" || draft.websocketPreferenceTouched
         ? draft.supportsWebsockets ?? true
         : undefined,

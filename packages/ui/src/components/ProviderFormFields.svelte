@@ -21,6 +21,7 @@
   export let onAuthChanged: () => MaybePromise = () => {};
   export let itemLayout = false;
   export let showWebsocketSetting = false;
+  export let showConcurrencySetting = false;
   export let websocketWarning = draft.websocketWarning;
   export let websocketProbing = false;
   export let compactProviderSelect = false;
@@ -401,6 +402,27 @@
         onValueChange={() => onAuthChanged()}
       />
     </div>
+    {#if showConcurrencySetting}
+      <Field label={$t("providerForm.maxConcurrentRequests")} hint={$t("providerForm.maxConcurrentRequestsHint")}>
+        <input
+          name="maxConcurrentRequests"
+          type="number"
+          min="0"
+          max="4294967295"
+          step="1"
+          value={draft.maxConcurrentRequests ?? ""}
+          placeholder={$t("providerForm.unlimitedConcurrency")}
+          on:input={(event) => {
+            const input = event.currentTarget;
+            draft = {
+              ...draft,
+              maxConcurrentRequests: input.validity.badInput ? Number.NaN : input.value === "" ? undefined : Number(input.value),
+              concurrencyLimitTouched: true
+            };
+          }}
+        />
+      </Field>
+    {/if}
     {#if showWebsocketSetting && (draft.interfaceType === "openai_compatible" || draft.interfaceType === "azure_openai")}
       <SwitchField
         label={$t("providerForm.supportsWebsockets")}

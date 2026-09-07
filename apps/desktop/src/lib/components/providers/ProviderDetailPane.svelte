@@ -415,6 +415,9 @@
         return "interface.customHttp";
     }
   }
+  $: if (editMode && selected && !draft.concurrencyLimitTouched) {
+    draft.maxConcurrentRequests = selected.maxConcurrentRequests;
+  }
   // Background capability updates may change this switch while other edits remain in progress.
   $: if (editMode && selected && !draft.websocketPreferenceTouched) {
     draft.supportsWebsockets = selected.supportsWebsockets ?? true;
@@ -523,6 +526,7 @@
 
       {#if editMode}
         <ProviderFormFields
+          showConcurrencySetting
           showWebsocketSetting
           websocketWarning={selected.websocketWarning}
           websocketProbing={saving && Boolean(draft.websocketPreferenceTouched && draft.supportsWebsockets && selected.supportsWebsockets === false)}
@@ -848,6 +852,10 @@
                 <span>{$t("providerDetail.addKey")}</span>
               </button>
             {/if}
+          </div>
+          <div class="kv-row">
+            <span class="kv-label">{$t("providerForm.maxConcurrentRequests")}</span>
+            <span class="kv-value">{selected.maxConcurrentRequests || $t("providerForm.unlimitedConcurrency")}</span>
           </div>
           {#if selected.defaultModel}
             <button

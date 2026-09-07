@@ -593,10 +593,19 @@ async fn run_response(
     .await
     .unwrap_or_else(|never| match never {});
     if !response.status().is_success() {
+        let at_capacity = response.extensions().get::<ProviderAtCapacity>().is_some();
         return Err(BridgeError {
             status: response.status(),
-            code: "upstream_error",
-            message: "converted upstream request failed",
+            code: if at_capacity {
+                "provider_concurrency_limit"
+            } else {
+                "upstream_error"
+            },
+            message: if at_capacity {
+                "all available providers are at their concurrency limit"
+            } else {
+                "converted upstream request failed"
+            },
         });
     }
     let identity = response.extensions().get::<UpstreamIdentity>().copied();

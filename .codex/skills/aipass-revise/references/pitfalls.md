@@ -297,6 +297,14 @@ Newest entries last within each section.
 - **Guardrail**: distinguish operation, model, streaming mode and effective credential configuration; filter unsupported/non-OpenAI targets before limiting attempts. Never learn unsupported from auth/quota/parameter errors or from missing output. Never use a chat protocol converter, change conversation affinity, or replay an ambiguous submitted image request. Preserve slow generation and config cancellation. Keep capabilities ephemeral and payloads out of diagnostics.
 - **Watch points**: Images entry auth, multipart metadata, `images::candidates`, structured error classification, large split image SSE events, and `tests/image_api.rs`. Native Responses image tools are a separate capability.
 
+### Provider concurrency admission must cover every forwarding path
+- **Symptom**: channel activity statistics alone cannot enforce a provider limit, and independent channels/keys can bypass a per-target cap.
+- **Root cause**: `TargetActivityGuard` counted by target; HTTP generations, Images, model discovery and native WS submission had separate admission paths.
+- **Fix**: provider-wide atomic permits shared across routes, including unlimited occupancy for live limit changes. Limited WS routes use the existing per-generation bridge; storage and IPC carry the provider-owned setting with protocol v7.
+- **Guardrail**: acquire before submission and release after completion/cancellation; never truncate the candidate list before skipping full providers. Preserve occupancy across config reloads and keep busy skips out of circuit health. Run `provider_concurrency` regressions, vault durability and desktop edit/save/reopen tests.
+- **Watch points**: `concurrency.rs`, HTTP/model dispatch, `images.rs`, native WS and bridge, Agent runtime snapshots, Vault update omission semantics, Tauri/provider form mappings. Never bypass provider-bound continuation or no-replay protections to find a free slot.
+- **Form guardrail**: update a numeric draft value and its touched flag in one input handler. A separate `bind:value` plus touched mutation can let a parent reactive refresh restore the old value before the binding reads it. Verify changing a nonempty limit in a real 960×640 browser as well as the App regression.
+
 ## Public model pricing (aipass-agent pricing)
 
 ### Startup-only refresh and encrypted metadata left prices stale

@@ -231,6 +231,10 @@ pub struct ProviderEntryInput {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Provider-wide local proxy limit. Missing/zero is unlimited; updates
+    /// preserve the existing limit when omitted and clear it with zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
     /// Responses WebSocket capability; absence keeps the default enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_websockets: Option<bool>,
@@ -268,6 +272,10 @@ pub struct ProviderEntryUpdateInput {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Provider-wide local proxy limit. Missing/zero is unlimited; updates
+    /// preserve the existing limit when omitted and clear it with zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
     /// Responses WebSocket capability; absence keeps the default enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_websockets: Option<bool>,
@@ -308,6 +316,10 @@ pub struct EntrySummary {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Provider-wide local proxy limit. Missing/zero is unlimited; updates
+    /// preserve the existing limit when omitted and clear it with zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
     /// Responses WebSocket capability; absence keeps the default enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_websockets: Option<bool>,
@@ -908,6 +920,7 @@ impl Vault {
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
+            max_concurrent_requests: input.max_concurrent_requests.filter(|limit| *limit > 0),
             supports_websockets: input.supports_websockets,
             websocket_warning: None,
             interface_type: input.interface_type,
@@ -1183,6 +1196,10 @@ impl Vault {
             domains: input.domains,
             favicon_url: input.favicon_url,
             endpoints: input.endpoints,
+            max_concurrent_requests: input
+                .max_concurrent_requests
+                .or(old.entry.max_concurrent_requests)
+                .filter(|limit| *limit > 0),
             supports_websockets: input.supports_websockets.or(old.entry.supports_websockets),
             websocket_warning,
             interface_type: input.interface_type,
@@ -2304,6 +2321,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
     let entry = &plaintext.entry;
     let primary = entry.secret_refs.first();
     EntrySummary {
+        max_concurrent_requests: entry.max_concurrent_requests,
         supports_websockets: entry.supports_websockets,
         websocket_warning: entry.websocket_warning.clone(),
         id: entry.id,
@@ -2637,6 +2655,46 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn provider_concurrency_limit_is_durable_and_omitted_updates_preserve_it() {
+        let dir = tempdir().unwrap();
+        let password = SecretString::new("test password");
+        let vault = create_test_vault(dir.path(), &password);
+        let mut initial = input("test-secret");
+        let legacy = serde_json::to_value(&initial).unwrap();
+        assert!(legacy.get("maxConcurrentRequests").is_none());
+        assert_eq!(
+            serde_json::from_value::<ProviderEntryInput>(legacy)
+                .unwrap()
+                .max_concurrent_requests,
+            None
+        );
+        initial.max_concurrent_requests = Some(3);
+        let id = vault.add_provider(initial).unwrap();
+        vault.update_provider(id, update_input(None)).unwrap();
+        drop(vault);
+        let vault = Vault::open(dir.path(), &password).unwrap();
+        assert_eq!(
+            vault
+                .get_provider_summary(id)
+                .unwrap()
+                .max_concurrent_requests,
+            Some(3)
+        );
+        let mut update = update_input(None);
+        update.max_concurrent_requests = Some(0);
+        vault.update_provider(id, update).unwrap();
+        drop(vault);
+        let vault = Vault::open(dir.path(), &password).unwrap();
+        assert_eq!(
+            vault
+                .get_provider_summary(id)
+                .unwrap()
+                .max_concurrent_requests,
+            None
+        );
+    }
+
+    #[test]
     fn websocket_auto_disable_is_narrow_durable_and_cleared_only_by_recovery() {
         let dir = tempdir().unwrap();
         let password = SecretString::new("test password");
@@ -2686,6 +2744,7 @@ mod tests {
             .is_none());
         let manual_id = vault
             .add_provider(ProviderEntryInput {
+                max_concurrent_requests: None,
                 supports_websockets: Some(false),
                 ..input("manual")
             })
@@ -2699,6 +2758,7 @@ mod tests {
 
     fn input(secret: &str) -> ProviderEntryInput {
         ProviderEntryInput {
+            max_concurrent_requests: None,
             supports_websockets: None,
             title: "Anthropic Prod".to_string(),
             provider_kind: ProviderKind::Official,
@@ -2733,6 +2793,7 @@ mod tests {
 
     fn update_input(secret: Option<&str>) -> ProviderEntryUpdateInput {
         ProviderEntryUpdateInput {
+            max_concurrent_requests: None,
             supports_websockets: None,
             title: "Anthropic Prod Renamed".to_string(),
             provider_kind: ProviderKind::Official,

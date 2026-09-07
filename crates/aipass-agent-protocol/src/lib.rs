@@ -25,7 +25,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // and background sync status. Older residents cannot implement these semantics.
 // Version 5 adds the signed native CloudKit transport.
 // Version 6 requires verified WS preference recovery and automatic capability warnings.
-pub const AGENT_PROTOCOL_VERSION: u32 = 6;
+// Version 7 requires provider concurrency persistence and runtime admission limits.
+pub const AGENT_PROTOCOL_VERSION: u32 = 7;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]

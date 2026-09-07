@@ -71,6 +71,28 @@ pub(super) async fn handle_request(
     // including when sibling targets use HTTP or a different protocol.
     let fallback_route = route.clone();
     let fallback_pool = Arc::new(pool::Pool::default());
+    // Limited routes must select/admit each generation, not pin an idle socket
+    // to a provider that may be full when the next response.create arrives.
+    if route
+        .targets
+        .iter()
+        .filter(|target| target.config.enabled)
+        .any(|target| {
+            target
+                .max_concurrent_requests
+                .is_some_and(|limit| limit > 0)
+        })
+    {
+        return bridge::upgrade(
+            request,
+            state,
+            route,
+            pricing,
+            config_changed,
+            downstream_response,
+            fallback_pool,
+        );
+    }
     let client =
         match upstream_client_for_transport(&state, route.config.retry.connect_timeout_ms, true) {
             Ok(client) => client,
@@ -488,8 +510,13 @@ async fn relay(
         if let Message::Text(text) = &message {
             if let Ok(value) = serde_json::from_str(text) {
                 if from_client {
-                    if !usage.client_event(&value) {
-                        let mut error = serde_json::json!({"type":"error","status":503,"error":{"type":"server_error","code":"provider_temporarily_unavailable","message":"provider is cooling down or recovering; reconnect and resend full input"}});
+                    if let Err(status) = usage.client_event(&value) {
+                        let (code, message) = if status == StatusCode::TOO_MANY_REQUESTS {
+                            ("provider_concurrency_limit", "provider is at its concurrency limit; reconnect and resend full input")
+                        } else {
+                            ("provider_temporarily_unavailable", "provider is cooling down or recovering; reconnect and resend full input")
+                        };
+                        let mut error = serde_json::json!({"type":"error","status":status.as_u16(),"error":{"type":"server_error","code":code,"message":message}});
                         if let Some(lane) = value.get("stream_id") {
                             error["stream_id"] = lane.clone();
                         }
@@ -575,7 +602,12 @@ async fn relay(
 
 struct ResponseUsage {
     trace: ResponseTrace,
-    activity: Option<(TargetActivityGuard, RecoveryPermit, InFlightGuard)>,
+    activity: Option<(
+        TargetActivityGuard,
+        RecoveryPermit,
+        InFlightGuard,
+        ProviderPermit,
+    )>,
     request_id: Uuid,
     started: Instant,
     started_at: i64,
@@ -655,20 +687,29 @@ impl SessionUsage {
         }
     }
 
-    fn client_event(&mut self, value: &serde_json::Value) -> bool {
+    fn client_event(&mut self, value: &serde_json::Value) -> Result<(), StatusCode> {
         self.client_event_with_id(value, Uuid::new_v4())
     }
 
-    fn client_event_with_id(&mut self, value: &serde_json::Value, request_id: Uuid) -> bool {
+    fn client_event_with_id(
+        &mut self,
+        value: &serde_json::Value,
+        request_id: Uuid,
+    ) -> Result<(), StatusCode> {
         // Retain metadata only, never prompts, tool results or full WS events.
         // Cap bookkeeping independently of the upstream's multiplexing limits.
-        if value["type"] != "response.create"
-            || self.active.len() + self.pending.values().map(VecDeque::len).sum::<usize>() >= 1024
-        {
-            return true;
+        if value["type"] != "response.create" {
+            return Ok(());
+        }
+        // Never forward a generation we cannot track and release later.
+        if self.active.len() + self.pending.values().map(VecDeque::len).sum::<usize>() >= 1024 {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
         let Some(recovery) = RecoveryPermit::acquire(&self.state, self.target.config.id) else {
-            return false;
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        };
+        let Some(provider_permit) = ProviderPermit::acquire(&self.state, &self.target) else {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
         };
         let mut request = ResponseUsage::new(value, self.session_key.as_deref());
         request.request_id = request_id;
@@ -676,6 +717,7 @@ impl SessionUsage {
             TargetActivityGuard::new(&self.state, self.target.config.id),
             recovery,
             InFlightGuard::new(self.state.in_flight_requests.clone()),
+            provider_permit,
         ));
         self.state.usage.log_diagnostic(
             "info",
@@ -695,7 +737,7 @@ impl SessionUsage {
             .entry(request.stream_id.clone())
             .or_default()
             .push_back(request);
-        true
+        Ok(())
     }
 
     fn take_pending(&mut self, value: &serde_json::Value) -> Option<ResponseUsage> {

@@ -251,9 +251,7 @@ fn candidates(
     });
     // Filter before the attempt limit, so excluded targets do not consume slots.
     // Image calls have no Responses lineage and must not steal its affinity.
-    let limit = eligible.config.retry.max_attempts.max(1);
-    eligible.config.retry.max_attempts = u8::MAX;
-    let mut targets = select_route_targets_with_affinity(state, &eligible, None);
+    let mut targets = ordered_route_targets(state, &eligible, None);
     targets.sort_by_key(|target| {
         state.image_capabilities.lock().ok().and_then(|mut ledger| {
             ledger.get(&key(
@@ -265,7 +263,6 @@ fn candidates(
             ))
         }) != Some(Support::Supported)
     });
-    targets.truncate(usize::from(limit));
     targets
 }
 
@@ -552,7 +549,7 @@ pub(super) async fn forward(
         Ok(metadata) => metadata,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
     };
-    let targets = candidates(&state, &route, operation, &metadata);
+    let mut targets = candidates(&state, &route, operation, &metadata);
     state.usage.log_diagnostic(
         "info",
         format!(
@@ -567,223 +564,262 @@ pub(super) async fn forward(
     }
     let mut final_attempt = None;
     let mut attempts = 0;
-    for target in targets {
-        let key = key(
-            &state,
-            &target,
-            operation,
-            metadata.model.as_deref(),
-            metadata.stream,
-        );
-        // Another in-flight request may have learned a rejection after ranking.
-        if state
-            .image_capabilities
-            .lock()
-            .ok()
-            .and_then(|mut ledger| ledger.get(&key))
-            == Some(Support::Unsupported)
-        {
-            continue;
-        }
-        let Some(recovery) = RecoveryPermit::acquire(&state, target.config.id) else {
-            continue;
-        };
-        attempts += 1;
-        let activity = TargetActivityGuard::new(&state, target.config.id);
-        let protocol = target
-            .config
-            .effective_protocol(route.config.upstream_protocol);
-        let mut attempt = Attempt {
-            state: state.clone(),
-            target,
-            route_id: route.config.id,
-            request_id: request.request_id,
-            model: metadata.model.clone(),
-            inbound: route.config.inbound_protocol,
-            upstream: protocol,
-            retry: route.config.retry.clone(),
-            operation,
-            key,
-            started: Instant::now(),
-            started_at: now_unix(),
-            request_started: request.started,
-            request_started_at: request.started_at,
-            number: attempts,
-            status: None,
-            outcome: None,
-            record_request: false,
-        };
-        // Keep only the last failed attempt for request-level accounting.
-        drop(final_attempt.take());
-        let setup = async {
-            let client = upstream_client(&state, route.config.retry.connect_timeout_ms)?;
-            let path = if attempt.target.config.auth_scheme == "azure_api_key" {
-                operation.path().trim_start_matches("/v1")
-            } else {
-                operation.path()
-            };
-            let url = upstream_url_with_query(
-                &attempt.target.config.base_url,
-                path,
-                request.request_query.as_deref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let mut headers =
-                build_upstream_headers(&request.incoming_headers, &attempt.target, protocol)?;
-            headers.insert(
-                header::CONTENT_LENGTH,
-                HeaderValue::from_str(&request.body.len().to_string())
-                    .map_err(|e| e.to_string())?,
-            );
-            let payload = request
-                .body
-                .request_body()
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok::<_, String>(client.post(url).headers(headers).body(payload))
-        }
-        .await;
-        let upstream = match setup {
-            Ok(upstream) => upstream,
-            Err(_) => {
-                attempt.outcome = Some(false);
-                final_attempt = Some(attempt);
-                continue;
-            }
-        };
-        state.usage.log_diagnostic("info", format!("event=proxy.images.forwarding request_id={} target_id={} operation={operation:?} attempt={}", request.request_id, attempt.target.config.id, attempt.number));
-        let response = match upstream.send().await {
-            Ok(response) => response,
-            Err(error) => {
-                let safe_retry = error.is_connect();
-                attempt.outcome = Some(false);
-                mark_failure(&state, attempt.target.config.id, &route.config.retry);
-                final_attempt = Some(attempt);
-                if safe_retry {
-                    continue;
-                }
-                // A timeout/lost response may already have generated and billed.
+    let mut capacity_skipped = false;
+    let mut hold_round = 0;
+    let deadline = hold_deadline(&route.config.retry, request.started);
+    let mut changed = request.config_changed.clone();
+    loop {
+        for target in targets {
+            if attempts >= route.config.retry.max_attempts.max(1) {
                 break;
             }
-        };
-        let status = response.status();
-        attempt.status = Some(status);
-        if !status.is_success() {
-            let body = error_body(response).await;
-            let detail = diagnostics::upstream::error_detail(
-                &body,
-                &attempt.target,
-                &local_token_redactions(&request.incoming_headers),
+            let key = key(
+                &state,
+                &target,
+                operation,
+                metadata.model.as_deref(),
+                metadata.stream,
             );
-            state.usage.log_upstream_error(
-                request.request_id,
-                route.config.id,
-                &attempt.target.config,
-                status,
-                "images_http",
-                &detail,
-            );
-            let unavailable = unsupported(status, &body);
-            if unavailable {
-                attempt.evidence(Support::Unsupported);
-            }
-            if !unavailable && status_affects_circuit(status) {
-                mark_failure(&state, attempt.target.config.id, &route.config.retry);
-            }
-            attempt.outcome = Some(false);
-            final_attempt = Some(attempt);
-            // Only explicit pre-execution rejection permits replay. In particular,
-            // an arbitrary 5xx after submission is ambiguous for image generation.
-            if unavailable || matches!(status.as_u16(), 400 | 401 | 403 | 404 | 405 | 422 | 429) {
+            // Another in-flight request may have learned a rejection after ranking.
+            if state
+                .image_capabilities
+                .lock()
+                .ok()
+                .and_then(|mut ledger| ledger.get(&key))
+                == Some(Support::Unsupported)
+            {
                 continue;
             }
-            break;
-        }
-        let response_headers = response.headers().clone();
-        let streaming = response_headers
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(is_event_stream);
-        let stream_body = if streaming {
-            attempt.record_request = true;
-            let stream = relay(response, attempt, request.config_changed.clone(), operation);
-            BodyExt::boxed_unsync(StreamBody::new(
-                stream.map(|result| result.map(Frame::data)),
-            ))
-        } else {
-            // Validate the complete JSON result before returning success. Lost or
-            // truncated responses remain ambiguous and must not be replayed.
-            let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
-            let buffered = match collect_upstream_body(None, &mut source).await {
-                Ok(bytes) => bytes,
+            let Some(recovery) = RecoveryPermit::acquire(&state, target.config.id) else {
+                continue;
+            };
+            let Some(provider_permit) = ProviderPermit::acquire(&state, &target) else {
+                capacity_skipped = true;
+                continue;
+            };
+            attempts += 1;
+            let activity = TargetActivityGuard::new(&state, target.config.id);
+            let protocol = target
+                .config
+                .effective_protocol(route.config.upstream_protocol);
+            let mut attempt = Attempt {
+                state: state.clone(),
+                target,
+                route_id: route.config.id,
+                request_id: request.request_id,
+                model: metadata.model.clone(),
+                inbound: route.config.inbound_protocol,
+                upstream: protocol,
+                retry: route.config.retry.clone(),
+                operation,
+                key,
+                started: Instant::now(),
+                started_at: now_unix(),
+                request_started: request.started,
+                request_started_at: request.started_at,
+                number: attempts,
+                status: None,
+                outcome: None,
+                record_request: false,
+            };
+            // Keep only the last failed attempt for request-level accounting.
+            drop(final_attempt.take());
+            let setup = async {
+                let client = upstream_client(&state, route.config.retry.connect_timeout_ms)?;
+                let path = if attempt.target.config.auth_scheme == "azure_api_key" {
+                    operation.path().trim_start_matches("/v1")
+                } else {
+                    operation.path()
+                };
+                let url = upstream_url_with_query(
+                    &attempt.target.config.base_url,
+                    path,
+                    request.request_query.as_deref(),
+                )
+                .map_err(|e| e.to_string())?;
+                let mut headers =
+                    build_upstream_headers(&request.incoming_headers, &attempt.target, protocol)?;
+                headers.insert(
+                    header::CONTENT_LENGTH,
+                    HeaderValue::from_str(&request.body.len().to_string())
+                        .map_err(|e| e.to_string())?,
+                );
+                let payload = request
+                    .body
+                    .request_body()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>(client.post(url).headers(headers).body(payload))
+            }
+            .await;
+            let upstream = match setup {
+                Ok(upstream) => upstream,
                 Err(_) => {
                     attempt.outcome = Some(false);
                     final_attempt = Some(attempt);
+                    continue;
+                }
+            };
+            state.usage.log_diagnostic("info", format!("event=proxy.images.forwarding request_id={} target_id={} operation={operation:?} attempt={}", request.request_id, attempt.target.config.id, attempt.number));
+            let response = match upstream.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    let safe_retry = error.is_connect();
+                    attempt.outcome = Some(false);
+                    mark_failure(&state, attempt.target.config.id, &route.config.retry);
+                    final_attempt = Some(attempt);
+                    if safe_retry {
+                        continue;
+                    }
+                    // A timeout/lost response may already have generated and billed.
                     break;
                 }
             };
-            let mut observed = Observer::new(operation, false);
-            let valid = observed.push(&buffered).is_ok();
-            observed.finish();
-            if !valid || !observed.completed || observed.failed {
-                if observed.failed {
-                    let detail = diagnostics::upstream::error_detail(
-                        &buffered,
-                        &attempt.target,
-                        &local_token_redactions(&request.incoming_headers),
-                    );
-                    state.usage.log_upstream_error(
-                        request.request_id,
-                        route.config.id,
-                        &attempt.target.config,
-                        status,
-                        "images_http",
-                        &detail,
-                    );
-                }
-                if observed.unsupported {
+            let status = response.status();
+            attempt.status = Some(status);
+            if !status.is_success() {
+                let body = error_body(response).await;
+                let detail = diagnostics::upstream::error_detail(
+                    &body,
+                    &attempt.target,
+                    &local_token_redactions(&request.incoming_headers),
+                );
+                state.usage.log_upstream_error(
+                    request.request_id,
+                    route.config.id,
+                    &attempt.target.config,
+                    status,
+                    "images_http",
+                    &detail,
+                );
+                let unavailable = unsupported(status, &body);
+                if unavailable {
                     attempt.evidence(Support::Unsupported);
+                }
+                if !unavailable && status_affects_circuit(status) {
+                    mark_failure(&state, attempt.target.config.id, &route.config.retry);
                 }
                 attempt.outcome = Some(false);
                 final_attempt = Some(attempt);
-                if observed.unsupported {
+                // Only explicit pre-execution rejection permits replay. In particular,
+                // an arbitrary 5xx after submission is ambiguous for image generation.
+                if unavailable || matches!(status.as_u16(), 400 | 401 | 403 | 404 | 405 | 422 | 429)
+                {
                     continue;
                 }
                 break;
             }
-            attempt.outcome = Some(true);
-            attempt.record_request = true;
-            attempt.evidence(Support::Supported);
-            complete_target_success(
-                &state,
-                route.config.id,
-                None,
-                attempt.target.config.id,
-                attempt.started,
-                None,
-            );
-            BodyExt::boxed_unsync(
-                Full::new(buffered).map_err(|never| -> BoxError { match never {} }),
-            )
-        };
-        let mut response = Response::builder().status(status);
-        let hop = connection_header_names(&response_headers);
-        for (name, value) in &response_headers {
-            if !is_hop_header(name) && !hop.contains(name) && name != header::CONTENT_LENGTH {
-                response = response.header(name, value);
+            let response_headers = response.headers().clone();
+            let streaming = response_headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(is_event_stream);
+            let stream_body = if streaming {
+                attempt.record_request = true;
+                let stream = relay(response, attempt, request.config_changed.clone(), operation);
+                BodyExt::boxed_unsync(StreamBody::new(
+                    stream.map(|result| result.map(Frame::data)),
+                ))
+            } else {
+                // Validate the complete JSON result before returning success. Lost or
+                // truncated responses remain ambiguous and must not be replayed.
+                let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
+                let buffered = match collect_upstream_body(None, &mut source).await {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        attempt.outcome = Some(false);
+                        final_attempt = Some(attempt);
+                        break;
+                    }
+                };
+                let mut observed = Observer::new(operation, false);
+                let valid = observed.push(&buffered).is_ok();
+                observed.finish();
+                if !valid || !observed.completed || observed.failed {
+                    if observed.failed {
+                        let detail = diagnostics::upstream::error_detail(
+                            &buffered,
+                            &attempt.target,
+                            &local_token_redactions(&request.incoming_headers),
+                        );
+                        state.usage.log_upstream_error(
+                            request.request_id,
+                            route.config.id,
+                            &attempt.target.config,
+                            status,
+                            "images_http",
+                            &detail,
+                        );
+                    }
+                    if observed.unsupported {
+                        attempt.evidence(Support::Unsupported);
+                    }
+                    attempt.outcome = Some(false);
+                    final_attempt = Some(attempt);
+                    if observed.unsupported {
+                        continue;
+                    }
+                    break;
+                }
+                attempt.outcome = Some(true);
+                attempt.record_request = true;
+                attempt.evidence(Support::Supported);
+                complete_target_success(
+                    &state,
+                    route.config.id,
+                    None,
+                    attempt.target.config.id,
+                    attempt.started,
+                    None,
+                );
+                BodyExt::boxed_unsync(
+                    Full::new(buffered).map_err(|never| -> BoxError { match never {} }),
+                )
+            };
+            let mut response = Response::builder().status(status);
+            let hop = connection_header_names(&response_headers);
+            for (name, value) in &response_headers {
+                if !is_hop_header(name) && !hop.contains(name) && name != header::CONTENT_LENGTH {
+                    response = response.header(name, value);
+                }
             }
+            return attach_in_flight_guard(
+                response.body(stream_body).unwrap_or_else(|_| {
+                    error_response(StatusCode::BAD_GATEWAY, "failed to build image response")
+                }),
+                Some((activity, recovery, provider_permit)),
+            );
         }
-        return attach_in_flight_guard(
-            response.body(stream_body).unwrap_or_else(|_| {
-                error_response(StatusCode::BAD_GATEWAY, "failed to build image response")
-            }),
-            Some((activity, recovery)),
-        );
+        // Wait only when nothing was submitted. Image requests with ambiguous
+        // upstream results retain their existing no-replay behavior.
+        if attempts > 0 || !capacity_skipped || !route.config.retry.hold_on_failure {
+            break;
+        }
+        let mut delay = hold_backoff_delay(&route.config.retry, hold_round);
+        if let Some(deadline) = deadline {
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            delay = delay.min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+        }
+        tokio::select! {
+            _ = changed.changed() => return error_response(StatusCode::SERVICE_UNAVAILABLE, "proxy configuration changed"),
+            _ = tokio::time::sleep(delay) => {}
+        }
+        if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            break;
+        }
+        hold_round = hold_round.saturating_add(1);
+        capacity_skipped = false;
+        targets = candidates(&state, &route, operation, &metadata);
     }
     if let Some(mut attempt) = final_attempt {
         attempt.record_request = true;
     } else {
         record_request(&state, false, None);
+    }
+    if capacity_skipped && attempts == 0 {
+        return capacity_response();
     }
     error_response(
         StatusCode::BAD_GATEWAY,

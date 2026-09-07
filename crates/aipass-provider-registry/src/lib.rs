@@ -303,6 +303,10 @@ pub struct ProviderEntry {
     pub favicon_url: Option<String>,
     pub endpoints: Vec<ProviderEndpoint>,
     pub interface_type: InterfaceType,
+    /// Provider-wide local proxy limit. Missing/zero is unlimited; updates
+    /// preserve the existing limit when omitted and clear it with zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
     /// Responses WebSocket capability; absence keeps the default enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_websockets: Option<bool>,

@@ -285,6 +285,7 @@ fn agent_error_to_string(err: AgentCommandError) -> String {
 fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
     let provider_kind = provider_kind_for_id(request.provider_id.as_deref());
     ProviderEntryInput {
+        max_concurrent_requests: request.max_concurrent_requests,
         supports_websockets: request.supports_websockets,
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
@@ -317,6 +318,7 @@ fn provider_add_input(request: ProviderAddRequest) -> ProviderEntryInput {
 fn provider_update_input(request: ProviderUpdateRequest) -> ProviderEntryUpdateInput {
     let provider_kind = provider_kind_for_id(request.provider_id.as_deref());
     ProviderEntryUpdateInput {
+        max_concurrent_requests: request.max_concurrent_requests,
         supports_websockets: request.supports_websockets,
         title: non_empty(request.title).unwrap_or_else(|| "Custom Provider".to_string()),
         provider_kind,
@@ -2704,6 +2706,7 @@ mod tests {
     fn gemini_summary() -> EntrySummary {
         let now = time::OffsetDateTime::now_utc();
         EntrySummary {
+            max_concurrent_requests: None,
             supports_websockets: None,
             websocket_warning: None,
             id: Uuid::new_v4(),

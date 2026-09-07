@@ -327,6 +327,7 @@ fn new_entry_input(provider: &CcswitchProvider, key: &str, base_url: &str) -> Pr
         _ => InterfaceType::OpenAiCompatible,
     };
     ProviderEntryInput {
+        max_concurrent_requests: None,
         supports_websockets: None,
         title: provider.name.clone(),
         provider_kind,
@@ -538,6 +539,7 @@ mod tests {
     fn manual_entry(vault: &Vault, title: &str, key: &str, endpoint: &str) {
         vault
             .add_provider(ProviderEntryInput {
+                max_concurrent_requests: None,
                 supports_websockets: None,
                 title: title.to_string(),
                 provider_kind: ProviderKind::ThirdParty,

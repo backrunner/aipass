@@ -56,6 +56,7 @@
 
         <div class="modal-body">
           <ProviderFormFields
+            showConcurrencySetting
             showWebsocketSetting
             itemLayout
             {formMode}

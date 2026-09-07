@@ -323,6 +323,7 @@ fn handle_request_inner(
                 billing,
             };
             let input = ProviderEntryInput {
+                max_concurrent_requests: None,
                 supports_websockets: None,
                 title: non_empty(title).unwrap_or_else(|| "Custom Provider".to_string()),
                 provider_kind: provider_kind_for_id(provider_id.as_deref()),
@@ -396,6 +397,7 @@ fn handle_request_inner(
                 billing,
             };
             let input = ProviderEntryUpdateInput {
+                max_concurrent_requests: None,
                 supports_websockets: None,
                 title: non_empty(title).unwrap_or_else(|| "Custom Provider".to_string()),
                 provider_kind: provider_kind_for_id(provider_id.as_deref()),

@@ -33,6 +33,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     faviconUrl: summary.faviconUrl,
     endpoints: summary.endpoints,
     interfaceType: summary.interfaceType,
+    maxConcurrentRequests: summary.maxConcurrentRequests,
     supportsWebsockets: summary.supportsWebsockets,
     websocketWarning: summary.websocketWarning,
     authScheme: summary.authScheme,

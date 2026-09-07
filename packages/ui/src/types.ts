@@ -27,6 +27,8 @@ export type Draft = {
   accountIdentity?: string;
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
+  maxConcurrentRequests?: number;
+  concurrencyLimitTouched?: boolean;
   supportsWebsockets?: boolean;
   websocketPreferenceTouched?: boolean;
   websocketWarning?: { reason: string; status: number; detectedAt: number; configKey: number[] };

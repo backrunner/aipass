@@ -411,6 +411,7 @@ export type EntrySummary = {
   faviconUrl?: string;
   endpoints: ProviderEntry["endpoints"];
   interfaceType: InterfaceType;
+  maxConcurrentRequests?: number;
   supportsWebsockets?: boolean;
   websocketWarning?: { reason: string; status: number; detectedAt: number; configKey: number[] };
   authScheme: AuthScheme;

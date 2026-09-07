@@ -144,6 +144,8 @@ pub(crate) struct ChangePasswordRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderAddRequest {
     #[serde(default)]
+    pub(crate) max_concurrent_requests: Option<u32>,
+    #[serde(default)]
     pub(crate) supports_websockets: Option<bool>,
     pub(crate) title: String,
     pub(crate) provider_id: Option<String>,
@@ -180,6 +182,8 @@ pub(crate) struct ProviderAddRequest {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderUpdateRequest {
+    #[serde(default)]
+    pub(crate) max_concurrent_requests: Option<u32>,
     #[serde(default)]
     pub(crate) supports_websockets: Option<bool>,
     pub(crate) id: Uuid,

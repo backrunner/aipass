@@ -1034,6 +1034,7 @@ impl ProxyService {
                         }
                     }
                     Ok(ResolvedTarget {
+                        max_concurrent_requests: entry.max_concurrent_requests,
                         supports_websockets: entry.supports_websockets.unwrap_or(true),
                         config: target_config,
                         api_key,
@@ -1329,6 +1330,7 @@ mod tests {
     fn provider_input(api_key: &str, endpoint: String, header: &str) -> ProviderEntryInput {
         ProviderEntryInput {
             // Credential-refresh fixtures serve HTTP generations only.
+            max_concurrent_requests: None,
             supports_websockets: Some(false),
             title: "Proxy upstream".into(),
             provider_kind: ProviderKind::Unknown,
@@ -1764,6 +1766,7 @@ mod tests {
             config: service.config.routes[0].clone(),
             local_token: local_token.into(),
             targets: vec![ResolvedTarget {
+                max_concurrent_requests: None,
                 supports_websockets: false,
                 config: ProxyTargetConfig {
                     id: Uuid::new_v4(),
@@ -2001,6 +2004,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    max_concurrent_requests: Some(3),
                     supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
@@ -2029,6 +2033,11 @@ mod tests {
         assert!(service
             .refresh_provider_credentials(&creation.vault, provider_id)
             .expect("refresh proxy"));
+        assert_eq!(
+            service.runtime_config(&creation.vault).unwrap().routes[0].targets[0]
+                .max_concurrent_requests,
+            Some(3)
+        );
         request();
 
         let first = request_rx
@@ -2100,6 +2109,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    max_concurrent_requests: None,
                     supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
@@ -2187,6 +2197,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    max_concurrent_requests: None,
                     supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,
@@ -2755,6 +2766,7 @@ mod tests {
             .update_provider(
                 provider_id,
                 ProviderEntryUpdateInput {
+                    max_concurrent_requests: None,
                     supports_websockets: None,
                     title: "Proxy upstream".into(),
                     provider_kind: ProviderKind::Unknown,

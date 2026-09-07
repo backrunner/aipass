@@ -1300,3 +1300,142 @@ async fn preference_only_refresh_keeps_native_and_fallback_sessions_alive() {
         );
     }
 }
+
+#[tokio::test]
+async fn provider_concurrency_routes_each_ws_generation_and_idle_sockets_take_no_slots() {
+    let primary = mock(0).await;
+    let backup = mock(0).await;
+    *primary.events.lock().unwrap() = Some(responses()[..2].to_vec());
+    let mut route = test_route(primary.address.clone());
+    route.targets[0].max_concurrent_requests = Some(1);
+    route.config.retry.max_attempts = 1;
+    route
+        .targets
+        .push(test_route(backup.address.clone()).targets.remove(0));
+    let (handle, _, _dir) = start_proxy(vec![route], direct());
+    let mut a = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    let mut b = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    assert!(handle.state.provider_activity.lock().unwrap().is_empty());
+    a.send(event(
+        json!({"type":"response.create","model":"test","input":"hello"}),
+    ))
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        receive(&mut a).await;
+    }
+    assert_eq!(
+        handle
+            .state
+            .provider_activity
+            .lock()
+            .unwrap()
+            .values()
+            .sum::<u64>(),
+        1
+    );
+    let result = turn(&mut b, None).await;
+    assert_eq!(result.last().unwrap()["type"], "response.completed");
+    assert_eq!(primary.calls.lock().unwrap().len(), 1);
+    assert_eq!(backup.calls.lock().unwrap().len(), 1);
+    a.close(None).await.unwrap();
+    b.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !handle.state.provider_activity.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    *primary.events.lock().unwrap() = None;
+    let mut c = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    assert_eq!(
+        turn(&mut c, None).await.last().unwrap()["type"],
+        "response.completed"
+    );
+    assert_eq!(primary.calls.lock().unwrap().len(), 2);
+    c.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn provider_concurrency_limits_apply_to_native_ws_sessions_opened_before_the_change() {
+    let upstream = mock(0).await;
+    *upstream.events.lock().unwrap() = Some(responses()[..2].to_vec());
+    let route = test_route(upstream.address.clone());
+    let (handle, _, _dir) = start_proxy(vec![route], direct());
+    let mut a = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    let mut b = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+        .await
+        .unwrap();
+    a.send(event(
+        json!({"type":"response.create","model":"test","input":"hello"}),
+    ))
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        receive(&mut a).await;
+    }
+    let mut config = handle.state.config.read().unwrap().clone();
+    config.routes[0].targets[0].max_concurrent_requests = Some(1);
+    handle.update_config(config).unwrap();
+    let rejected = turn(&mut b, None).await;
+    assert_eq!(rejected.last().unwrap()["status"], 429);
+    assert_eq!(
+        rejected.last().unwrap()["error"]["code"],
+        "provider_concurrency_limit"
+    );
+    assert_eq!(upstream.calls.lock().unwrap().len(), 1);
+    a.close(None).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !handle.state.provider_activity.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    *upstream.events.lock().unwrap() = None;
+    assert_eq!(
+        turn(&mut b, None).await.last().unwrap()["type"],
+        "response.completed"
+    );
+    b.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn provider_concurrency_ws_distinguishes_local_capacity_from_upstream_rate_limits() {
+    for local_capacity in [false, true] {
+        let upstream = mock(if local_capacity { 0 } else { 429 }).await;
+        let mut route = test_route(upstream.address.clone());
+        route.targets[0].max_concurrent_requests = Some(1);
+        let target = route.targets[0].clone();
+        let (handle, _, _dir) = start_proxy(vec![route], direct());
+        let _occupied =
+            local_capacity.then(|| ProviderPermit::acquire(&handle.state, &target).unwrap());
+        let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
+            .await
+            .unwrap();
+        let events = turn(&mut ws, None).await;
+        let error = events.last().unwrap();
+        assert_eq!(error["status"], 429);
+        assert_eq!(
+            error["error"]["code"],
+            if local_capacity {
+                "provider_concurrency_limit"
+            } else {
+                "upstream_error"
+            }
+        );
+        if local_capacity {
+            assert_eq!(upstream.upgrades.load(Ordering::SeqCst), 0);
+        }
+        ws.close(None).await.unwrap();
+    }
+}

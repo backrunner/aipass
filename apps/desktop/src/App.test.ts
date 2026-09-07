@@ -15,11 +15,11 @@ import App from "./App.svelte";
 let app: ReturnType<typeof mount>;
 afterEach(async () => { if (app) await unmount(app); document.body.innerHTML = ""; vi.unstubAllGlobals(); delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__; });
 
-test("provider edit saves WS opt-out and prefills the key again after reopening", async () => {
+test("provider edit persists concurrency limits and WS opt-out across reopening", async () => {
   const entry: EntrySummary = {
     id: "provider", title: "Test provider", favorite: false, providerKind: "self_hosted",
     providerId: "custom_http", domains: [], endpoints: [{ id: "api", kind: "api", url: "https://fixture.test/v1" }],
-    interfaceType: "openai_compatible", authScheme: "bearer", supportsWebsockets: true,
+    interfaceType: "openai_compatible", authScheme: "bearer", supportsWebsockets: true, maxConcurrentRequests: 1,
     secretRefs: [{ id: "key", label: "Primary", masked: "••••", fingerprint: "test" }], tags: [],
     quota: { label: "Wallet", remaining: "42.1234", unit: "USD" },
     maskedSecret: "••••", fingerprint: "test", faviconUrl: "data:image/png;base64,AA=="
@@ -37,7 +37,10 @@ test("provider edit saves WS opt-out and prefills the key again after reopening"
       case "server_usage_summary": return { providers: [], models: [] };
       case "pricing_config_get": return { groups: [], assignments: [] };
       case "secret_reveal_field": return "fixture-existing-key";
-      case "provider_update": entry.supportsWebsockets = args.request.supportsWebsockets; return null;
+      case "provider_update":
+        entry.supportsWebsockets = args.request.supportsWebsockets;
+        if (args.request.maxConcurrentRequests !== undefined) entry.maxConcurrentRequests = args.request.maxConcurrentRequests || undefined;
+        return null;
       default: return null;
     }
   });
@@ -49,15 +52,29 @@ test("provider edit saves WS opt-out and prefills the key again after reopening"
   await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-input input")?.value).toBe("fixture-existing-key"); });
   document.querySelector<HTMLButtonElement>(".advanced-toggle")!.click();
   flushSync();
+  const limit = document.querySelector<HTMLInputElement>("[name=maxConcurrentRequests]")!;
+  expect(limit.value).toBe("1");
+  limit.value = "3";
+  limit.dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
   const ws = document.querySelector<HTMLButtonElement>(".advanced-section [role=switch]")!;
   ws.click();
   flushSync();
   expect(ws.getAttribute("aria-checked")).toBe("false");
   button("Save changes").click();
   await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
-  expect(invoke).toHaveBeenCalledWith("provider_update", expect.objectContaining({ request: expect.objectContaining({ supportsWebsockets: false, apiKey: "fixture-existing-key", quota: expect.objectContaining({ unit: "USD", remaining: "42.1234" }) }) }));
+  expect(invoke).toHaveBeenCalledWith("provider_update", expect.objectContaining({ request: expect.objectContaining({ maxConcurrentRequests: 3, supportsWebsockets: false, apiKey: "fixture-existing-key", quota: expect.objectContaining({ unit: "USD", remaining: "42.1234" }) }) }));
   button("Edit").click();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector(".advanced-section [role=switch]")?.getAttribute("aria-checked")).toBe("false"); });
+  const reopenedLimit = document.querySelector<HTMLInputElement>("[name=maxConcurrentRequests]")!;
+  expect(reopenedLimit.value).toBe("3");
+  reopenedLimit.value = "";
+  reopenedLimit.dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
+  button("Save changes").click();
+  await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
+  expect(invoke).toHaveBeenCalledWith("provider_update", expect.objectContaining({ request: expect.objectContaining({ maxConcurrentRequests: 0 }) }));
+  expect(entry.maxConcurrentRequests).toBeUndefined();
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 

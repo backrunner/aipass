@@ -141,6 +141,7 @@ export interface ProviderEntry {
   endpoints: ProviderEndpoint[];
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
+  maxConcurrentRequests?: number;
   supportsWebsockets?: boolean;
   websocketWarning?: { reason: string; status: number; detectedAt: number; configKey: number[] };
   secretRefs: SecretRef[];

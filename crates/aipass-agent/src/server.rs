@@ -691,6 +691,7 @@ fn save_detected_secret(
     );
     let entry_id = vault
         .add_provider(ProviderEntryInput {
+            max_concurrent_requests: None,
             supports_websockets: None,
             title: preview.title,
             provider_kind,
@@ -1984,6 +1985,7 @@ fn probe_entry(
     .map(str::to_owned)
     .unwrap_or(endpoint);
     let target = ws_interface.then(|| aipass_proxy::ResolvedTarget {
+        max_concurrent_requests: None,
         supports_websockets: true,
         api_key: secret.to_string(),
         config: aipass_proxy::ProxyTargetConfig {
@@ -2683,6 +2685,7 @@ pub(crate) mod tests {
 
     pub(crate) fn sync_test_provider(title: &str, api_key: &str) -> ProviderEntryInput {
         ProviderEntryInput {
+            max_concurrent_requests: None,
             supports_websockets: None,
             title: title.to_string(),
             provider_kind: ProviderKind::Unknown,
@@ -2931,6 +2934,7 @@ pub(crate) mod tests {
 
     fn favicon_test_entry() -> EntrySummary {
         EntrySummary {
+            max_concurrent_requests: None,
             supports_websockets: None,
             websocket_warning: None,
             id: Uuid::new_v4(),
