@@ -55,7 +55,7 @@ struct Evidence {
     expires: Instant,
 }
 
-/// Ephemeral observations are cleared on lock/stop. No prompts, image payloads,
+/// Ephemeral observations are cleared when the proxy stops. No prompts, image payloads,
 /// provider URLs, model names or credential fingerprints are written to disk.
 #[derive(Default)]
 pub(super) struct Ledger {
