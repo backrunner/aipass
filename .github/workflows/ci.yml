@@ -27,7 +27,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm licenses:audit
@@ -45,11 +45,11 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
-      - name: Test native CloudKit transport boundary
+      - name: Verify native CloudKit transport boundary
         run: cargo test -p aipass-desktop cloudkit
       - name: Build unsigned macOS app bundle
         run: pnpm --dir apps/desktop tauri build --ci --bundles app

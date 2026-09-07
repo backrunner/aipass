@@ -70,13 +70,23 @@ HTTP and WebSocket requests can keep provider prompt caches warm by sending a st
 
 ### Prerequisites
 
-- Node.js 24 and `pnpm` 11.11.0
-- Stable Rust
+- Node.js 26 (see `.nvmrc`) and `pnpm` 11.25.0 (pinned in `package.json`)
+- Stable Rust (on macOS, use Homebrew's latest `rust` formula)
 - The [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system
 
-Install the workspace dependencies:
+On macOS, check `command -v cargo rustc` and `rustc --version` so local builds use Homebrew's compiler. Homebrew Rust 1.98.0 uses LLVM 22's `rust-objcopy`, which can produce a `mis-aligned LINKEDIT string pool` error on macOS 27. The local repair upgrades Homebrew's `llvm` to 23.1.0 and points only Rust's `rust-objcopy` symlink to `$(brew --prefix llvm)/bin/llvm-objcopy`; Rust's LLVM 22 library dependency stays intact. Recheck this link after upgrading or reinstalling Rust, since Homebrew may recreate it.
+
+If you use nvm, select the repository's Node.js version:
 
 ```bash
+nvm install
+nvm use
+```
+
+Install pnpm and the workspace dependencies:
+
+```bash
+npm install --global pnpm@11.25.0
 pnpm install --frozen-lockfile
 ```
 

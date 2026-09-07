@@ -119,7 +119,7 @@ impl AppState {
             .pending_deep_links
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        pending.push(deeplink::PendingDeepLink::CcSwitch(link));
+        pending.push(deeplink::PendingDeepLink::CcSwitch(Box::new(link)));
     }
 
     pub(crate) fn store_pending_aipass_provider_link(&self, link: deeplink::AipassProviderLink) {
@@ -127,7 +127,7 @@ impl AppState {
             .pending_deep_links
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        pending.push(deeplink::PendingDeepLink::AipassProvider(link));
+        pending.push(deeplink::PendingDeepLink::AipassProvider(Box::new(link)));
     }
 
     pub(crate) fn store_pending_ccswitch_link_error(

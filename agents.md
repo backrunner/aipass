@@ -34,3 +34,10 @@ User instruction, 2026-09-07: permanently skip local Ubuntu validation.
   instructions in repository skills and documentation.
 - GitHub Actions remains responsible for its configured Linux jobs. Report
   local macOS results and remote CI results accurately and separately.
+
+## Local Rust Toolchain
+
+User instruction, 2026-09-07: keep local Rust managed by Homebrew and use the
+latest stable version available from Homebrew's `rust` formula. Repair its
+dependencies when needed; do not switch local builds to rustup as a workaround.
+This preference applies to the local macOS machine, not remote CI toolchain setup.

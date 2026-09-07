@@ -1154,6 +1154,7 @@ fn quota_from_parts(
         return None;
     }
     Some(QuotaInfo {
+        unit: None,
         label,
         limit,
         used,

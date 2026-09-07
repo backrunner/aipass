@@ -41,6 +41,10 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
       - name: Validate release tag and versions
         id: release
         shell: bash
@@ -120,7 +124,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -429,7 +433,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -487,6 +491,10 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
 
       - name: Generate checksums and SBOM
         run: node scripts/release-metadata.mjs release-artifacts

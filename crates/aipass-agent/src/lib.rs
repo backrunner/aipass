@@ -1,7 +1,7 @@
 pub mod autostart;
 pub(crate) mod ccswitch;
 pub mod client;
-mod cloudkit;
+pub mod cloudkit;
 pub mod desktop;
 pub mod ipc;
 pub mod launcher;
@@ -16,7 +16,7 @@ pub mod server;
 pub mod session;
 pub(crate) mod sync_watch;
 pub(crate) mod usage_probe;
-mod vault_sync;
+pub(crate) mod vault_sync;
 pub mod windows_service;
 
 #[cfg(target_os = "macos")]

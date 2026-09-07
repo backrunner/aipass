@@ -91,9 +91,9 @@ pub(crate) struct CcSwitchProviderLink {
 #[serde(tag = "kind", content = "payload")]
 pub(crate) enum PendingDeepLink {
     #[serde(rename = "ccSwitch")]
-    CcSwitch(CcSwitchProviderLink),
+    CcSwitch(Box<CcSwitchProviderLink>),
     #[serde(rename = "aipassProvider")]
-    AipassProvider(AipassProviderLink),
+    AipassProvider(Box<AipassProviderLink>),
     #[serde(rename = "ccSwitchError")]
     CcSwitchError(CcSwitchLinkErrorPayload),
     #[serde(rename = "aipassProviderError")]

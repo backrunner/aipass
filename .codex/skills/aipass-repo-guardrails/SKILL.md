@@ -86,6 +86,16 @@ CI reproduction, including branch and nightly release gates. Do not install
 Linux dependencies locally or treat unavailable local Ubuntu validation as a
 blocker. GitHub Actions runs its configured Linux jobs remotely.
 
+Per the local Rust preference in root `agents.md`, use Homebrew's latest stable
+`rust` formula for local macOS validation. Check `command -v cargo rustc` and
+`rustc --version`; do not prioritize rustup to work around a dependency failure.
+For the macOS 27 LINKEDIT issue, Homebrew Rust 1.98.0's LLVM 22 `rust-objcopy`
+misaligns stripped libraries. The verified local repair uses Homebrew LLVM
+23.1.0's `llvm-objcopy` through Rust's `rust-objcopy` symlink, leaving the Rust
+compiler's LLVM 22 library dependency intact. Recheck the symlink and a freshly
+compiled stripped library after a Rust upgrade/reinstall. See `README.md` and
+the build-toolchain entry in the pitfalls registry for details.
+
 ## Pre-push validation gate
 
 `git push` is prohibited until every required check below passes for the exact commit being pushed.
@@ -94,7 +104,7 @@ blocker. GitHub Actions runs its configured Linux jobs remotely.
 2. Passing this gate is necessary but does not grant permission to push. Only push when the user has explicitly requested it.
 3. Finalize the intended commits first. Record the source ref and commit SHA for every intended refspec, require a clean worktree, and run the gate against each unique commit being pushed. Never include unvalidated extra refs through `--all`, `--tags`, or additional refspecs.
 4. Run the complete local branch gate below for every code or documentation push, even when the changed files look unrelated to a job. Do not select checks based on the diff.
-5. Run `rust`, `node`, and `macOS desktop bundle` natively on macOS. Use Node 24, pnpm from the root `packageManager` field, stable Rust, and the required macOS build dependencies. Local Ubuntu jobs and Linux dependency setup are permanently excluded.
+5. Run `rust`, `node`, and `macOS desktop bundle` natively on macOS. Use Node 26 from `.nvmrc`, pnpm from the root `packageManager` field, stable Rust, and the required macOS build dependencies. Local Ubuntu jobs and Linux dependency setup are permanently excluded.
 6. Every setup step, command, and bundle assertion must exit successfully. A pre-existing failure is still a failure.
 7. After validation, require every recorded ref to resolve to the same commit and the worktree to still be clean. Any commit, amend, rebase, merge, generated-file change, or workflow change invalidates the result and requires the full gate again.
 8. Never bypass the required macOS gate with `--no-verify`, ignored exit codes, narrower package filters, or skipped tests. The explicit local Ubuntu exclusion above is a standing user rule, not a gate failure.
@@ -113,7 +123,7 @@ cargo test --workspace
 cargo build --workspace
 ```
 
-`node` on macOS with Node 24:
+`node` on macOS with Node 26:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -124,7 +134,7 @@ pnpm test
 pnpm build
 ```
 
-`macOS desktop bundle` on macOS with Node 24 and stable Rust:
+`macOS desktop bundle` on macOS with Node 26 and stable Rust:
 
 ```bash
 pnpm install --frozen-lockfile
