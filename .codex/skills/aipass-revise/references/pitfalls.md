@@ -90,6 +90,20 @@ Newest entries last within each section.
 - **Guardrail**: serialize target selection with settings changes/import/reset; install vault identity and its sync settings together. Test failed settings persistence, recovery with stale sibling settings, queued sync target changes, and record-only first installation in `vault_sync::tests`.
 - **Watch points**: configured startup/watcher/manual sync, file/backup/WebDAV/CloudKit import, `load_sync_settings`, `save_sync_settings`, and create-time discovery.
 
+### Automatic CloudKit upgrades must commit only after authenticated read-back
+- **Symptom**: existing local/WebDAV/folder settings never entered CloudKit; Drive fallback skipped late edits once another device populated CloudKit.
+- **Root cause**: settings had no upgrade marker and `vault_sync::run_cloudkit_inner` consulted Drive only when CloudKit was empty. Reusing this fallback for fresh CloudKit restores also misclassified them as legacy installations.
+- **Fix**: protocol v8, a persisted one-time migration marker, source backup/reconciliation, destination authentication before uploads, and remote read-back before switching settings. Fresh restore/create and explicit settings changes record their current choice. Background revision refresh reloads settings without overwriting a UI draft.
+- **Guardrail**: enable migration for existing local-only vaults, serialize it with settings/import/reset, keep network IO outside the session lock, and verify current local contents after read-back. Preserve original encrypted copies and settings on failure. Test retries after reopen/settings IO failure, concurrent edits, foreign and conflicting vaults, late Drive edits, explicit opt-outs and fresh CloudKit restores in `cloudkit_migration::tests` and `session::tests`.
+- **Watch points**: initial/configured/manual CloudKit sync, lock-time queues, unlock watcher, bootstrap-before-create, import settings, protocol retirement and App sync-revision refresh.
+
+### CloudKit deployment scope and normalized grants need explicit handling
+- **Symptom**: a Development deployment required Production access; Production validation returned `endpoint not applicable`; a successful import was reported as failed after Apple normalized creator permissions into `GRANT READ, WRITE`.
+- **Root cause**: `scripts/deploy-cloudkit-schema.mjs` assumed both environments supported the same deployment endpoints and parsed only one permission per grant.
+- **Fix**: local CLI accepts Development only, with Production promotion documented through CloudKit Console; expand combined grants before validating creator access and idempotency. Developer ID profile service wildcards are accepted while the application still requests only the explicit CloudKit container/service.
+- **Guardrail**: reject Production/both before tool calls, validate Development before import, and compare a fresh post-import export. Test combined creator/non-creator grants and deployment without Production access. Do not mistake an iCloud service wildcard for authorization of an unlisted container.
+- **Watch points**: deployment script/tests, `infra/cloudkit/schema.ckdb`, `docs/cloudkit-release.md`. Keep schema deployment separate from signed-app provisioning.
+
 ## Tool configuration writes (aipass-agent / config-writers)
 
 ### Local diagnostics stopped at rotation limits and runtime boundaries

@@ -20,6 +20,9 @@ test("schema merge preserves server types, fields, and indexes and is idempotent
   assert.equal(mergeSchema(completed, required), completed);
   assert.throws(() => mergeSchema(required.replace("ASSET", "STRING"), required), /incompatible/);
   assert.throws(() => mergeSchema(required.replaceAll('"_creator"', '"_world"'), required), /permissions/);
+  const canonical = `${baseline} RECORD TYPE VaultSnapshot (ciphertext ASSET, GRANT READ, WRITE TO "_creator");`;
+  assert.equal(mergeSchema(canonical, required), canonical);
+  assert.throws(() => mergeSchema(canonical.replace('READ, WRITE TO "_creator"', 'READ, WRITE TO "_world"'), required), /permissions/);
 });
 
 async function fixture(t, fail) {
@@ -38,19 +41,38 @@ async function fixture(t, fail) {
   return { options: { team: "TESTTEAM00", output, deploy: true, run }, calls, schemas };
 }
 
-test("deployment exports and validates both environments before importing and verifies afterward", async (t) => {
+test("local deployment defaults to Development without needing Production access", async (t) => {
+  const { options, calls, schemas } = await fixture(t, "export-schema:production");
+  const report = await deploySchema(options);
+  assert.equal(report.container, "iCloud.com.alkinum.aipass");
+  assert.deepEqual(report.environments, [{ environment: "development", changed: true }]);
+  assert.deepEqual(calls, ["export-schema:development", "validate-schema:development", "import-schema:development", "export-schema:development"]);
+  assert.equal(schemas.development, mergeSchema(baseline, required));
+  assert.equal(schemas.production, baseline);
+});
+
+test("Production, both, and misspelled environments are rejected before any tool call", async (t) => {
+  const { options, calls } = await fixture(t);
+  for (const environment of ["production", "both", "developement"]) {
+    await assert.rejects(deploySchema({ ...options, environment }), /--environment development/);
+    assert.deepEqual(calls, []);
+  }
+});
+
+test("deployment validates before importing and verifies the result idempotently", async (t) => {
   const { options, calls, schemas } = await fixture(t);
   const report = await deploySchema(options);
   assert.equal(report.deployed, true);
-  assert.deepEqual(calls, ["export-schema:development", "export-schema:production", "validate-schema:development", "validate-schema:production", "import-schema:development", "export-schema:development", "import-schema:production", "export-schema:production"]);
-  assert.equal(schemas.production, mergeSchema(baseline, required));
+  assert.deepEqual(calls, ["export-schema:development", "validate-schema:development", "import-schema:development", "export-schema:development"]);
+  assert.equal(schemas.development, mergeSchema(baseline, required));
+  assert.equal(schemas.production, baseline);
   calls.length = 0;
   await deploySchema(options);
   assert.ok(calls.every((call) => !call.startsWith("import-schema:")));
 });
 
-test("auth and production validation failures perform no imports", async (t) => {
-  for (const failure of ["export-schema:development", "export-schema:production", "validate-schema:production"]) {
+test("auth and validation failures perform no imports", async (t) => {
+  for (const failure of ["export-schema:development", "validate-schema:development"]) {
     const { options, calls } = await fixture(t, failure);
     await assert.rejects(deploySchema(options), /authorization-failed/);
     assert.ok(calls.every((call) => !call.startsWith("import-schema:")));

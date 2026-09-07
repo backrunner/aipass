@@ -21,14 +21,15 @@ export function mergeSchema(current, required) {
   const [record, body] = existing[0];
   const field = body.match(/(?:^|,)\s*"?ciphertext"?\s+([A-Z0-9_<>]+)/);
   if (field && field[1] !== "ASSET") throw new Error("VaultSnapshot.ciphertext already has an incompatible type");
-  const grants = [...body.matchAll(/GRANT\s+(\w+)\s+TO\s+"([^"]+)"/g)];
-  if (grants.some((grant) => grant[2] !== "_creator")) {
+  const grants = [...body.matchAll(/GRANT\s+([A-Z]+(?:\s*,\s*[A-Z]+)*)\s+TO\s+"([^"]+)"/g)]
+    .flatMap((grant) => grant[1].split(/\s*,\s*/).map((permission) => ({ permission, role: grant[2] })));
+  if (grants.some((grant) => grant.role !== "_creator")) {
     throw new Error("VaultSnapshot has non-creator permissions; review the exported schema before deployment");
   }
   const additions = [];
   if (!field) additions.push("ciphertext ASSET");
   for (const permission of ["WRITE", "READ"]) {
-    if (!grants.some((grant) => grant[1] === permission && grant[2] === "_creator")) {
+    if (!grants.some((grant) => grant.permission === permission && grant.role === "_creator")) {
       additions.push(`GRANT ${permission} TO "_creator"`);
     }
   }
@@ -41,14 +42,18 @@ export function mergeSchema(current, required) {
   return current.replace(record, () => record.replace(body, () => merged));
 }
 
-export async function deploySchema({ team, container = defaultContainer, output, deploy = false, run = runCktool }) {
+export async function deploySchema({ team, container = defaultContainer, environment = "development", output, deploy = false, run = runCktool }) {
   if (!/^[A-Z0-9]{10}$/.test(team ?? "")) throw new Error("Pass --team with the Apple Developer team ID");
   if (!/^iCloud\.[A-Za-z0-9.-]+$/.test(container)) throw new Error("Invalid CloudKit container ID");
+  if (environment !== "development") {
+    throw new Error("Schema deployment requires --environment development; promote to Production in CloudKit Console");
+  }
+  const environments = [environment];
   const directory = output ? resolve(output) : await mkdtemp(join(tmpdir(), "aipass-cloudkit-schema-"));
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const required = await readFile(schemaPath, "utf8");
   const plans = [];
-  for (const environment of ["development", "production"]) {
+  for (const environment of environments) {
     const scope = ["--team-id", team, "--container-id", container, "--environment", environment];
     const before = join(directory, `${environment}-before.ckdb`);
     const planned = join(directory, `${environment}-planned.ckdb`);
@@ -58,8 +63,8 @@ export async function deploySchema({ team, container = defaultContainer, output,
     await writeFile(planned, merged, { mode: 0o600 });
     plans.push({ environment, scope, planned, changed: merged !== current });
   }
-  // Validate BOTH environments before the first mutation. Auth/validation
-  // failures cannot leave a partially imported development schema.
+  // cktool validate/import operate on Development. Production promotion is a
+  // separate CloudKit Console operation and never part of this local script.
   for (const plan of plans) await run(["validate-schema", ...plan.scope, "--file", plan.planned]);
   if (deploy) {
     for (const plan of plans) {
@@ -86,6 +91,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const { values } = parseArgs({ options: {
       team: { type: "string" }, container: { type: "string", default: process.env.AIPASS_CLOUDKIT_CONTAINER || defaultContainer },
+      environment: { type: "string", default: "development" },
       output: { type: "string" }, deploy: { type: "boolean", default: false },
     } });
     console.log(JSON.stringify(await deploySchema(values), null, 2));

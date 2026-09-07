@@ -25,9 +25,13 @@ pub struct NativeHostSettings {
     pub ignored_origins: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedSyncSettings {
+    // Missing on existing installations. New explicit choices are exempt
+    // from the one-time macOS migration, including local-only creation.
+    #[serde(default)]
+    pub cloudkit_migration_complete: bool,
     #[serde(default)]
     pub mode: SyncMode,
     #[serde(default)]
@@ -40,6 +44,19 @@ pub struct PersistedSyncSettings {
     pub webdav_password: Option<Ciphertext>,
 }
 
+impl Default for PersistedSyncSettings {
+    fn default() -> Self {
+        Self {
+            cloudkit_migration_complete: true,
+            mode: SyncMode::default(),
+            sync_folder: None,
+            webdav_url: None,
+            webdav_username: None,
+            webdav_password: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum StoredSyncSecret {
     Plaintext(SensitiveString),
@@ -48,6 +65,7 @@ pub enum StoredSyncSecret {
 
 #[derive(Clone, Debug, Default)]
 pub struct StoredSyncSettings {
+    pub cloudkit_migration_pending: bool,
     pub mode: SyncMode,
     pub sync_folder: Option<PathBuf>,
     pub webdav_url: Option<String>,
@@ -332,6 +350,17 @@ pub fn create_vault_with_options(
             password.zeroize();
             return Err(err);
         }
+    }
+    if !sync_settings_path(&state.vault_dir).exists() {
+        let settings = PersistedSyncSettings {
+            mode: default_sync_mode(),
+            ..Default::default()
+        };
+        atomic_write_bytes(
+            sync_settings_path(&state.vault_dir),
+            &serde_json::to_vec(&settings).map_err(ServiceError::internal)?,
+        )
+        .map_err(ServiceError::internal)?;
     }
     let creation = Vault::create(&state.vault_dir, &SecretString::new(password.as_str()))
         .map_err(map_vault_error);
@@ -750,6 +779,8 @@ pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
             atomic_write_bytes(&path, &serde_json::to_vec_pretty(&persisted)?)?;
         }
         return Ok(StoredSyncSettings {
+            cloudkit_migration_pending: cfg!(target_os = "macos")
+                && !persisted.cloudkit_migration_complete,
             mode: persisted.mode,
             sync_folder: persisted.sync_folder,
             webdav_url: persisted.webdav_url,
@@ -759,13 +790,14 @@ pub fn load_sync_settings(vault_dir: &Path) -> Result<StoredSyncSettings> {
     }
     Ok(StoredSyncSettings {
         mode: default_sync_mode(),
+        cloudkit_migration_pending: cfg!(target_os = "macos") && manifest_path(vault_dir).exists(),
         ..StoredSyncSettings::default()
     })
 }
 
-/// Fresh installs on macOS default to iCloud Drive sync; other platforms keep
-/// the protocol's local-folder default. Only applied when no sync settings
-/// file exists, so a user's persisted choice always wins.
+/// Fresh installs on macOS default to CloudKit; other platforms keep the
+/// protocol's local-folder default. Existing choices remain active until
+/// their one-time CloudKit migration has been verified.
 fn default_sync_mode() -> SyncMode {
     default_sync_mode_for_os(std::env::consts::OS)
 }
@@ -820,6 +852,7 @@ pub(crate) fn prepare_sync_settings(
         .map(|secret| persist_sync_secret(vault, secret))
         .transpose()?;
     let persisted = PersistedSyncSettings {
+        cloudkit_migration_complete: !settings.cloudkit_migration_pending,
         mode: settings.mode,
         sync_folder: settings.sync_folder.clone(),
         webdav_url: settings.webdav_url.clone(),
@@ -832,6 +865,7 @@ pub(crate) fn prepare_sync_settings(
     Ok((
         serde_json::to_vec_pretty(&persisted)?,
         StoredSyncSettings {
+            cloudkit_migration_pending: settings.cloudkit_migration_pending,
             mode: settings.mode,
             sync_folder: settings.sync_folder.clone(),
             webdav_url: settings.webdav_url.clone(),
@@ -846,6 +880,10 @@ pub fn apply_sync_settings_update(
     update: SyncSettingsUpdate,
 ) -> StoredSyncSettings {
     StoredSyncSettings {
+        // Repairing credentials for the old backend must still finish its
+        // pending migration. An explicit choice of another mode supersedes it.
+        cloudkit_migration_pending: current.cloudkit_migration_pending
+            && current.mode == update.mode,
         mode: update.mode,
         sync_folder: update.sync_folder,
         webdav_url: update.webdav_url,
@@ -1199,6 +1237,7 @@ mod tests {
         )
         .expect("create vault");
         let settings = StoredSyncSettings {
+            cloudkit_migration_pending: false,
             mode: SyncMode::WebDav,
             sync_folder: None,
             webdav_url: Some("https://dav.example".to_string()),
@@ -1263,6 +1302,93 @@ mod tests {
         let vault_dir = temp.path().join("vault");
         let loaded = load_sync_settings(&vault_dir).expect("default settings");
         assert_eq!(loaded.mode, default_sync_mode());
+        assert!(!loaded.cloudkit_migration_pending);
+    }
+
+    #[test]
+    fn cloudkit_migration_marker_distinguishes_old_settings_and_explicit_choices() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("vault");
+        let vault = Vault::create(&root, &SecretString::new("master"))
+            .unwrap()
+            .vault;
+        assert_eq!(
+            load_sync_settings(&root)
+                .unwrap()
+                .cloudkit_migration_pending,
+            cfg!(target_os = "macos")
+        );
+        let path = sync_settings_path(&root);
+        for mode in [
+            SyncMode::Local,
+            SyncMode::ICloud,
+            SyncMode::OneDrive,
+            SyncMode::WebDav,
+        ] {
+            atomic_write_bytes(
+                &path,
+                &serde_json::to_vec(&serde_json::json!({"mode": mode})).unwrap(),
+            )
+            .unwrap();
+            let old = load_sync_settings(&root).unwrap();
+            assert_eq!(old.mode, mode);
+            assert_eq!(old.cloudkit_migration_pending, cfg!(target_os = "macos"));
+            save_sync_settings(&root, &vault, &old).unwrap();
+            assert_eq!(
+                load_sync_settings(&root)
+                    .unwrap()
+                    .cloudkit_migration_pending,
+                old.cloudkit_migration_pending
+            );
+            let explicit = apply_sync_settings_update(
+                old.clone(),
+                SyncSettingsUpdate {
+                    mode: if mode == SyncMode::Local {
+                        SyncMode::WebDav
+                    } else {
+                        SyncMode::Local
+                    },
+                    sync_folder: None,
+                    webdav_url: None,
+                    webdav_username: None,
+                    webdav_password: None,
+                    clear_webdav_password: false,
+                },
+            );
+            let repaired = apply_sync_settings_update(
+                old.clone(),
+                SyncSettingsUpdate {
+                    mode,
+                    sync_folder: None,
+                    webdav_url: None,
+                    webdav_username: None,
+                    webdav_password: Some(SensitiveString::from("repaired credential")),
+                    clear_webdav_password: false,
+                },
+            );
+            assert_eq!(
+                repaired.cloudkit_migration_pending,
+                old.cloudkit_migration_pending
+            );
+            save_sync_settings(&root, &vault, &explicit).unwrap();
+            assert!(
+                !load_sync_settings(&root)
+                    .unwrap()
+                    .cloudkit_migration_pending
+            );
+        }
+    }
+
+    #[test]
+    fn new_local_only_vault_does_not_start_automatic_cloudkit_migration() {
+        let temp = tempdir().unwrap();
+        let state = test_state(temp.path().join("vault"));
+        fs::remove_file(sync_settings_path(&state.vault_dir)).unwrap();
+        create_vault_with_options(&state, "master".into(), true).unwrap();
+        let settings = load_sync_settings(&state.vault_dir).unwrap();
+        assert_eq!(settings.mode, SyncMode::Local);
+        assert!(!settings.cloudkit_migration_pending);
+        assert!(state.sync_watcher.lock().unwrap().is_none());
     }
 
     #[test]
@@ -1273,6 +1399,7 @@ mod tests {
 
         create_vault(&state, "correct horse battery staple".to_string()).expect("create");
         let sync_settings = PersistedSyncSettings {
+            cloudkit_migration_complete: true,
             mode: SyncMode::WebDav,
             sync_folder: Some(temp.path().join("sync")),
             webdav_url: Some("https://dav.example".to_string()),

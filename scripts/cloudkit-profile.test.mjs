@@ -23,6 +23,16 @@ test("release uses only the matching production CloudKit identity", () => {
   assert.equal(ent["com.apple.developer.aps-environment"], "production");
 });
 
+test("Developer ID wildcard services allow only the app's explicit CloudKit request", () => {
+  for (const services of ["*", ["*"]]) {
+    const candidate = profile();
+    candidate.Entitlements["com.apple.developer.icloud-services"] = services;
+    assert.deepEqual(cloudEntitlements(candidate, "TESTTEAM00")["com.apple.developer.icloud-services"], ["CloudKit"]);
+    candidate.Entitlements["com.apple.developer.icloud-container-identifiers"] = [];
+    assert.throws(() => cloudEntitlements(candidate, "TESTTEAM00"), /container is missing/);
+  }
+});
+
 test("profile parsing supports native plist dates and certificate data", () => {
   const value = parseProfile(Buffer.from(`<?xml version="1.0"?><plist version="1.0"><dict>
     <key>ExpirationDate</key><date>2099-01-01T00:00:00Z</date>

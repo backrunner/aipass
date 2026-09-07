@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::{fs, path::Path, sync::Arc};
 
+mod cloudkit_migration;
+
 #[derive(Default, Serialize, Deserialize)]
 struct Checkpoint {
     heads: Vec<String>,
@@ -95,7 +97,16 @@ pub(crate) fn run_cloudkit(state: &Arc<AgentState>) -> ServiceResult<SyncReport>
         .sync_lock
         .lock()
         .map_err(|_| ServiceError::internal(anyhow::anyhow!("sync lock poisoned")))?;
-    let result = run_cloudkit_inner(state);
+    let result = (|| {
+        let settings =
+            crate::session::load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
+        if settings.cloudkit_migration_pending {
+            recover_local_pending(state)?;
+            cloudkit_migration::run(state, &settings)
+        } else {
+            run_cloudkit_inner(state)
+        }
+    })();
     if let Ok(mut status) = state.sync_status.lock() {
         *status = Some(match &result {
             Ok(report) => report.status.clone(),
@@ -155,10 +166,20 @@ fn run_configured_inner(state: &Arc<AgentState>) -> ServiceResult<SyncReport> {
     let settings =
         crate::session::load_sync_settings(&state.vault_dir).map_err(ServiceError::internal)?;
     recover_local_pending(state)?;
+    if settings.cloudkit_migration_pending {
+        return cloudkit_migration::run(state, &settings);
+    }
+    run_settings_inner(state, &settings)
+}
+
+fn run_settings_inner(
+    state: &Arc<AgentState>,
+    settings: &crate::session::StoredSyncSettings,
+) -> ServiceResult<SyncReport> {
     if settings.mode == aipass_agent_protocol::SyncMode::ICloud {
         return run_cloudkit_inner(state);
     }
-    if let Some(dir) = crate::sync_watch::folder_sync_dir(&settings) {
+    if let Some(dir) = crate::sync_watch::folder_sync_dir(settings) {
         return run_inner(
             state,
             &aipass_sync::FolderSnapshotRemote(&dir),
@@ -182,7 +203,7 @@ fn run_configured_inner(state: &Arc<AgentState>) -> ServiceResult<SyncReport> {
             .map_err(|_| ServiceError::internal(anyhow::anyhow!("session lock poisoned")))?;
         crate::session::transport_password(
             state,
-            &settings,
+            settings,
             match &*session {
                 SessionState::Locked => None,
                 SessionState::Unlocked(info) => Some(&info.vault),
@@ -626,7 +647,9 @@ fn synchronize(
         if !root.join("manifest.aipmanifest").exists() {
             if heads.len() == 1 {
                 let id = heads.first().unwrap();
-                VaultSyncSnapshot::parse(&fs::read(cache_path(root, id)?)?)?.bootstrap(root)?;
+                let snapshot = VaultSyncSnapshot::parse(&fs::read(cache_path(root, id)?)?)?;
+                prepare_cloudkit_bootstrap(root, target)?;
+                snapshot.bootstrap(root)?;
                 *applied = true;
                 checkpoint.heads = vec![id.clone()];
                 atomic_write_bytes(&path, &serde_json::to_vec(&checkpoint)?)?;
@@ -1152,8 +1175,9 @@ pub(crate) fn bootstrap_before_create(state: &Arc<AgentState>) -> ServiceResult<
         let (bytes, id) = single_snapshot(&remote).map_err(ServiceError::internal)?;
         (bytes, id, format!("folder:{}", dir.display()))
     };
-    VaultSyncSnapshot::parse(&bytes)
-        .map_err(crate::session::map_vault_error)?
+    let snapshot = VaultSyncSnapshot::parse(&bytes).map_err(crate::session::map_vault_error)?;
+    prepare_cloudkit_bootstrap(&state.vault_dir, &target).map_err(ServiceError::internal)?;
+    snapshot
         .bootstrap(&state.vault_dir)
         .map_err(crate::session::map_vault_error)?;
     atomic_write_bytes(
@@ -1174,6 +1198,26 @@ pub(crate) fn bootstrap_before_create(state: &Arc<AgentState>) -> ServiceResult<
         .sync_revision
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(true)
+}
+
+fn prepare_cloudkit_bootstrap(root: &Path, target: &str) -> Result<()> {
+    if !target.starts_with("cloudkit:") || root.join("manifest.aipmanifest").exists() {
+        return Ok(());
+    }
+    // A fresh CloudKit restore is already on the destination. Record that
+    // before installing its manifest so it cannot look like an old Drive vault.
+    let path = crate::session::sync_settings_path(root);
+    let mut settings: crate::session::PersistedSyncSettings = if path.exists() {
+        serde_json::from_slice(&fs::read(&path)?)?
+    } else {
+        crate::session::PersistedSyncSettings {
+            mode: aipass_agent_protocol::SyncMode::ICloud,
+            ..Default::default()
+        }
+    };
+    settings.cloudkit_migration_complete = true;
+    atomic_write_bytes(path, &serde_json::to_vec(&settings)?)?;
+    Ok(())
 }
 
 #[cfg(test)]

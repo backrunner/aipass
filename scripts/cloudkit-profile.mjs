@@ -16,7 +16,9 @@ export function cloudEntitlements(profile, team, container = defaultContainer, n
   const applicationId = ent["com.apple.application-identifier"];
   require(applicationId === `${team}.${bundleId}`, "CloudKit profile application identifier does not match AIPass");
   require(allows(ent["com.apple.developer.icloud-container-identifiers"], container), "CloudKit container is missing from the profile");
-  require(allows(ent["com.apple.developer.icloud-services"], "CloudKit"), "CloudKit service is missing from the profile");
+  // Developer ID profiles may authorize all iCloud services with "*".
+  // The app still requests only CloudKit and the explicitly bound container.
+  require(allows(ent["com.apple.developer.icloud-services"], "CloudKit") || allows(ent["com.apple.developer.icloud-services"], "*"), "CloudKit service is missing from the profile");
   require(allows(ent["com.apple.developer.icloud-container-environment"], "Production"), "CloudKit profile does not allow Production");
   require(ent["com.apple.developer.aps-environment"] === "production", "CloudKit profile does not allow production push notifications");
   return {

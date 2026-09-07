@@ -15,11 +15,14 @@ const SYNC_WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const SYNC_WATCH_POLL: Duration = Duration::from_millis(250);
 
 /// The folder a sync configuration syncs against, when the backend is a
-/// local filesystem folder (explicit folder or OneDrive).
+/// local filesystem folder (explicit folder, OneDrive, or a pending Drive migration).
 /// CloudKit and WebDAV have independent remote-change detection.
 pub(crate) fn folder_sync_dir(settings: &StoredSyncSettings) -> Option<PathBuf> {
     match settings.mode {
         SyncMode::Local => settings.sync_folder.clone(),
+        SyncMode::ICloud if settings.cloudkit_migration_pending => {
+            cloud_sync_dir(CloudSyncProvider::ICloud).ok()
+        }
         SyncMode::ICloud => None,
         SyncMode::OneDrive => cloud_sync_dir(CloudSyncProvider::OneDrive).ok(),
         SyncMode::WebDav => None,
@@ -90,7 +93,9 @@ pub(crate) fn restart_sync_watcher(state: &Arc<AgentState>, settings: &StoredSyn
     if let Ok(mut cached) = state.webdav_transport.lock() {
         *cached = None;
     }
-    let enabled = settings.mode != SyncMode::Local || settings.sync_folder.is_some();
+    let enabled = settings.cloudkit_migration_pending
+        || settings.mode != SyncMode::Local
+        || settings.sync_folder.is_some();
     let watcher = enabled.then(|| {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();

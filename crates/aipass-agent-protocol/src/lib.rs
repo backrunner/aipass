@@ -26,7 +26,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 5 adds the signed native CloudKit transport.
 // Version 6 requires verified WS preference recovery and automatic capability warnings.
 // Version 7 requires provider concurrency persistence and runtime admission limits.
-pub const AGENT_PROTOCOL_VERSION: u32 = 7;
+// Version 8 requires verified automatic migration of existing macOS vaults to CloudKit.
+pub const AGENT_PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]

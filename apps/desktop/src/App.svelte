@@ -582,7 +582,11 @@
       status = next;
       if (next.syncStatus) syncState = next.syncStatus;
       if (!authChanged) {
-        if (syncChanged && nowUnlocked) { await loadEntries(); await loadServer(); }
+        if (syncChanged && nowUnlocked) {
+          await loadEntries();
+          await loadServer();
+          if (!syncSettingsDirty()) await loadSyncSettings({ preserveDraft: true });
+        }
         return;
       }
       if (next.exists && next.locked) setAuthMode("unlock");
@@ -3004,9 +3008,10 @@
     }
   }
 
-  async function loadSyncSettings() {
+  async function loadSyncSettings(options: { preserveDraft?: boolean } = {}) {
     try {
       const settings = await invokeTauri<SyncSettings>("sync_settings_load");
+      if (options.preserveDraft && syncSettingsDirty()) return;
       syncMode = settings.mode;
       syncFolder = settings.syncFolder ?? "";
       webdavUrl = settings.webdavUrl ?? "";
