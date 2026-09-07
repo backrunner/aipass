@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn slow_http_generations_wait_without_failover_and_report_channel_activity() {
+    // The hold clock starts before parsing and SQLite diagnostics. Leave CI
+    // enough time to submit, then exceed this budget only after upstream ack.
+    let hold_budget_ms = 1_000;
     for mode in [
         "headers",
         "body",
@@ -80,7 +83,7 @@ async fn slow_http_generations_wait_without_failover_and_report_channel_activity
                 first_byte_timeout_ms: 20,
                 stream_idle_timeout_ms: 20,
                 hold_on_failure: true,
-                hold_max_duration_ms: 30,
+                hold_max_duration_ms: hold_budget_ms,
                 silent_retry: mode == "silent_stream",
                 ..RetryPolicy::default()
             },
@@ -96,12 +99,13 @@ async fn slow_http_generations_wait_without_failover_and_report_channel_activity
             (2, 2)
         );
         let url = format!("http://{}/v1/responses", proxy.bind_addr);
-        let request = tokio::spawn(async move {
-            let response = reqwest::Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(3))
-                .build()
-                .unwrap()
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .unwrap();
+        let mut request = tokio::spawn(async move {
+            let response = client
                 .post(url)
                 .bearer_auth("slow-test")
                 .json(&serde_json::json!({"model":"test","stream":streaming}))
@@ -110,11 +114,14 @@ async fn slow_http_generations_wait_without_failover_and_report_channel_activity
                 .unwrap();
             (response.status(), response.text().await.unwrap())
         });
-        tokio::time::timeout(Duration::from_secs(1), arrival)
-            .await
-            .unwrap()
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::select! {
+            result = tokio::time::timeout(Duration::from_secs(5), arrival) => {
+                result.unwrap_or_else(|error| panic!("{mode}: upstream arrival timed out: {error}"))
+                    .expect("upstream closed before acknowledging the request");
+            }
+            result = &mut request => panic!("{mode}: request ended before upstream arrival: {result:?}"),
+        }
+        tokio::time::sleep(Duration::from_millis(hold_budget_ms + 100)).await;
         assert!(
             !request.is_finished(),
             "{mode}: a submitted request must keep waiting"
