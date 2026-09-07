@@ -573,6 +573,7 @@ async fn run_response(
     }
     let response = forward_request(
         ForwardRequest {
+            image_operation: None,
             websocket: true,
             upstream_pool: Some(context.upstream_pool.clone()),
             affinity_fallback: Some(format!("bridge:{}:{lane}", context.connection_id)),

@@ -143,11 +143,11 @@ Newest entries last within each section.
 
 ## Proxy credential snapshot (proxy_service / handlers)
 
-### Codex local tokens must stay on Responses
+### Codex local tokens must keep their conversational protocol scope
 - **Symptom**: a Codex-configured local proxy token could be reused against another inbound API route such as Chat Completions.
 - **Root cause**: local authentication is token based, so protocol scoping depends on the route selection predicate remaining aligned with Codex's `wire_api = "responses"` configuration.
 - **Fix**: keep Codex integration validation and runtime route selection tied to `OpenAiResponses`, with an explicit protocol-scope helper and regression test.
-- **Guardrail**: preserve one-to-one Codex token and Responses route scoping; reject Chat Completions and Anthropic paths before forwarding.
+- **Guardrail**: preserve one-to-one Codex token and Responses conversation routing; reject Chat Completions and Anthropic paths before forwarding. Per the 2026-09-07 user request, OpenAI route tokens also authorize the two standalone Images endpoints, restricted to their own OpenAI targets; this exception must not broaden conversational protocol access.
 - **Watch points**: `crates/aipass-agent/src/server.rs` `ensure_proxy_tool_protocol`, `crates/aipass-proxy/src/lib.rs` route selection, and `apps/desktop/src/lib/utils/integrations.ts`.
 
 ### New or changed credentials invisible to the running proxy
@@ -282,6 +282,13 @@ Newest entries last within each section.
 - **Fix**: typed handshake/fallback outcomes; one pre-submission reconnect; bounded session fallback; versioned joint evidence and an agent-consumed event; atomic Vault preference/warning update; non-generating recovery validation outside the vault lock; touched-only UI updates. Preserve automatic closure explanations until recovery succeeds.
 - **Guardrail**: keep all three WS entry paths on the shared capability ledger. Never replay an ambiguous submission. Reject stale configuration epochs, duplicate events and candidates invalidated by WS success. Keep unsaved events through lock/write failure/listener stop, revalidate before persistence, and clear only after refresh. Retain refresh retries separately from live evidence: a record can commit before auditing fails, and later WS success must not erase that committed change's refresh/revision. A preference-only update must not revoke live transports. Require valid empty WS completion before false-to-true saves and compare configuration again after probing. Cover these in `websocket/tests/adaptive.rs`, `proxy_service::tests::websocket_capability_survives_lock_stop_retry_and_vault_reopen`, `websocket_recovery_tests.rs`, Vault durability tests, and `App.test.ts`.
 - **Watch points**: proxy capability/upstream/native/bridge/pool, agent background worker/provider update/probe, Vault summary and narrow update, Tauri DTO, schemas/UI types, provider details/form/i18n, and protocol version.
+
+### Standalone image calls need separate capability and replay rules
+- **Symptom**: Images paths were rejected locally; chat health, a tool declaration or a partial image could be mistaken for usable image generation support.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` recognized only conversational protocols, while Images JSON/multipart requests and image SSE events have a separate wire contract.
+- **Fix**: `images.rs` forwards generation/edit requests through existing authenticated route targets and shared URL/header/body helpers, with bounded request-driven capability evidence and byte-preserving image streams.
+- **Guardrail**: distinguish operation, model, streaming mode and effective credential configuration; filter unsupported/non-OpenAI targets before limiting attempts. Never learn unsupported from auth/quota/parameter errors or from missing output. Never use a chat protocol converter, change conversation affinity, or replay an ambiguous submitted image request. Preserve slow generation and config cancellation. Keep capabilities ephemeral and payloads out of diagnostics.
+- **Watch points**: Images entry auth, multipart metadata, `images::candidates`, structured error classification, large split image SSE events, and `tests/image_api.rs`. Native Responses image tools are a separate capability.
 
 ## Public model pricing (aipass-agent pricing)
 

@@ -29,6 +29,7 @@ use zeroize::Zeroize;
 pub use aipass_proxy_conversion::{supports, ConversionError, ProxyProtocol as Protocol};
 
 mod diagnostics;
+mod images;
 mod routing;
 use routing::{complete_target_success, RecoveryPermit};
 mod shell_env;
@@ -1185,6 +1186,7 @@ struct RuntimeState {
     stats: Arc<Mutex<RuntimeStats>>,
     usage: Arc<UsageStore>,
     health: Arc<Mutex<HashMap<Uuid, TargetHealth>>>,
+    image_capabilities: Arc<Mutex<images::Ledger>>,
     ws_health: Arc<Mutex<HashMap<websocket::capability::Key, websocket::capability::Health>>>,
     ws_sessions: Arc<Mutex<websocket::capability::HttpSessions>>,
     rr_counters: Arc<Mutex<HashMap<Uuid, AtomicU64>>>,
@@ -1312,6 +1314,7 @@ impl ProxyHandle {
             stats: Arc::new(Mutex::new(RuntimeStats::default())),
             usage,
             health: Arc::new(Mutex::new(HashMap::new())),
+            image_capabilities: Arc::new(Mutex::new(images::Ledger::default())),
             ws_health: Arc::new(Mutex::new(ws_health)),
             ws_sessions: Arc::new(Mutex::new(HashMap::new())),
             rr_counters: Arc::new(Mutex::new(HashMap::new())),
@@ -2635,12 +2638,20 @@ async fn handle_request_inner(
             response = handle_models_request(request, state) => response,
         });
     }
-    let Some(inbound) = ProxyProtocol::from_path(&path) else {
+    let image_operation = images::Operation::from_path(&path);
+    let inbound = ProxyProtocol::from_path(&path);
+    if inbound.is_none() && image_operation.is_none() {
         return Ok(error_response(
             StatusCode::NOT_FOUND,
             "unsupported proxy path",
         ));
-    };
+    }
+    if image_operation.is_some() && method != http::Method::POST {
+        return Ok(error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Images API requires POST",
+        ));
+    }
     let incoming_headers = request.headers().clone();
     let (bearer_token, api_key_token) = local_proxy_tokens(&incoming_headers);
     if bearer_token.is_none() && api_key_token.is_none() {
@@ -2649,7 +2660,8 @@ async fn handle_request_inner(
             "missing local proxy token",
         ));
     }
-    let selected = select_route(&state, bearer_token, api_key_token, Some(inbound));
+    let selected = select_route(&state, bearer_token, api_key_token, inbound)
+        .filter(|(route, _)| image_operation.is_none() || images::accepts_route(route));
     let Some((mut route, pricing)) = selected else {
         return Ok(error_response(
             StatusCode::UNAUTHORIZED,
@@ -2678,6 +2690,7 @@ async fn handle_request_inner(
     };
     forward_request(
         ForwardRequest {
+            image_operation,
             websocket: false,
             upstream_pool: None,
             affinity_fallback: None,
@@ -2698,6 +2711,7 @@ async fn handle_request_inner(
 }
 
 struct ForwardRequest {
+    image_operation: Option<images::Operation>,
     websocket: bool,
     upstream_pool: Option<Arc<websocket::pool::Pool>>,
     affinity_fallback: Option<String>,
@@ -2746,7 +2760,11 @@ async fn forward_request_inner(
     route: ResolvedRoute,
     pricing: Vec<ModelPricing>,
 ) -> Result<Response<BoxBody>, Infallible> {
+    if let Some(operation) = request.image_operation {
+        return Ok(images::forward(request, state, route, operation).await);
+    }
     let ForwardRequest {
+        image_operation: _,
         websocket,
         upstream_pool,
         affinity_fallback,
@@ -4735,6 +4753,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    mod image_api;
     mod runtime_status;
     mod stability;
     mod transparency;

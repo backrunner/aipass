@@ -40,6 +40,7 @@ AIPass 的核心操作统一经过 Agent，桌面、CLI 和浏览器扩展共用
 | `proxy.tools.summary` | 对照 `http_inbound`、`ws_bridge_prepared`、`converted_upstream`、`ws_upstream` 阶段的工具数量及类型。`ws_bridge_prepared` 位于桥接器恢复上下文之后，`ws_upstream` 是即将原样发送的 WS 请求。`tools_present=false` 表示未提供工具列表，`available=false` 表示无法解析摘要，不能当成工具数量为零。 |
 | `proxy.request.forwarding` | 按请求 ID 查看目标、尝试次数、入站与上游协议，以及是否发生转换。WS 上游包含 `connection_id`，多个请求的值相同表示复用了同一连接。原生直通请求沿用入口工具摘要；转换后另记工具摘要。 |
 | `proxy.target.cooldown` | 查看临时拉黑的目标、`cooldown_ms` 时长与 `reopen_count` 累计开启次数。默认连续失败 3 次拉黑 30 秒，恢复尝试再次失败立即加倍，最长 15 分钟；已在途的其他失败不延长同一次拉黑。 |
+| `proxy.images.routing` / `proxy.images.forwarding` / `proxy.images.capability` | 查看独立 Images 请求的候选数、实际目标及从真实请求学习到的生成/编辑支持状态。能力按模型、streaming 模式和有效 provider 配置隔离，仅保留在运行内存中；详见 [Images API](proxy-images.md)。 |
 | `proxy.responses.summary` | 每个生成请求结束或中断时，汇总 Responses 事件、文本/工具增量、终止事件数量及顺序异常。`transport` 区分原生 WS 上游与 HTTP/SSE 上游；不对转换后的下游流作同样的顺序判断。 |
 | `proxy.websocket.transport` | 区分连接失败、握手超时、HTTP 拒绝、无效 Upgrade、连接成功、`reused` 连接复用和 HTTP 桥接回退；能够提取时保留 `os_error` 数字，不保存原始错误。 |
 | `proxy.websocket.closed` | 查看断开方向、固定原因类别、WS 关闭码，以及断开时尚未完成的请求数。 |

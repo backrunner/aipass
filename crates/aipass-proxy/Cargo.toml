@@ -13,6 +13,7 @@ http.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+multer.workspace = true
 reqwest = { workspace = true, features = ["brotli", "deflate", "gzip", "zstd"] }
 rusqlite.workspace = true
 serde.workspace = true
