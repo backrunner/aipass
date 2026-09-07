@@ -160,6 +160,31 @@ test("switches chart totals and provider details together for every period", () 
   }
 });
 
+test("opens the breakdown range menu on hover and changes the shared range", async () => {
+  setLocale("en");
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  app = mount(ServerDetailPane, {
+    target,
+    props: { config, status, usageByRange: { "24h": usage, 7: usage, 30: usage } }
+  }) as never;
+  flushSync();
+
+  const trigger = document.querySelector<HTMLButtonElement>(".usage-range-trigger")!;
+  trigger.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true }));
+  await vi.waitFor(() => {
+    flushSync();
+    expect(document.querySelector(".usage-range-menu")).not.toBeNull();
+  });
+
+  const thirtyDay = [...document.querySelectorAll<HTMLElement>(".usage-range-item")]
+    .find((item) => item.textContent?.includes("30"))!;
+  thirtyDay.click();
+  flushSync();
+  expect(trigger.textContent).toContain("30");
+  expect(thirtyDay.getAttribute("aria-checked")).toBe("true");
+});
+
 test("stopped address opens on demand and stays editable when saving fails", async () => {
   const onSaveConfig = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
   app = mount(ServerDetailPane, { target: document.body, props: { config, status, usageByRange: emptyServerUsage(), onSaveConfig } }) as never;

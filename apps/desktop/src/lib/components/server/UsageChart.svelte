@@ -83,7 +83,6 @@
   }
 
   function selectRange(value: typeof range) {
-    hideTooltip();
     range = value;
   }
 
@@ -136,6 +135,7 @@
     hoveredPoint = undefined;
   }
 
+  $: { range; hideTooltip(); }
   $: points = range === "24h" ? buildHours(hourlySeries) : buildDays(range, series);
   $: maxTokens = Math.max(1, ...points.map(tokensOf));
   $: totalTokens = points.reduce((sum, point) => sum + tokensOf(point), 0);

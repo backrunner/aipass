@@ -13,6 +13,7 @@
   import IntegrationCard from "../integration/IntegrationCard.svelte";
   import UsageBreakdown from "./UsageBreakdown.svelte";
   import UsageChart from "./UsageChart.svelte";
+  import UsageRangeMenu from "./UsageRangeMenu.svelte";
 
   export let config: ProxyConfig;
   export let status: ProxyStatus;
@@ -248,7 +249,7 @@
 
     <Card title={$t("server.usageBreakdown")} padded={false} collapsible>
       <svelte:fragment slot="actions">
-        <span class="hint">{$t(usageRange === "24h" ? "server.last24Hours" : usageRange === 7 ? "server.last7Days" : "server.last30Days")}</span>
+        <UsageRangeMenu bind:range={usageRange} />
       </svelte:fragment>
       <UsageBreakdown usage={usageByRange[usageRange]} routes={config.routes} {status} {entries} {archivedEntries} />
     </Card>
