@@ -8,6 +8,7 @@
   import { t } from "../i18n";
   import type { Draft, FormMode, MaybePromise } from "../types";
   import Field from "./Field.svelte";
+  import Banner from "./Banner.svelte";
   import SelectField from "./SelectField.svelte";
   import SwitchField from "./SwitchField.svelte";
 
@@ -20,6 +21,8 @@
   export let onAuthChanged: () => MaybePromise = () => {};
   export let itemLayout = false;
   export let showWebsocketSetting = false;
+  export let websocketWarning = draft.websocketWarning;
+  export let websocketProbing = false;
   export let compactProviderSelect = false;
   export let showSecretLabel = true;
   // Set when editing an official OAuth entry: the proxy sends the OAuth token
@@ -151,6 +154,7 @@
       initial.add("endpoint");
     }
     visibleFields = initial;
+    advancedOpen = !itemLayout;
     if (itemLayout && formMode === "edit") {
       formRoot.querySelector<HTMLInputElement>(".title-field input")?.focus({ preventScroll: true });
     }
@@ -253,7 +257,7 @@
           <input
             bind:value={draft.apiKey}
             type={showApiKey ? "text" : "password"}
-            placeholder={formMode === "edit" ? $t("providerForm.keepCurrent") : $t("providerForm.pasteApiKey")}
+            placeholder={$t("providerForm.pasteApiKey")}
             autocomplete="off"
             spellcheck="false"
           />
@@ -368,9 +372,19 @@
   </section>
 {/if}
 
-<details class="form-section advanced-section" open={!itemLayout || advancedOpen} on:toggle={(event) => (advancedOpen = event.currentTarget.open)}>
-  <summary class="section-title">{$t("providerForm.advanced")}<ChevronDown size={14} /></summary>
-  <div class="section-fields">
+<section class="form-section advanced-section" class:expanded={advancedOpen}>
+  <button
+    type="button"
+    class="advanced-toggle"
+    aria-expanded={advancedOpen}
+    on:click={() => (advancedOpen = !advancedOpen)}
+  >
+    <span>{$t("providerForm.advanced")}</span>
+    <ChevronDown size={14} />
+  </button>
+  <div class="advanced-collapse" inert={!advancedOpen}>
+    <div class="advanced-collapse-inner">
+      <div class="section-fields">
     <div class="protocol-field">
       <SelectField
         label={$t("providerForm.interface")}
@@ -392,8 +406,10 @@
         label={$t("providerForm.supportsWebsockets")}
         description={$t("providerForm.supportsWebsocketsHint")}
         checked={draft.supportsWebsockets ?? true}
-        onCheckedChange={(checked) => (draft.supportsWebsockets = checked)}
+        onCheckedChange={(checked) => { draft.supportsWebsockets = checked; draft.websocketPreferenceTouched = true; }}
       />
+      {#if websocketWarning}<Banner tone="warning">{$t("providerForm.websocketAutoDisabled")}</Banner>{/if}
+      {#if websocketProbing}<Banner tone="info">{$t("providerForm.websocketProbing")}</Banner>{/if}
     {/if}
     {#if visibleFields.has("consoleUrl")}
       <div class="removable-field" data-provider-field="consoleUrl">
@@ -466,8 +482,10 @@
         </button>
       </div>
     {/if}
+      </div>
+    </div>
   </div>
-</details>
+</section>
 
 {#if detailsAvailable.length > 0 || advancedAvailable.length > 0}
   {#if itemLayout}
@@ -511,22 +529,60 @@
 </div>
 
 <style lang="scss">
-  .advanced-section summary {
+  .form-section.advanced-section { gap: 0; }
+
+  .advanced-toggle {
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: space-between;
     cursor: pointer;
-    list-style: none;
-    padding: 8px 2px;
+    padding: 12px 14px;
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+    background: var(--surface);
+    text-align: left;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    transition: border-radius 220ms ease, background-color 120ms ease;
   }
-  .advanced-section summary::-webkit-details-marker {
-    display: none;
+  .advanced-toggle:hover {
+    background: var(--surface-2);
   }
-  .advanced-section[open] summary :global(svg) {
+  .advanced-toggle :global(svg) {
+    transition: transform 220ms ease;
+  }
+  .advanced-section.expanded .advanced-toggle {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
+  }
+  .advanced-section.expanded .advanced-toggle :global(svg) {
     transform: rotate(180deg);
   }
-  .advanced-section .section-fields {
-    margin-top: 8px;
+  .advanced-collapse {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 220ms ease, opacity 180ms ease;
+    opacity: 0;
+  }
+  .advanced-section.expanded .advanced-collapse {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  .advanced-collapse-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .advanced-collapse, .advanced-toggle, .advanced-toggle :global(svg) { transition: none; }
+  }
+
+  .provider-form-fields .advanced-section .section-fields {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    margin-top: 0;
   }
 
   .provider-form-fields.item-layout {

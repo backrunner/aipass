@@ -54,3 +54,35 @@ test("disables save and cancel while a provider update is pending", async () => 
     expect(save.disabled).toBe(false);
   });
 });
+
+test("prefills an existing key masked, allows reveal, and saves its value", async () => {
+  const onReadSecret = vi.fn(async () => "fixture-existing-key");
+  const onUpdateSecret = vi.fn(async () => {});
+  render({ onReadSecret, onUpdateSecret });
+  document.querySelector<HTMLButtonElement>(".kv-actions button:not(.copy-hint):not([aria-pressed])")!.click();
+  await vi.waitFor(() => {
+    flushSync();
+    expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-existing-key");
+  });
+  const input = document.querySelector<HTMLInputElement>(".secret-edit-input input")!;
+  expect(input.type).toBe("password");
+  document.querySelector<HTMLButtonElement>(".secret-toggle")!.click();
+  flushSync();
+  expect(input.type).toBe("text");
+  document.querySelector<HTMLButtonElement>(".credential-inline-editor .btn")!.click();
+  await vi.waitFor(() => expect(onUpdateSecret).toHaveBeenCalledWith("key", "Production", "fixture-existing-key"));
+});
+
+test("a cancelled key read cannot repopulate a later editor", async () => {
+  let finish!: (key: string) => void;
+  render({ onReadSecret: () => new Promise(resolve => { finish = resolve; }) });
+  document.querySelector<HTMLButtonElement>(".kv-actions button:not(.copy-hint):not([aria-pressed])")!.click();
+  flushSync();
+  expect(document.querySelector<HTMLButtonElement>(".credential-inline-editor .btn")!.disabled).toBe(true);
+  [...document.querySelectorAll<HTMLButtonElement>(".credential-inline-editor button")].at(-1)!.click();
+  finish("late-fixture-key");
+  await Promise.resolve();
+  flushSync();
+  expect(document.querySelector(".credential-inline-editor")).toBeNull();
+  expect(document.body.innerHTML).not.toContain("late-fixture-key");
+});

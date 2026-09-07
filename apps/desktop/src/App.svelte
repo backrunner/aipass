@@ -414,9 +414,12 @@
   $: selected = filtered.find((entry) => entry.id === selectedId) ?? filtered[0];
 
   let lastSelectedId = "";
+  let editRequestGeneration = 0;
   $: if (selected?.id !== lastSelectedId) {
+    editRequestGeneration++;
     lastSelectedId = selected?.id ?? "";
     detailEditMode = false;
+    draft.apiKey = "";
   }
   $: counts = buildProviderCounts(countEntries);
   $: if ((selected?.id ?? "") !== activeDetailId) {
@@ -753,6 +756,8 @@
   });
 
   onDestroy(() => {
+    editRequestGeneration++;
+    draft.apiKey = "";
     unlistenVaultAuth?.();
     unlistenVaultStatus?.();
     unlistenOpenServer?.();
@@ -1418,8 +1423,14 @@
     }
   }
 
-  function openEdit(entry: ProviderEntry) {
+  async function openEdit(entry: ProviderEntry) {
+    const generation = ++editRequestGeneration;
     error = "";
+    let apiKey = "";
+    if (entry.credentialKind !== "oauth" && entry.secretRefs[0]) {
+      try { apiKey = await readSecretForEdit(entry.secretRefs[0].id); } catch { return; }
+    }
+    if (generation !== editRequestGeneration || selected?.id !== entry.id || status.locked) return;
     formMode = "edit";
     // An existing entry's protocol is already an explicit choice; never let
     // domain/endpoint inference silently rewrite it during editing.
@@ -1445,8 +1456,10 @@
       accountIdentity: entry.accountIdentity ?? "",
       interfaceType: entry.interfaceType,
       supportsWebsockets: entry.supportsWebsockets ?? true,
+      websocketWarning: entry.websocketWarning,
+      websocketPreferenceTouched: false,
       authScheme: entry.authScheme,
-      apiKey: "",
+      apiKey,
       secretLabel: entry.secretRefs[0]?.label ?? "",
       defaultModel: entry.defaultModel ?? "",
       modelAlias: encodePairValues(entry.modelAliases ?? []),
@@ -1494,6 +1507,7 @@
   }
 
   function cancelDetailEdit() {
+    editRequestGeneration++;
     detailEditMode = false;
     draft = emptyDraft();
     protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
@@ -1508,6 +1522,10 @@
   }
 
   async function saveProvider() {
+    if (formMode === "edit" && draft.credentialKind !== "oauth" && selected?.secretRefs.length && !draft.apiKey.trim()) {
+      error = localizedMessage("providerForm.apiKeyRequired");
+      return;
+    }
     if (formMode === "add" && providerFilter === "all") {
       inferDraftFromEndpoint();
     }
@@ -1525,7 +1543,9 @@
       consoleEndpoints: splitEndpointList(draft.consoleUrl),
       faviconUrl: draft.faviconUrl || undefined,
       interfaceType: draft.interfaceType,
-      supportsWebsockets: draft.supportsWebsockets ?? true,
+      supportsWebsockets: formMode === "add" || draft.websocketPreferenceTouched
+        ? draft.supportsWebsockets ?? true
+        : undefined,
       authScheme: draft.authScheme,
       credentialKind: formMode === "add" ? draft.credentialKind || "api" : draft.credentialKind,
       // On edits, an empty value explicitly clears the stored identity;
@@ -1598,7 +1618,10 @@
       await loadEntries();
       openPendingDeepLink();
     } catch (err) {
-      error = String(err);
+      const message = String(err);
+      error = message.includes("websocket_probe_unconfirmed:")
+        ? localizedMessage("providerForm.websocketProbeFailed", { message: message.split("websocket_probe_unconfirmed:")[1].trim() })
+        : message;
     }
   }
 
@@ -1622,6 +1645,16 @@
     revealTimer = setTimeout(() => {
       revealedSecrets = {};
     }, Math.max(5, Math.min(120, clipboardClearSeconds || 30)) * 1000);
+  }
+
+  async function readSecretForEdit(secretId: string): Promise<string> {
+    if (!selected) throw new Error("No provider selected");
+    try {
+      return await invokeTauri<string>("secret_reveal_field", { id: selected.id, field: secretId });
+    } catch (err) {
+      error = String(err);
+      throw err;
+    }
   }
 
   async function copySecretById(secretId: string) {
@@ -1827,12 +1860,11 @@
     const refreshVersion = serverMutationVersion;
     serverRefreshPromise = (async () => {
       try {
-        const [nextStatus, nextConfig] = await Promise.all([
-          invokeTauri<ProxyStatus>("server_status"),
+        const [, nextConfig] = await Promise.all([
+          refreshServerStatus(),
           invokeTauri<ProxyConfig>("server_config_get")
         ]);
         if (serverMutationInFlight || refreshVersion !== serverMutationVersion) return;
-        serverStatus = nextStatus;
         serverConfig = { ...nextConfig, upstreamProxy: nextConfig.upstreamProxy ?? { mode: "system" } };
       } catch (err) {
         console.warn("server state load failed", err);
@@ -2503,13 +2535,14 @@
     const next = probed
       ? {
           label: probed.label,
+          unit: probed.unit,
           limit: probed.limit,
           used: probed.used,
           remaining: probed.remaining,
           resetAt: probed.resetAt
         }
       : clearMissing
-        ? { label: undefined, limit: undefined, used: undefined, remaining: undefined, resetAt: undefined }
+        ? { label: undefined, unit: undefined, limit: undefined, used: undefined, remaining: undefined, resetAt: undefined }
         : current;
     if (!next) return undefined;
     // An explicit empty snapshot is meaningful: it tells the Rust owner to
@@ -2842,6 +2875,7 @@
     if (!draft.quotaLabel && !draft.quotaLimit && !draft.quotaUsed && !draft.quotaRemaining && !draft.quotaResetAt) return undefined;
     return {
       label: draft.quotaLabel || undefined,
+      unit: formMode === "edit" ? selected?.quota?.unit : undefined,
       limit: draft.quotaLimit || undefined,
       used: draft.quotaUsed || undefined,
       remaining: draft.quotaRemaining || undefined,
@@ -3222,6 +3256,7 @@
         onArchive={archiveSelected}
         onTrash={trashSelected}
         onRevealSecret={revealSecretById}
+        onReadSecret={readSecretForEdit}
         onCopySecret={copySecretById}
         onUpdateSecret={updateSecret}
         onRemoveSecret={removeSecondarySecret}

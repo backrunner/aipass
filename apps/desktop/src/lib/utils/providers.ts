@@ -34,6 +34,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     endpoints: summary.endpoints,
     interfaceType: summary.interfaceType,
     supportsWebsockets: summary.supportsWebsockets,
+    websocketWarning: summary.websocketWarning,
     authScheme: summary.authScheme,
     secretRefs: summary.secretRefs?.length
       ? summary.secretRefs

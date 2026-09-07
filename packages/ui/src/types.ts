@@ -28,6 +28,8 @@ export type Draft = {
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
   supportsWebsockets?: boolean;
+  websocketPreferenceTouched?: boolean;
+  websocketWarning?: { reason: string; status: number; detectedAt: number; configKey: number[] };
   apiKey: string;
   secretLabel: string;
   defaultModel: string;

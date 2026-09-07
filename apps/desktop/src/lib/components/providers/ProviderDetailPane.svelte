@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import ProviderEmptyState from "./ProviderEmptyState.svelte";
   import type { InterfaceType, ProviderEntry, ProviderKind, SecretRef } from "@aipass/schemas";
   import {
@@ -91,6 +92,7 @@
   export let onArchive: () => MaybePromise = () => {};
   export let onTrash: () => MaybePromise = () => {};
   export let onRevealSecret: (secretId: string) => MaybePromise = () => {};
+  export let onReadSecret: (secretId: string) => Promise<string> = async () => "";
   export let onCopySecret: (secretId: string) => MaybePromise = () => {};
   export let onUpdateSecret: (secretId: string, label: string, apiKey?: string) => MaybePromise = () => {};
   export let onRemoveSecret: (secretId: string) => MaybePromise = () => {};
@@ -147,14 +149,20 @@
 
   let showAddSecret = false;
   let editingSecretId = "";
+  let editingSecretEntryId = "";
   let editingSecretLabel = "";
   let editingSecretValue = "";
+  let editingSecretVisible = false;
+  let editingSecretLoading = false;
+  let secretEditGeneration = 0;
+  let startingEdit = false;
   let usageDialogOpen = false;
   type CodexIntegrationMode = CodexApiKeyMode;
   let codexIntegrationMode: CodexIntegrationMode = "auth_json";
   let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
   let lastIntegrationEntryId = "";
   let lastDialogEntryId = "";
+  onDestroy(cancelSecretEdit);
   let pricingDialogOpen = false;
   let pricingDialogGroupId: string | undefined;
   let pricingDialogAssign: { entryId: string; secretId: string } | undefined;
@@ -199,29 +207,45 @@
     ? pricingGroups.find((item) => item.id === pricingDialogGroupId)
     : undefined;
 
-  $: if (editingSecretId && !selected?.secretRefs.some((secret) => secret.id === editingSecretId)) {
+  $: if (editingSecretId && (selected?.id !== editingSecretEntryId || !selected?.secretRefs.some((secret) => secret.id === editingSecretId))) {
     cancelSecretEdit();
   }
 
-  function beginSecretEdit(secret: SecretRef) {
+  async function beginSecretEdit(secret: SecretRef) {
+    editingSecretEntryId = selected?.id ?? "";
     editingSecretId = secret.id;
     editingSecretLabel = secret.label;
+    editingSecretVisible = false;
     editingSecretValue = "";
+    editingSecretLoading = true;
+    const generation = ++secretEditGeneration;
+    try {
+      const value = await onReadSecret(secret.id);
+      if (generation === secretEditGeneration) editingSecretValue = value;
+    } catch {
+      if (generation === secretEditGeneration) cancelSecretEdit();
+    } finally {
+      if (generation === secretEditGeneration) editingSecretLoading = false;
+    }
   }
 
   function cancelSecretEdit() {
+    secretEditGeneration += 1;
+    editingSecretLoading = false;
     editingSecretId = "";
+    editingSecretEntryId = "";
     editingSecretLabel = "";
     editingSecretValue = "";
+    editingSecretVisible = false;
   }
 
   async function saveSecretEdit() {
-    if (!editingSecretId || !editingSecretLabel.trim()) return;
+    if (!editingSecretId || editingSecretLoading || !editingSecretLabel.trim() || !editingSecretValue.trim()) return;
     try {
       await onUpdateSecret(
         editingSecretId,
         editingSecretLabel.trim(),
-        editingSecretValue.trim() || undefined
+        editingSecretValue.trim()
       );
       cancelSecretEdit();
     } catch {
@@ -349,8 +373,10 @@
     usageDialogOpen = true;
   }
 
-  function startEdit() {
-    if (selected) onEditStart(selected);
+  async function startEdit() {
+    if (!selected || startingEdit) return;
+    startingEdit = true;
+    try { await onEditStart(selected); } finally { startingEdit = false; }
   }
 
   function cancelEdit() {
@@ -389,6 +415,11 @@
         return "interface.customHttp";
     }
   }
+  // Background capability updates may change this switch while other edits remain in progress.
+  $: if (editMode && selected && !draft.websocketPreferenceTouched) {
+    draft.supportsWebsockets = selected.supportsWebsockets ?? true;
+  }
+
 </script>
 
 {#if selected}
@@ -436,7 +467,7 @@
             <Trash2 size={14} /> {$t("providerDetail.moveToTrash")}
           </Button>
         {:else}
-          <Button variant="primary" on:click={startEdit}>
+          <Button variant="primary" loading={startingEdit} on:click={startEdit}>
             <Pencil size={14} /> {$t("providerDetail.edit")}
           </Button>
 
@@ -477,6 +508,10 @@
     <div class="detail-body">
       {#if notice}<Banner tone="success">{notice}</Banner>{/if}
       {#if error}<Banner tone="danger">{error}</Banner>{/if}
+      {#if selected.websocketWarning}<Banner tone="warning">{$t("providerForm.websocketAutoDisabled")}</Banner>{/if}
+      {#if saving && draft.websocketPreferenceTouched && draft.supportsWebsockets && selected.supportsWebsockets === false}
+        <Banner tone="info">{$t("providerForm.websocketProbing")}</Banner>
+      {/if}
       {#if showTrash && selected.deletedAt}
         {@const days = trashDaysRemaining(selected.deletedAt)}
         {#if days !== undefined}
@@ -489,6 +524,8 @@
       {#if editMode}
         <ProviderFormFields
           showWebsocketSetting
+          websocketWarning={selected.websocketWarning}
+          websocketProbing={saving && Boolean(draft.websocketPreferenceTouched && draft.supportsWebsockets && selected.supportsWebsockets === false)}
           itemLayout
           {formMode}
           bind:draft
@@ -562,17 +599,16 @@
                       aria-label={$t("providerDetail.secretLabel")}
                       placeholder={$t("providerDetail.secretLabelPlaceholder")}
                     />
-                    <input
-                      bind:value={editingSecretValue}
-                      aria-label={$t("providerDetail.secretValue")}
-                      type="password"
-                      autocomplete="off"
-                      placeholder={$t("providerForm.keepCurrent")}
-                    />
+                    <div class="secret-edit-input">
+                      <input bind:value={editingSecretValue} aria-label={$t("providerDetail.secretValue")} type={editingSecretVisible ? "text" : "password"} disabled={editingSecretLoading} autocomplete="off" spellcheck="false" />
+                      <button type="button" class="secret-toggle" disabled={editingSecretLoading} aria-label={$t(editingSecretVisible ? "providerForm.hideApiKey" : "providerForm.showApiKey")} aria-pressed={editingSecretVisible} on:click={() => (editingSecretVisible = !editingSecretVisible)}>
+                        {#if editingSecretVisible}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+                      </button>
+                    </div>
                     <Button
                       variant="secondary"
                       size="sm"
-                      disabled={secretBusy === secret.id || !editingSecretLabel.trim()}
+                      disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretLabel.trim() || !editingSecretValue.trim()}
                       on:click={saveSecretEdit}
                     >{$t("common.save")}</Button>
                     <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
@@ -702,17 +738,16 @@
                   aria-label={$t("providerDetail.secretLabel")}
                   placeholder={$t("providerDetail.secretLabelPlaceholder")}
                 />
-                <input
-                  bind:value={editingSecretValue}
-                  aria-label={$t("providerDetail.secretValue")}
-                  type="password"
-                  autocomplete="off"
-                  placeholder={$t("providerForm.keepCurrent")}
-                />
+                <div class="secret-edit-input">
+                  <input bind:value={editingSecretValue} aria-label={$t("providerDetail.secretValue")} type={editingSecretVisible ? "text" : "password"} disabled={editingSecretLoading} autocomplete="off" spellcheck="false" />
+                  <button type="button" class="secret-toggle" disabled={editingSecretLoading} aria-label={$t(editingSecretVisible ? "providerForm.hideApiKey" : "providerForm.showApiKey")} aria-pressed={editingSecretVisible} on:click={() => (editingSecretVisible = !editingSecretVisible)}>
+                    {#if editingSecretVisible}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+                  </button>
+                </div>
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={secretBusy === secret.id || !editingSecretLabel.trim()}
+                  disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretLabel.trim() || !editingSecretValue.trim()}
                   on:click={saveSecretEdit}
                 >{$t("common.save")}</Button>
                 <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
@@ -721,17 +756,19 @@
               </div>
             {:else}
               <div class="kv-row secret" class:copied-flash={copied === `secret:${secret.id}`}>
-                <button type="button" class="secret-copy" aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}>
+                <div class="credential-heading">
                   <span class="kv-label"><KeyRound size={13} />{secret.label}</span>
-                  <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
-                </button>
-                <span class="kv-actions">
                   {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
-                    <span class="pricing-badge">
+                    <span class="pricing-badge" title={pricingGroupName(pricingAssignment.groupId)}>
                       {#if pricingAssignment.groupId}{pricingGroupName(pricingAssignment.groupId)}{/if}
                       {#if pricingAssignment.multiplier !== 1}×{pricingAssignment.multiplier}{/if}
                     </span>
                   {/if}
+                </div>
+                <button type="button" class="secret-copy" aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}>
+                  <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
+                </button>
+                <span class="kv-actions">
                   {#if copied === `secret:${secret.id}`}
                     <span class="kv-hint copied"><Check size={13} /> {$t("providerDetail.copied")}</span>
                   {:else}
@@ -908,9 +945,9 @@
           <Card title={$t("providerDetail.quota")} collapsible>
             <div class="kv-row">
               <span class="kv-label">{selected.quota?.label ?? $t("providerDetail.quota")}</span>
-              <span class="kv-value">
-                <strong class="tabular">{selected.quota?.remaining ?? "—"}</strong>
-                <span class="text-tertiary"> / {selected.quota?.limit ?? "—"}</span>
+              <span class="kv-value quota-value">
+                <strong class="tabular">{selected.quota?.remaining ?? "—"}</strong>{#if selected.quota?.unit}<span class="quota-unit">{selected.quota.unit}</span>{/if}
+                {#if selected.quota?.limit}<span class="text-tertiary"> / {selected.quota.limit}</span>{/if}
               </span>
               <span></span>
             </div>
@@ -1017,7 +1054,7 @@
 {/if}
 
 <style lang="scss">
-  .kv-row > .kv-hint, .kv-row > .kv-actions, .kv-row > span:last-child:not(.kv-label):not(.kv-value) {
+  .kv-row > .kv-hint, .kv-row > .kv-actions, .kv-row > span:last-child:not(.kv-label):not(.kv-value):not(.kv-actions) {
     grid-column: 2;
     grid-row: 1 / 3;
   }
@@ -1026,7 +1063,7 @@
     gap: 6px;
     min-width: 0;
     grid-column: 1;
-    grid-row: 1 / 3;
+    grid-row: 2;
     text-align: left;
     border-radius: 4px;
   }
@@ -1038,15 +1075,20 @@
     opacity: 1;
     color: var(--accent);
   }
-  .secret .kv-actions {
-    flex-wrap: wrap;
-    max-width: 150px;
+  .credential-heading {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
   }
-  .pricing-badge {
-    max-width: 140px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  .credential-heading .kv-label { min-width: 0; overflow-wrap: anywhere; }
+  .credential-heading .pricing-badge { max-width: 70%; }
+  .quota-unit { margin-left: 0.3em; }
+  .kv-row.secret > .kv-actions { grid-row: 2; }
+  .secret-copy .kv-value { grid-row: auto; }
   .notes-body {
     overflow-wrap: anywhere;
   }
@@ -1084,11 +1126,11 @@
 
   .detail-header {
     display: flex;
-    flex-direction: column-reverse;
+    flex-direction: row;
     flex-shrink: 0;
-    align-items: stretch;
-    gap: 20px;
-    padding: 14px 24px 24px;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 18px 20px;
     border-bottom: 1px solid var(--divider);
     background: transparent;
   }
@@ -1122,6 +1164,7 @@
   }
 
   .identity {
+    flex: 1;
     display: flex;
     align-items: center;
     gap: 14px;
@@ -1171,6 +1214,7 @@
   }
 
   .actions {
+    flex: 0 0 auto;
     justify-content: flex-end;
     display: inline-flex;
     align-items: center;
@@ -1364,6 +1408,7 @@
      line up; the badge, copy hint, and reveal toggle live in the trailing
      column. The value and copy button invoke the same copy action. */
   .kv-actions {
+    min-width: 0;
     display: inline-flex;
     align-items: center;
     justify-content: flex-end;
@@ -1454,13 +1499,24 @@
     }
   }
 
+  .quota-value {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .chips {
+    white-space: normal;
+    overflow: visible;
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
   }
 
   .chip {
+    overflow-wrap: anywhere;
+    min-width: 0;
     padding: 3px 8px;
     border-radius: 999px;
     background: var(--surface-2);
@@ -1575,7 +1631,8 @@
     align-items: center;
     gap: 4px;
     align-self: center;
-    flex-shrink: 0;
+    min-width: 0;
+    max-width: 100%;
     margin-inline-end: 4px;
     padding: 3px 8px;
     border-radius: 999px;
@@ -1583,7 +1640,8 @@
     color: var(--accent);
     font-size: 11px;
     font-weight: 500;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .secret-edit-row,
@@ -1594,10 +1652,8 @@
     gap: 8px;
     align-items: center;
 
-    input:first-child {
-
+    > input:first-child {
       grid-column: 1 / -1;
-
     }
 
     input {
@@ -1625,6 +1681,29 @@
     border-bottom: 1px solid var(--divider);
     background: var(--surface-2);
   }
+
+  .secret-edit-input {
+    position: relative;
+    min-width: 0;
+  }
+
+  .secret-edit-input input {
+    padding-right: 34px;
+  }
+
+  .secret-toggle {
+    position: absolute;
+    inset-inline-end: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    color: var(--text-tertiary);
+    border-radius: var(--radius-sm);
+  }
+  .secret-toggle:hover { background: var(--surface-2); color: var(--text); }
 
   .credential-add-row {
     padding: 12px 16px;

@@ -399,6 +399,7 @@ export type EntrySummary = {
   endpoints: ProviderEntry["endpoints"];
   interfaceType: InterfaceType;
   supportsWebsockets?: boolean;
+  websocketWarning?: { reason: string; status: number; detectedAt: number; configKey: number[] };
   authScheme: AuthScheme;
   maskedSecret: string;
   fingerprint: string;
@@ -476,7 +477,7 @@ export type ProbeResult = {
   status?: number;
   endpoint?: string;
   modelCount?: number;
-  websocket?: { supported: boolean | null; status?: number };
+  websocket?: { supported: boolean | null; status?: number; error?: string };
   error?: string;
 };
 

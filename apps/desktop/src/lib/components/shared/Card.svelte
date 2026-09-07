@@ -36,14 +36,16 @@
       {/if}
     </header>
   {/if}
-  {#if !collapsible || open}
-    <div class="card-body" class:padded>
-      <slot />
+  <div class="card-collapse" class:expanded={!collapsible || open} inert={collapsible && !open}>
+    <div class="card-collapse-inner">
+      <div class="card-body" class:padded>
+        <slot />
+      </div>
+      {#if $$slots.footer}
+        <div class="card-footer"><slot name="footer" /></div>
+      {/if}
     </div>
-    {#if $$slots.footer}
-      <div class="card-footer"><slot name="footer" /></div>
-    {/if}
-  {/if}
+  </div>
 </section>
 
 <style lang="scss">
@@ -114,6 +116,28 @@
 
   .card.collapsed .card-header {
     border-bottom-color: transparent;
+  }
+
+  .card-collapse {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 220ms ease, opacity 180ms ease;
+  }
+
+  .card-collapse:not(.expanded) {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+
+  .card-collapse-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card-collapse, .card-toggle .card-chevron {
+      transition: none;
+    }
   }
 
   .card-body.padded {

@@ -73,6 +73,7 @@ export function secretInterfaceType(
 }
 
 export interface QuotaInfo {
+  unit?: string;
   label?: string;
   limit?: string;
   used?: string;
@@ -141,6 +142,7 @@ export interface ProviderEntry {
   interfaceType: InterfaceType;
   authScheme: AuthScheme;
   supportsWebsockets?: boolean;
+  websocketWarning?: { reason: string; status: number; detectedAt: number; configKey: number[] };
   secretRefs: SecretRef[];
   defaultModel?: string;
   modelAliases?: Array<[string, string]>;
