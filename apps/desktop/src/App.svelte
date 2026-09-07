@@ -332,15 +332,22 @@
   let pricingConfig: PricingConfig = { groups: [], assignments: [] };
   let toolDetections: ToolDetection[] = [];
   let toolDetectionsLoaded = false;
+  let serverStatusTimer: ReturnType<typeof setInterval> | undefined;
+  let serverStatusPromise: Promise<void> | undefined;
   let serverPollTimer: ReturnType<typeof setInterval> | undefined;
   let serverRefreshPromise: Promise<void> | undefined;
   let serverMutationVersion = 0;
   let serverMutationInFlight = false;
   $: {
     clearInterval(serverPollTimer);
+    clearInterval(serverStatusTimer);
     serverPollTimer = undefined;
+    serverStatusTimer = undefined;
     if (showServer && status.exists && !status.locked) {
       serverPollTimer = setInterval(() => void loadServer(), 2000);
+      serverStatusTimer = setInterval(() => {
+        if (document.visibilityState !== "hidden") void refreshServerStatus();
+      }, 500);
     }
   }
   $: {
@@ -779,6 +786,7 @@
     clearTimeout(searchTimer);
     clearTimeout(updateCheckTimer);
     clearInterval(serverPollTimer);
+    clearInterval(serverStatusTimer);
     clearInterval(sessionPollTimer);
     clearInterval(usageRefreshTimer);
   });
@@ -1852,6 +1860,17 @@
     query = "";
   }
 
+  function refreshServerStatus(): Promise<void> {
+    if (serverStatusPromise) return serverStatusPromise;
+    const version = serverMutationVersion;
+    serverStatusPromise = invokeTauri<ProxyStatus>("server_status").then((next) => {
+      if (!serverMutationInFlight && version === serverMutationVersion && !status.locked) serverStatus = next;
+    }).catch((err) => console.warn("server status load failed", err)).finally(() => {
+      serverStatusPromise = undefined;
+    });
+    return serverStatusPromise;
+  }
+
   function loadServer(): Promise<void> {
     // The status event and the periodic refresh can arrive together. Share the
     // in-flight request so a slower refresh cannot be overwritten by an older
@@ -2252,9 +2271,23 @@
   }
 
   async function copyServerToken(token: string) {
-    if (!token) return;
-    await navigator.clipboard?.writeText(token);
-    scheduleClipboardClear(token);
+    await copyServerValue(token, true);
+  }
+
+  async function copyServerValue(value: string, sensitive = false) {
+    if (!value) return;
+    if (!navigator.clipboard?.writeText) {
+      error = localizedMessage("notice.clipboardUnavailable");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      if (sensitive) scheduleClipboardClear(value);
+      notice = localizedMessage("providerDetail.copied");
+      setTimeout(() => (notice = ""), 1800);
+    } catch (err) {
+      error = String(err);
+    }
   }
 
   async function saveRouteGroup(route: ProxyRouteConfig) {
@@ -3197,6 +3230,7 @@
           onSaveConfig={saveServerConfig}
           onRotateToken={rotateServerToken}
           onCopyToken={copyServerToken}
+          onCopyEndpoint={copyServerValue}
           onClearUsage={clearServerUsage}
           onPreviewIntegration={previewProxyIntegration}
           onApplyIntegration={applyProxyIntegration}

@@ -1,12 +1,17 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
+  import { Tooltip } from "bits-ui";
   import { Table } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
-  import type { ServerUsageSummary } from "../../types";
+  import type { ProxyChannelStatus, ProxyRouteConfig, ProxyStatus, ServerUsageSummary } from "../../types";
   import { formatCompact, formatCostMicros, formatTokenCacheRate } from "../../utils/format";
 
+  import ChannelIndicator from "./ChannelIndicator.svelte";
+
   export let usage: ServerUsageSummary;
+  export let routes: ProxyRouteConfig[] = [];
+  export let status: ProxyStatus | undefined = undefined;
   export let entries: ProviderEntry[] = [];
   // Archived providers still serve proxy traffic, so their usage rows must
   // resolve to real titles instead of the id-prefix fallback.
@@ -14,6 +19,7 @@
 
   type Row = {
     key: string;
+    channels: ProxyChannelStatus[];
     label: string;
     sublabel: string;
     requestCount: number;
@@ -27,48 +33,51 @@
     averageFirstTokenMs?: number;
   };
 
-  function entryFor(providerEntryId: string): ProviderEntry | undefined {
-    return (
-      entries.find((entry) => entry.id === providerEntryId) ??
-      archivedEntries.find((entry) => entry.id === providerEntryId)
-    );
+  function buildRows(usage: ServerUsageSummary, routes: ProxyRouteConfig[], status: ProxyStatus | undefined, providers: ProviderEntry[]): Row[] {
+    const keyFor = (providerId: string, secretId: string) => `${providerId}:${secretId}`;
+    const configured = routes.flatMap((route) => route.targets);
+    const usageByKey = new Map(usage.providers.map((row) => [keyFor(row.providerEntryId, row.secretId), row]));
+    // One row per credential, at its first position in the configured groups.
+    // Removed credentials with historical usage follow in a deterministic order.
+    const identities = new Map<string, { providerEntryId: string; secretId: string }>(configured.map((target) => [keyFor(target.providerEntryId, target.secretId), target]));
+    for (const row of [...usage.providers].sort((a, b) => keyFor(a.providerEntryId, a.secretId).localeCompare(keyFor(b.providerEntryId, b.secretId)))) {
+      const key = keyFor(row.providerEntryId, row.secretId);
+      if (!identities.has(key)) identities.set(key, row);
+    }
+    return [...identities].map(([key, identity]): Row => {
+      const row = usageByKey.get(key);
+      const entry = providers.find((entry) => entry.id === identity.providerEntryId);
+      const secret = entry?.secretRefs.find((ref) => ref.id === identity.secretId);
+      const siblings = [...identities.values()].filter((other) => other.providerEntryId === identity.providerEntryId);
+      return {
+        key,
+        channels: status?.running ? (status.channels ?? []).filter((channel) => channel.providerEntryId === identity.providerEntryId && channel.secretId === identity.secretId) : [],
+        label: entry?.title || identity.providerEntryId.slice(0, 8),
+        sublabel: siblings.length > 1 ? secret?.label || secret?.masked || identity.secretId.slice(0, 8) : "",
+        requestCount: row?.requestCount ?? 0,
+        inputTokens: row?.inputTokens ?? 0,
+        outputTokens: row?.outputTokens ?? 0,
+        cacheTokens: (row?.cacheReadTokens ?? 0) + (row?.cacheCreationTokens ?? 0),
+        cacheRate: formatTokenCacheRate(row?.inputTokens ?? 0, row?.cacheReadTokens ?? 0),
+        estimatedCostMicros: row?.estimatedCostMicros ?? 0,
+        completedAttempts: row?.completedAttempts ?? 0,
+        successRateBps: row?.successRateBps ?? 0,
+        averageFirstTokenMs: row?.averageFirstTokenMs
+      };
+    });
   }
 
-  function providerName(providerEntryId: string): string {
-    const entry = entryFor(providerEntryId);
-    return entry?.title || providerEntryId.slice(0, 8);
-  }
-
-  $: providerRows = usage.providers.map((row): Row => {
-    const entry = entryFor(row.providerEntryId);
-    const siblings = usage.providers.filter((other) => other.providerEntryId === row.providerEntryId);
-    const secret = entry?.secretRefs.find((ref) => ref.id === row.secretId);
-    return {
-      key: `${row.providerEntryId}:${row.secretId}`,
-      label: providerName(row.providerEntryId),
-      sublabel: siblings.length > 1 ? secret?.label || secret?.masked || row.secretId.slice(0, 8) : "",
-      requestCount: row.requestCount,
-      inputTokens: row.inputTokens,
-      outputTokens: row.outputTokens,
-      cacheTokens: row.cacheReadTokens + row.cacheCreationTokens,
-      cacheRate: formatTokenCacheRate(row.inputTokens, row.cacheReadTokens),
-      estimatedCostMicros: row.estimatedCostMicros,
-      completedAttempts: row.completedAttempts ?? 0,
-      successRateBps: row.successRateBps ?? 0,
-      averageFirstTokenMs: row.averageFirstTokenMs
-    };
-  });
-
+  $: rows = buildRows(usage, routes, status, [...entries, ...archivedEntries]);
   function formatSuccessRate(value: number, completedAttempts: number): string {
     if (completedAttempts === 0) return "-";
     const percent = value / 100;
     return `${percent.toFixed(Number.isInteger(percent) ? 0 : 1)}%`;
   }
 
-  $: rows = providerRows;
   $: hasData = rows.length > 0;
 </script>
 
+<Tooltip.Provider delayDuration={150}>
 <div class="usage-breakdown">
   {#if hasData}
     <table class="breakdown-table">
@@ -89,7 +98,10 @@
         {#each rows as row (row.key)}
           <tr>
             <td class="col-name">
-              <span class="row-label">{row.label}</span>
+              <span class="row-heading">
+                <span class="row-label" title={row.label}>{row.label}</span>
+                <ChannelIndicator channels={row.channels} {routes} />
+              </span>
               {#if row.sublabel}<span class="row-sublabel">{row.sublabel}</span>{/if}
             </td>
             <td>{formatCompact(row.requestCount)}</td>
@@ -112,6 +124,7 @@
     </div>
   {/if}
 </div>
+</Tooltip.Provider>
 
 <style lang="scss">
   .usage-breakdown {
@@ -163,21 +176,24 @@
     }
 
     .col-name {
-      min-width: 72px;
-      width: 72px;
-      max-width: 72px;
+      min-width: 80px;
+      width: 80px;
+      max-width: 80px;
       overflow: hidden;
       text-align: left;
     }
 
     .col-rate {
-      min-width: 64px;
-      width: 64px;
-      max-width: 64px;
+      min-width: 56px;
+      width: 56px;
+      max-width: 56px;
     }
   }
 
+  .row-heading { display: flex; align-items: center; gap: 4px; }
+
   .row-label {
+    min-width: 0;
     display: inline-block;
     max-width: 100%;
     overflow: hidden;
@@ -189,13 +205,12 @@
   }
 
   .row-sublabel {
-    margin-inline-start: 6px;
+    display: block;
     max-width: 100%;
     overflow: hidden;
     color: var(--text-tertiary);
     font-size: 11px;
     text-overflow: ellipsis;
-    vertical-align: bottom;
     white-space: nowrap;
   }
 

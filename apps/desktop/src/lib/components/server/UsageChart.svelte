@@ -466,12 +466,14 @@
 
   .chart-summary {
     display: flex;
+    flex: 0 0 auto;
     flex-direction: column;
     justify-content: center;
-    gap: 12px;
-    min-width: 124px;
+    gap: 10px;
+    min-width: 108px;
     padding-left: 16px;
     border-left: 1px solid var(--divider);
+    text-align: right;
   }
 
   .summary-item {
@@ -490,6 +492,8 @@
       font-size: 16px;
       font-weight: 650;
       font-variant-numeric: tabular-nums;
+      line-height: 1.25;
+      white-space: nowrap;
     }
   }
 
@@ -554,7 +558,8 @@
     line-height: 1.4;
   }
 
-  @container (max-width: 620px) {
+  // Keep the plot readable in the narrow detail pane at the Tauri minimum.
+  @container (max-width: 460px) {
     .chart-body {
       flex-direction: column;
       gap: 12px;
@@ -562,11 +567,18 @@
 
     .chart-summary {
       flex-direction: row;
-      justify-content: space-between;
+      justify-content: flex-end;
+      gap: 0;
       min-width: 0;
-      padding: 12px 0 0;
+      padding: 10px 0 0;
       border-top: 1px solid var(--divider);
       border-left: 0;
+    }
+
+    .summary-item + .summary-item {
+      margin-left: 14px;
+      padding-left: 14px;
+      border-left: 1px solid var(--divider);
     }
   }
 </style>

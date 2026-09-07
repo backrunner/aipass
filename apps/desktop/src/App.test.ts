@@ -61,6 +61,41 @@ test("provider edit saves WS opt-out and prefills the key again after reopening"
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
+test("refreshes live proxy status while usage aggregation is still pending", async () => {
+  const { emptyServerUsage } = await import("./lib/services/serverUsage");
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+  let concurrency = 0;
+  let blockUsage = false;
+  let releaseUsage: (value: ReturnType<typeof emptyServerUsage>) => void = () => {};
+  const delayedUsage = new Promise((resolve) => { releaseUsage = resolve; });
+  invoke.mockImplementation(async (command: string) => {
+    switch (command) {
+      case "vault_status": return { exists: true, locked: false };
+      case "preferences_load": return { locale: "en", officialAccountsImport: false };
+      case "sync_settings_load": return { mode: "local" };
+      case "entries_list": case "entries_trash_list": case "take_pending_deep_links": case "tool_config_detect": case "server_usage_timeseries": case "server_usage_hourly_timeseries": return [];
+      case "server_config_get": return { enabled: true, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+      case "server_status": return { running: true, enabled: true, activeRoutes: 1, requests: 10, failures: 0, recentRequests: 0, recentTokens: 0, inFlightRequests: concurrency, availableChannels: 2, totalChannels: 3, successRateBps: 10_000 };
+      case "server_usage_summary": return blockUsage ? delayedUsage : emptyServerUsage();
+      case "pricing_config_get": return { groups: [], assignments: [] };
+      default: return null;
+    }
+  });
+  app = mount(App, { target: document.body });
+  await vi.waitFor(() => { flushSync(); expect(listeners.has("open-server-workspace")).toBe(true); });
+  blockUsage = true;
+  listeners.get("open-server-workspace")!();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".status-grid")).toBeTruthy(); });
+  concurrency = 7;
+  await vi.waitFor(() => {
+    flushSync();
+    const cells = [...document.querySelectorAll(".status-cell")];
+    expect(cells.find((cell) => cell.textContent?.includes("Real-time concurrency"))?.querySelector("strong")?.textContent).toBe("7");
+    expect(cells.find((cell) => cell.textContent?.includes("Available channels"))?.querySelector("strong")?.textContent).toBe("2/3");
+  }, { timeout: 1500 });
+  releaseUsage(emptyServerUsage());
+});
+
 test("background WS disable preserves other edits and failed recovery keeps the draft", async () => {
   const entry: EntrySummary = {
     id: "provider", title: "Test provider", favorite: false, providerKind: "self_hosted",

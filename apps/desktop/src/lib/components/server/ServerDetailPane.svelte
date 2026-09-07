@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Badge, Banner, Button, IconButton } from "@aipass/ui";
-  import { AlertTriangle, Copy, Play, RotateCw, Server, Square, Trash2 } from "lucide-svelte";
+  import { AlertTriangle, Check, Copy, FileText, Pencil, Play, RotateCw, Server, Square, Trash2, X } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
 
   import { t } from "../../stores/i18n";
@@ -32,6 +32,7 @@
   export let onSaveConfig: (config: ProxyConfig) => MaybePromise<boolean | void> = () => {};
   export let onRotateToken: (routeId: string) => MaybePromise = () => {};
   export let onCopyToken: (token: string) => MaybePromise = () => {};
+  export let onCopyEndpoint: (endpoint: string) => MaybePromise = () => {};
   export let onClearUsage: () => MaybePromise<boolean | void> = () => {};
   export let onPreviewIntegration: (tool: ToolConfigTarget, routeId: string) => Promise<ToolConfigPreview> = async () => {
     throw new Error("preview unavailable");
@@ -43,9 +44,15 @@
   export let onLoadProxyLogs: () => Promise<ProxyLogEntry[]> = async () => [];
 
   let bindAddrDraft = config.bindAddr;
+  let editingBindAddr = false;
+  let savingBindAddr = false;
+
+  function focusBindInput(input: HTMLInputElement) {
+    input.focus();
+    input.select();
+  }
   let clearUsageConfirmOpen = false;
   let logsOpen = false;
-  let proxyLogs: ProxyLogEntry[] = [];
   let ProxyLogsDialog: typeof import("./ProxyLogsDialog.svelte").default | undefined;
   let lastBindAddr = config.bindAddr;
   $: if (config.bindAddr !== lastBindAddr) {
@@ -57,7 +64,7 @@
   $: configuredChannels = enabledRoutes.flatMap((route) => route.targets.filter((target) => target.enabled));
   $: totalChannels = status.totalChannels ?? configuredChannels.length;
   $: availableChannels = status.availableChannels ?? (status.running
-    ? configuredChannels.filter((target) => !(status.degradedTargetIds ?? []).includes(target.id)).length
+    ? configuredChannels.length
     : 0);
   $: integrateRoute =
     enabledRoutes.find((route) => route.id === selectedRouteId) ?? enabledRoutes[0];
@@ -96,11 +103,24 @@
       })
     : [];
 
-  function saveBindAddr() {
-    const bindAddr = bindAddrDraft.trim();
-    if (!bindAddr || bindAddr === config.bindAddr) return;
-    void onSaveConfig({ ...config, bindAddr });
+  function cancelBindAddr() {
+    editingBindAddr = false;
+    bindAddrDraft = config.bindAddr;
   }
+
+  async function saveBindAddr() {
+    if (busy || savingBindAddr || status.running) return;
+    const bindAddr = bindAddrDraft.trim();
+    if (!bindAddr) return;
+    if (bindAddr === config.bindAddr) { cancelBindAddr(); return; }
+    savingBindAddr = true;
+    try {
+      if (await onSaveConfig({ ...config, bindAddr }) !== false) editingBindAddr = false;
+    } finally {
+      savingBindAddr = false;
+    }
+  }
+  $: if (status.running) editingBindAddr = false;
 
   function formatSuccessRate(value: number, completedAttempts: number): string {
     if (completedAttempts === 0) return "-";
@@ -111,12 +131,6 @@
   async function openProxyLogs() {
     if (!ProxyLogsDialog) {
       ProxyLogsDialog = (await import("./ProxyLogsDialog.svelte")).default;
-    }
-    try {
-      proxyLogs = await onLoadProxyLogs();
-    } catch (error) {
-      console.error("failed to load proxy logs", error);
-      proxyLogs = [];
     }
     logsOpen = true;
   }
@@ -137,21 +151,23 @@
           </div>
         {/if}
         <div class="bind-chip" title={$t("server.bindAddress")}>
-          {#if status.running}
-            <code class="mono">{status.bindAddr}</code>
+          {#if editingBindAddr && !status.running}
+            <form class="bind-editor" on:submit|preventDefault={saveBindAddr}>
+              <input class="mono" use:focusBindInput bind:value={bindAddrDraft} disabled={savingBindAddr} spellcheck="false" aria-label={$t("server.bindAddress")} on:keydown={(event) => { if (event.key === "Escape" && !savingBindAddr) cancelBindAddr(); }} />
+              <button type="submit" class="bind-save" disabled={Boolean(busy) || savingBindAddr || !bindAddrDraft.trim()} aria-label={$t("common.save")}><Check size={13} /></button>
+              <button type="button" class="bind-cancel" disabled={Boolean(busy) || savingBindAddr} on:click={cancelBindAddr} aria-label={$t("common.cancel")}><X size={13} /></button>
+            </form>
           {:else}
-            <input class="mono" bind:value={bindAddrDraft} spellcheck="false" aria-label={$t("server.bindAddress")} />
-            <button
-              type="button"
-              class="bind-save"
-              on:click={saveBindAddr}
-              disabled={Boolean(busy) || !bindAddrDraft.trim() || bindAddrDraft.trim() === config.bindAddr}
-            >{$t("common.save")}</button>
+            <code class="mono">{status.running ? status.bindAddr : config.bindAddr}</code>
+            {#if !status.running}
+              <button type="button" class="bind-edit" disabled={Boolean(busy)} on:click={() => (editingBindAddr = true)} aria-label={$t("server.editBindAddress")}><Pencil size={12} /></button>
+            {/if}
           {/if}
         </div>
       </div>
     </div>
     <div class="actions">
+      <IconButton size="sm" label={$t("server.viewLogs")} on:click={openProxyLogs}><FileText size={15} /></IconButton>
       {#if status.running && status.degraded}
         <button type="button" class="status-trigger degraded" on:click={openProxyLogs} title={$t("server.viewLogs")}>
           <AlertTriangle size={14} /> {$t("server.degraded")}
@@ -234,7 +250,7 @@
       <svelte:fragment slot="actions">
         <span class="hint">{$t(usageRange === "24h" ? "server.last24Hours" : usageRange === 7 ? "server.last7Days" : "server.last30Days")}</span>
       </svelte:fragment>
-      <UsageBreakdown usage={usageByRange[usageRange]} {entries} {archivedEntries} />
+      <UsageBreakdown usage={usageByRange[usageRange]} routes={config.routes} {status} {entries} {archivedEntries} />
     </Card>
 
     <IntegrationCard
@@ -250,14 +266,19 @@
       {#if integrateRoute}
         <div class="kv-line">
           <span class="kv-label">{$t("server.endpoint")}</span>
-          <code class="kv-value mono">{integrateEndpoint}</code>
+          <code class="kv-value mono" title={integrateEndpoint}>{integrateEndpoint}</code>
+          <div class="kv-actions">
+            <IconButton size="sm" label={$t("server.copyEndpoint")} on:click={() => onCopyEndpoint(integrateEndpoint)}>
+              <Copy size={13} />
+            </IconButton>
+          </div>
         </div>
         <div class="kv-line">
           <span class="kv-label">{$t("server.token")}</span>
           {#if integrateRoute.token}
             <code class="kv-value mono" title={integrateRoute.token}>{integrateRoute.token}</code>
             <div class="kv-actions">
-              <IconButton size="sm" label={$t("server.copy")} on:click={() => onCopyToken(integrateRoute.token)}>
+              <IconButton size="sm" label={$t("server.copyToken")} on:click={() => onCopyToken(integrateRoute.token)}>
                 <Copy size={13} />
               </IconButton>
               <IconButton size="sm" label={$t("server.rotateToken")} disabled={Boolean(busy)} on:click={() => onRotateToken(integrateRoute.id)}>
@@ -293,7 +314,7 @@
 </ConfirmModal>
 
 {#if ProxyLogsDialog}
-  <svelte:component this={ProxyLogsDialog} open={logsOpen} logs={proxyLogs} onOpenChange={(open) => (logsOpen = open)} />
+  <svelte:component this={ProxyLogsDialog} open={logsOpen} onLoadLogs={onLoadProxyLogs} {config} providers={[...entries, ...archivedEntries]} onOpenChange={(open) => (logsOpen = open)} />
 {/if}
 
 <style lang="scss">
@@ -485,21 +506,28 @@
   }
 
   .kv-value {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-x: auto;
     white-space: nowrap;
     font-size: 12px;
     color: var(--text);
     padding: 6px 8px;
     border-radius: var(--radius-sm);
     background: var(--surface-2);
-    user-select: all;
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .kv-actions {
     display: inline-flex;
     align-items: center;
     gap: 4px;
+  }
+
+  .bind-chip code {
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .status-trigger {
@@ -516,6 +544,20 @@
     font-weight: 600;
     cursor: pointer;
   }
+
+  .bind-editor { display: flex; align-items: center; gap: 6px; min-width: 0; }
+
+  .bind-edit,
+  .bind-cancel {
+    border: 0;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .bind-edit:hover,
+  .bind-cancel:hover { color: var(--text); }
 
   @container (max-width: 760px) {
     .detail-header {

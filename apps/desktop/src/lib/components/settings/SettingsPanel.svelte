@@ -672,6 +672,7 @@
 
           <Tabs.Content value="server" class="tab-panel">
             <Card title={$t("settings.serverFailover")}>
+              <p class="hint">{$t("settings.serverResponseWait")}</p>
               <div class="settings-stack">
                 {#each serverConfig.routes as route (route.id)}
                   <section class="server-route-settings">

@@ -89,6 +89,9 @@ let app: Record<string, unknown> | undefined;
 
 afterEach(async () => {
   if (app) await unmount(app as never);
+  // Bits UI releases the body scroll lock on a 24 ms cleanup timer.
+  // Keep happy-dom alive until that callback has completed.
+  await new Promise((resolve) => window.setTimeout(resolve, 30));
   app = undefined;
   document.body.innerHTML = "";
 });

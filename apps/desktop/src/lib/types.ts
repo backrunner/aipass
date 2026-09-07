@@ -162,6 +162,18 @@ export type ProxyConfig = {
   upstreamProxy: UpstreamProxyConfig;
 };
 
+export type ProxyChannelStatus = {
+  routeId: string;
+  targetId: string;
+  providerEntryId: string;
+  secretId: string;
+  inFlightRequests: number;
+  degraded: boolean;
+  available: boolean;
+  cooldownRemainingMs: number;
+  websocketCoolingDown: boolean;
+};
+
 export type ProxyStatus = {
   running: boolean;
   enabled: boolean;
@@ -179,6 +191,7 @@ export type ProxyStatus = {
   inFlightRequests?: number;
   availableChannels?: number;
   totalChannels?: number;
+  channels?: ProxyChannelStatus[];
 };
 
 export type ProxyLogEntry = {

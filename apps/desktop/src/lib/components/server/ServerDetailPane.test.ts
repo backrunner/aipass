@@ -159,3 +159,23 @@ test("switches chart totals and provider details together for every period", () 
     expect(breakdownCard?.querySelector(".card-actions")?.textContent).toContain(label);
   }
 });
+
+test("stopped address opens on demand and stays editable when saving fails", async () => {
+  const onSaveConfig = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  app = mount(ServerDetailPane, { target: document.body, props: { config, status, usageByRange: emptyServerUsage(), onSaveConfig } }) as never;
+  flushSync();
+  expect(document.querySelector(".bind-editor input")).toBeNull();
+  document.querySelector<HTMLButtonElement>(".bind-edit")!.click();
+  flushSync();
+  const input = document.querySelector<HTMLInputElement>(".bind-editor input")!;
+  expect(document.activeElement).toBe(input);
+  input.value = "127.0.0.1:8989";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  document.querySelector(".bind-editor")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => { flushSync(); expect(onSaveConfig).toHaveBeenCalledOnce(); expect(input.disabled).toBe(false); });
+  expect(document.querySelector(".bind-editor input")).toBe(input);
+  expect(input.value).toBe("127.0.0.1:8989");
+  document.querySelector(".bind-editor")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".bind-editor input")).toBeNull(); });
+  expect(onSaveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ bindAddr: "127.0.0.1:8989" }));
+});
