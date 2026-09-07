@@ -336,6 +336,9 @@ mod tests {
                     Err(err) => panic!("fixture accept: {err}"),
                 }
             };
+            // macOS can inherit the listener's nonblocking mode on accept.
+            // Wait for the HTTP request instead of racing its first packet.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(REQUEST_TIMEOUT)).unwrap();
             let mut request = Vec::new();
             while !request.ends_with(b"\r\n\r\n") {
