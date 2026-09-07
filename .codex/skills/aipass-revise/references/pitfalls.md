@@ -99,6 +99,13 @@ Newest entries last within each section.
 - **Guardrail**: never serialize requests for diagnostics; log only allowlisted metadata, retain operation pairs across repetition/rotation, correlate attempts across HTTP/SSE/WebSocket, and test persistence after stop/restart and business failures within successful IPC responses.
 - **Watch points**: agent `operation_log.rs`, shared `logging.rs`, client/envelope/server correlation, desktop logger, proxy `diagnostics.rs` and `persist_attempt`. Regression tests cover provider lifecycle, semantic errors/unwinding, concurrent rotation, restart retention and successful fallback.
 
+### Live log viewers must scope refresh and scrolling to an opening
+- **Symptom**: the proxy log dialog opened at the oldest entry and stayed on a one-time snapshot.
+- **Root cause**: `ServerDetailPane` loaded logs before opening the dialog; the portalled log body had no mount/update scroll handling or refresh lifecycle.
+- **Fix**: `ProxyLogsDialog` loads immediately and schedules the next refresh two seconds after completion, follows the bottom unless the user scrolls up, and invalidates pending work on close/unmount. Keep the last good snapshot on transient failures and skip unchanged DOM updates.
+- **Guardrail**: bind scrolling to the actual mounted log body, prevent overlapping refreshes, and reject responses from previous openings. Verify opening/reopening, manual scrolling, failures, close and unmount in `ProxyLogsDialog.test.ts` and at 960×640.
+- **Watch points**: dialog portal mounting, `ServerDetailPane` lazy loading and `onLoadProxyLogs`, typed `server_logs` IPC.
+
 ### Unsupported Responses tools must not disappear during conversion
 - **Symptom**: Responses-to-Anthropic conversion returned success after removing `custom` execution tools and their call history.
 - **Root cause**: `request.rs` filtered tools to `function` and ignored unsupported call/result items.
@@ -123,8 +130,8 @@ Newest entries last within each section.
 ### Codex session migration overflowed the IPC response
 - **Symptom**: changing a Codex provider failed with `failed to fill whole buffer`, while other tool configuration writes succeeded.
 - **Root cause**: Codex provider migration scanned session JSONL files and put each transformed file into `ConfigPlan.extra_writes`; large histories made the preview response exceed the 16 MiB agent frame limit or exhausted the agent before it could answer.
-- **Fix**: keep only migration paths and counts in the plan, and perform per-file backup plus streaming JSONL rewrite in Rust during apply; previews contain configuration diffs and migration summaries only.
-- **Guardrail**: never place Codex session/history contents in `ToolConfigPreviewResponse` or any IPC frame; migrate history files on the agent side with bounded per-file memory and encrypted backups.
+- **Fix**: preview and apply use separate planning entry points. Preview returns configuration diffs without discovering or reading JSONL/SQLite history; apply retains migration paths/counts and performs per-file backup plus streaming rewrite in Rust.
+- **Guardrail**: never scan session/history files during preview, including direct, official and local-proxy modes. Never place history contents in an IPC frame. Keep apply-time migration and encrypted backups; test preview against unreadable history (`codex_preview_never_reads_session_history_in_any_auth_mode`).
 - **Watch points**: `crates/aipass-config-writers/src/plan.rs`, `crates/aipass-config-writers/src/backup.rs`, and `crates/aipass-agent/src/handlers.rs`.
 
 ### Codex provider writes omitted WebSocket support
@@ -174,15 +181,15 @@ Newest entries last within each section.
 ### Successful fallback hid failing proxy targets
 - **Symptom**: the proxy showed a healthy status after a backup completed the request, and users could not identify the failing service in a route group.
 - **Root cause**: `crates/aipass-proxy/src/lib.rs` `ProxyHandle::status` only used final request failures; target circuit health never crossed the status boundary into `RouteListPane` / `RouteGroupDialog`.
-- **Fix**: expose enabled target IDs with recent unresolved failures or an open circuit through `ProxyStatus`; include them in degradation and display badges per group and credential while running.
+- **Fix**: expose enabled target IDs with unresolved failures or an open circuit through `ProxyStatus`; include them in degradation and display badges per group and credential while running.
 - **Guardrail**: derive target degradation from shared runtime health, including successful fallback, recovery, expiration, and config reload. Keep target IDs distinct across credentials. Enforced by `degraded_targets_follow_recent_failures_circuits_and_recovery`, `proxy_authenticates_fails_over_and_records_usage`, and desktop route component tests.
 - **Watch points**: HTTP/model discovery/stream/WebSocket `mark_failure` and `mark_success`, agent stopped status, desktop status polling, route list and editor.
 
 ### Immediate success cleared a recovering target
 - **Symptom**: a provider briefly showed as degraded and then returned to healthy after one successful fallback or a late in-flight response.
 - **Root cause**: `crates/aipass-proxy/src/lib.rs` `mark_success` removed target health on the first success, even when the target had unresolved failures or had just left its circuit-open period.
-- **Fix**: retain target health through recovery and require two consecutive successful requests before clearing it; ignore successes that arrive while a newer circuit is still open.
-- **Guardrail**: treat every target with unresolved failures as recovering and require `RECOVERY_SUCCESS_THRESHOLD` consecutive successes before removing health state. Keep the rule shared by HTTP, SSE, model discovery, and WebSocket completion paths.
+- **Fix**: require two distinct, consecutive successful generations started after the latest failure before clearing degradation; keep recent flapping history for ten minutes. Count non-stream completion once, and ignore model discovery and older in-flight successes.
+- **Guardrail**: require `RECOVERY_SUCCESS_THRESHOLD` new successful generations before clearing degradation. Do not erase recent failure history, count one response twice, heal from model discovery, or let old completions heal newer failures. Keep HTTP/SSE/native WS/adapted WS aligned; cover stale parallel lanes and recovery thresholds.
 - **Watch points**: `mark_failure`, `mark_success`, `circuit_open`, streaming completion, converted WebSocket lanes, and degraded status projection.
 
 ### Empty successful bodies must not commit
@@ -195,44 +202,86 @@ Newest entries last within each section.
 ### Validate provider payloads before success accounting
 - **Symptom**: a malformed 200 response on a converted route returned 502 without fallback and was counted as successful; model discovery also returned empty/error 200 bodies as healthy results.
 - **Root cause**: `crates/aipass-proxy/src/lib.rs` `forward_request` started usage tracking before non-stream conversion; `handle_models_request` skipped the error-body guard used by generation.
-- **Fix**: validate non-stream conversion before starting success/usage tracking, and reject empty or structured-error model-list bodies before marking success.
+- **Fix**: validate non-stream conversion before starting success/usage tracking, and reject empty or structured-error model-list bodies before returning them; model discovery never heals generation health.
 - **Guardrail**: finish response validation before success accounting or committing a response; on provider response conversion failure, continue fallback and record only the failed attempt. Enforced by `invalid_converted_response_fails_over_without_recording_success` and `model_discovery_empty_and_error_success_bodies_fail_over`.
 - **Watch points**: `forward_request`, `handle_models_request`, `track_usage_stream`, and converted WebSocket calls to the shared forwarding path.
 
-### Hold duration must bound in-flight waits
-- **Symptom**: a short maximum hold duration could still leave HTTP requests or WS handshakes waiting for the much longer per-attempt timeout, and start new attempts after the budget expired.
-- **Root cause**: HTTP `forward_request` and native WS handshake loops only checked elapsed time after an entire round, before sleeping; buffered body reads restarted the idle timeout on every chunk.
-- **Fix**: share an absolute hold deadline across target selection, response headers, first SSE events, buffered body reads and WS handshakes. Count only targets actually attempted and preserve the last failure across backoff.
-- **Guardrail**: enforce the hold deadline on every pre-commit network wait and before each attempt; never apply it to an already committed live stream. Covered by `hold_deadline_bounds_backoff_headers_and_buffered_bodies`, `hold_deadline_does_not_cut_off_a_committed_stream`, and `websocket_hold_deadline_bounds_backoff_and_handshake`.
-- **Watch points**: `crates/aipass-proxy/src/lib.rs` forwarding/collection and `websocket.rs` handshake; converted WS shares the HTTP path.
+### Slow generation is not a confirmed provider failure
+- **Symptom**: a slow response header, first SSE event, body chunk or WS generation triggered a hard timeout and sometimes submitted the same generation to another provider.
+- **Root cause**: generation waits shared first-byte, idle and hold deadlines; HTTP replay protection was limited to WebSocket callers.
+- **Fix**: per the 2026-09-07 user instruction, remove response deadlines from HTTP/SSE/native WS/adapted WS. Bound only connection/handshake establishment, socket writes, and retry backoff. After submission, permit another provider only on an explicit rejected status/error event/error payload or a fully received invalid response; never replay ambiguous write/read failures or truncated responses. Disable reqwest automatic retries. Cancel pending work on downstream close/config invalidation without classifying cancellation as provider failure.
+- **Guardrail**: do not use first-byte, idle or hold budgets to terminate a submitted generation. Check hold limits only before another attempt and during backoff/handshake. Verify slow headers/bodies/SSE/WS remain active beyond legacy budgets, confirmed errors still fail over, and ambiguous failures never touch a backup.
+- **Watch points**: `forward_request`, `prefetch_sse_event`, `collect_upstream_body`, `track_usage_stream`, `websocket.rs`, `websocket/upstream.rs`, `websocket/bridge.rs`; regressions in `tests/runtime_status.rs` and WebSocket tests.
+
+### Live channel telemetry must follow generation lifetimes
+- **Symptom**: live concurrency and available channels displayed zero with an old resident Agent; WS connections were counted while idle, recovering targets were subtracted as unavailable, and usage rows moved on every refresh.
+- **Root cause**: missing IPC fields silently deserialized to zero, activity was tied to the HTTP upgrade lifetime, availability reused degradation, and the UI reused usage-volume sorting.
+- **Fix**: require the current Agent protocol at startup; expose per-target request activity/circuit cooldown from Rust. Count each WS generation, release guards on completion or cancellation, keep recovering channels available, and refresh status independently of usage queries. Order credential rows by first appearance in configured groups, including zero-usage members; aggregate indicators using provider plus secret identity while showing the specific group in tooltips.
+- **Guardrail**: test HTTP/native WS/adapted WS activity through slow response, completion and cancellation. Do not infer live activity from historical usage or treat degradation as an open circuit. Keep configured ordering stable across usage refreshes and keep removed historical credentials deterministic.
+- **Watch points**: `ProxyStatus`, Agent stopped status, Tauri tray fixtures, App status polling, `UsageBreakdown` / `ChannelIndicator`, protocol readiness replacement.
 
 ### Circuit-open weights distorted round robin
 - **Symptom**: after a high-weight target opened its circuit, one healthy fallback received its weight while another equally weighted target received no requests.
 - **Root cause**: `crates/aipass-proxy/src/lib.rs` `select_route_targets` rotated by all enabled targets' weights before removing circuit-open targets.
 - **Fix**: remove unavailable targets before calculating weighted rotation.
-- **Guardrail**: calculate round-robin weights over the actual eligible target set; keep explicit hold-mode circuit bypass intact. Covered by `round_robin_redistributes_weight_among_available_targets`.
+- **Guardrail**: calculate round-robin weights only over eligible peers in the best stability tier. All retry modes must respect open circuits and recovery reservations. Covered by `round_robin_redistributes_weight_among_available_targets`.
 - **Watch points**: shared target selection used by HTTP, model discovery, native WS, and converted WS.
 
 ### Session cache affinity was lost during target selection
 - **Symptom**: requests from one conversation alternated between providers, reducing provider prompt-cache hits even while every target was healthy.
 - **Root cause**: round-robin selection had no short-lived association between a client session key and the target that completed its previous request; HTTP, model discovery, and WebSocket paths all started from the route-wide rotation.
 - **Fix**: keep bounded in-memory affinity keyed by route and `prompt_cache_key`/session headers, prefer the healthy remembered target, and rebind after fallback; failures clear mappings for the affected target.
-- **Guardrail**: apply session affinity after health filtering in every transport path, remember only a validated successful target, bound and expire keys, and clear them on target failure or config reload. Covered by `session_affinity_prefers_last_successful_target_across_round_robin` and `session_affinity_is_cleared_when_a_target_fails`.
+- **Guardrail**: apply session affinity after health filtering in every transport path; only validated generation success can bind it. Keep successful fallback bindings against late old completions and primary recovery, retain response-ID origins, and use connection/lane affinity for adapted WS without a client key. Bound/expire keys and invalidate changed credentials or failed targets; preserve unaffected bindings on metadata/config reorder. Covered by `session_affinity_prefers_last_successful_target_across_round_robin` and `session_affinity_is_cleared_when_a_target_fails`.
 - **Watch points**: `crates/aipass-proxy/src/lib.rs` forwarding/model discovery and `crates/aipass-proxy/src/websocket.rs` handshake selection.
+
+### Held retries and eager recovery churned stable fallback sessions
+- **Symptom**: a failed high-priority provider was retried during its ban or regained session traffic on cooldown expiry, reducing prompt-cache reuse on a reliable backup.
+- **Root cause**: `lib.rs` passed `hold_round > 0` as a circuit bypass; target sorting ignored unresolved health; cooldown was fixed and model queries/config reload/late completions replaced session state.
+- **Fix**: prioritize established sessions, then stable targets, recent recovery, and unresolved degradation. Default three failures open a 30-second ban; failed half-open recovery immediately doubles it up to 15 minutes, allowing one generation at a time. Keep ten minutes of flapping history after recovery and never generate background recovery requests. Preserve unaffected routing state while still invalidating authenticated transport snapshots on config reload.
+- **Guardrail**: never bypass a target ban in HTTP or native WS hold/silent retries. Acquire recovery slots at submission and release on completion/cancellation. Do not move a working session merely to test priority restoration. Retain explicit-failure-only replay rules and provider-bound opaque context. Test real multi-turn HTTP/SSE/adapted WS, blacklist budgets/escalation, model discovery, stale completion, and credential vs metadata reload in `tests/stability.rs` and `websocket/tests/adaptive.rs`.
+- **Watch points**: `routing.rs`, shared selection/forwarding/usage completion, native WS `response.create`, adapted WS lane identity, and channel degradation projection.
 
 ### Provider WS capability must not become a route-wide transport choice
 - **Symptom**: one HTTP-only provider forced every target in a mixed route to SSE, while a rejecting WS endpoint could repeatedly fail despite working over SSE.
 - **Root cause**: `crates/aipass-proxy/src/websocket.rs` selected the bridge once for the whole route; native handshakes shared the ordinary HTTP target circuit, and pre-output buffering could replay a submitted generation.
-- **Fix**: prefer transparent relay for the actual selected native target, select upstream WS per provider only inside fallback/converted sessions, track provider-scoped WS cooldown separately from HTTP health, and use the shared connector for non-generating Responses warmup probes.
-- **Guardrail**: never reset WS failures on SSE success or on a 101 handshake alone. Do not replay a WS client's generation after submission or an ambiguous disconnect, including before output and with silent retry enabled. Keep probe auth/quota/timeouts inconclusive and clear runtime capability state on config refresh. Regression coverage: `websocket/tests/adaptive.rs`.
+- **Fix**: prefer transparent relay for the actual selected native target, select upstream WS per provider only inside fallback/converted sessions, keep temporary WS fallback session-scoped and require two 404/405/501 refusals plus successful Responses HTTP generation before disabling the provider preference, and use the shared connector for non-generating Responses warmup probes.
+- **Guardrail**: never infer missing WS support from transport errors, model discovery, or a 101 handshake alone. Do not replay a WS client's generation after submission or an ambiguous disconnect, including before output and with silent retry enabled. Keep probe auth/quota/timeouts inconclusive, invalidate evidence only for changed effective transport configuration, and let concurrent valid WS completion invalidate pending rejection evidence. Regression coverage: `websocket/tests/adaptive.rs`.
 - **Watch points**: `websocket.rs` native relay, `websocket/upstream.rs` mixed-route WS, `websocket/bridge.rs`, `lib.rs` forwarding/WS health, agent `provider.probe`, and desktop probe rendering.
 
 ### WS preference must cover HTTP entry points and preserve upstream connections
 - **Symptom**: mixed routes opened a new upstream socket for each generation, HTTP Responses clients never tried WS, and idle upstream sockets had no proactive heartbeat.
 - **Root cause**: `websocket/upstream.rs` owned a socket only for the response lifetime; `lib.rs` gated it on the inbound `websocket` flag; native relay only replied to peer pings.
 - **Fix**: prefer WS for native Responses HTTP and WS requests, retain successful sockets only inside fallback WS sessions, for 120 seconds, with exclusive leases and handshake/session isolation, and add hop-local ping/pong liveness checks.
-- **Guardrail**: never share a leased socket between active generations or client connections. A Codex close ends every upstream lease and idle worker; never reuse across client connections or retain HTTP-request sockets. Keep native sessions transparent even on mixed routes. Revalidate fallback sockets before generation, drop them on config refresh/cancellation/error, preserve buffered HTTP response shape, and never count control frames as response progress. Reconstruct complete tool history before provider changes; reject orphan results and pin opaque provider state to its source target. Cover reuse, idle heartbeats, isolation, refresh, safe reconnect and no replay in `websocket/tests/adaptive.rs`.
+- **Guardrail**: never share a leased socket between active generations or client connections. A Codex close ends every upstream lease and idle worker; never reuse across client connections or retain HTTP-request sockets. Keep native sessions transparent even on mixed routes. Revalidate fallback sockets before generation, drop them on credential/interface refresh, cancellation or error, preserve buffered HTTP response shape, and never count control frames as response progress. Reconstruct complete tool history before provider changes; reject orphan results and pin opaque provider state to its source target. Cover reuse, idle heartbeats, isolation, refresh, safe reconnect and no replay in `websocket/tests/adaptive.rs`.
 - **Watch points**: `lib.rs` HTTP entry, `websocket.rs` native relay, `websocket/bridge.rs` session ownership, `websocket/upstream.rs`, `websocket/pool.rs`, and `websocket/keepalive.rs`.
+
+### Auxiliary WS notifications must not break Responses adaptation or probing
+- **Symptom**: Replica native WS completed successfully, but HTTP-to-WS streaming broke immediately and the WS capability probe stayed inconclusive.
+- **Root cause**: `websocket/upstream.rs` `ResponseStream::next_event` rejected non-`response.*` events; `websocket/probe.rs` also rejected the normal `codex.rate_limits` notification before warmup completion.
+- **Fix**: preserve well-formed typed auxiliary events through streaming adaptation, ignore them while buffering a response, and let probes continue past them to a validated empty-output warmup completion.
+- **Guardrail**: never treat an auxiliary notification as generation completion, first token, or transport recovery. Keep malformed events and incomplete/disconnected warmups unsuccessful, and never replay a submitted generation. Cover HTTP streaming/buffering, native/adapted WS and probe notification ordering in `websocket/tests/adaptive.rs`.
+- **Watch points**: `websocket/upstream.rs`, `websocket/probe.rs`, `websocket/bridge.rs`, and `SessionUsage::server_event` in `websocket.rs`.
+
+### Provider API bases and client identity must survive every transport
+- **Symptom**: automatic namespace inference treated `/v3`, `/v1beta` and `/openai` as if the user had supplied `/v1`; configured identity headers could overwrite Codex, and configured local metadata escaped upstream filtering.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` `upstream_url_with_query` generalized version detection beyond the user's explicit `/v1` input; `build_upstream_headers` filtered only two inbound local header names and let configured headers replace client identity.
+- **Fix**: per the 2026-09-07 user correction, omit the appended `/v1` only when the user base contains an exact `/v1` path segment, retaining the official Codex OAuth backend and Azure resource-path contracts. Prefer inbound User-Agent/originator and filter AIPass identity/local metadata from both incoming and configured headers. Generated bridge response IDs use a neutral `resp_` prefix.
+- **Guardrail**: use the shared URL/header builders for HTTP, model discovery, native WS and adapted WS. Check `/v1` as a path segment, never in the hostname/query or as a prefix of `/v10` or `/v1beta`; do not infer it from another namespace. Never inject an AIPass identity or replace an existing client identity with provider defaults. Preserve native request/response bytes and test wire-level auth replacement, opaque tools, session metadata and provider base/query handling. Coverage: `tests/transparency.rs` and native/converted WebSocket tests.
+- **Watch points**: `lib.rs` `upstream_url_with_query` / `build_upstream_headers`, `websocket.rs` `upstream_headers`, `websocket/bridge.rs`, and the agent's provider model probe URL builder.
+
+### Upstream failures lost provider explanations
+- **Symptom**: local proxy logs showed a failed attempt without an actionable provider error.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` discarded non-success bodies before failover; WS and SSE had separate error paths.
+- **Fix**: shared bounded error extraction for HTTP/model discovery, WS handshake and WS/SSE error events; retain request/target/provider IDs and resolve display names from the unlocked desktop list.
+- **Guardrail**: persist only sanitized error fields/excerpts, never whole wire payloads or titles. Bound error reads and stream event buffers, redact active credentials and headers, and keep failed-attempt detail even if fallback succeeds. Tests cover 403 failover, WS rejection, split SSE errors and unrelated-payload redaction.
+- **Watch points**: `diagnostics/upstream.rs`, HTTP/model discovery, WS connector/session trackers, and `proxyLogs.ts`.
+
+### WS capability persistence and recovery must share agent authority
+- **Symptom**: intermittent WS failures disabled unrelated sessions, stale edit drafts could undo automatic closure, and preference refresh could cut off a working fallback response.
+- **Root cause**: `crates/aipass-proxy/src/lib.rs` combined provider transport failure counts with preference, while `apps/desktop/src/App.svelte` always sent the draft switch and runtime invalidation treated preference as credential configuration.
+- **Fix**: typed handshake/fallback outcomes; one pre-submission reconnect; bounded session fallback; versioned joint evidence and an agent-consumed event; atomic Vault preference/warning update; non-generating recovery validation outside the vault lock; touched-only UI updates. Preserve automatic closure explanations until recovery succeeds.
+- **Guardrail**: keep all three WS entry paths on the shared capability ledger. Never replay an ambiguous submission. Reject stale configuration epochs, duplicate events and candidates invalidated by WS success. Keep unsaved events through lock/write failure/listener stop, revalidate before persistence, and clear only after refresh. Retain refresh retries separately from live evidence: a record can commit before auditing fails, and later WS success must not erase that committed change's refresh/revision. A preference-only update must not revoke live transports. Require valid empty WS completion before false-to-true saves and compare configuration again after probing. Cover these in `websocket/tests/adaptive.rs`, `proxy_service::tests::websocket_capability_survives_lock_stop_retry_and_vault_reopen`, `websocket_recovery_tests.rs`, Vault durability tests, and `App.test.ts`.
+- **Watch points**: proxy capability/upstream/native/bridge/pool, agent background worker/provider update/probe, Vault summary and narrow update, Tauri DTO, schemas/UI types, provider details/form/i18n, and protocol version.
 
 ## Public model pricing (aipass-agent pricing)
 
@@ -332,3 +381,12 @@ Newest entries last within each section.
 - **Fix**: reuse shared form/card controls, validate retry numbers and ordering before IPC, and keep the dialog open with an inline error on persistence failure.
 - **Guardrail**: validate advanced retry fields before saving and surface every failed route-config write in the open dialog. When disabling an option, retain valid persisted/default numbers instead of submitting invalid hidden inputs. Covered by `RouteGroupDialog.test.ts`.
 - **Watch points**: `RouteGroupDialog.svelte`, `App.svelte` `saveRouteGroup`, and agent `validate_config`.
+
+## Build toolchain
+
+### Homebrew Rust's objcopy dependency produced misaligned macro libraries
+- **Symptom**: macOS 27 Tauri release builds failed to load procedural macros with `mis-aligned LINKEDIT string pool`, including after rebuilding their caches.
+- **Root cause**: Homebrew's Rust 1.98.0 formula links `lib/rustlib/<host>/bin/rust-objcopy` to LLVM 22's `llvm-objcopy`, whose debug-info stripping has the Mach-O alignment defect in [rust-lang/rust#157750](https://github.com/rust-lang/rust/issues/157750). LLVM 23.1.0 contains [the alignment fix](https://github.com/llvm/llvm-project/pull/203680). Both `scripts/build-desktop-sidecars.mjs:15` and Tauri inherit the same compiler and dependency.
+- **Fix**: keep the latest Homebrew `rust`, upgrade Homebrew `llvm` to 23.1.0, and point only the Rust sysroot's `rust-objcopy` symlink to `$(brew --prefix llvm)/bin/llvm-objcopy`. Keep Rust's LLVM 22 library dependency unchanged. The same stripped-library reproducer fails with LLVM 22 and loads with LLVM 23; rebuild affected cached macros after the repair.
+- **Guardrail**: use Homebrew-managed Rust locally per the user's preference; verify Cargo/rustc provenance and the actual objcopy link before macOS validation. Recheck a freshly compiled stripped library after Rust upgrades/reinstalls, which can recreate the formula's original symlink. Do not replace the LLVM 22 library with LLVM 23 or switch to rustup to bypass the issue.
+- **Watch points**: desktop development, `scripts/build-desktop-sidecars.mjs`, Tauri release builds, and the local macOS validation shell.
