@@ -70,7 +70,7 @@ HTTP and WebSocket requests can keep provider prompt caches warm by sending a st
 
 ### Prerequisites
 
-- Node.js 26 (see `.nvmrc`) and `pnpm` 11.25.0 (pinned in `package.json`)
+- Node.js 26 (see `.nvmrc`) and `pnpm` 12.3.4 (pinned in `package.json`)
 - Stable Rust (on macOS, use Homebrew's latest `rust` formula)
 - The [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system
 
@@ -86,7 +86,7 @@ nvm use
 Install pnpm and the workspace dependencies:
 
 ```bash
-npm install --global pnpm@11.25.0
+npm install --global pnpm@12.3.4
 pnpm install --frozen-lockfile
 ```
 
