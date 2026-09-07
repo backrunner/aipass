@@ -9,7 +9,7 @@
 3. 在本机使用下面的 CLI 脚本部署 `infra/cloudkit/schema.ckdb`，默认只部署 Development；Production 另行手动部署。CI 不部署 schema。`VaultSnapshot.ciphertext` 类型为 **Asset**，只授予 creator 读写权限。应用自动创建私有 custom zone `AIPassVault`，recordName 为密文 SHA-256，订阅 ID 为 `aipass-vault-changes-v1`。zone change API 不依赖可查询的自定义索引。
 4. 使用签名且嵌入 profile 的正式候选包，在同一 Apple 账户的两台 macOS 设备验证上传、首次安装恢复、后台推送和断网重试，再验证更换 Apple 账户会停止该 vault 的同步。开发和生产数据库彼此独立。
 
-2026-09-07 已从本机向团队 `PB8H83VL3Z` 的 `iCloud.com.alkinum.aipass` 容器导入 Development schema，并重新导出验证成功；重复部署确认无需修改。已有 `Users` 类型保留。Production 尚未部署，真实签名包的跨设备验收尚未完成。
+2026-09-07 已从本机向团队 `PB8H83VL3Z` 的 `iCloud.com.alkinum.aipass` 容器导入 Development schema，并重新导出验证成功；重复部署确认无需修改。已有 `Users` 类型保留。2026-09-08 用户通过 CloudKit Console 部署 Production，本机回读确认所需字段和权限齐全；匹配发布证书、容器与生产推送权限的 Developer ID profile 已配置。真实签名包的跨设备验收尚未完成。
 
 ## CLI 部署
 
