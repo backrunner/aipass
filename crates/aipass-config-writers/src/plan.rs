@@ -15,6 +15,18 @@ use std::path::Path;
 use toml_edit::{value, DocumentMut, Item, Table};
 
 pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    plan_codex_with_history(home, entry, true)
+}
+
+pub fn preview_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    plan_codex_with_history(home, entry, false)
+}
+
+fn plan_codex_with_history(
+    home: &Path,
+    entry: &ToolEntry,
+    scan_history: bool,
+) -> Result<(ConfigPlan, String)> {
     ensure_codex_entry(entry)?;
     let codex_dir = resolve_codex_dir(home);
     let target = codex_dir.join("config.toml");
@@ -48,6 +60,7 @@ pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)
         &mut plan,
         provider_migration.as_deref(),
         &provider_name,
+        scan_history,
     )?;
     Ok((plan, content))
 }
@@ -56,6 +69,18 @@ pub fn plan_codex(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)
 /// Existing auth.json is deliberately left untouched so an API-key switch can
 /// be reversed without destroying the user's OAuth session.
 pub fn plan_codex_official(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    plan_codex_official_with_history(home, entry, true)
+}
+
+pub fn preview_codex_official(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
+    plan_codex_official_with_history(home, entry, false)
+}
+
+fn plan_codex_official_with_history(
+    home: &Path,
+    entry: &ToolEntry,
+    scan_history: bool,
+) -> Result<(ConfigPlan, String)> {
     ensure_codex_entry(entry)?;
     let codex_dir = resolve_codex_dir(home);
     let target = codex_dir.join("config.toml");
@@ -98,6 +123,7 @@ pub fn plan_codex_official(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan
         &mut plan,
         provider_migration.as_deref(),
         &provider_name,
+        scan_history,
     )?;
     Ok((plan, content))
 }
@@ -110,6 +136,23 @@ pub fn plan_codex_plaintext_with_mode(
     home: &Path,
     entry: &ToolEntry,
     api_key_mode: CodexApiKeyMode,
+) -> Result<(ConfigPlan, String)> {
+    plan_codex_plaintext_with_history(home, entry, api_key_mode, true)
+}
+
+pub fn preview_codex_plaintext_with_mode(
+    home: &Path,
+    entry: &ToolEntry,
+    api_key_mode: CodexApiKeyMode,
+) -> Result<(ConfigPlan, String)> {
+    plan_codex_plaintext_with_history(home, entry, api_key_mode, false)
+}
+
+fn plan_codex_plaintext_with_history(
+    home: &Path,
+    entry: &ToolEntry,
+    api_key_mode: CodexApiKeyMode,
+    scan_history: bool,
 ) -> Result<(ConfigPlan, String)> {
     ensure_codex_entry(entry)?;
     let api_key = entry
@@ -202,6 +245,7 @@ pub fn plan_codex_plaintext_with_mode(
         &mut plan,
         provider_migration.as_deref(),
         &provider_name,
+        scan_history,
     )?;
     Ok((plan, content))
 }
@@ -1130,11 +1174,17 @@ fn append_codex_migration(
     plan: &mut ConfigPlan,
     from_provider: Option<&str>,
     to_provider: &str,
+    scan_history: bool,
 ) -> Result<()> {
     let Some(from_provider) = from_provider else {
         return Ok(());
     };
 
+    if !scan_history {
+        // Preview reads only configuration. Apply replans against the current
+        // history and creates encrypted backups before migrating anything.
+        return Ok(());
+    }
     let mut session_files = Vec::new();
     for root in [
         codex_dir.join("sessions"),

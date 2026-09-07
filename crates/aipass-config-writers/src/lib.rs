@@ -19,7 +19,8 @@ pub use plan::{
     plan_cursor_local_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok,
     plan_grok_plaintext, plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
     plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext, plan_pi_plaintext_with_api,
-    GrokApiBackend, OpenCodeApi, PiApi,
+    preview_codex, preview_codex_official, preview_codex_plaintext_with_mode, GrokApiBackend,
+    OpenCodeApi, PiApi,
 };
 pub use utils::{config_backup_path, diff_preview_for_path, endpoint_url, redacted_diff_preview};
 
@@ -64,6 +65,57 @@ mod tests {
         assert!(plan.target_path.exists());
         rollback(&plan).unwrap();
         assert!(!plan.target_path.exists());
+    }
+
+    #[test]
+    fn codex_preview_never_reads_session_history_in_any_auth_mode() {
+        let _guard = codex_env_lock().lock().unwrap();
+        let dir = tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        let sessions = codex_dir.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            codex_dir.join("config.toml"),
+            "model_provider = \"old-provider\"\n",
+        )
+        .unwrap();
+        // A history scan would fail decoding this file. Preview must not even
+        // try to read it, regardless of the authentication mode.
+        let history = sessions.join("rollout.jsonl");
+        std::fs::write(&history, [0xff, 0xfe]).unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        entry.api_key = Some("preview-only-key".into());
+        entry.supports_websockets = Some(false);
+        for result in [
+            preview_codex(dir.path(), &entry),
+            preview_codex_official(dir.path(), &entry),
+            preview_codex_plaintext_with_mode(dir.path(), &entry, CodexApiKeyMode::AuthJson),
+            preview_codex_plaintext_with_mode(
+                dir.path(),
+                &entry,
+                CodexApiKeyMode::ExperimentalBearerToken,
+            ),
+        ] {
+            let (plan, _) = result.expect("preview must not inspect history");
+            assert!(plan.codex_session_migration.is_none());
+            assert!(plan.codex_provider_migration.is_none());
+            assert!(plan
+                .extra_writes
+                .iter()
+                .all(|write| write.target_path.file_name().unwrap() == "auth.json"));
+            assert!(!plan.preview.contains("preview-only-key"));
+        }
+        assert!(
+            plan_codex(dir.path(), &entry).is_err(),
+            "apply planning still validates history migrations"
+        );
+        assert_eq!(std::fs::read(history).unwrap(), [0xff, 0xfe]);
+        let (_, content) = preview_codex(dir.path(), &entry).unwrap();
+        let parsed = content.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            parsed["model_providers"]["aipass"]["supports_websockets"].as_bool(),
+            Some(false)
+        );
     }
 
     #[test]

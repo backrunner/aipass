@@ -892,7 +892,7 @@ fn dispatch_request(
                 ),
             );
             let result = with_vault(state, true, |vault| {
-                let (entry, plan, content) = build_tool_config_plan(vault, &request_for_closure)?;
+                let (entry, plan, content) = build_tool_config_plan(vault, &request_for_closure, true)?;
                 let files = tool_config_preview_files(&plan, &content);
                 let preview = combined_tool_config_preview(&files);
                 write_component_log(
@@ -948,7 +948,7 @@ fn dispatch_request(
                 ),
             );
             let result = with_vault(state, false, |vault| {
-                let (entry, plan, content) = build_tool_config_plan(vault, &request_for_closure)?;
+                let (entry, plan, content) = build_tool_config_plan(vault, &request_for_closure, false)?;
                 let operation_id = plan.operation_id;
                 let target = "redacted";
                 let applied = apply_plan_encrypted(&plan, &content, &vault.config_backup_key())
@@ -1061,7 +1061,7 @@ fn dispatch_request(
                 ),
             );
             let result = with_vault(state, true, |vault| {
-                let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request_for_closure)?;
+                let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request_for_closure, true)?;
                 let files = tool_config_preview_files(&plan, &content);
                 let preview = combined_tool_config_preview(&files);
                 write_component_log(
@@ -1109,7 +1109,7 @@ fn dispatch_request(
                 ),
             );
             let result = with_vault(state, false, |vault| {
-                let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request_for_closure)?;
+                let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request_for_closure, false)?;
                 let operation_id = plan.operation_id;
                 let target = "redacted";
                 let applied = apply_plan_encrypted(&plan, &content, &vault.config_backup_key())

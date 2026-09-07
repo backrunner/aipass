@@ -24,9 +24,9 @@ use aipass_agent_protocol::{
 use aipass_config_writers::{
     apply_plan_encrypted, config_backup_path, diff_preview_for_path, plan_claude_code,
     plan_claude_code_official, plan_claude_code_plaintext, plan_codex, plan_codex_official,
-    plan_codex_plaintext, plan_codex_plaintext_with_mode, plan_cursor_local,
-    plan_cursor_local_plaintext, plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok,
-    plan_grok_plaintext, plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
+    plan_codex_plaintext_with_mode, plan_cursor_local, plan_cursor_local_plaintext,
+    plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok, plan_grok_plaintext,
+    plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
     plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext, plan_pi_plaintext_with_api,
     redacted_diff_preview, rollback_encrypted, ApplyResult,
     CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan, GrokApiBackend, OpenCodeApi, PiApi,
@@ -1111,6 +1111,7 @@ fn default_auth_for_interface(interface_type: &InterfaceType) -> AuthScheme {
 fn build_tool_config_plan(
     vault: &Vault,
     request: &ToolConfigRequest,
+    preview: bool,
 ) -> ServiceResult<(EntrySummary, ConfigPlan, String)> {
     if request.codex_api_key_mode.is_some()
         && (!matches!(request.tool, ToolConfigTool::Codex)
@@ -1179,12 +1180,18 @@ fn build_tool_config_plan(
         tool_entry.api_key = Some(vault.reveal_secret(entry.id).map_err(map_vault_error)?);
     }
     let (plan, content) = match (&request.tool, &request.mode) {
-        (ToolConfigTool::Codex, ToolConfigMode::Official) => {
-            plan_codex_official(&home, &tool_entry).map_err(ServiceError::internal)?
-        }
-        (ToolConfigTool::Codex, ToolConfigMode::Helper) => {
-            plan_codex(&home, &tool_entry).map_err(ServiceError::internal)?
-        }
+        (ToolConfigTool::Codex, ToolConfigMode::Official) => (if preview {
+            aipass_config_writers::preview_codex_official
+        } else {
+            plan_codex_official
+        })(&home, &tool_entry)
+        .map_err(ServiceError::internal)?,
+        (ToolConfigTool::Codex, ToolConfigMode::Helper) => (if preview {
+            aipass_config_writers::preview_codex
+        } else {
+            plan_codex
+        })(&home, &tool_entry)
+        .map_err(ServiceError::internal)?,
         (ToolConfigTool::Codex, ToolConfigMode::Env) => {
             plan_tool_env_helper(&home, ToolConfigTool::Codex, &tool_entry)?
         }
@@ -1199,8 +1206,12 @@ fn build_tool_config_plan(
                     CodexApiKeyMode::AuthJson => WriterCodexApiKeyMode::AuthJson,
                 })
                 .unwrap_or(WriterCodexApiKeyMode::AuthJson);
-            plan_codex_plaintext_with_mode(&home, &tool_entry, mode)
-                .map_err(ServiceError::internal)?
+            (if preview {
+                aipass_config_writers::preview_codex_plaintext_with_mode
+            } else {
+                plan_codex_plaintext_with_mode
+            })(&home, &tool_entry, mode)
+            .map_err(ServiceError::internal)?
         }
         (ToolConfigTool::ClaudeCode, ToolConfigMode::Helper) => {
             plan_claude_code(&home, &tool_entry).map_err(ServiceError::internal)?
@@ -1270,6 +1281,7 @@ fn build_tool_config_proxy_plan(
     vault: &Vault,
     state: &Arc<AgentState>,
     request: &ToolConfigProxyRequest,
+    preview: bool,
 ) -> ServiceResult<(ToolEntry, ConfigPlan, String)> {
     let (bind_addr, route) = {
         let mut proxy = state
@@ -1336,7 +1348,7 @@ fn build_tool_config_proxy_plan(
     let home = home_dir()?;
     let (plan, content) = match request.tool {
         ToolId::Codex => {
-            plan_codex_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
+            (if preview { aipass_config_writers::preview_codex_plaintext_with_mode } else { plan_codex_plaintext_with_mode })(&home, &tool_entry, WriterCodexApiKeyMode::AuthJson).map_err(ServiceError::internal)?
         }
         ToolId::ClaudeCode => {
             plan_claude_code_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
