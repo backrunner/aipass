@@ -375,11 +375,17 @@ async fn serve(
     let mut socket = WebSocketStream::from_raw_socket(downstream, Role::Server, Some(config)).await;
     tokio::select! {
         biased;
-        _ = config_changed.changed() => {
-            let close = Some(CloseFrame { code: CloseCode::Restart, reason: "proxy configuration changed; reconnect".into() });
-            let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(close)).await;
-        }
+        _ = config_changed.changed() => {}
         _ = serve_session(&mut socket, context) => {}
+    }
+    // Invalidation can happen while the session branch is being polled, after
+    // the biased watch branch returned Pending. It still owns the close reason.
+    if config_changed.has_changed().unwrap_or(true) {
+        let close = Some(CloseFrame {
+            code: CloseCode::Restart,
+            reason: "proxy configuration changed; reconnect".into(),
+        });
+        let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(close)).await;
     }
 }
 
@@ -421,7 +427,14 @@ async fn serve_session(
                 }
                 Err(error) => {
                     session.failed(&request.lane, previous_id.as_deref());
-                    if !send(socket, error.event(&request.lane), write_timeout).await {
+                    if !send(
+                        socket,
+                        error.event(&request.lane),
+                        write_timeout,
+                        &context.config_changed,
+                    )
+                    .await
+                    {
                         return;
                     }
                 }
@@ -451,7 +464,7 @@ async fn serve_session(
                         }
                     }
                 };
-                if !send(socket, value, write_timeout).await { break; }
+                if !send(socket, value, write_timeout, &context.config_changed).await { break; }
             }
             message = socket.next() => {
                 let Some(Ok(message)) = message else { break; };
@@ -475,7 +488,7 @@ async fn serve_session(
                     _ => None,
                 };
                 if let Some(error) = error {
-                    if !send(socket, error, write_timeout).await { break; }
+                    if !send(socket, error, write_timeout, &context.config_changed).await { break; }
                 }
             }
         }
@@ -486,7 +499,13 @@ async fn send(
     socket: &mut WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>,
     value: Value,
     timeout: Duration,
+    config_changed: &ConfigWatch,
 ) -> bool {
+    // A cancelled HTTP operation can finish in the same poll as invalidation.
+    // Do not turn its cancellation into a provider error on the WS connection.
+    if config_changed.has_changed().unwrap_or(true) {
+        return false;
+    }
     matches!(
         tokio::time::timeout(timeout, socket.send(Message::text(value.to_string()))).await,
         Ok(Ok(()))
