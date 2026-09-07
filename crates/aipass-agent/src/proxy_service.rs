@@ -113,7 +113,9 @@ impl ProxyService {
             return Ok(false);
         }
         self.load_config(vault)?;
-        let runtime = self.runtime_config(vault)?;
+        // Synced or archived providers may remain in the stored selection.
+        // Only currently usable targets can confirm a capability event.
+        let runtime = self.runtime_config_inner(vault, true)?;
         for event in self.pending_ws_events.clone() {
             let current = runtime
                 .routes
@@ -873,7 +875,7 @@ impl ProxyService {
                 self.save_config(vault)?;
             }
             if running {
-                self.restart(vault)?;
+                self.reload_if_running(vault)?;
             }
             Ok(true)
         })();
@@ -1807,6 +1809,95 @@ mod tests {
             .to_ascii_lowercase()
             .contains("authorization: bearer upstream-secret"));
         upstream_thread.join().expect("upstream thread");
+    }
+
+    #[test]
+    fn inactive_targets_do_not_interrupt_live_refresh_or_capability_persistence() {
+        for capability in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let vault = Vault::create(temp.path(), &SecretString::new("test master"))
+                .unwrap()
+                .vault;
+            let mut service = ProxyService::new(temp.path()).unwrap();
+            service.config = config_with_token("refresh-test");
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            service.config.bind_addr = listener.local_addr().unwrap().to_string();
+            drop(listener);
+            let mut providers = Vec::new();
+            for secret in ["first-key", "second-key"] {
+                let mut input = provider_input(secret, "http://127.0.0.1:9/v1".into(), "header");
+                input.supports_websockets = Some(true);
+                let id = vault.add_provider(input).unwrap();
+                providers.push(id);
+                service.config.routes[0].targets.push(ProxyTargetConfig {
+                    id: Uuid::new_v4(),
+                    provider_entry_id: id,
+                    secret_id: vault.get_provider_summary(id).unwrap().secret_refs[0]
+                        .id
+                        .clone(),
+                    label: secret.into(),
+                    base_url: "http://127.0.0.1:9/v1".into(),
+                    auth_scheme: "bearer".into(),
+                    headers: Vec::new(),
+                    group: None,
+                    priority: 0,
+                    weight: 1,
+                    enabled: true,
+                    protocol: None,
+                });
+            }
+            service.save_config(&vault).unwrap();
+            service.start(&vault).unwrap();
+            let bind = service.status().bind_addr;
+            let runtime = service.runtime_config(&vault).unwrap();
+            let event = aipass_proxy::WebsocketCapabilityEvent {
+                id: Uuid::new_v4(),
+                provider_entry_id: providers[1],
+                config_key: aipass_proxy::websocket_config_key(
+                    &runtime.routes[0].targets[1],
+                    &runtime.upstream_proxy,
+                ),
+                status: 405,
+                detected_at: 1,
+            };
+            vault.archive_provider(providers[0]).unwrap();
+            if capability {
+                // A sync can leave stored references to an unavailable provider.
+                service.reload_if_running(&vault).unwrap();
+                service
+                    .handle
+                    .as_ref()
+                    .unwrap()
+                    .restore_websocket_capability_event(&event);
+                assert!(service.persist_ws_capabilities(&vault).unwrap());
+                assert_eq!(
+                    vault
+                        .get_provider_summary(providers[1])
+                        .unwrap()
+                        .supports_websockets,
+                    Some(false)
+                );
+            } else {
+                assert!(service
+                    .refresh_provider_credentials(&vault, providers[0])
+                    .unwrap());
+                // Editing another provider must also tolerate the retained reference.
+                assert!(service
+                    .refresh_provider_credentials(&vault, providers[1])
+                    .unwrap());
+            }
+            assert!(service.status().running);
+            assert!(service.config.enabled);
+            assert_eq!(service.status().bind_addr, bind);
+            assert_eq!(service.status().channels.len(), 1);
+            assert_eq!(service.status().channels[0].provider_entry_id, providers[1]);
+            assert_eq!(service.config.routes[0].targets.len(), 2);
+            vault.restore_provider(providers[0]).unwrap();
+            service
+                .refresh_provider_credentials(&vault, providers[0])
+                .unwrap();
+            assert_eq!(service.status().channels.len(), 2);
+        }
     }
 
     #[test]

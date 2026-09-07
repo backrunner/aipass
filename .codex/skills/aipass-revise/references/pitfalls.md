@@ -157,6 +157,13 @@ Newest entries last within each section.
 - **Guardrail**: every vault mutation path must either refresh the proxy snapshot or provably not affect proxy-visible data. When adding a new write path, grep for `refresh_proxy_provider_credentials` / `reload_if_running` call sites and add yours.
 - **Watch points**: `crates/aipass-agent/src/handlers.rs` (all provider/secret/sync/import branches), `crates/aipass-agent/src/server.rs` `save_detected_secret`, `crates/aipass-agent/src/session.rs` unlock/lock transitions.
 
+### Unavailable siblings must not stop live provider reconciliation
+- **Symptom**: archiving a referenced provider stopped the whole proxy; a retained unavailable target also prevented another provider's WS capability warning from being persisted.
+- **Root cause**: `proxy_service.rs::refresh_provider_credentials` called strict `restart`, and `persist_ws_capabilities` used strict `runtime_config`, while sync refresh already skipped unavailable targets.
+- **Fix**: use the existing tolerant live reload for local credential refresh and the same usable-target resolution for capability persistence. Retain stored references so restoring the provider makes it available again.
+- **Guardrail**: reconcile local provider changes, synced changes, and capability observations against the same usable target set. Test archive, sibling refresh, warning persistence, and restore without stopping the listener in `inactive_targets_do_not_interrupt_live_refresh_or_capability_persistence`.
+- **Watch points**: local archive/restore and provider edits, sync reload, capability persistence, strict validation for explicit proxy setup.
+
 ### WebSocket transport must share proxy configuration and invalidation
 - **Symptom**: Responses WebSocket clients could not connect to the local proxy; a separate direct WS connector would also bypass configured outbound proxies and leave authenticated sessions alive after credential changes.
 - **Root cause**: `crates/aipass-proxy/src/lib.rs` used `serve_connection` without upgrades, and `build_upstream_headers` intentionally removes HTTP hop headers. Runtime refresh originally only replaced the request-time credential snapshot.
