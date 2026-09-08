@@ -738,14 +738,21 @@ fn friendly_unlock_error(error: &aipass_agent::AgentCommandError) -> String {
 
 fn install_login_agent_async(app: AppHandle, feedback: TrayFeedback) {
     thread::spawn(move || {
-        let result = agent_client(&app).and_then(|client| {
-            let agent_binary = aipass_agent::agent_binary_path().map_err(|err| err.to_string())?;
-            let desktop_binary = std::env::current_exe().map_err(|err| err.to_string())?;
-            aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
-                .map_err(|err| err.to_string())?;
-            install_tray_autostart_for_current_desktop(&desktop_binary, &client.config.vault_dir)?;
-            ensure_agent_running_for_desktop(&client)
-        });
+        let result = crate::runtime_lifecycle::RUNTIME
+            .start()
+            .and_then(|_starting| {
+                let client = agent_client(&app)?;
+                let agent_binary =
+                    aipass_agent::agent_binary_path().map_err(|err| err.to_string())?;
+                let desktop_binary = std::env::current_exe().map_err(|err| err.to_string())?;
+                aipass_agent::install_agent_autostart(&agent_binary, &client.config.vault_dir)
+                    .map_err(|err| err.to_string())?;
+                install_tray_autostart_for_current_desktop(
+                    &desktop_binary,
+                    &client.config.vault_dir,
+                )?;
+                crate::ensure_agent_running_for_desktop_inner(&client)
+            });
         match result {
             Ok(_) => {
                 feedback.reset_repair_text();

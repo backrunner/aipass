@@ -24,7 +24,8 @@ pub mod windows_service;
 pub use autostart::{
     ensure_autostart as ensure_agent_autostart, ensure_tray_autostart_with_socket,
     install_tray_autostart_with_socket, stop_tray_autostart_with_socket,
-    suspend_autostart as suspend_agent_autostart, uninstall_tray_autostart_with_socket,
+    suspend_autostart as suspend_agent_autostart, suspend_tray_autostart,
+    uninstall_tray_autostart_with_socket,
 };
 pub use autostart::{
     install_autostart as install_agent_autostart, install_tray_autostart,

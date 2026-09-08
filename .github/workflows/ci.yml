@@ -49,13 +49,17 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
-      - name: Verify native CloudKit transport boundary
-        run: cargo test -p aipass-desktop cloudkit
-      - name: Build unsigned macOS app and DMG
+      - name: Verify desktop and macOS process lifecycle
+        run: |
+          cargo test -p aipass-desktop --lib
+          cargo test -p aipass-agent autostart::
+      - name: Prepare disposable updater signing key
+        run: node scripts/prepare-runtime-check-build.mjs "${RUNNER_TEMP}/aipass-runtime-signing"
+      - name: Build macOS test app and DMG with ad hoc signing
         env:
           # CI normally skips Finder's background and icon layout in Tauri.
           TAURI_BUNDLER_DMG_IGNORE_CI: "true"
-        run: pnpm --dir apps/desktop tauri build --ci --bundles app,dmg
+        run: pnpm --dir apps/desktop tauri build --ci --bundles app,dmg --config "${AIPASS_RUNTIME_BUILD_CONFIG}"
       - name: Verify app bundle
         shell: bash
         run: |
@@ -70,3 +74,16 @@ jobs:
           test -x "${app_path}/Contents/Resources/aipass-native-host"
       - name: Verify DMG installation window
         run: node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
+      - name: Verify packaged startup and update restart
+        run: node scripts/verify-macos-runtime.mjs target/release/bundle runtime-check-reports
+      - name: Upload runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-runtime-checks
+          path: runtime-check-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Remove disposable signing key
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/aipass-runtime-signing"

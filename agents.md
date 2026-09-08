@@ -22,6 +22,20 @@ Examples:
 - `refactor(native-host): split request handling`
 - `fix(sync): handle webdav conflict metadata`
 
+## Desktop Artifact Release Gate
+
+User instruction, 2026-09-08: validate future artifacts to prevent startup and
+update crashes from reaching releases.
+
+- Run `scripts/verify-macos-runtime.mjs` against the finished DMG and updater
+  archive before publication. Require main/tray startup at 960×640, responsive
+  frontend and Agent, explicit install/restart and cached install/restart.
+- Keep the production updater signature checks enabled. An early exit, hang,
+  missing restart, wrong running version or leftover update cache fails the gate.
+- Preserve failure diagnostics and artifact hashes. Signature/notarization or
+  build success alone is not a runtime validation result.
+- See `docs/desktop-artifact-validation.md`; local checks remain macOS-only.
+
 ## Local Validation Platform
 
 User instruction, 2026-09-07: permanently skip local Ubuntu validation.

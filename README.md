@@ -217,6 +217,8 @@ Release artifacts are produced by the `Release` GitHub Actions workflow on `vX.Y
 
 On macOS, open the DMG and double-click AIPass inside it to copy the app to `/Applications` and launch it. Dragging AIPass onto the Applications folder is also supported. Both macOS workflows set `TAURI_BUNDLER_DMG_IGNORE_CI=true` so Tauri saves the Finder background and icon layout even with `CI=true`. They mount the finished DMG read-only and run `scripts/verify-macos-dmg.mjs` to check the background, layout, Applications link, and bundled executables. This check requires a macOS Finder session.
 
+Both workflows also run the finished applications at 960×640 and verify main/tray startup, responsive frontend/Agent IPC, manual update restart and cached update restart before uploading release artifacts. Failures block publication and preserve diagnostics with input artifact hashes. See [desktop artifact validation](docs/desktop-artifact-validation.md) for the isolated runtime gate and its coverage.
+
 The DMG background is a TIFF with 660×400 (72 dpi) and 1320×800 (144 dpi) representations, so it stays sharp on Retina screens at the same window size. Regenerate it on macOS with Pillow installed using `python3 scripts/generate-dmg-background.py`; the DMG check verifies both image representations.
 
 The desktop updater reads `latest.json` from these feeds:

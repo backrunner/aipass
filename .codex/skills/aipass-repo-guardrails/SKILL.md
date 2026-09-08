@@ -137,16 +137,31 @@ pnpm build
 `macOS desktop bundle` on macOS with Node 26 and stable Rust:
 
 ```bash
-pnpm install --frozen-lockfile
-TAURI_BUNDLER_DMG_IGNORE_CI=true pnpm --dir apps/desktop tauri build --ci --bundles app,dmg
 set -euo pipefail
+pnpm install --frozen-lockfile
+runtime_signing_dir="$(mktemp -d)/signing"
+trap 'rm -rf "$runtime_signing_dir"' EXIT
+node scripts/prepare-runtime-check-build.mjs "$runtime_signing_dir"
+TAURI_SIGNING_PRIVATE_KEY="$runtime_signing_dir/updater.key" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' \
+TAURI_BUNDLER_DMG_IGNORE_CI=true \
+  pnpm --dir apps/desktop tauri build --ci --bundles app,dmg \
+  --config "$runtime_signing_dir/tauri.runtime-check.json"
 app_path="$(find target -path "*/release/bundle/macos/AIPass.app" -type d -print -quit)"
 test -n "${app_path}"
 test -x "${app_path}/Contents/MacOS/aipass-desktop"
 test -x "${app_path}/Contents/Resources/aipass-agent"
 test -x "${app_path}/Contents/Resources/aipass-native-host"
 node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
+node scripts/verify-macos-runtime.mjs target/release/bundle runtime-check-reports
 ```
+
+The runtime artifact gate is mandatory per `agents.md` (2026-09-08). Run the
+finished DMG and updater archive through main/tray startup and both manual/cached
+install-and-restart scenarios. Keep updater signature verification enabled and
+retain failure reports with artifact hashes. A startup-only `.app` check does
+not satisfy this gate. Release jobs use production-signed artifacts; the branch
+bundle above uses a disposable updater key. See `docs/desktop-artifact-validation.md`.
 
 Report each completed local job as `rust (macOS)`, `node (macOS)`, and `macOS desktop bundle`, including failures or required checks that could not run. Report remote GitHub Actions results separately; never claim local Ubuntu checks ran.
 

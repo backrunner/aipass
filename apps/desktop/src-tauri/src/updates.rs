@@ -82,6 +82,16 @@ fn updater_for_channel(
     app: &AppHandle,
     channel: &str,
 ) -> Result<tauri_plugin_updater::Updater, String> {
+    if let Some(endpoint) = crate::runtime_check::endpoint() {
+        let reinstall = crate::runtime_check::reinstall_same_version();
+        return app
+            .updater_builder()
+            .version_comparator(move |current, release| reinstall && release.version == current)
+            .no_proxy()
+            .endpoints(vec![endpoint])
+            .and_then(|builder| builder.build())
+            .map_err(|err| err.to_string());
+    }
     let endpoint = endpoint_for_channel(channel)?;
     app.updater_builder()
         .endpoints(vec![endpoint])
@@ -90,6 +100,9 @@ fn updater_for_channel(
 }
 
 fn update_cache_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    if let Some(dir) = crate::runtime_check::path("cache/updates") {
+        return Ok((dir.join("package"), dir.join("metadata.json")));
+    }
     let dir = app
         .path()
         .app_cache_dir()
@@ -305,7 +318,10 @@ async fn install_cached_update(app: &AppHandle, cached: CachedUpdate) -> Result<
     if cached
         .version
         .parse::<semver::Version>()
-        .map(|version| version <= current_version)
+        .map(|version| {
+            version < current_version
+                || (version == current_version && !crate::runtime_check::reinstall_same_version())
+        })
         .unwrap_or(false)
     {
         clear_cached_update(app);
@@ -332,15 +348,19 @@ fn install_verified_update(
 ) -> Result<bool, String> {
     let downloaded_bytes = package.len() as u64;
     emit_update_progress(app, "installing", downloaded_bytes, None);
+    let updating = crate::runtime_lifecycle::RUNTIME.update()?;
     if let Err(err) = stop_runtime_processes(app) {
+        drop(updating);
         restore_agent_after_update_failure(app);
         return Err(err);
     }
     if let Err(err) = update.install(package) {
+        drop(updating);
         restore_agent_after_update_failure(app);
         return Err(err.to_string());
     }
     clear_cached_update(app);
+    crate::runtime_check::installed()?;
     // The updater only swaps the bundle on disk; relaunch so the new
     // version actually runs ("Install & restart" in the UI promises this).
     // The relaunched process inherits this process's environment, so drop a
@@ -358,6 +378,16 @@ fn restore_agent_after_update_failure(app: &AppHandle) {
         return;
     };
     let _ = crate::ensure_agent_running_for_desktop(&client);
+    if crate::runtime_check::active() {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(desktop_binary) = std::env::current_exe() {
+        let _ = crate::ensure_tray_autostart_for_current_desktop(
+            &desktop_binary,
+            &client.config.vault_dir,
+        );
+    }
 }
 
 #[tauri::command]
@@ -418,10 +448,9 @@ fn stop_runtime_processes(app: &AppHandle) -> Result<(), String> {
             // update transaction so it cannot relaunch the old binary while
             // the bundle is being replaced.
             let _ = aipass_agent::suspend_agent_autostart(&client.config.vault_dir);
-            let _ = crate::stop_tray_autostart_for_current_desktop(&client.config.vault_dir);
+            aipass_agent::suspend_tray_autostart(&client.config.vault_dir)
+                .map_err(|err| err.to_string())?;
         }
-        #[cfg(target_os = "macos")]
-        crate::tray_swift::shutdown();
         return Ok(());
     }
     let _ = client.request::<ProxyStatus>(&AgentRequest::ServerStop);
@@ -434,7 +463,8 @@ fn stop_runtime_processes(app: &AppHandle) -> Result<(), String> {
         // AgentShutdown stops the child, but the resident LaunchAgent would
         // otherwise bring it back before the updater replaces the bundle.
         let _ = aipass_agent::suspend_agent_autostart(&client.config.vault_dir);
-        let _ = crate::stop_tray_autostart_for_current_desktop(&client.config.vault_dir);
+        aipass_agent::suspend_tray_autostart(&client.config.vault_dir)
+            .map_err(|err| err.to_string())?;
     }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -454,8 +484,6 @@ fn stop_runtime_processes(app: &AppHandle) -> Result<(), String> {
         return Err("AIPass agent did not exit before update".to_string());
     }
 
-    #[cfg(target_os = "macos")]
-    crate::tray_swift::shutdown();
     Ok(())
 }
 

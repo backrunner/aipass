@@ -110,6 +110,13 @@ pub fn stop_tray_autostart_with_socket(
     imp::stop_tray_with_socket(vault_dir, singleton_socket)
 }
 
+/// Pause tray supervision while the desktop itself installs an update.
+/// Unlike stop, this must neither signal the desktop child nor send it Quit.
+#[cfg(target_os = "macos")]
+pub fn suspend_tray_autostart(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+    imp::suspend_tray(vault_dir)
+}
+
 pub fn query_tray_autostart(vault_dir: &Path) -> Result<TrayAutostartStatus> {
     imp::query_tray(vault_dir)
 }
@@ -165,6 +172,7 @@ mod imp {
             &paths.supervisor_path,
             &paths.supervisor_log,
             &paths.supervisor_err_log,
+            false,
         );
         if !force_reload
             && autostart_files_match(&paths, &supervisor, &plist)
@@ -310,6 +318,7 @@ mod imp {
             &paths.supervisor_path,
             &paths.supervisor_log,
             &paths.supervisor_err_log,
+            true,
         );
         if !force_reload
             && autostart_files_match(&paths, &supervisor, &plist)
@@ -419,6 +428,37 @@ mod imp {
         })
     }
 
+    pub(super) fn suspend_tray(vault_dir: &Path) -> Result<TrayAutostartStatus> {
+        let service_name = tray_service_name(vault_dir)?;
+        let paths = macos_paths(&service_name)?;
+        suspend_tray_service(&service_name, &paths)?;
+        Ok(TrayAutostartStatus {
+            service_name,
+            registered: paths.plist_path.exists(),
+            running: false,
+            install_path: Some(paths.plist_path),
+            supervisor_path: Some(paths.supervisor_path),
+            desktop_binary: None,
+        })
+    }
+
+    fn suspend_tray_service(service_name: &str, paths: &MacosAutostartPaths) -> Result<()> {
+        match fs::remove_file(&paths.stop_child_path) {
+            Ok(()) => (),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+            Err(err) => return Err(err.into()),
+        }
+        // The tray LaunchAgent abandons its process group on unload. Its
+        // TERM handler also leaves the child alive without the stop flag.
+        // The caller is that child when the app was started at login.
+        unload_launch_agent(service_name, &paths.plist_path)?;
+        anyhow::ensure!(
+            !launch_agent_running(service_name),
+            "AIPass tray supervisor did not stop before update"
+        );
+        Ok(())
+    }
+
     struct MacosAutostartPaths {
         plist_path: PathBuf,
         supervisor_path: PathBuf,
@@ -474,6 +514,7 @@ mod imp {
         supervisor_path: &Path,
         supervisor_log: &Path,
         supervisor_err_log: &Path,
+        abandon_process_group: bool,
     ) -> String {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -490,6 +531,8 @@ mod imp {
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>AbandonProcessGroup</key>
+  <{}/>
   <key>StandardOutPath</key>
   <string>{}</string>
   <key>StandardErrorPath</key>
@@ -499,6 +542,7 @@ mod imp {
 "#,
             xml_escape(service_name),
             xml_escape(&supervisor_path.display().to_string()),
+            abandon_process_group,
             xml_escape(&supervisor_log.display().to_string()),
             xml_escape(&supervisor_err_log.display().to_string()),
         )
@@ -785,6 +829,116 @@ cleanup
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn suspending_tray_supervision_preserves_the_desktop_child() {
+            let temp = tempfile::tempdir().unwrap();
+            let paths = MacosAutostartPaths {
+                plist_path: temp.path().join("tray.plist"),
+                supervisor_path: temp.path().join("supervisor.sh"),
+                log_dir: temp.path().to_path_buf(),
+                out_log: temp.path().join("out.log"),
+                err_log: temp.path().join("err.log"),
+                supervisor_log: temp.path().join("supervisor.out.log"),
+                supervisor_err_log: temp.path().join("supervisor.err.log"),
+                stop_child_path: temp.path().join("stop-child"),
+            };
+            let service_name = format!("dev.aipass.test.tray.{}", uuid::Uuid::new_v4());
+            let desktop = temp.path().join("desktop.sh");
+            let pid_path = temp.path().join("desktop.pid");
+            write_supervisor(
+                &desktop,
+                &format!(
+                    "#!/bin/sh\necho $$ > {}\n/bin/sleep 300 &\nchild=$!\ntrap 'kill \"$child\"; exit' TERM INT\nwait \"$child\"\n",
+                    shell_quote(&pid_path.display().to_string())
+                ),
+            )
+            .unwrap();
+            let script = macos_tray_supervisor_script(
+                &service_name,
+                &paths.plist_path,
+                &desktop,
+                &temp.path().join("vault"),
+                &paths.out_log,
+                &paths.err_log,
+                &paths.stop_child_path,
+                &temp.path().join("desktop.sock"),
+            )
+            .unwrap();
+            write_supervisor(&paths.supervisor_path, &script).unwrap();
+            fs::write(
+                &paths.plist_path,
+                macos_plist(
+                    &service_name,
+                    &paths.supervisor_path,
+                    &paths.supervisor_log,
+                    &paths.supervisor_err_log,
+                    true,
+                ),
+            )
+            .unwrap();
+
+            // Only register this fixture's unique service; never change HOME
+            // or touch the user's real AIPass LaunchAgents or vault.
+            struct Cleanup<'a> {
+                service: &'a str,
+                paths: &'a MacosAutostartPaths,
+                pid_path: &'a Path,
+            }
+            impl Drop for Cleanup<'_> {
+                fn drop(&mut self) {
+                    let _ = write_stop_child_flag(&self.paths.stop_child_path);
+                    let _ = unload_launch_agent(self.service, &self.paths.plist_path);
+                    if let Ok(pid) = fs::read_to_string(self.pid_path) {
+                        let _ = Command::new("kill")
+                            .arg(pid.trim())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                    }
+                }
+            }
+            let _cleanup = Cleanup {
+                service: &service_name,
+                paths: &paths,
+                pid_path: &pid_path,
+            };
+            load_launch_agent(&service_name, &paths.plist_path).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !pid_path.exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            let pid = fs::read_to_string(&pid_path).expect("supervised desktop started");
+            assert!(launch_agent_running(&service_name));
+
+            // A previous interrupted stop must not make suspension kill the
+            // process that is about to replace the bundle.
+            write_stop_child_flag(&paths.stop_child_path).unwrap();
+            suspend_tray_service(&service_name, &paths).unwrap();
+            assert!(!paths.stop_child_path.exists());
+            assert!(!launch_agent_running(&service_name));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(Command::new("kill")
+                .args(["-0", pid.trim()])
+                .status()
+                .unwrap()
+                .success());
+            assert!(paths.plist_path.exists());
+            assert!(paths.supervisor_path.exists());
+
+            // Update failure can restore supervision without replacing the
+            // desktop process that still owns the window.
+            load_launch_agent(&service_name, &paths.plist_path).unwrap();
+            assert!(launch_agent_running(&service_name));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert_eq!(fs::read_to_string(&pid_path).unwrap(), pid);
+            suspend_tray_service(&service_name, &paths).unwrap();
+            assert!(Command::new("kill")
+                .args(["-0", pid.trim()])
+                .status()
+                .unwrap()
+                .success());
+        }
 
         #[test]
         fn macos_agent_supervisor_waits_for_existing_agent_and_suppresses_tray_launch() {

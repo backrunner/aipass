@@ -15,7 +15,7 @@
     "licenses:audit": "node scripts/license-audit.mjs",
     "native-host:install": "node scripts/install-native-host.mjs",
     "release:metadata": "node scripts/release-metadata.mjs",
-    "test": "node --test scripts/cloudkit-profile.test.mjs scripts/deploy-cloudkit-schema.test.mjs && turbo test",
+    "test": "node --test scripts/cloudkit-profile.test.mjs scripts/deploy-cloudkit-schema.test.mjs scripts/verify-macos-runtime.test.mjs && turbo test",
     "typecheck": "turbo typecheck",
     "format": "prettier --write ."
   },

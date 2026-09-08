@@ -6,6 +6,8 @@ mod deeplink;
 mod logging;
 mod models;
 mod oauth_browser;
+mod runtime_check;
+mod runtime_lifecycle;
 #[cfg(target_os = "macos")]
 mod self_install;
 mod singleton;
@@ -184,6 +186,16 @@ fn agent_client(_app: &AppHandle) -> Result<AgentClient, String> {
 }
 
 pub(crate) fn ensure_agent_running_for_desktop(client: &AgentClient) -> Result<(), String> {
+    let _starting = runtime_lifecycle::RUNTIME.start()?;
+    ensure_agent_running_for_desktop_inner(client)
+}
+
+fn ensure_agent_running_for_desktop_inner(client: &AgentClient) -> Result<(), String> {
+    if runtime_check::active() {
+        return client
+            .ensure_running_for_desktop_companion()
+            .map_err(|err| err.to_string());
+    }
     #[cfg(target_os = "macos")]
     {
         client.ensure_running().map_err(|err| err.to_string())
@@ -589,6 +601,9 @@ fn save_preferences(app: &AppHandle, preferences: &AppPreferences) -> Result<(),
 }
 
 fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(path) = runtime_check::path("preferences.json") {
+        return Ok(path);
+    }
     let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
     Ok(dir.join("preferences.json"))
 }
@@ -832,6 +847,9 @@ fn latest_installed_extension_version(extension_dir: &Path) -> Option<[u64; 4]> 
 // layout Chrome uses for self-hosted updates, picked up on the next browser
 // launch. Runs silently at startup; failures are logged, never surfaced.
 fn sync_installed_browser_extensions(app: &AppHandle) {
+    if runtime_check::active() {
+        return;
+    }
     if let Err(err) = sync_installed_browser_extensions_inner(app) {
         let _ = logging::log_event("desktop.extension_sync.failed", &[("error", &err)]);
     }
@@ -1894,6 +1912,9 @@ fn default_window_size(target: &str) -> DesktopWindowSize {
 }
 
 fn window_size_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(path) = runtime_check::path("window-size.json") {
+        return Ok(path);
+    }
     let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
     Ok(dir.join(DESKTOP_WINDOW_SIZE_FILE))
 }
@@ -2150,6 +2171,9 @@ pub(crate) fn handle_deep_link_urls(app: &AppHandle, urls: Vec<url::Url>) {
 
 fn ensure_agent_resident_async(app: AppHandle) {
     thread::spawn(move || {
+        let Ok(_starting) = runtime_lifecycle::RUNTIME.start() else {
+            return;
+        };
         let client = match agent_client(&app) {
             Ok(client) => client,
             Err(err) => {
@@ -2157,6 +2181,11 @@ fn ensure_agent_resident_async(app: AppHandle) {
                 return;
             }
         };
+
+        if runtime_check::active() {
+            let _ = ensure_agent_running_for_desktop_inner(&client);
+            return;
+        }
 
         #[cfg(target_os = "macos")]
         match aipass_agent::agent_binary_path() {
@@ -2189,7 +2218,7 @@ fn ensure_agent_resident_async(app: AppHandle) {
             }
         }
 
-        if let Err(err) = ensure_agent_running_for_desktop(&client) {
+        if let Err(err) = ensure_agent_running_for_desktop_inner(&client) {
             eprintln!("failed to ensure AIPass agent is running: {err}");
         }
         if let Err(err) = repair_bundled_native_host_manifest(&app) {
@@ -2248,6 +2277,10 @@ fn round_macos_view(view: &objc2_app_kit::NSView, radius: f64) {
 }
 
 pub fn run() {
+    if let Err(err) = runtime_check::initialize() {
+        eprintln!("runtime verification setup failed: {err}");
+        std::process::exit(1);
+    }
     let version = env!("CARGO_PKG_VERSION");
     let launch_target = launch_window_target();
     logging::init();
@@ -2278,6 +2311,8 @@ pub fn run() {
     };
     let mut singleton = Some(singleton);
 
+    let mut context = tauri::generate_context!();
+    runtime_check::configure(&mut context);
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
@@ -2322,6 +2357,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             cloudkit::start(app.handle().clone());
             ensure_agent_resident_async(app.handle().clone());
+            runtime_check::start(app.handle().clone());
             let extension_sync_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let _ = run_blocking(move || {
@@ -2429,7 +2465,7 @@ pub fn run() {
             install_update,
             take_pending_deep_links
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {

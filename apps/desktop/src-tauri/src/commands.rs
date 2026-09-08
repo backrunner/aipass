@@ -89,6 +89,7 @@ pub(crate) fn desktop_startup_stage(stage: String) -> Result<(), String> {
     ) {
         return Err("invalid desktop startup stage".to_string());
     }
+    crate::runtime_check::frontend_stage(&stage);
     crate::logging::log_event("desktop.startup.stage", &[("stage", &stage)])
 }
 

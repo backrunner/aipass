@@ -262,6 +262,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm --dir apps/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.generated.json
 
+      - name: Verify desktop and macOS process lifecycle
+        run: |
+          cargo test -p aipass-desktop --lib
+          cargo test -p aipass-agent autostart::
+
       - name: Verify DMG installation window
         run: node scripts/verify-macos-dmg.mjs target/universal-apple-darwin/release/bundle/dmg
 
@@ -358,6 +363,18 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "${updater_app}"
           spctl --assess --type execute --verbose=4 "${updater_app}"
           xcrun stapler validate "${updater_app}"
+
+      - name: Verify signed artifact startup and update restart
+        run: node scripts/verify-macos-runtime.mjs release-artifacts runtime-check-reports
+
+      - name: Upload runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-runtime-checks-${{ needs.resolve-release.outputs.tag }}
+          path: runtime-check-reports/
+          if-no-files-found: ignore
+          retention-days: 30
 
       - uses: actions/upload-artifact@v4
         with:
@@ -494,6 +511,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          pattern: aipass-*
           path: release-artifacts
           merge-multiple: true
 

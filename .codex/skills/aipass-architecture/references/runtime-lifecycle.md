@@ -48,6 +48,8 @@ Supervisor scripts live under `~/.aipass/autostart`; stdout/stderr live under `~
 
 Bundle updates normally replace binaries at stable paths inside `AIPass.app`. If generated supervisor content, plist content, executable permission, service registration, binary path, vault path, or singleton socket changes, ensure must reinstall the affected LaunchAgent.
 
+During an update, suspend tray supervision without terminating the desktop that owns the installer. `suspend_tray_autostart` clears the kill-child flag and unloads a tray LaunchAgent with `AbandonProcessGroup`; stop/uninstall operations also send Quit and must never be used here. Failed installs restore supervision while keeping the window and tray alive. A stuck old installer can retain its cached package and repeat the exit on every launch.
+
 ## IPC And Paths
 
 - Vault canonicalization, namespace, service name, socket, and runtime token paths are centralized in `crates/aipass-agent/src/paths.rs` and `ipc.rs`.
