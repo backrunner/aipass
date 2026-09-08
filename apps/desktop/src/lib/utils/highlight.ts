@@ -22,23 +22,6 @@ export function detectLang(targetPath: string): CodeLang {
   return "text";
 }
 
-function diffLine(input: string): {
-  prefix: "add" | "remove" | "context" | "none";
-  body: string;
-} {
-  if (input.startsWith("+ ")) return { prefix: "add", body: input.slice(2) };
-  if (input.startsWith("- ")) return { prefix: "remove", body: input.slice(2) };
-  if (input.startsWith("  "))
-    return { prefix: "context", body: input.slice(2) };
-  if (input === "+" || input === "-" || input === "  ") {
-    return {
-      prefix: input === "+" ? "add" : input === "-" ? "remove" : "context",
-      body: "",
-    };
-  }
-  return { prefix: "none", body: input };
-}
-
 function highlightJsonLine(line: string): string {
   const out: string[] = [];
   let i = 0;
@@ -201,42 +184,25 @@ function findCommentStart(line: string, char: string): number {
   return -1;
 }
 
-export function highlightPreview(input: string, targetPath: string): string {
-  let lang = detectLang(targetPath);
-  const highlighted = input.split("\n").map((rawLine) => {
-    // Multi-file plans prefix each section with its absolute path. Keep the
-    // marker visible and switch syntax highlighting for auth.json/env files.
-    if (
-      rawLine.startsWith("# ") &&
-      /\.(json|jsonc|toml|env|ini|conf)$/.test(rawLine.slice(2))
-    ) {
-      lang = detectLang(rawLine.slice(2));
-      return `<span class="diff-file">${escapeHtml(rawLine)}</span>`;
-    }
+/** Highlight literal source without interpreting indentation as diff prefixes. */
+export function highlightCodeLine(line: string, lang: CodeLang): string {
+  switch (lang) {
+    case "json":
+      return highlightJsonLine(line);
+    case "toml":
+      return highlightTomlLine(line);
+    case "env":
+    case "ini":
+      return highlightEnvLine(line);
+    default:
+      return escapeHtml(line);
+  }
+}
 
-    const { prefix, body } = diffLine(rawLine);
-    const highlightedBody =
-      body.length === 0
-        ? ""
-        : (() => {
-            switch (lang) {
-              case "json":
-                return highlightJsonLine(body);
-              case "toml":
-                return highlightTomlLine(body);
-              case "env":
-              case "ini":
-                return highlightEnvLine(body);
-              default:
-                return escapeHtml(body);
-            }
-          })();
-
-    if (prefix === "none") {
-      return highlightedBody;
-    }
-    const marker = prefix === "add" ? "+" : prefix === "remove" ? "-" : " ";
-    return `<span class="diff-${prefix}">${marker}</span>${highlightedBody}`;
-  });
-  return highlighted.join("\n");
+export function highlightCode(input: string, targetPath: string): string {
+  const lang = detectLang(targetPath);
+  return input
+    .split("\n")
+    .map((line) => highlightCodeLine(line, lang))
+    .join("\n");
 }

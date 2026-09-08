@@ -5,8 +5,10 @@
 
   import { t } from "../../stores/i18n";
   import type { ToolConfigPreview } from "../../types";
-  import { detectLang, highlightPreview } from "../../utils/highlight";
+  import { detectLang, highlightCode } from "../../utils/highlight";
+  import { parseConfigDiff } from "../../utils/config-diff";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
+  import DiffViewer from "./DiffViewer.svelte";
 
   export let open = false;
   export let preview: ToolConfigPreview | undefined = undefined;
@@ -46,6 +48,8 @@
     return {
       file,
       unchanged,
+      showDiff,
+      rows: showDiff && !unchanged ? parseConfigDiff(diff, file.path) : [],
       text: showDiff && !unchanged ? diff : file.content
     };
   });
@@ -53,7 +57,7 @@
   $: activePath = files[Number(activeFile)]?.path ?? preview?.targetPath ?? "";
 
   function fileName(path: string): string {
-    return path.split("/").pop() || path;
+    return path.split(/[\\/]/).pop() || path;
   }
 </script>
 
@@ -98,8 +102,10 @@
               <Tabs.Content class="file-tab-content" value={String(index)}>
                 {#if item.unchanged}
                   <div class="code-block placeholder">{$t("integration.noChanges")}</div>
+                {:else if item.showDiff}
+                  <DiffViewer rows={item.rows} />
                 {:else}
-                  <pre class="code-block" data-lang={detectLang(item.file.path)}>{@html highlightPreview(item.text, item.file.path)}</pre>
+                  <pre class="code-block" data-lang={detectLang(item.file.path)}>{@html highlightCode(item.text, item.file.path)}</pre>
                 {/if}
               </Tabs.Content>
             {/each}
@@ -110,8 +116,10 @@
           </div>
           {#if bodies[0].unchanged}
             <div class="code-block placeholder">{$t("integration.noChanges")}</div>
+          {:else if bodies[0].showDiff}
+            <DiffViewer rows={bodies[0].rows} />
           {:else}
-            <pre class="code-block" data-lang={detectLang(bodies[0].file.path)}>{@html highlightPreview(bodies[0].text, bodies[0].file.path)}</pre>
+            <pre class="code-block" data-lang={detectLang(bodies[0].file.path)}>{@html highlightCode(bodies[0].text, bodies[0].file.path)}</pre>
           {/if}
         {/if}
       {/if}
@@ -158,8 +166,8 @@
     flex-direction: column;
     min-height: 0;
     gap: 12px;
-    width: min(760px, calc(100vw - 48px));
-    max-height: min(640px, calc(100vh - 64px));
+    width: min(1120px, calc(100vw - 48px));
+    height: min(720px, calc(100vh - 48px));
     padding: 18px 20px 16px;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -208,6 +216,7 @@
 
   .dialog-header {
     display: flex;
+    flex-shrink: 0;
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
@@ -264,6 +273,7 @@
 
   .file-bar {
     display: flex;
+    flex-shrink: 0;
     align-items: center;
     gap: 12px;
     min-height: 30px;
@@ -327,7 +337,7 @@
     padding: 12px 14px;
     overflow: auto;
     flex: 1;
-    background: var(--surface-raised);
+    background: var(--surface);
     border: 1px solid var(--divider);
     border-radius: var(--radius);
     font-family: var(--font-mono);
@@ -335,6 +345,8 @@
     line-height: 1.6;
     tab-size: 2;
     white-space: pre;
+    user-select: text;
+    -webkit-user-select: text;
 
     &.placeholder {
       display: grid;
@@ -376,34 +388,9 @@
     color: var(--accent);
   }
 
-  :global(.code-block .diff-file) {
-    display: block;
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  :global(.code-block .diff-add),
-  :global(.code-block .diff-remove),
-  :global(.code-block .diff-context) {
-    display: inline-block;
-    width: 1.2em;
-    user-select: none;
-  }
-
-  :global(.code-block .diff-add) {
-    color: var(--success);
-  }
-
-  :global(.code-block .diff-remove) {
-    color: var(--danger);
-  }
-
-  :global(.code-block .diff-context) {
-    color: var(--text-tertiary);
-  }
-
   .dialog-footer {
     display: flex;
+    flex-shrink: 0;
     align-items: center;
     justify-content: space-between;
     gap: 12px;

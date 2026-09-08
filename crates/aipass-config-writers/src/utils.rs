@@ -177,7 +177,18 @@ pub(crate) fn diff_preview_from(before: &str, after: &str) -> String {
         after_end -= 1;
     }
 
-    let mut lines = Vec::new();
+    // Preserve the real file coordinates for editor previews. The two-character
+    // line markers remain compatible with CLI output and secret redaction.
+    let start = prefix.saturating_sub(1);
+    let trailing_context =
+        usize::from(before_end < before_lines.len() && after_end < after_lines.len());
+    let old_count = before_end - start + trailing_context;
+    let new_count = after_end - start + trailing_context;
+    let old_start = if old_count == 0 { 0 } else { start + 1 };
+    let new_start = if new_count == 0 { 0 } else { start + 1 };
+    let mut lines = vec![format!(
+        "@@ -{old_start},{old_count} +{new_start},{new_count} @@"
+    )];
     if prefix > 0 {
         lines.push(format!("  {}", before_lines[prefix - 1]));
     }
@@ -200,7 +211,7 @@ pub(crate) fn diff_preview_from(before: &str, after: &str) -> String {
 pub fn redacted_diff_preview(content: &str, redactions: &[&str]) -> String {
     let mut preview = if content
         .lines()
-        .any(|line| line.starts_with("+ ") || line.starts_with("- "))
+        .any(|line| line.starts_with("+ ") || line.starts_with("- ") || line.starts_with("@@ "))
     {
         content.to_string()
     } else {
@@ -257,4 +268,35 @@ pub(crate) fn dotenv_quote(value: &str) -> String {
         .replace('"', "\\\"")
         .replace('\n', "\\n");
     format!("\"{escaped}\"")
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+
+    #[test]
+    fn preview_keeps_file_coordinates_after_omitted_prefix() {
+        let before = "first\nsecond\nthird\nold\nlast\n";
+        let after = "first\nsecond\nthird\nnew\nextra\nlast\n";
+        assert_eq!(
+            diff_preview_from(before, after),
+            "@@ -3,3 +3,4 @@\n  third\n- old\n+ new\n+ extra\n  last"
+        );
+    }
+
+    #[test]
+    fn preview_coordinates_cover_new_deleted_and_unchanged_files() {
+        assert_eq!(diff_preview_from("", "new\n"), "@@ -0,0 +1,1 @@\n+ new");
+        assert_eq!(diff_preview_from("old\n", ""), "@@ -1,1 +0,0 @@\n- old");
+        assert_eq!(diff_preview_from("same\n", "same\n"), "(no changes)");
+    }
+
+    #[test]
+    fn redaction_preserves_coordinates_and_removes_credentials() {
+        let diff = diff_preview_from("api_key = \"old\"\n", "api_key = \"new\"\n");
+        assert_eq!(
+            redacted_diff_preview(&diff, &[]),
+            "@@ -1,1 +1,1 @@\n- [redacted]\n+ [redacted]"
+        );
+    }
 }

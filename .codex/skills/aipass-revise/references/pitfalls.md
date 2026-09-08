@@ -148,6 +148,13 @@ Newest entries last within each section.
 - **Guardrail**: never scan session/history files during preview, including direct, official and local-proxy modes. Never place history contents in an IPC frame. Keep apply-time migration and encrypted backups; test preview against unreadable history (`codex_preview_never_reads_session_history_in_any_auth_mode`).
 - **Watch points**: `crates/aipass-config-writers/src/plan.rs`, `crates/aipass-config-writers/src/backup.rs`, and `crates/aipass-agent/src/handlers.rs`.
 
+### Compact configuration diffs are not literal source
+- **Symptom**: preview marked unchanged settings as replacements, lost JSON indentation in full-file view, and could not show real file line numbers.
+- **Root cause**: `crates/aipass-config-writers/src/utils.rs:155` emits a compact replacement block with omitted prefix lines; `apps/desktop/src/lib/utils/highlight.ts:25` interpreted source indentation as diff markers even in full-file mode.
+- **Fix**: retain hunk coordinates in the agent diff, align unchanged lines in the desktop viewer, and highlight literal source separately from diff parsing.
+- **Guardrail**: never derive file line numbers from snippet indexes or feed literal content back through diff-prefix stripping. Preserve hunk metadata during redaction; test per-file counts and full-file indentation.
+- **Watch points**: `utils::diff_tests`, `config-diff.test.ts`, `highlight.test.ts`, and `IntegrationPreviewDialog.test.ts`; direct and local-proxy integrations share the viewer.
+
 ### Codex provider writes omitted WebSocket support
 - **Symptom**: generated Codex configurations did not advertise Responses WebSocket support, including when pointing at the WS-capable local proxy.
 - **Root cause**: `crates/aipass-config-writers/src/plan.rs:930` managed `wire_api` but omitted the provider-level `supports_websockets` flag.

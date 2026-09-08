@@ -16,9 +16,9 @@ const preview: ToolConfigPreview = {
     {
       path: "/home/u/.codex/config.toml",
       content: "FULL_MARKER_LINE",
-      diff: "DIFF_MARKER_LINE"
-    }
-  ]
+      diff: "DIFF_MARKER_LINE",
+    },
+  ],
 };
 
 let app: Record<string, unknown> | undefined;
@@ -38,14 +38,14 @@ function mountDialog(props: Record<string, unknown>) {
   document.body.appendChild(target);
   app = mount(IntegrationPreviewDialog, {
     target,
-    props: { open: true, preview, onOpenChange: () => {}, ...props }
+    props: { open: true, preview, onOpenChange: () => {}, ...props },
   }) as never;
   flushSync();
 }
 
 function clickButton(matcher: RegExp) {
   const button = [...document.body.querySelectorAll("button")].find((item) =>
-    matcher.test(item.textContent ?? "")
+    matcher.test(item.textContent ?? ""),
   );
   expect(button).toBeTruthy();
   button!.click();
@@ -68,8 +68,14 @@ test("unchanged diff renders the localized placeholder", () => {
   mountDialog({
     preview: {
       ...preview,
-      files: [{ path: "/home/u/.codex/config.toml", content: "SAME", diff: "(no changes)" }]
-    }
+      files: [
+        {
+          path: "/home/u/.codex/config.toml",
+          content: "SAME",
+          diff: "(no changes)",
+        },
+      ],
+    },
   });
   expect(document.body.textContent).toMatch(/无变更|No changes/);
 });
@@ -77,7 +83,9 @@ test("unchanged diff renders the localized placeholder", () => {
 test("shows localized subtitle instead of the raw english summary", () => {
   mountDialog({ toolName: "Codex" });
   expect(document.body.textContent).toContain("Demo");
-  expect(document.body.textContent).not.toContain("Configure Codex live config");
+  expect(document.body.textContent).not.toContain(
+    "Configure Codex live config",
+  );
 });
 
 test("cancel button closes the dialog through onOpenChange", () => {
@@ -86,4 +94,60 @@ test("cancel button closes the dialog through onOpenChange", () => {
 
   clickButton(/取消|Cancel/i);
   expect(calls).toEqual([false]);
+});
+
+test("renders accurate per-file counts, line coordinates and literal full-file indentation", () => {
+  mountDialog({
+    preview: {
+      ...preview,
+      files: [
+        {
+          path: "/home/u/.codex/config.toml",
+          content: 'model = "new"',
+          diff: '@@ -8,2 +8,2 @@\n  # model\n- model = "old"\n+ model = "new"',
+        },
+        {
+          path: "/home/u/.codex/auth.json",
+          content: '{\n  "OPENAI_API_KEY": "demo"\n}',
+          diff: '@@ -0,0 +1,3 @@\n+ {\n+   "OPENAI_API_KEY": "demo"\n+ }',
+        },
+      ],
+    },
+  });
+  const activePanel = () =>
+    document.querySelector('.file-tab-content[data-state="active"]')!;
+  expect(activePanel().querySelector(".diff-count.added")?.textContent).toBe(
+    "+1",
+  );
+  expect(activePanel().querySelector(".diff-count.removed")?.textContent).toBe(
+    "−1",
+  );
+  expect(
+    [...activePanel().querySelectorAll(".before .diff-line-number")].map(
+      (el) => el.textContent,
+    ),
+  ).toEqual(["8", "9"]);
+
+  clickButton(/auth\.json/);
+  expect(activePanel().querySelector(".diff-count.added")?.textContent).toBe(
+    "+3",
+  );
+  expect(activePanel().querySelector(".diff-count.removed")?.textContent).toBe(
+    "−0",
+  );
+  clickButton(/完整文件|Full file/i);
+  expect(activePanel().querySelector("pre")?.textContent).toBe(
+    '{\n  "OPENAI_API_KEY": "demo"\n}',
+  );
+});
+
+test("missing diff falls back to the file content", () => {
+  mountDialog({
+    preview: {
+      ...preview,
+      files: [{ path: "config.toml", content: "fallback = true" }],
+    },
+  });
+  expect(document.querySelector("pre")?.textContent).toBe("fallback = true");
+  expect(document.querySelector(".diff-viewer")).toBeNull();
 });
