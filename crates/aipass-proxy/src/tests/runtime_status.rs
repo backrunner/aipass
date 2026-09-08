@@ -22,56 +22,72 @@ async fn slow_http_generations_wait_without_failover_and_report_channel_activity
         let wait = Arc::new(Mutex::new(Some(wait)));
         let streaming = matches!(mode, "prefetch" | "stream" | "silent_stream");
         let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let service = service_fn(move |request: Request<Incoming>| {
-                let received = received.lock().unwrap().take().unwrap();
-                let wait = wait.lock().unwrap().take().unwrap();
-                async move {
-                    request.into_body().collect().await.unwrap();
-                    received.send(()).unwrap();
-                    let mut wait = Some(wait);
-                    if matches!(mode, "headers" | "cancel") {
-                        let _ = wait.take().unwrap().await;
-                    }
-                    let first = if mode == "prefetch" {
-                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"slow\"}}\n\n"
-                    } else if streaming {
-                        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
-                    } else {
-                        "{\"output\":"
-                    };
-                    let last = if streaming {
-                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"slow\",\"status\":\"completed\",\"output\":[]}}\n\n"
-                    } else {
-                        "[]}"
-                    };
-                    let body = stream::once(async move {
-                        Ok::<_, BoxError>(Frame::data(Bytes::from_static(first.as_bytes())))
-                    })
-                    .chain(stream::once(async move {
-                        if let Some(wait) = wait {
-                            let _ = wait.await;
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let received = received.clone();
+                let wait = wait.clone();
+                let service = service_fn(move |request: Request<Incoming>| {
+                    let received = received.clone();
+                    let wait = wait.clone();
+                    async move {
+                        if request.method() == http::Method::GET
+                            && request.uri().path() == "/"
+                            && !request.headers().contains_key(header::AUTHORIZATION)
+                        {
+                            return Ok::<_, Infallible>(error_response(
+                                StatusCode::NOT_FOUND,
+                                "fixture",
+                            ));
                         }
-                        Ok::<_, BoxError>(Frame::data(Bytes::from_static(last.as_bytes())))
-                    }));
-                    Ok::<_, Infallible>(
-                        Response::builder()
-                            .header(
-                                header::CONTENT_TYPE,
-                                if streaming {
-                                    "text/event-stream"
-                                } else {
-                                    "application/json"
-                                },
-                            )
-                            .body(BodyExt::boxed_unsync(StreamBody::new(body)))
-                            .unwrap(),
-                    )
-                }
-            });
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(TokioIo::new(socket), service)
-                .await;
+                        let received = received.lock().unwrap().take().unwrap();
+                        let wait = wait.lock().unwrap().take().unwrap();
+                        request.into_body().collect().await.unwrap();
+                        received.send(()).unwrap();
+                        let mut wait = Some(wait);
+                        if matches!(mode, "headers" | "cancel") {
+                            let _ = wait.take().unwrap().await;
+                        }
+                        let first = if mode == "prefetch" {
+                            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"slow\"}}\n\n"
+                        } else if streaming {
+                            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
+                        } else {
+                            "{\"output\":"
+                        };
+                        let last = if streaming {
+                            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"slow\",\"status\":\"completed\",\"output\":[]}}\n\n"
+                        } else {
+                            "[]}"
+                        };
+                        let body = stream::once(async move {
+                            Ok::<_, BoxError>(Frame::data(Bytes::from_static(first.as_bytes())))
+                        })
+                        .chain(stream::once(async move {
+                            if let Some(wait) = wait {
+                                let _ = wait.await;
+                            }
+                            Ok::<_, BoxError>(Frame::data(Bytes::from_static(last.as_bytes())))
+                        }));
+                        Ok::<_, Infallible>(
+                            Response::builder()
+                                .header(
+                                    header::CONTENT_TYPE,
+                                    if streaming {
+                                        "text/event-stream"
+                                    } else {
+                                        "application/json"
+                                    },
+                                )
+                                .body(BodyExt::boxed_unsync(StreamBody::new(body)))
+                                .unwrap(),
+                        )
+                    }
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .keep_alive(false)
+                    .serve_connection(TokioIo::new(socket), service)
+                    .await;
+            }
         });
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
@@ -88,6 +104,7 @@ async fn slow_http_generations_wait_without_failover_and_report_channel_activity
                 ..RetryPolicy::default()
             },
         );
+        let backup_target = route.targets[1].config.id.to_string();
         let mut config = RuntimeConfig::from_routes(available_addr().to_string(), vec![route]);
         config.upstream_proxy.mode = UpstreamProxyMode::Direct;
         let proxy = ProxyHandle::start(config.clone(), store).unwrap();
@@ -156,11 +173,36 @@ async fn slow_http_generations_wait_without_failover_and_report_channel_activity
         .await
         .unwrap();
         assert_eq!(proxy.status().channels[0].in_flight_requests, 0);
+        // Local development tools can probe new listeners with GET /. Such
+        // traffic is unrelated to this generation; still reject any API or
+        // authenticated request, and independently assert no backup attempt.
+        while let Ok(accepted) =
+            tokio::time::timeout(Duration::from_millis(20), fallback.accept()).await
+        {
+            let (mut socket, _) = accepted.expect("backup listener failed");
+            let headers = tokio::time::timeout(Duration::from_secs(1), async {
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") && headers.len() < 8192 {
+                    let byte = tokio::io::AsyncReadExt::read_u8(&mut socket).await.unwrap();
+                    headers.push(byte);
+                }
+                String::from_utf8(headers).unwrap()
+            })
+            .await
+            .expect("unexpected connection stalled at the backup");
+            assert!(
+                headers.starts_with("GET / HTTP/1.1\r\n")
+                    && !headers.to_ascii_lowercase().contains("\r\nauthorization:"),
+                "{mode}: backup received unexpected traffic"
+            );
+        }
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), fallback.accept())
-                .await
-                .is_err(),
-            "{mode}: backup must remain untouched"
+            proxy
+                .logs()
+                .unwrap()
+                .iter()
+                .all(|entry| !entry.message.contains(&backup_target)),
+            "{mode}: proxy must never attempt the backup"
         );
         server.abort();
     }
