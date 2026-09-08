@@ -237,6 +237,8 @@
   let updateRestartConfirmOpen = false;
   let updateInstallConfirmChecking = false;
   let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
+  $: canShowUpdatePrompt = showWorkspace && !showAuthScreen && !status.initialSyncPending && !lockTransitioning;
+  $: if (!canShowUpdatePrompt) updateRestartConfirmOpen = false;
   let selectedId = "";
   let showForm = false;
   let showOAuthConnect = false;
@@ -532,6 +534,7 @@
   }
 
   async function installAvailableUpdate() {
+    if (!canShowUpdatePrompt) return;
     updateInstalling = true;
     updateProgress = { phase: "downloading", downloadedBytes: 0, totalBytes: null };
     updateInstallError = "";
@@ -557,10 +560,12 @@
   }
 
   async function requestInstallAvailableUpdate() {
-    if (updateInstalling || updateInstallConfirmChecking) return;
+    if (!canShowUpdatePrompt || updateInstalling || updateInstallConfirmChecking) return;
     updateInstallConfirmChecking = true;
     try {
-      if (await checkProxyRunningForUpdate()) {
+      const proxyRunning = await checkProxyRunningForUpdate();
+      if (!canShowUpdatePrompt) return;
+      if (proxyRunning) {
         updateRestartConfirmOpen = true;
         return;
       }
@@ -3331,7 +3336,7 @@
     {/if}
   {/if}
 
-  {#if updateAvailableVersion}
+  {#if canShowUpdatePrompt && updateAvailableVersion}
     <div class="update-banner">
       <Banner tone="info">
         <span class="update-banner-text">{$t("updates.bannerTitle", { version: updateAvailableVersion })}</span>
@@ -3366,10 +3371,12 @@
   {/if}
 </div>
 
-<UpdateRestartConfirmModal
-  bind:open={updateRestartConfirmOpen}
-  onConfirm={() => installAvailableUpdate()}
-/>
+{#if canShowUpdatePrompt}
+  <UpdateRestartConfirmModal
+    bind:open={updateRestartConfirmOpen}
+    onConfirm={() => installAvailableUpdate()}
+  />
+{/if}
 
 <ConfirmModal
   bind:open={ccSwitchDuplicateOpen}

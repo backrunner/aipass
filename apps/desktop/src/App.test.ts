@@ -11,9 +11,77 @@ vi.mock("./lib/services/updates", () => ({ UPDATE_PROGRESS_EVENT: "update", reso
 vi.mock("./lib/build", () => ({ buildTimeIso: "2026-09-07T00:00:00Z", buildTimeLabel: () => "fixture" }));
 vi.mock("@vinlemon/window-controls/window-controls.js", () => ({}));
 import App from "./App.svelte";
+import * as updates from "./lib/services/updates";
 
 let app: ReturnType<typeof mount>;
-afterEach(async () => { if (app) await unmount(app); document.body.innerHTML = ""; vi.unstubAllGlobals(); delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__; });
+afterEach(async () => { if (app) await unmount(app); document.body.innerHTML = ""; vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__; });
+
+test("update notices wait for unlock and close on lock, including a pending restart check", async () => {
+  vi.useFakeTimers();
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key)
+  });
+  vi.spyOn(updates, "checkForUpdates").mockResolvedValue({ currentVersion: "0.2.0-beta.1", available: true, latestVersion: "0.2.0-beta.2" });
+  vi.spyOn(updates, "downloadUpdate").mockResolvedValue("0.2.0-beta.2");
+  const install = vi.spyOn(updates, "installUpdate");
+  let locked = true;
+  let pendingProxyStatus: Promise<unknown> | undefined;
+  const proxyStatus = { running: true, enabled: true, activeRoutes: 1, requests: 0, failures: 0 };
+  invoke.mockImplementation(async (command: string) => {
+    switch (command) {
+      case "vault_status": return { exists: true, locked };
+      case "preferences_load": return { locale: "en", officialAccountsImport: false };
+      case "sync_settings_load": return { mode: "local" };
+      case "entries_list": case "entries_trash_list": case "take_pending_deep_links": case "tool_config_detect": case "server_usage_timeseries": case "server_usage_hourly_timeseries": return [];
+      case "server_config_get": return { enabled: true, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+      case "server_status": return pendingProxyStatus ?? proxyStatus;
+      case "server_usage_summary": return { providers: [], models: [] };
+      case "pricing_config_get": return { groups: [], assignments: [] };
+      default: return null;
+    }
+  });
+  app = mount(App, { target: document.body });
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_startup_stage", { stage: "complete" }));
+  await vi.advanceTimersByTimeAsync(3100);
+  flushSync();
+  expect(updates.downloadUpdate).toHaveBeenCalledWith("beta");
+  expect(document.querySelector(".update-banner")).toBeNull();
+
+  const setLocked = async (value: boolean) => {
+    locked = value;
+    listeners.get("vault-status-changed")!();
+    await vi.advanceTimersByTimeAsync(600);
+    flushSync();
+    // happy-dom does not run the unlock curtain's CSS animation.
+    document.querySelector(".veil .block")?.dispatchEvent(new Event("animationend"));
+    flushSync();
+  };
+  const installButton = () => document.querySelector<HTMLButtonElement>(".update-banner button")!;
+  await setLocked(false);
+  expect(document.querySelector(".update-banner")?.textContent).toContain("0.2.0-beta.2");
+  installButton().click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".update-confirm-content")).toBeTruthy(); });
+  await setLocked(true);
+  expect(document.querySelector(".update-banner")).toBeNull();
+  expect(document.querySelector(".update-confirm-content")).toBeNull();
+  await setLocked(false);
+  expect(document.querySelector(".update-banner")).toBeTruthy();
+  expect(document.querySelector(".update-confirm-content")).toBeNull();
+
+  let finishProxyStatus!: (value: unknown) => void;
+  pendingProxyStatus = new Promise((resolve) => { finishProxyStatus = resolve; });
+  installButton().click();
+  await setLocked(true);
+  finishProxyStatus(proxyStatus);
+  await vi.advanceTimersByTimeAsync(50);
+  flushSync();
+  expect(document.querySelector(".update-confirm-content")).toBeNull();
+  expect(install).not.toHaveBeenCalled();
+});
 
 test("provider edit persists concurrency limits and WS opt-out across reopening", async () => {
   const entry: EntrySummary = {

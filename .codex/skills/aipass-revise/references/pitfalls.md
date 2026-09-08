@@ -347,6 +347,13 @@ Newest entries last within each section.
 
 ## Update channel resolution (apps/desktop)
 
+### Update notices appeared before vault unlock
+- **Symptom**: a background update download displayed its banner over the locked or onboarding screen; restart confirmation could survive a lock.
+- **Root cause**: `apps/desktop/src/App.svelte` rendered the banner solely from the available version and mounted the restart dialog outside the authenticated workspace.
+- **Fix**: gate both surfaces on the visible unlocked workspace, clear confirmation on lock, and recheck visibility after the asynchronous proxy-status probe.
+- **Guardrail**: keep background update results pending until unlock; hide update notices and close confirmation when locking. Exercise lock/unlock and delayed restart checks in `App.test.ts`.
+- **Watch points**: automatic update banner, restart confirmation and settings update UI.
+
 ### Stored channel preference outlived the build's version family
 - **Symptom**: after a beta build updated to a stable release, the app kept polling the beta update feed (and vice versa).
 - **Root cause**: every call site used `getStoredUpdateChannel() ?? inferUpdateChannel(version)`, so a manual/stale localStorage choice permanently overrode the channel implied by the running build.
@@ -360,6 +367,20 @@ Newest entries last within each section.
 - **Fix**: align both tag patterns and exercise the public nightly feed against revised, older, draft, and beta release candidates.
 - **Guardrail**: when changing release tag syntax, update both release validation and the deployed channel resolver. Verify the public feed selects the published version before declaring the release complete.
 - **Watch points**: `.github/workflows/release.yml`, `apps/web/src/worker.ts`, and `apps/web/scripts/worker.test.mjs`.
+
+### Updating the desktop stopped the installer itself
+- **Symptom**: installing nightly closed the app before replacing its bundle; every subsequent launch retried the cached update and exited again. Logs repeated `desktop.update.install_pending` → `desktop.singleton.quit_request` → `desktop.exit.completed`, still on the old version.
+- **Root cause**: `apps/desktop/src-tauri/src/updates.rs:421,437` called `stop_tray_autostart_for_current_desktop`, which sets the supervisor's kill-child flag and sends Quit to the same desktop singleton that is running the installer (`crates/aipass-agent/src/autostart.rs:400`). A launchd-started desktop can also die when its supervisor's process group is removed.
+- **Fix**: use a separate tray suspension operation without Quit or a kill-child flag, preserve tray children with `AbandonProcessGroup`, and restore supervision on failed installs. Keep the tray UI alive until the normal restart/exit path. Back up and remove a stuck pending-update cache to recover an already affected old build; that build cannot install its own fix reliably.
+- **Guardrail**: update preparation must keep the installing desktop alive for both manual and login launches; stop/uninstall APIs are for intentional termination. Exercise actual launchd suspension, stale stop flags, child survival and supervisor restoration in `suspending_tray_supervision_preserves_the_desktop_child`. Both workflows must run `scripts/verify-macos-runtime.mjs` on the finished DMG and updater archive; require responsive main/tray startup and manual/cached install → new-process restart → cleared cache. Keep original signatures and retain failure diagnostics. See `docs/desktop-artifact-validation.md`; signature and bundle checks alone do not validate update lifecycle.
+- **Watch points**: both agent-available/unavailable branches in `stop_runtime_processes`, `install_pending_update`, `install_update`, tray Quit, and macOS supervisor/plist generation.
+
+### Background readiness restarted the agent during bundle replacement
+- **Symptom**: the finished-artifact install test failed with `AIPass agent did not exit before update`; logs showed a new agent PID between authenticated shutdown and installation.
+- **Root cause**: desktop status polls and the tray watchdog called `ensure_agent_running_for_desktop` while `updates.rs::stop_runtime_processes` was waiting for the agent to exit. Stopping launchd alone did not stop desktop-owned restart attempts.
+- **Fix**: serialize bundle installation against startup and autostart repair with `runtime_lifecycle::RUNTIME`. Wait for in-flight startup, reject new readiness/repair attempts without blocking the native event loop, and release the update guard before failure recovery.
+- **Guardrail**: hold the runtime update guard from agent shutdown through bundle replacement and process restart. Test queued startup, watchdog rejection and failed-update recovery in `update_waits_for_existing_startup_and_rejects_watchdog_restarts`; keep ordinary background polling active in the artifact install scenarios so this race remains observable.
+- **Watch points**: desktop startup warmup, all desktop/tray readiness calls, login-agent repair and both update-install entry points.
 
 ## Tray vs UI vs agent validation
 
