@@ -378,15 +378,17 @@ fn restore_agent_after_update_failure(app: &AppHandle) {
         return;
     };
     let _ = crate::ensure_agent_running_for_desktop(&client);
-    if crate::runtime_check::active() {
-        return;
-    }
     #[cfg(target_os = "macos")]
-    if let Ok(desktop_binary) = std::env::current_exe() {
-        let _ = crate::ensure_tray_autostart_for_current_desktop(
-            &desktop_binary,
-            &client.config.vault_dir,
-        );
+    {
+        if crate::runtime_check::active() {
+            return;
+        }
+        if let Ok(desktop_binary) = std::env::current_exe() {
+            let _ = crate::ensure_tray_autostart_for_current_desktop(
+                &desktop_binary,
+                &client.config.vault_dir,
+            );
+        }
     }
 }
 
