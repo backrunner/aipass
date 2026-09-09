@@ -9,7 +9,8 @@
   export let formMode: FormMode = "add";
   export let draft: Draft;
   export let error = "";
-  export let onSave: () => MaybePromise = () => {};
+  export let saving = false;
+  export let onSave: () => MaybePromise<boolean | void> = () => {};
   export let onClose: () => MaybePromise = () => {};
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
   export let onInferDraftFromEndpoint: () => MaybePromise = () => {};
@@ -25,7 +26,7 @@
       dialogOpen = true;
       return;
     }
-    if (closing) return;
+    if (closing || saving) return;
     closing = true;
     dialogOpen = false;
     setTimeout(() => onClose(), 220);
@@ -39,15 +40,19 @@
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
     <Dialog.Overlay class="provider-dialog-overlay" />
-    <Dialog.Content class="provider-dialog-content">
-      <form class="modal" on:submit|preventDefault={() => onSave()}>
+    <Dialog.Content
+      class="provider-dialog-content"
+      onEscapeKeydown={(event) => { if (saving) event.preventDefault(); }}
+      onInteractOutside={(event) => { if (saving) event.preventDefault(); }}
+    >
+      <form class="modal" aria-busy={saving} on:submit|preventDefault={() => { if (!saving) void onSave(); }}>
         <header class="modal-header">
           <Dialog.Title class="provider-dialog-title">
             {formMode === "add" ? $t("providerList.addProvider") : $t("providerModal.editProvider")}
           </Dialog.Title>
           <Dialog.Close>
             {#snippet child({ props })}
-              <button {...props} type="button" class="close-btn" aria-label={$t("common.close")}>
+              <button {...props} disabled={saving} type="button" class="close-btn" aria-label={$t("common.close")}>
                 <X size={16} />
               </button>
             {/snippet}
@@ -72,8 +77,8 @@
         </div>
 
         <footer class="modal-footer">
-          <Button variant="ghost" on:click={handleClose}>{$t("common.cancel")}</Button>
-          <Button variant="primary" type="submit">
+          <Button variant="ghost" disabled={saving} on:click={handleClose}>{$t("common.cancel")}</Button>
+          <Button variant="primary" type="submit" loading={saving}>
             {formMode === "add" ? $t("providerList.addProvider") : $t("providerModal.saveChanges")}
           </Button>
         </footer>

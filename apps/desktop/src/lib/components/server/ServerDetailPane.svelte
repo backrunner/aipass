@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Badge, Banner, Button, IconButton } from "@aipass/ui";
-  import { AlertTriangle, Check, Copy, FileText, Pencil, Play, RotateCw, Server, Square, Trash2, X } from "lucide-svelte";
+  import { AlertTriangle, Check, Copy, FileText, LoaderCircle, Pencil, Play, RotateCw, Server, Square, Trash2, X } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
 
   import { t } from "../../stores/i18n";
@@ -54,6 +54,7 @@
   }
   let clearUsageConfirmOpen = false;
   let logsOpen = false;
+  let logsOpening = false;
   let ProxyLogsDialog: typeof import("./ProxyLogsDialog.svelte").default | undefined;
   let lastBindAddr = config.bindAddr;
   $: if (config.bindAddr !== lastBindAddr) {
@@ -130,10 +131,16 @@
   }
 
   async function openProxyLogs() {
-    if (!ProxyLogsDialog) {
-      ProxyLogsDialog = (await import("./ProxyLogsDialog.svelte")).default;
+    if (logsOpening) return;
+    logsOpening = true;
+    try {
+      if (!ProxyLogsDialog) {
+        ProxyLogsDialog = (await import("./ProxyLogsDialog.svelte")).default;
+      }
+      logsOpen = true;
+    } finally {
+      logsOpening = false;
     }
-    logsOpen = true;
   }
 </script>
 
@@ -168,9 +175,11 @@
       </div>
     </div>
     <div class="actions">
-      <IconButton size="sm" label={$t("server.viewLogs")} on:click={openProxyLogs}><FileText size={15} /></IconButton>
+      <IconButton size="sm" label={$t(logsOpening ? "common.loading" : "server.viewLogs")} disabled={logsOpening} on:click={openProxyLogs}>
+        {#if logsOpening}<LoaderCircle size={15} class="logs-opening" aria-hidden="true" />{:else}<FileText size={15} />{/if}
+      </IconButton>
       {#if status.running && status.degraded}
-        <button type="button" class="status-trigger degraded" on:click={openProxyLogs} title={$t("server.viewLogs")}>
+        <button type="button" class="status-trigger degraded" disabled={logsOpening} on:click={openProxyLogs} title={$t("server.viewLogs")}>
           <AlertTriangle size={14} /> {$t("server.degraded")}
         </button>
       {:else}
@@ -255,13 +264,21 @@
     </Card>
 
     <IntegrationCard
+      localProxy
       tools={proxyIntegrationTools}
       detections={toolDetections}
       resetKey={integrateRoute?.id ?? ""}
       disabled={Boolean(busy) || !integrateRoute?.token}
       onRefresh={onRefreshToolDetections}
-      onPreview={(tool) => integrateRoute ? onPreviewIntegration(tool.id, integrateRoute.id) : Promise.reject(new Error("no active route"))}
-      onApply={(tool) => integrateRoute ? onApplyIntegration(tool.id, integrateRoute.id) : Promise.reject(new Error("no active route"))}
+      onPreview={async (tool) => {
+        if (!integrateRoute) throw new Error("no active route");
+        const routeId = integrateRoute.id;
+        const apply = onApplyIntegration;
+        return {
+          preview: await onPreviewIntegration(tool.id, routeId),
+          apply: () => apply(tool.id, routeId)
+        };
+      }}
     >
       <p class="hint">{$t("server.integrateDesc")}</p>
       {#if integrateRoute}
@@ -319,6 +336,11 @@
 {/if}
 
 <style lang="scss">
+  :global(.logs-opening) { animation: logs-opening-spin 1s linear infinite; }
+  @keyframes logs-opening-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.logs-opening) { animation: none; }
+  }
   .detail {
     display: flex;
     flex-direction: column;

@@ -1,6 +1,9 @@
 import type { ProviderEntry } from "@aipass/schemas";
 import { emptyDraft } from "@aipass/ui";
 import { flushSync, mount, unmount, type ComponentProps } from "svelte";
+import { fromStore, writable } from "svelte/store";
+import { setLocale } from "../../stores/i18n";
+import type { ToolConfigPreview } from "../../types";
 import { afterEach, expect, test, vi } from "vitest";
 import ProviderDetailPane from "./ProviderDetailPane.svelte";
 
@@ -34,6 +37,39 @@ test("copy, reveal and key editing are separate keyboard-focusable actions", () 
   flushSync();
   expect(document.querySelector(".credential-inline-editor input[type='password']")).toBeTruthy();
   expect(onCopySecret).toHaveBeenCalledTimes(1);
+});
+
+test("provider selection invalidates previews and confirmation retains the previewed provider and Codex mode", async () => {
+  setLocale("en");
+  const selection = writable({ ...selected, interfaceType: "openai_compatible" as const });
+  const state = fromStore(selection);
+  let finish!: () => void;
+  const preview = vi.fn(async (request) => {
+    if (request.id === "provider") await new Promise<void>(resolve => { finish = resolve; });
+    return {
+      tool: request.tool, mode: request.mode, entryId: request.id, entryTitle: request.id,
+      targetPath: "/fixture/config.toml", summary: "fixture", preview: "+ fixture"
+    } as ToolConfigPreview;
+  });
+  const apply = vi.fn(async (request) => ({
+    tool: request.tool, mode: request.mode, entryId: request.id, entryTitle: request.id,
+    targetPath: "/fixture/config.toml", summary: "fixture", operationId: "fixture", backupPath: "/fixture/backup"
+  }));
+  app = mount(ProviderDetailPane, { target: document.body, props: {
+    get selected() { return state.current; }, draft: emptyDraft(), probeResult: undefined,
+    usageProbeResult: undefined, onPreviewToolConfig: preview, onApplyToolConfig: apply
+  } });
+  flushSync();
+  const write = () => document.querySelector<HTMLButtonElement>(".tool-side .btn-secondary")!;
+  write().click(); flushSync();
+  expect(preview).toHaveBeenLastCalledWith({ tool: "codex", mode: "plaintext", id: "provider", codexApiKeyMode: "auth_json" });
+  selection.update(entry => ({ ...entry, id: "provider-b" })); flushSync();
+  finish(); await Promise.resolve(); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  write().click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeTruthy(); });
+  document.querySelector<HTMLButtonElement>(".dialog-actions .btn-primary")!.click();
+  await vi.waitFor(() => expect(apply).toHaveBeenCalledWith({ tool: "codex", mode: "plaintext", id: "provider-b", codexApiKeyMode: "auth_json" }));
 });
 
 test("disables save and cancel while a provider update is pending", async () => {

@@ -74,7 +74,6 @@
   export let usageProbeResult: UsageProbeResult | undefined;
   export let usageProbing = false;
   export let notice = "";
-  export let error = "";
   export let editMode = false;
   export let formMode: FormMode = "edit";
   export let draft: Draft;
@@ -249,7 +248,7 @@
       );
       cancelSecretEdit();
     } catch {
-      // Parent keeps the visible error and this editor remains open.
+      // Parent reports the error in a toast and this editor remains open.
     }
   }
   $: hasQuota = Boolean(
@@ -337,6 +336,16 @@
 
   function setCodexIntegrationMode(mode: string) {
     codexIntegrationMode = mode as CodexIntegrationMode;
+  }
+
+  async function previewIntegration(tool: IntegrationToolDefinition) {
+    if (!selected) throw new Error("no provider selected");
+    const request = integrationRequest(tool, selected.id);
+    const apply = onApplyToolConfig;
+    return {
+      preview: await onPreviewToolConfig(request),
+      apply: () => apply(request)
+    };
   }
 
   function fullyMasked(): string {
@@ -510,7 +519,6 @@
 
     <div class="detail-body">
       {#if notice}<Banner tone="success">{notice}</Banner>{/if}
-      {#if error}<Banner tone="danger">{error}</Banner>{/if}
       {#if selected.websocketWarning}<Banner tone="warning">{$t("providerForm.websocketAutoDisabled")}</Banner>{/if}
       {#if saving && draft.websocketPreferenceTouched && draft.supportsWebsockets && selected.supportsWebsockets === false}
         <Banner tone="info">{$t("providerForm.websocketProbing")}</Banner>
@@ -1018,9 +1026,8 @@
             codexMode={codexIntegrationMode}
             codexModeOptions={codexIntegrationModeOptions}
             onCodexModeChange={setCodexIntegrationMode}
-            resetKey={selected.id}
-            onPreview={(tool) => onPreviewToolConfig(integrationRequest(tool, selected.id))}
-            onApply={(tool) => onApplyToolConfig(integrationRequest(tool, selected.id))}
+            resetKey={`${selected.id}:${codexIntegrationMode}:${isOfficialOauth}`}
+            onPreview={previewIntegration}
           />
         {/if}
       {/if}

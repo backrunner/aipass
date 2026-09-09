@@ -28,6 +28,7 @@
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
+  import ErrorToast from "./lib/components/shared/ErrorToast.svelte";
   import ConfirmModal from "./lib/components/shared/ConfirmModal.svelte";
   import UpdateRestartConfirmModal from "./lib/components/shared/UpdateRestartConfirmModal.svelte";
   import type {
@@ -224,7 +225,26 @@
   let preferencesSaveChain: Promise<void> = Promise.resolve();
   let query = "";
   let copied = "";
+  type ErrorTarget = "auth" | "provider-form" | "settings" | "toast";
   let error: MessageValue = "";
+  let errorTarget: ErrorTarget = "auth";
+  let errorToast: { id: number; message: MessageValue } | undefined;
+  let errorSequence = 0;
+
+  function clearError() {
+    error = "";
+    errorToast = undefined;
+  }
+
+  function reportError(message: MessageValue, target: ErrorTarget = status.locked || !status.exists ? "auth" : "toast") {
+    error = message;
+    // Capture the destination when the operation fails; navigation must never
+    // turn a previous dialog error into feedback on the selected provider.
+    errorTarget = target;
+    if (message && target === "toast") {
+      errorToast = { id: ++errorSequence, message };
+    }
+  }
   let notice: MessageValue = "";
   let errorText = "";
   let noticeText = "";
@@ -241,6 +261,7 @@
   $: if (!canShowUpdatePrompt) updateRestartConfirmOpen = false;
   let selectedId = "";
   let showForm = false;
+  let providerSaving = false;
   let showOAuthConnect = false;
   let formMode: FormMode = "add";
   let detailEditMode = false;
@@ -749,7 +770,7 @@
           statusReady = true;
           setAuthMode("unlock");
         }
-        error = String(err);
+        reportError(String(err));
         logStartupStage("error");
       } finally {
         // Retry after the async startup work in case the initial IPC call raced
@@ -806,7 +827,7 @@
   async function importExistingVault(request: VaultImportSource) {
     if (onboardingImportBusy || authBusy) return;
     onboardingImportBusy = true;
-    error = "";
+    clearError();
     try {
       if (request.source === "backup" || request.source === "vault") {
         await invokeTauri("vault_import_encrypted", { request: { input: request.path, exportPassword: request.password } });
@@ -818,19 +839,19 @@
       }
       await refreshStatus();
       await loadSyncSettings();
-    } catch (err) { error = String(err); }
+    } catch (err) { reportError(String(err)); }
     finally { onboardingImportBusy = false; }
   }
 
   async function checkCloudForVault() {
     if (cloudCheckBusy || onboardingImportBusy) return;
     cloudCheckBusy = true;
-    error = "";
+    clearError();
     try {
       const report = await invokeTauri<SyncReport>("sync_cloud", { request: { provider: "icloud" } });
-      if (report.message) error = report.message;
+      if (report.message) reportError(report.message);
       await refreshStatus();
-    } catch (err) { error = String(err); }
+    } catch (err) { reportError(String(err)); }
     finally { cloudCheckBusy = false; }
   }
 
@@ -849,7 +870,7 @@
         status = { exists: true, locked: true };
         setAuthMode("unlock");
       }
-      error = String(err);
+      reportError(String(err));
     } finally {
       statusReady = true;
     }
@@ -857,9 +878,9 @@
 
   async function createVault(localOnly = false) {
     if (authBusy) return;
-    error = "";
+    clearError();
     if (createPassword !== createPasswordConfirm) {
-      error = localizedMessage("notice.passwordsDoNotMatch");
+      reportError(localizedMessage("notice.passwordsDoNotMatch"));
       return;
     }
     authBusy = "create";
@@ -872,7 +893,7 @@
       if (response.phase !== "succeeded") {
         const message = response.error ?? localizedMessage("error.vaultCreationFailed");
         await refreshStatus();
-        if (!status.exists) error = message;
+        if (!status.exists) reportError(message);
         return;
       }
       status = {
@@ -891,7 +912,7 @@
       await openPendingServerView();
       openPendingDeepLink();
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       authBusy = "";
     }
@@ -899,7 +920,7 @@
 
   async function unlockVault() {
     if (authBusy) return;
-    error = "";
+    clearError();
     authBusy = "unlock";
     await flushUiBeforeBlockingWork();
     try {
@@ -908,7 +929,7 @@
       });
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        error = unlockErrorMessage(response);
+        reportError(unlockErrorMessage(response));
         return;
       }
       status = {
@@ -925,7 +946,7 @@
       await openPendingServerView();
       openPendingDeepLink();
     } catch (err) {
-      error = err instanceof Error ? err.message : localizedMessage("error.unlockFailed");
+      reportError(err instanceof Error ? err.message : localizedMessage("error.unlockFailed"));
     } finally {
       authBusy = "";
     }
@@ -933,13 +954,13 @@
 
   async function recoverVault() {
     if (authBusy) return;
-    error = "";
+    clearError();
     if (!recoveryKeyInput.trim()) {
-      error = localizedMessage("notice.recoveryKeyRequired");
+      reportError(localizedMessage("notice.recoveryKeyRequired"));
       return;
     }
     if (recoveryPassword !== recoveryPasswordConfirm) {
-      error = localizedMessage("notice.passwordsDoNotMatch");
+      reportError(localizedMessage("notice.passwordsDoNotMatch"));
       return;
     }
     authBusy = "recover";
@@ -953,7 +974,7 @@
       });
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        error = response.error ?? localizedMessage("error.vaultRecoveryFailed");
+        reportError(response.error ?? localizedMessage("error.vaultRecoveryFailed"));
         return;
       }
       status = {
@@ -970,7 +991,7 @@
       await openPendingServerView();
       openPendingDeepLink();
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       authBusy = "";
     }
@@ -993,14 +1014,14 @@
 
   async function resetVault() {
     if (resetBusy || resetConfirm.trim() !== "RESET") return;
-    error = "";
+    clearError();
     resetBusy = true;
     await flushUiBeforeBlockingWork();
     try {
       const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_reset");
       const response = await waitForVaultAuthTask(started.taskId);
       if (response.phase !== "succeeded") {
-        error = response.error ?? localizedMessage("error.vaultResetFailed");
+        reportError(response.error ?? localizedMessage("error.vaultResetFailed"));
         return;
       }
       status = { exists: false, locked: true };
@@ -1013,7 +1034,7 @@
       resetConfirm = "";
       setAuthMode("create");
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       resetBusy = false;
     }
@@ -1022,7 +1043,7 @@
   async function copyRecoveryKit() {
     if (!pendingRecoveryKey) return;
     if (!navigator.clipboard?.writeText) {
-      error = localizedMessage("notice.clipboardUnavailable");
+      reportError(localizedMessage("notice.clipboardUnavailable"));
       return;
     }
     try {
@@ -1033,7 +1054,7 @@
         copied = "";
       }, 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -1049,7 +1070,7 @@
     const lockPromise = invokeTauri<VaultStatus>("vault_lock").then((next) => {
       lockStatus = next;
     }).catch((err) => {
-      error = String(err);
+      reportError(String(err));
     });
 
     // Reset transient UI state behind the cover. Wait for the cover to be in
@@ -1096,6 +1117,8 @@
   }
 
   function clearSensitiveUnlockedState() {
+    errorToast = undefined;
+    showOAuthConnect = false;
     entries = [];
     countEntries = [];
     archivedEntries = [];
@@ -1302,7 +1325,7 @@
   async function refreshOfficialAccounts() {
     if (!officialAccountsImport || officialAccountsBusy) return;
     officialAccountsBusy = true;
-    error = "";
+    clearError();
     try {
       const results = await invokeTauri<OfficialAccountRefreshResult[]>("official_accounts_refresh", { providerIds: ["openai", "anthropic", "xai"] });
       const importResults = await invokeTauri<OfficialAccountRefreshResult[]>("ccswitch_import");
@@ -1310,7 +1333,7 @@
       const combined = [...(results ?? []), ...(importResults ?? [])];
       const failures = combined.filter((item) => item.error);
       if (failures.length > 0) {
-        error = failures.map((item) => officialAccountFailureMessage(item, $t)).join("; ");
+        reportError(failures.map((item) => officialAccountFailureMessage(item, $t)).join("; "));
       }
       const succeeded = combined.length - failures.length;
       if (succeeded > 0) {
@@ -1319,7 +1342,7 @@
         setTimeout(() => (notice = ""), 1800);
       }
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       officialAccountsBusy = false;
     }
@@ -1399,7 +1422,7 @@
   }
 
   function openAdd() {
-    error = "";
+    clearError();
     formMode = "add";
     draft = emptyDraft();
     protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
@@ -1407,7 +1430,7 @@
   }
 
   function openOAuthConnect() {
-    error = "";
+    clearError();
     showOAuthConnect = true;
   }
 
@@ -1442,7 +1465,7 @@
 
   async function openEdit(entry: ProviderEntry) {
     const generation = ++editRequestGeneration;
-    error = "";
+    clearError();
     let apiKey = "";
     if (entry.credentialKind !== "oauth" && entry.secretRefs[0]) {
       try { apiKey = await readSecretForEdit(entry.secretRefs[0].id); } catch { return; }
@@ -1530,33 +1553,37 @@
     detailEditMode = false;
     draft = emptyDraft();
     protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
-    error = "";
+    clearError();
   }
 
   async function saveDetailEdit() {
-    await saveProvider();
-    if (!error) {
+    if (await saveProvider()) {
       detailEditMode = false;
     }
   }
 
-  async function saveProvider() {
+  async function saveProvider(): Promise<boolean> {
+    if (providerSaving || status.locked) return false;
+    clearError();
+    const entry = selected;
+    const generation = editRequestGeneration;
+    const current = () => generation === editRequestGeneration && !status.locked;
     if (formMode === "edit" && draft.credentialKind !== "oauth" && selected?.secretRefs.length && !draft.apiKey.trim()) {
-      error = localizedMessage("providerForm.apiKeyRequired");
-      return;
+      reportError(localizedMessage("providerForm.apiKeyRequired"), showForm ? "provider-form" : "toast");
+      return false;
     }
     if (formMode === "add" && providerFilter === "all") {
       inferDraftFromEndpoint();
     }
     const endpointValues = [...splitEndpointList(draft.endpoint), ...splitEndpointList(draft.consoleUrl)];
     if (endpointValues.some((value) => !parseHttpEndpoint(value))) {
-      error = localizedMessage("providers.invalidEndpoint");
-      return;
+      reportError(localizedMessage("providers.invalidEndpoint"), showForm ? "provider-form" : "toast");
+      return false;
     }
     const concurrencyLimit = draft.maxConcurrentRequests ?? 0;
     if (!Number.isInteger(concurrencyLimit) || concurrencyLimit < 0 || concurrencyLimit > 4_294_967_295) {
-      error = $t("providerForm.invalidConcurrencyLimit");
-      return;
+      reportError($t("providerForm.invalidConcurrencyLimit"), showForm ? "provider-form" : "toast");
+      return false;
     }
     const provider = providerDefinitions.find((item) => item.id === draft.providerId);
     const request = {
@@ -1596,6 +1623,8 @@
       notes: draft.notes || undefined
     };
     const secretMetadata = secretMetadataFromDraft();
+    providerSaving = true;
+    let committed = false;
     try {
       if (formMode === "add") {
         const id = await invokeTauri<string>("provider_add", {
@@ -1605,25 +1634,28 @@
             secretMetadata
           }
         });
+        committed = true;
+        if (!current()) return false;
         // Reset to the default view before selecting, so a filter, query, or
         // favorites/archive view cannot hide the just-created entry.
         resetProviderListView();
         selectedId = id;
-      } else if (selected) {
+      } else if (entry) {
         // An empty header input preserves the stored headers; a non-empty one
         // is merged into them (new names appended, same-named updated).
         let headers: Array<[string, string]> | undefined;
         if (draft.header.trim()) {
           const incoming = headerPairs(draft.header);
-          if (selected.headerNames?.length) {
+          if (entry.headerNames?.length) {
             try {
-              const stored = await invokeTauri<Array<[string, string]>>("secret_reveal_headers", { id: selected.id });
+              const stored = await invokeTauri<Array<[string, string]>>("secret_reveal_headers", { id: entry.id });
+              if (!current()) return false;
               headers = mergeHeaderPairs(stored, incoming);
             } catch (err) {
               // Without the stored values a save would silently drop every
               // existing header, so abort instead of falling back to replace.
-              error = localizedMessage("providers.headersMergeFailed", { message: String(err) });
-              return;
+              if (current()) reportError(localizedMessage("providers.headersMergeFailed", { message: String(err) }), showForm ? "provider-form" : "toast");
+              return false;
             }
           } else {
             headers = incoming;
@@ -1632,11 +1664,15 @@
         await invokeTauri("provider_update", {
           request: {
             ...request,
-            id: selected.id,
+            id: entry.id,
             headers,
             secretMetadata
           }
         });
+        committed = true;
+        if (!current()) return false;
+      } else {
+        return false;
       }
       draft.apiKey = "";
       showForm = false;
@@ -1644,11 +1680,18 @@
       protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
       await loadEntries();
       openPendingDeepLink();
+      return current();
     } catch (err) {
+      if (!current()) return false;
       const message = String(err);
-      error = message.includes("websocket_probe_unconfirmed:")
+      reportError(message.includes("websocket_probe_unconfirmed:")
         ? localizedMessage("providerForm.websocketProbeFailed", { message: message.split("websocket_probe_unconfirmed:")[1].trim() })
-        : message;
+        : message, showForm ? "provider-form" : "toast");
+      // A refresh failure after the write must not leave a blank editor or
+      // invite a second creation. Report the refresh failure without reopening the editor.
+      return committed;
+    } finally {
+      providerSaving = false;
     }
   }
 
@@ -1679,7 +1722,7 @@
     try {
       return await invokeTauri<string>("secret_reveal_field", { id: selected.id, field: secretId });
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
       throw err;
     }
   }
@@ -1697,7 +1740,7 @@
 
   async function addSecondarySecret() {
     if (!selected || !newSecretLabel.trim() || !newSecretKey.trim()) return;
-    error = "";
+    clearError();
     secretBusy = "add";
     try {
       await invokeTauri("secret_add", {
@@ -1712,7 +1755,7 @@
       notice = localizedMessage("notice.secretAdded");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       secretBusy = "";
     }
@@ -1720,7 +1763,7 @@
 
   async function updateSecret(secretId: string, label: string, apiKey?: string) {
     if (!selected || !label.trim()) return;
-    error = "";
+    clearError();
     secretBusy = secretId;
     try {
       await invokeTauri("secret_update", {
@@ -1737,7 +1780,7 @@
       notice = localizedMessage("notice.secretUpdated");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
       throw err;
     } finally {
       secretBusy = "";
@@ -1746,7 +1789,7 @@
 
   async function removeSecondarySecret(secretId: string) {
     if (!selected || selected.secretRefs.length <= 1) return;
-    error = "";
+    clearError();
     secretBusy = secretId;
     try {
       await invokeTauri("secret_remove", { id: selected.id, label: secretId });
@@ -1758,7 +1801,7 @@
       notice = localizedMessage("notice.secretRemoved");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       secretBusy = "";
     }
@@ -1782,12 +1825,12 @@
 
   async function toggleFavoriteSelected(favorite: boolean) {
     if (!selected) return;
-    error = "";
+    clearError();
     try {
       await invokeTauri("provider_favorite", { id: selected.id, favorite });
       await loadEntries();
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -1992,7 +2035,7 @@
         multiplier
       });
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -2015,7 +2058,7 @@
         });
       }
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -2024,7 +2067,7 @@
     try {
       pricingConfig = await invokeTauri<PricingConfig>("pricing_group_delete", { groupId });
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -2035,7 +2078,7 @@
         effectiveFrom
       });
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -2076,7 +2119,7 @@
   }
 
   function openCcSwitchForm(link: CcSwitchProviderLink) {
-    error = "";
+    clearError();
     formMode = "add";
     const mapped = ccSwitchLinkToDraft(link);
     draft = { ...emptyDraft(), ...mapped };
@@ -2089,7 +2132,7 @@
   }
 
   function openAipassProviderForm(link: AipassProviderLink) {
-    error = "";
+    clearError();
     formMode = "add";
     const mapped = aipassProviderLinkToDraft(link);
     protocolTouched = {
@@ -2143,11 +2186,11 @@
       setTimeout(() => (notice = ""), 2400);
       return;
     }
-    error = localizedMessage("deepLink.importFailed", { message: payload.message });
+    reportError(localizedMessage("deepLink.importFailed", { message: payload.message }));
   }
 
   function handleAipassProviderImportError(payload: AipassProviderImportError) {
-    error = localizedMessage("deepLink.importFailed", { message: payload.message });
+    reportError(localizedMessage("deepLink.importFailed", { message: payload.message }));
   }
 
   function handlePendingDeepLink(pending: PendingDeepLink) {
@@ -2198,13 +2241,13 @@
     if (serverBusy) return false;
     serverBusy = "save";
     beginServerMutation();
-    error = "";
+    clearError();
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config });
       serverStatus = await invokeTauri<ProxyStatus>("server_status");
       return true;
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
       return false;
     } finally {
       endServerMutation();
@@ -2216,13 +2259,13 @@
     if (serverBusy) return;
     serverBusy = "start";
     beginServerMutation();
-    error = "";
+    clearError();
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
       serverStatus = await invokeTauri<ProxyStatus>("server_start");
       serverConfig = { ...serverConfig, enabled: serverStatus.enabled };
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       endServerMutation();
       serverBusy = "";
@@ -2233,12 +2276,12 @@
     if (serverBusy) return;
     serverBusy = "stop";
     beginServerMutation();
-    error = "";
+    clearError();
     try {
       serverStatus = await invokeTauri<ProxyStatus>("server_stop");
       serverConfig = { ...serverConfig, enabled: false };
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       endServerMutation();
       serverBusy = "";
@@ -2249,7 +2292,7 @@
     if (serverBusy) return;
     serverBusy = `token:${routeId}`;
     beginServerMutation();
-    error = "";
+    clearError();
     try {
       serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
       const result = await invokeTauri<ServerTokenResponse>("server_token_rotate", { routeId });
@@ -2262,7 +2305,7 @@
         )
       };
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     } finally {
       endServerMutation();
       serverBusy = "";
@@ -2273,7 +2316,7 @@
     if (serverBusy) return false;
     serverBusy = "clear-usage";
     beginServerMutation();
-    error = "";
+    clearError();
     try {
       await invokeTauri<void>("server_usage_clear");
       await loadServer();
@@ -2281,7 +2324,7 @@
       setTimeout(() => (notice = ""), 1800);
       return true;
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
       return false;
     } finally {
       endServerMutation();
@@ -2296,7 +2339,7 @@
   async function copyServerValue(value: string, sensitive = false) {
     if (!value) return;
     if (!navigator.clipboard?.writeText) {
-      error = localizedMessage("notice.clipboardUnavailable");
+      reportError(localizedMessage("notice.clipboardUnavailable"));
       return;
     }
     try {
@@ -2305,7 +2348,7 @@
       notice = localizedMessage("providerDetail.copied");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -2335,18 +2378,18 @@
   }
 
   async function addEntryAsRoute(entry: ProviderEntry, groupId?: string) {
-    error = "";
+    clearError();
     const secret = entry.secretRefs[0];
     if (!secret) {
-      error = localizedMessage("providers.routeNoSecret");
+      reportError(localizedMessage("providers.routeNoSecret"));
       return;
     }
     if (!proxySupportedEntry(entry, secret)) {
-      error = localizedMessage("providers.routeUnsupportedInterface");
+      reportError(localizedMessage("providers.routeUnsupportedInterface"));
       return;
     }
     if (!entry.endpoints.some((endpoint) => endpoint.kind === "api" && endpoint.url)) {
-      error = localizedMessage("providers.routeNoEndpoint");
+      reportError(localizedMessage("providers.routeNoEndpoint"));
       return;
     }
     // Reliability check: probe the credential endpoint before routing traffic to it.
@@ -2370,7 +2413,7 @@
           (target) => target.providerEntryId === entry.id && target.secretId === secret.id
         )
       ) {
-        error = localizedMessage("providers.routeAlreadyMember");
+        reportError(localizedMessage("providers.routeAlreadyMember"));
         return;
       }
       const target = buildRouteTarget(entry, secret, group.targets.length);
@@ -2410,29 +2453,38 @@
   async function rotateVault() {
     if (securityBusy) return;
     securityBusy = "rotate";
-    error = "";
+    clearError();
     try {
       await invokeTauri("vault_rotate");
       notice = localizedMessage("notice.vaultRotated");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       securityBusy = "";
     }
   }
 
   async function openSettings(tab: string = "general") {
+    clearError();
+    notice = "";
     settingsInitialTab = tab;
     showSettings = true;
-    void Promise.allSettled([loadSyncSettings(), loadDevices(), loadSyncConflicts(), loadBrowserExtensionStatus()]);
+    void Promise.allSettled([loadSyncSettings({ preserveDraft: true }), loadDevices(), loadSyncConflicts(), loadBrowserExtensionStatus()]);
   }
 
   async function closeSettings() {
     // Only persist explicit user changes; an untouched close must not write
     // the placeholder defaults over the agent's platform default sync mode.
-    if (syncSettingsDirty() && !(await saveSyncSettings())) return;
+    if (syncSettingsDirty() && !(await saveSyncSettings())) return false;
     showSettings = false;
+    return true;
+  }
+
+  async function settingsOperation<T>(action: () => T | Promise<T>): Promise<T> {
+    clearError();
+    notice = "";
+    return await action();
   }
 
   function closeProviderForm() {
@@ -2452,7 +2504,7 @@
     try {
       devices = await invokeTauri<DeviceRecord[]>("devices_list");
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       devicesLoading = false;
     }
@@ -2461,14 +2513,14 @@
   async function revokeDevice(id: string) {
     if (securityBusy) return;
     securityBusy = `revoke:${id}`;
-    error = "";
+    clearError();
     try {
       await invokeTauri("device_revoke", { id });
       notice = localizedMessage("notice.deviceRevoked");
       await Promise.all([loadDevices(), loadEntries()]);
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       securityBusy = "";
     }
@@ -2478,7 +2530,7 @@
     if (!newPassword.trim()) return;
     if (securityBusy) return;
     securityBusy = "password";
-    error = "";
+    clearError();
     try {
       await invokeTauri("vault_change_password", { request: { newPassword } });
       newPassword = "";
@@ -2486,7 +2538,7 @@
       resetAutoLock();
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       securityBusy = "";
     }
@@ -2497,7 +2549,7 @@
     const entry = selected;
     probing = true;
     probeResult = undefined;
-    error = "";
+    clearError();
     try {
       const result = await invokeTauri<ProbeResult>("provider_probe", { id: entry.id, timeoutSeconds: 15 });
       if (selected?.id === entry.id) probeResult = result;
@@ -2521,7 +2573,7 @@
     }
     usageProbing = true;
     usageProbeResult = undefined;
-    error = "";
+    clearError();
     try {
       const result = await invokeTauri<UsageProbeResult>("provider_usage_probe", {
         id: selected.id,
@@ -2560,20 +2612,16 @@
       result.source === "sub_api_v1_usage"
     );
     if (!quota && !gateway) return;
-    error = "";
-    try {
-      await invokeTauri("provider_usage_apply", {
-        id: selected.id,
-        quota,
-        gateway
-      });
-      await loadEntries();
-      notice = localizedMessage("notice.usageProbeApplied");
-      setTimeout(() => (notice = ""), 1800);
-    } catch (err) {
-      error = String(err);
-      throw err;
-    }
+    clearError();
+    // The usage dialog owns its apply error and retry state.
+    await invokeTauri("provider_usage_apply", {
+      id: selected.id,
+      quota,
+      gateway
+    });
+    await loadEntries();
+    notice = localizedMessage("notice.usageProbeApplied");
+    setTimeout(() => (notice = ""), 1800);
   }
 
   function mergeQuota(
@@ -2696,7 +2744,7 @@
     id: string;
     codexApiKeyMode?: CodexApiKeyMode;
   }) {
-    error = "";
+    clearError();
     return invokeTauri<ToolConfigPreview>("tool_config_preview", { request });
   }
 
@@ -2706,14 +2754,9 @@
     id: string;
     codexApiKeyMode?: CodexApiKeyMode;
   }) {
-    error = "";
-    try {
-      const result = await invokeTauri<ToolConfigApplyResult>("tool_config_apply", { request });
-      return result;
-    } catch (err) {
-      error = String(err);
-      throw err;
-    }
+    clearError();
+    // The integration dialog owns its apply error and retry state.
+    return invokeTauri<ToolConfigApplyResult>("tool_config_apply", { request });
   }
 
   async function loadBrowserExtensionStatus() {
@@ -2721,7 +2764,7 @@
     try {
       browserExtensionStatus = await invokeTauri<BrowserExtensionStatus>("browser_extension_status");
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       browserExtensionBusy = "";
     }
@@ -2729,14 +2772,14 @@
 
   async function installBrowserExtension() {
     browserExtensionBusy = "install";
-    error = "";
+    clearError();
     try {
       const result = await invokeTauri<BrowserExtensionInstallResult>("browser_extension_install");
       browserExtensionStatus = result.status;
       notice = localizedMessage("notice.browserExtensionInstallStarted");
       setTimeout(() => (notice = ""), 2400);
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       browserExtensionBusy = "";
     }
@@ -2746,7 +2789,7 @@
     if (!exportPath.trim() || !exportPassword.trim()) return;
     if (backupBusy) return;
     backupBusy = "export";
-    error = "";
+    clearError();
     try {
       await invokeTauri("vault_export_encrypted", {
         request: {
@@ -2758,7 +2801,7 @@
       notice = localizedMessage("notice.exportWritten");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       backupBusy = "";
     }
@@ -2768,7 +2811,7 @@
     if (!importPath.trim() || !importPassword.trim()) return;
     if (backupBusy) return;
     backupBusy = "import";
-    error = "";
+    clearError();
     try {
       await invokeTauri("vault_import_encrypted", {
         request: {
@@ -2782,7 +2825,7 @@
       await lockVault();
       notice = localizedMessage("notice.importRestored");
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       backupBusy = "";
     }
@@ -2790,7 +2833,7 @@
 
   async function runSync() {
     if (syncState === "syncing") return;
-    error = "";
+    clearError();
     if (syncMode === "webdav" && !webdavUrl.trim()) return;
     if (syncMode === "local" && !syncFolder.trim()) return;
     if (!(await saveSyncSettings())) return;
@@ -2799,7 +2842,7 @@
     try {
       const report = await invokeTauri<SyncReport>("sync_run_configured");
       syncState = report.status;
-      error = report.message ?? "";
+      reportError(report.message ?? "", showSettings ? "settings" : undefined);
       notice = report.message
         ? ""
         : localizedMessage("notice.syncSummary", {
@@ -2810,7 +2853,7 @@
       await Promise.all([loadEntries(), loadSyncConflicts()]);
     } catch (err) {
       syncState = "offline";
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     }
   }
 
@@ -2826,7 +2869,7 @@
         }
       });
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       conflictsLoading = false;
     }
@@ -2835,7 +2878,7 @@
   async function resolveSyncConflict(conflict: SyncConflict, action: "accept" | "discard") {
     const key = `${action}:${conflict.scope}:${conflict.conflictPath}`;
     conflictBusy = key;
-    error = "";
+    clearError();
     try {
       const provider = cloudSyncProviderForMode(syncMode);
       await invokeTauri(action === "accept" ? "sync_accept_conflict" : "sync_discard_conflict", {
@@ -2852,7 +2895,7 @@
       await loadEntries();
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     } finally {
       conflictBusy = "";
     }
@@ -3025,7 +3068,7 @@
       hasSavedWebdavPassword = settings.hasWebdavPassword;
       loadedSyncSettings = { mode: syncMode, syncFolder, webdavUrl, webdavUsername };
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     }
   }
 
@@ -3041,6 +3084,8 @@
   }
 
   async function saveSyncSettings(options: { clearWebdavPassword?: boolean } = {}) {
+    clearError();
+    notice = "";
     try {
       const settings = await invokeTauri<SyncSettings>("sync_settings_save", {
         request: {
@@ -3059,9 +3104,10 @@
       webdavPassword = "";
       hasSavedWebdavPassword = settings.hasWebdavPassword;
       loadedSyncSettings = { mode: syncMode, syncFolder, webdavUrl, webdavUsername };
+      notice = localizedMessage("settings.syncSettingsSaved");
       return true;
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
       return false;
     }
   }
@@ -3087,7 +3133,7 @@
         setLocale(prefs.locale);
       }
     } catch (err) {
-      error = String(err);
+      reportError(String(err));
     }
   }
 
@@ -3111,7 +3157,7 @@
     try {
       await operation;
     } catch (err) {
-      error = String(err);
+      reportError(String(err), showSettings ? "settings" : undefined);
     }
   }
 
@@ -3123,7 +3169,7 @@
 
   function setAuthMode(mode: AuthMode) {
     authMode = mode;
-    error = "";
+    clearError();
     if (mode !== "create") {
       createPassword = "";
       createPasswordConfirm = "";
@@ -3143,6 +3189,12 @@
     }
   }
 </script>
+
+{#if errorToast}
+  {#key errorToast.id}
+    <ErrorToast message={errorToast.message} onDismiss={() => { errorToast = undefined; }} />
+  {/key}
+{/if}
 
 <RecoveryKitModal
   recoveryKey={pendingRecoveryKey}
@@ -3173,8 +3225,8 @@
         {status}
         {authMode}
         busyMode={authBusy}
-        error={errorText}
-        {errorDetail}
+        error={errorTarget === "auth" ? errorText : ""}
+        errorDetail={errorTarget === "auth" ? errorDetail : ""}
         bind:password
         bind:createPassword
         bind:createPasswordConfirm
@@ -3294,7 +3346,6 @@
         {usageProbeResult}
         {usageProbing}
         notice={noticeText}
-        error={errorText}
         editMode={detailEditMode}
         formMode="edit"
         bind:draft
@@ -3399,6 +3450,8 @@
 
 {#if showSettings && !status.locked}
   <SettingsPanel
+    error={errorTarget === "settings" ? errorText : ""}
+    notice={noticeText}
     initialTab={settingsInitialTab}
     bind:autoLockMinutes
     bind:clipboardClearSeconds
@@ -3432,30 +3485,31 @@
     onCheckProxyRunning={checkProxyRunningForUpdate}
     onUpdateChannelChanged={resetUpdatePromptForChannel}
     {serverBusy}
-    onClose={closeSettings}
-    onSavePreferences={savePreferences}
-    onChangeMasterPassword={changeMasterPassword}
-    onRotateVault={rotateVault}
-    onExportVault={exportVault}
-    onImportVault={importVault}
-    onRunSync={runSync}
-    onSaveSyncSettings={saveSyncSettings}
-    onClearSavedWebdavPassword={clearSavedWebdavPassword}
-    onLoadSyncConflicts={loadSyncConflicts}
-    onResolveSyncConflict={resolveSyncConflict}
-    onRevokeDevice={revokeDevice}
-    onLoadBrowserExtensionStatus={loadBrowserExtensionStatus}
-    onInstallBrowserExtension={installBrowserExtension}
-    onDetectCcSwitch={detectCcSwitch}
-    onSaveServerConfig={saveServerConfig}
+    onClose={() => settingsOperation(closeSettings)}
+    onSavePreferences={() => settingsOperation(savePreferences)}
+    onChangeMasterPassword={() => settingsOperation(changeMasterPassword)}
+    onRotateVault={() => settingsOperation(rotateVault)}
+    onExportVault={() => settingsOperation(exportVault)}
+    onImportVault={() => settingsOperation(importVault)}
+    onRunSync={() => settingsOperation(runSync)}
+    onSaveSyncSettings={() => settingsOperation(saveSyncSettings)}
+    onClearSavedWebdavPassword={() => settingsOperation(clearSavedWebdavPassword)}
+    onLoadSyncConflicts={() => settingsOperation(loadSyncConflicts)}
+    onResolveSyncConflict={(conflict, action) => settingsOperation(() => resolveSyncConflict(conflict, action))}
+    onRevokeDevice={(id) => settingsOperation(() => revokeDevice(id))}
+    onLoadBrowserExtensionStatus={() => settingsOperation(loadBrowserExtensionStatus)}
+    onInstallBrowserExtension={() => settingsOperation(installBrowserExtension)}
+    onDetectCcSwitch={() => settingsOperation(detectCcSwitch)}
+    onSaveServerConfig={(config) => settingsOperation(() => saveServerConfig(config))}
   />
 {/if}
 
 {#if showForm}
   <ProviderModal
     {formMode}
+    saving={providerSaving}
     bind:draft
-    error={errorText}
+    error={errorTarget === "provider-form" ? errorText : ""}
     onSave={saveProvider}
     onClose={closeProviderForm}
     onInferDraftFromDomain={inferDraftFromDomain}
@@ -3466,7 +3520,7 @@
   />
 {/if}
 
-{#if showOAuthConnect}
+{#if showOAuthConnect && showWorkspace && !showAuthScreen && !lockTransitioning}
   <OAuthConnectDialog
     {invokeTauri}
     onClose={() => { showOAuthConnect = false; }}

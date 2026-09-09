@@ -14,6 +14,7 @@
   export let preview: ToolConfigPreview | undefined = undefined;
   export let toolName = "";
   export let busy = false;
+  export let localProxy = false;
   export let allowConfirm = true;
   export let onConfirm: () => void = () => {};
   export let onOpenChange: (open: boolean) => void = () => {};
@@ -55,6 +56,15 @@
   });
 
   $: activePath = files[Number(activeFile)]?.path ?? preview?.targetPath ?? "";
+  $: accessNote = localProxy
+    ? $t("integration.proxyNote")
+    : preview?.mode === "plaintext"
+      ? $t("integration.plaintextNote")
+      : preview?.mode === "helper"
+        ? $t("integration.helperNote")
+        : preview?.mode === "env"
+          ? $t("integration.envNote")
+          : $t("integration.officialNote");
 
   function fileName(path: string): string {
     return path.split(/[\\/]/).pop() || path;
@@ -125,7 +135,7 @@
       {/if}
 
       <div class="dialog-footer">
-        <span class="dialog-note">{$t("integration.backupNote")}</span>
+        <span class="dialog-note"><span class="access-note">{accessNote}</span>{$t("integration.backupNote")}</span>
         <div class="dialog-actions">
           <!-- Button does not forward Dialog.Close child props (onclick), so
                closing is wired through the controlled onOpenChange instead. -->
@@ -402,6 +412,13 @@
     min-width: 0;
     color: var(--text-tertiary);
     font-size: 11px;
+  }
+
+  .access-note {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+    line-height: 1.5;
   }
 
   .dialog-actions {

@@ -248,4 +248,9 @@ test("background WS disable preserves other edits and failed recovery keeps the 
   expect(document.querySelector<HTMLInputElement>(".secret-input input")?.value).toBe("fixture-existing-key");
   expect(document.querySelector(".advanced-section [role=switch]")?.getAttribute("aria-checked")).toBe("true");
   expect(entry.supportsWebsockets).toBe(false);
+  rejectRecovery = false;
+  button("Save changes").click();
+  await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
+  expect(document.body.textContent).not.toContain("Your edits are preserved");
+  expect(entry.supportsWebsockets).toBe(true);
 });

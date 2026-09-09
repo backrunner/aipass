@@ -104,6 +104,13 @@ Newest entries last within each section.
 - **Guardrail**: reject Production/both before tool calls, validate Development before import, and compare a fresh post-import export. Test combined creator/non-creator grants and deployment without Production access. Do not mistake an iCloud service wildcard for authorization of an unlisted container.
 - **Watch points**: deployment script/tests, `infra/cloudkit/schema.ckdb`, `docs/cloudkit-release.md`. Keep schema deployment separate from signed-app provisioning.
 
+### Epoch rotation must share the authenticated snapshot transaction
+- **Symptom**: a damaged later record or failed write left earlier records encrypted with a lost epoch key; failed password/recovery/revocation operations could partially take effect.
+- **Root cause**: `crates/aipass-vault/src/lib.rs:883` rewrote objects before persisting the new manifest, and callers mutated password wrappers/device records before rotation completed.
+- **Fix**: prepare the next header, encrypted records, revocation and audit in memory; commit them through the existing authenticated snapshot journal with rollback and unlock replay.
+- **Guardrail**: never replace epoch-encrypted records before journaling the matching wrapped key. Test preparation failures, partial IO, manifest failure, interrupted unlock replay and retry after a failed password change (`sync_snapshot::tests`).
+- **Watch points**: explicit rotation, password changes, recovery, device revocation, snapshot apply/recovery and read gating.
+
 ## Tool configuration writes (aipass-agent / config-writers)
 
 ### Local diagnostics stopped at rotation limits and runtime boundaries
@@ -116,8 +123,8 @@ Newest entries last within each section.
 ### Live log viewers must scope refresh and scrolling to an opening
 - **Symptom**: the proxy log dialog opened at the oldest entry and stayed on a one-time snapshot.
 - **Root cause**: `ServerDetailPane` loaded logs before opening the dialog; the portalled log body had no mount/update scroll handling or refresh lifecycle.
-- **Fix**: `ProxyLogsDialog` loads immediately and schedules the next refresh two seconds after completion, follows the bottom unless the user scrolls up, and invalidates pending work on close/unmount. Keep the last good snapshot on transient failures and skip unchanged DOM updates.
-- **Guardrail**: bind scrolling to the actual mounted log body, prevent overlapping refreshes, and reject responses from previous openings. Verify opening/reopening, manual scrolling, failures, close and unmount in `ProxyLogsDialog.test.ts` and at 960×640.
+- **Fix**: `ProxyLogsDialog` loads immediately and schedules the next refresh two seconds after completion, follows the bottom unless the user scrolls up, and invalidates pending work on close/unmount. Virtualize and highlight only visible rows with measured wrapping heights and content/occurrence keys to preserve reading anchors as history is trimmed. Capture tail-follow intent before layout adjustments; show loading during imports and requests, retaining the last good snapshot on transient failures and skipping unchanged DOM updates.
+- **Guardrail**: bind scrolling to the actual mounted log body, prevent overlapping refreshes, and reject responses from previous openings. Verify bounded rendering/highlighting, duplicate entries, trimmed history, loading, opening/reopening, manual scrolling, failures, close and unmount in `ProxyLogsDialog.test.ts`; check wrapped rows and tail following at 960×640.
 - **Watch points**: dialog portal mounting, `ServerDetailPane` lazy loading and `onLoadProxyLogs`, typed `server_logs` IPC.
 
 ### Unsupported Responses tools must not disappear during conversion
@@ -161,6 +168,13 @@ Newest entries last within each section.
 - **Fix**: default `supports_websockets` to true in the shared provider updater for every auth mode; honor an explicit provider opt-out on direct integrations while local proxy integrations always advertise their own WS capability.
 - **Guardrail**: keep transport flags in the shared Codex provider updater; verify new configs, provider migration, direct opt-outs and local proxy WS support while keeping HTTP base URLs. Covered by the Codex writer idempotence/migration tests and `codex_local_proxy_writer_enables_websocket_transport`.
 - **Watch points**: `plan_codex`, `plan_codex_official`, `plan_codex_plaintext_with_mode`, and agent `build_tool_config_proxy_plan`.
+
+### Configuration confirmation must retain its preview context
+- **Symptom**: a delayed preview for one provider opened after selecting another; confirmation applied the current provider or Codex mode instead of the displayed selection.
+- **Root cause**: `IntegrationCard.svelte:64` reset visible state without invalidating requests, while parent apply callbacks rebuilt requests from live selection.
+- **Fix**: invalidate request generations on context change/unmount and return a captured apply closure with each preview; show mode-specific credential access text in the dialog and correct website claims.
+- **Guardrail**: bind confirmation to the request that produced its preview. Include provider/route identity and write mode in invalidation; ignore late success and failure. Cover provider changes, mode changes and repeated confirmation in integration tests.
+- **Watch points**: provider and proxy route integrations, Codex mode selection, direct configuration versus local proxy tokens, and English/Chinese security copy.
 
 ## Proxy credential snapshot (proxy_service / handlers)
 
@@ -336,6 +350,13 @@ Newest entries last within each section.
 - **Guardrail**: keep public catalog refreshes independent of vault unlock and application releases; reject unusable remote data before replacing the last good snapshot. Covered by the refresh schedule, download failure, and locked-vault tests in `pricing/list_prices.rs`.
 - **Watch points**: `server.rs` background startup, `pricing.rs` config reads, `handlers.rs` usage summary and timeseries price loading.
 
+### Backup inclusion and restore allowlists must stay aligned
+- **Symptom**: restoring an encrypted backup silently discarded pricing groups and assignments.
+- **Root cause**: `lib.rs:2510` export enumeration and `lib.rs:1957` import validation both omitted `pricing.aipstate`.
+- **Fix**: share the backup root-file list between export/import and include encrypted pricing; preserve the separate synchronization policy.
+- **Guardrail**: add new persistent user state to both backup and restore through the shared list. Test export/import/decrypt round trips and explicitly assert whether each local file enters sync snapshots.
+- **Watch points**: vault `BACKUP_ROOT_FILES`, `sync_path_allowed`, agent pricing state and server configuration.
+
 ## Endpoint inference (three implementations)
 
 ### Valid AI endpoints misclassified as custom_http
@@ -446,6 +467,22 @@ Newest entries last within each section.
 - **Fix**: reuse shared form/card controls, validate retry numbers and ordering before IPC, and keep the dialog open with an inline error on persistence failure.
 - **Guardrail**: validate advanced retry fields before saving and surface every failed route-config write in the open dialog. When disabling an option, retain valid persisted/default numbers instead of submitting invalid hidden inputs. Covered by `RouteGroupDialog.test.ts`.
 - **Watch points**: `RouteGroupDialog.svelte`, `App.svelte` `saveRouteGroup`, and agent `validate_config`.
+
+### Lock and save outcomes must own the active dialog lifecycle
+- **Symptom**: OAuth accounts stayed over the lock screen, settings errors appeared behind the drawer, a failed close hid unsaved settings, and save retries left an empty editor or duplicated providers.
+- **Root cause**: `App.svelte:1098` omitted OAuth from lock cleanup; settings closed before awaiting persistence; provider saves inferred success from a shared stale error and had no operation-level exclusion.
+- **Fix**: gate OAuth on the unlocked workspace; keep settings open until save succeeds with feedback inside the drawer; return explicit provider save results and guard in-flight writes. Preserve drafts from late settings reloads.
+- **Guardrail**: unmount every sensitive dialog on lock. Keep failed mutations visible with their draft, close on explicit success, and distinguish committed writes from refresh failures. Test actual App-to-dialog paths, including late list responses, close-save failure and repeated submits at 960×640.
+- **Watch points**: `App.operations.test.ts`, `IntegrationCard.test.ts`, inline/provider-modal saves, settings close/Escape/outside events, OAuth account loading and login cancellation.
+
+## Desktop operation feedback
+
+### Shared errors leaked into the selected provider
+- **Symptom**: import, settings and other operation failures appeared as a permanent error banner on the provider detail page.
+- **Root cause**: `App.svelte:3331` forwarded its shared `errorText` into `ProviderDetailPane.svelte:523`, independent of which operation failed; closing a dialog exposed its stale error behind it.
+- **Fix**: remove the detail page's generic error prop, route ordinary failures into a dismissible, expiring toast, and scope inline auth, provider-form and settings feedback to their own surfaces. Dialogs that already handle rejected callbacks own their errors without a duplicate host notification.
+- **Guardrail**: report operation errors through `reportError`; never pass app-wide errors to an entity detail page. Test unrelated errors during editing, repeated identical failures, auto-dismiss and closing a failed settings surface in `App.operations.test.ts`. Preserve drafts on failure and clear workspace toasts on lock.
+- **Watch points**: App operation handlers, provider inline/modal saves, settings feedback, integration/usage dialogs, and `ErrorToast.svelte` at 960×640.
 
 ## Build toolchain
 

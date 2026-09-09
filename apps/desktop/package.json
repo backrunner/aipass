@@ -20,6 +20,7 @@
   "dependencies": {
     "@aipass/schemas": "workspace:*",
     "@aipass/ui": "workspace:*",
+    "@tanstack/svelte-virtual": "^3.13.37",
     "@tauri-apps/api": "^2.11.0",
     "@vinlemon/window-controls": "^0.0.5",
     "bits-ui": "^2.13.0",

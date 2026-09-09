@@ -3,7 +3,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { Dialog, Tabs } from "bits-ui";
   import { Check, Download, Plus, Puzzle, RefreshCw, RotateCw, Server, Trash2, Upload, Wifi, X } from "lucide-svelte";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
 
   import { themeStore, setTheme } from "../../stores/appearance";
   import { isLocalizedMessage, localeStore, resolveMessage, setLocale, t } from "../../stores/i18n";
@@ -58,9 +58,11 @@
   export let devices: DeviceRecord[] = [];
   export let devicesLoading = false;
   export let initialTab: string = "general";
+  export let error = "";
+  export let notice = "";
   export let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [], upstreamProxy: { mode: "system" } };
   export let serverBusy = "";
-  export let onClose: () => MaybePromise = () => {};
+  export let onClose: () => MaybePromise<boolean | void> = () => {};
   export let proxyRunning = false;
   export let onCheckProxyRunning: () => MaybePromise<boolean> = () => proxyRunning;
   export let onUpdateChannelChanged: (channel: UpdateChannel) => MaybePromise = () => {};
@@ -360,33 +362,72 @@
 
   let dialogOpen = true;
   let closing = false;
+  let savingSyncSettings = false;
+  let operationError = "";
 
-  function handleOpenChange(next: boolean) {
+  async function saveSyncTarget() {
+    if (savingSyncSettings) return;
+    savingSyncSettings = true;
+    operationError = "";
+    try {
+      if (!(await onSaveSyncSettings())) {
+        await tick();
+        if (!error) operationError = $t("settings.saveFailed");
+      }
+    } catch (err) {
+      operationError = String(err);
+    } finally {
+      savingSyncSettings = false;
+    }
+  }
+
+  async function handleOpenChange(next: boolean) {
     if (next) {
       dialogOpen = true;
       return;
     }
-    if (closing) return;
+    if (closing || savingSyncSettings) return;
     closing = true;
-    dialogOpen = false;
-    setTimeout(() => onClose(), 300);
+    operationError = "";
+    try {
+      if ((await onClose()) === false) {
+        await tick();
+        if (!error) operationError = $t("settings.saveFailed");
+        return;
+      }
+      dialogOpen = false;
+    } catch (err) {
+      operationError = String(err);
+    } finally {
+      closing = false;
+    }
   }
 </script>
 
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
     <Dialog.Overlay class="settings-overlay" />
-    <Dialog.Content class="settings-drawer">
+    <Dialog.Content
+      class="settings-drawer"
+      onEscapeKeydown={(event) => { event.preventDefault(); void handleOpenChange(false); }}
+      onInteractOutside={(event) => { event.preventDefault(); void handleOpenChange(false); }}
+    >
       <header class="drawer-header">
         <Dialog.Title class="drawer-title">{$t("settings.title")}</Dialog.Title>
-        <Dialog.Close>
-          {#snippet child({ props })}
-            <button {...props} type="button" class="close-btn" aria-label={$t("settings.close")}>
-              <X size={16} />
-            </button>
-          {/snippet}
-        </Dialog.Close>
+        <button type="button" class="close-btn" disabled={closing || savingSyncSettings} aria-label={$t("settings.close")} on:click={() => handleOpenChange(false)}>
+          <X size={16} />
+        </button>
       </header>
+
+      {#if error || operationError || notice}
+        <div class="operation-feedback">
+          {#if error || operationError}
+            <Banner tone="danger">{error || operationError}</Banner>
+          {:else if notice}
+            <Banner tone="success">{notice}</Banner>
+          {/if}
+        </div>
+      {/if}
 
       <Tabs.Root bind:value={activeTab} class="settings-tabs">
         <Tabs.List class="tabs-list">
@@ -578,13 +619,13 @@
                   {/if}
                 {/if}
                 <div class="row-actions">
-                  <Button variant="secondary" on:click={() => onSaveSyncSettings()} disabled={syncBusy}>
+                  <Button variant="secondary" on:click={saveSyncTarget} disabled={syncBusy} loading={savingSyncSettings}>
                     {$t("common.save")}
                   </Button>
                   {#if syncMode === "webdav" && hasSavedWebdavPassword}
-                    <Button variant="ghost" on:click={() => onClearSavedWebdavPassword()} disabled={syncBusy}>{$t("settings.clearPassword")}</Button>
+                    <Button variant="ghost" on:click={() => { operationError = ""; void onClearSavedWebdavPassword(); }} disabled={syncBusy || savingSyncSettings}>{$t("settings.clearPassword")}</Button>
                   {/if}
-                  <Button variant="primary" on:click={() => onRunSync()} disabled={!syncReady || syncBusy}>
+                  <Button variant="primary" on:click={() => { operationError = ""; void onRunSync(); }} disabled={!syncReady || syncBusy || savingSyncSettings}>
                     <Wifi size={14} /> {syncBusy ? $t("syncStatus.syncing") : $t("settings.syncNow")}
                   </Button>
                 </div>
@@ -933,6 +974,14 @@
 />
 
 <style lang="scss">
+  .operation-feedback {
+    flex-shrink: 0;
+    max-height: 120px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    padding: 12px 20px 0;
+  }
+
   :global(.settings-overlay) {
     position: fixed;
     inset: 0;

@@ -20,15 +20,18 @@
   export let codexMode = "";
   export let codexModeOptions: Array<{ value: string; label: string }> = [];
   export let onCodexModeChange: (mode: string) => void = () => {};
-  export let onPreview: (tool: IntegrationToolDefinition) => Promise<ToolConfigPreview> = async () => {
+  // The owner captures the request before previewing; confirmation must use
+  // that same request, even if its current selection changes while awaiting IO.
+  export let onPreview: (tool: IntegrationToolDefinition) => Promise<{
+    preview: ToolConfigPreview;
+    apply: () => Promise<ToolConfigApplyResult>;
+  }> = async () => {
     throw new Error("preview unavailable");
-  };
-  export let onApply: (tool: IntegrationToolDefinition) => Promise<ToolConfigApplyResult> = async () => {
-    throw new Error("apply unavailable");
   };
   export let onRefresh: () => Promise<void> | void = () => {};
   export let resetKey = "";
   export let disabled = false;
+  export let localProxy = false;
 
   type ToolState = { busy: boolean; error: string; applied?: ToolConfigApplyResult };
   const emptyState = (): ToolState => ({ busy: false, error: "" });
@@ -41,6 +44,9 @@
   let pendingTool: IntegrationToolDefinition | undefined;
   let confirming = false;
   let refreshing = false;
+  let generation = 0;
+  let pendingApply: (() => Promise<ToolConfigApplyResult>) | undefined;
+  let previewContext = "";
 
   const APPLIED_NOTICE_MS = 4000;
 
@@ -64,14 +70,20 @@
   let lastResetKey = resetKey;
   $: if (resetKey !== lastResetKey) {
     lastResetKey = resetKey;
+    generation++;
     toolState = {};
     clearAllAppliedTimers();
     activePreview = undefined;
     pendingTool = undefined;
+    pendingApply = undefined;
+    confirming = false;
     previewOpen = false;
   }
 
-  onDestroy(clearAllAppliedTimers);
+  onDestroy(() => {
+    generation++;
+    clearAllAppliedTimers();
+  });
 
   $: stateFor = (tool: IntegrationToolDefinition): ToolState => toolState[tool.id] ?? emptyState();
 
@@ -99,36 +111,58 @@
   }
 
   async function showPreview(tool: IntegrationToolDefinition, readonly: boolean) {
+    if (disabled || stateFor(tool).busy || confirming) return;
+    const requestGeneration = ++generation;
+    const context = resetKey;
+    const current = () => generation === requestGeneration && resetKey === context;
+    toolState = {};
+    clearAllAppliedTimers();
+    pendingApply = undefined;
+    previewOpen = false;
     patchState(tool, { busy: true, error: "" });
     try {
-      activePreview = await onPreview(tool);
+      const plan = await onPreview(tool);
+      if (!current()) return;
+      activePreview = plan.preview;
+      pendingApply = plan.apply;
+      previewContext = context;
       pendingTool = tool;
       previewReadonly = readonly;
       previewOpen = true;
     } catch (err) {
-      patchState(tool, { error: String(err) });
+      if (current()) patchState(tool, { error: String(err) });
     } finally {
-      patchState(tool, { busy: false });
+      if (current()) patchState(tool, { busy: false });
     }
   }
 
   async function confirmApply() {
-    if (!pendingTool) return;
+    if (!pendingTool || !pendingApply || confirming || disabled || previewReadonly || !previewOpen || previewContext !== resetKey) return;
     const tool = pendingTool;
+    const apply = pendingApply;
+    const requestGeneration = generation;
+    const context = resetKey;
+    const current = () => generation === requestGeneration && resetKey === context;
     confirming = true;
     patchState(tool, { busy: true, error: "" });
     try {
-      const applied = await onApply(tool);
+      const applied = await apply();
+      if (!current()) return;
       patchState(tool, { applied, error: "" });
       clearAppliedTimer(tool.id);
       appliedTimers[tool.id] = setTimeout(() => dismissApplied(tool), APPLIED_NOTICE_MS);
       previewOpen = false;
     } catch (err) {
-      patchState(tool, { error: String(err) });
-      previewOpen = false;
+      if (current()) {
+        patchState(tool, { error: String(err) });
+        previewOpen = false;
+      }
     } finally {
-      patchState(tool, { busy: false });
-      confirming = false;
+      if (current()) {
+        patchState(tool, { busy: false });
+        confirming = false;
+        pendingApply = undefined;
+      }
     }
   }
 </script>
@@ -221,6 +255,7 @@
   open={previewOpen}
   preview={activePreview}
   toolName={pendingTool?.name ?? ""}
+  {localProxy}
   busy={confirming}
   allowConfirm={!previewReadonly}
   onConfirm={confirmApply}
