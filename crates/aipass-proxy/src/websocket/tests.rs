@@ -1412,7 +1412,40 @@ async fn websocket_hold_deadline_bounds_backoff_and_handshake() {
         let counter = count.clone();
         let server = tokio::spawn(async move {
             loop {
-                let (stream, _) = listener.accept().await.unwrap();
+                let (mut stream, _) = listener.accept().await.unwrap();
+                // Host listener discovery is not a WebSocket attempt. Peek so
+                // the real upgrade request remains intact for Tungstenite.
+                let headers = tokio::time::timeout(Duration::from_secs(1), async {
+                    let mut buffer = [0; 8192];
+                    loop {
+                        let length = stream.peek(&mut buffer).await.unwrap();
+                        assert!(length > 0 && length < buffer.len());
+                        if buffer[..length]
+                            .windows(4)
+                            .any(|bytes| bytes == b"\r\n\r\n")
+                        {
+                            break String::from_utf8(buffer[..length].to_vec())
+                                .unwrap()
+                                .to_ascii_lowercase();
+                        }
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                if headers.starts_with("get / http/1.1\r\n")
+                    && !headers.contains("\r\nauthorization:")
+                {
+                    tokio::io::AsyncWriteExt::write_all(
+                        &mut stream,
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+                    continue;
+                }
+                assert!(headers.starts_with("get /v1/responses "));
+                assert!(headers.contains("\r\nupgrade: websocket\r\n"));
                 let attempt = counter.fetch_add(1, Ordering::SeqCst);
                 if stall && attempt > 0 {
                     let _stream = stream;

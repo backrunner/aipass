@@ -6002,8 +6002,23 @@ mod tests {
         let primary_addr = primary.local_addr().unwrap();
         let primary_request = request.clone();
         let primary_thread = std::thread::spawn(move || {
-            let (mut stream, _) = primary.accept().unwrap();
-            let (_, body) = read_http_request(&mut stream);
+            let (mut stream, body) = loop {
+                let (mut stream, _) = primary.accept().unwrap();
+                let (headers, body) = read_http_request(&mut stream);
+                let headers = headers.to_ascii_lowercase();
+                if headers.starts_with("get / http/1.1\r\n")
+                    && !headers.contains("\r\nauthorization:")
+                {
+                    write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .unwrap();
+                    continue;
+                }
+                assert!(headers.starts_with("post /v1/responses "));
+                break (stream, body);
+            };
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
                 primary_request
@@ -6022,8 +6037,23 @@ mod tests {
         let fallback_addr = fallback.local_addr().unwrap();
         let fallback_request = request.clone();
         let fallback_thread = std::thread::spawn(move || {
-            let (mut stream, _) = fallback.accept().unwrap();
-            let (_, body) = read_http_request(&mut stream);
+            let (mut stream, body) = loop {
+                let (mut stream, _) = fallback.accept().unwrap();
+                let (headers, body) = read_http_request(&mut stream);
+                let headers = headers.to_ascii_lowercase();
+                if headers.starts_with("get / http/1.1\r\n")
+                    && !headers.contains("\r\nauthorization:")
+                {
+                    write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .unwrap();
+                    continue;
+                }
+                assert!(headers.starts_with("post /v1/responses "));
+                break (stream, body);
+            };
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
                 fallback_request
