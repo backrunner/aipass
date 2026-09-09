@@ -95,26 +95,105 @@ impl Vault {
         files: VaultExportPayload,
         parents: Vec<String>,
     ) -> Result<Vec<u8>, VaultError> {
+        self.encode_snapshot_with_header(self.header.clone(), files, parents)
+    }
+
+    fn encode_snapshot_with_header(
+        &self,
+        header: VaultHeader,
+        files: VaultExportPayload,
+        parents: Vec<String>,
+    ) -> Result<Vec<u8>, VaultError> {
         // Also authenticate tombstones as part of the complete snapshot. The
         // legacy per-object format cannot authenticate deletion markers alone.
         let payload = serde_json::to_vec(&files)?;
         let created_at = OffsetDateTime::now_utc();
-        let aad = serde_json::to_vec(&(
-            "aipass-vault-sync",
-            1u16,
-            &parents,
-            created_at,
-            &self.header,
-        ))?;
+        let aad = serde_json::to_vec(&("aipass-vault-sync", 1u16, &parents, created_at, &header))?;
         let snapshot = VaultSyncSnapshot {
             format: "aipass-vault-sync".into(),
             version: 1,
             parents,
             created_at,
-            header: self.header.clone(),
+            header,
             payload: encrypt_bytes(self.root_key.as_bytes(), &aad, &payload)?,
         };
         Ok(serde_json::to_vec(&snapshot)?)
+    }
+
+    pub(super) fn commit_epoch_rotation(
+        &mut self,
+        header: VaultHeader,
+        reason: &str,
+        revoked_device: Option<Uuid>,
+    ) -> Result<(), VaultError> {
+        let snapshot = self.prepare_epoch_rotation(header, reason, revoked_device)?;
+        self.apply_sync_snapshot(&snapshot)
+    }
+
+    /// Prepare the entire next epoch without changing disk or session keys.
+    /// Password/recovery wrappers and device revocation share the same journal
+    /// as the records, including the audit event, so failure can roll back all
+    /// of them and unlock can replay an interrupted commit.
+    fn prepare_epoch_rotation(
+        &self,
+        mut header: VaultHeader,
+        reason: &str,
+        revoked_device: Option<Uuid>,
+    ) -> Result<Vec<u8>, VaultError> {
+        self.ensure_sync_ready()?;
+        let next_epoch = advance_epoch(&self.epoch_key)?;
+        let mut files = self.sync_files()?;
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            at: OffsetDateTime::now_utc(),
+            action: reason.into(),
+            record_id: None,
+            detail: Some("epoch advanced".into()),
+        };
+        let audit_path = PathBuf::from("audit").join(format!("{}.aipaudit", event.id));
+        let audit = self.build_envelope(
+            &self.root.join(&audit_path),
+            event.id,
+            "audit_event",
+            1,
+            &serde_json::to_vec(&event)?,
+        )?;
+        files.files.push(VaultExportFile {
+            relative_path: audit_path,
+            bytes_b64: STANDARD_NO_PAD.encode(serde_json::to_vec(&audit)?),
+        });
+        for file in &mut files.files {
+            let bytes = STANDARD_NO_PAD
+                .decode(&file.bytes_b64)
+                .map_err(|_| VaultError::InvalidExport)?;
+            let mut envelope: ObjectEnvelope = serde_json::from_slice(&bytes)?;
+            if envelope.tombstone {
+                continue;
+            }
+            let mut plaintext = zeroize::Zeroizing::new(self.decrypt_envelope_bytes(&envelope)?);
+            if revoked_device
+                .is_some_and(|id| self.device_path(id) == self.root.join(&file.relative_path))
+            {
+                let mut device: DeviceRecord = serde_json::from_slice(&plaintext)?;
+                device.trusted = false;
+                device.revoked_at = Some(event.at);
+                device.last_epoch = next_epoch.epoch().epoch;
+                *plaintext = serde_json::to_vec(&device)?;
+            }
+            envelope.device_id = self.device_id;
+            envelope.updated_at = event.at;
+            envelope.lamport = envelope.lamport.saturating_add(1);
+            let envelope = encrypt_envelope(envelope, &plaintext, &next_epoch)?;
+            file.bytes_b64 = STANDARD_NO_PAD.encode(serde_json::to_vec(&envelope)?);
+        }
+        header.wrapped_epoch_key = encrypt_bytes(
+            self.root_key.as_bytes(),
+            header_key_aad(header.vault_id, "epoch").as_bytes(),
+            next_epoch.as_bytes(),
+        )?;
+        header.current_epoch = next_epoch.epoch().clone();
+        header.updated_at = event.at;
+        self.encode_snapshot_with_header(header, files, Vec::new())
     }
 
     /// Merge independent encrypted-file changes against a common ancestor.
@@ -325,6 +404,8 @@ impl Vault {
                 fs::remove_file(self.root.join(path))?;
             }
         }
+        #[cfg(test)]
+        tests::fail_snapshot_write()?;
         write_json(self.root.join("manifest.aipmanifest"), &snapshot.header)?;
         self.reload_from_disk()?;
         fs::remove_file(pending)?;
@@ -448,6 +529,169 @@ mod tests {
         )
         .unwrap()
         .vault
+    }
+
+    #[test]
+    fn rotation_failures_preserve_records_password_recovery_and_device_trust() {
+        for operation in ["rotate", "password", "recovery", "revoke"] {
+            // A corrupt input fails preparation; IO faults fail after records
+            // have been replaced, including just before manifest commit.
+            for fail_after in [None, Some(1), Some(4)] {
+                let dir = tempdir().unwrap();
+                let creation = Vault::create_with_device_and_kdf(
+                    dir.path(),
+                    &SecretString::new("master"),
+                    "device",
+                    KdfParams::with_random_salt(1024, 1, 1),
+                )
+                .unwrap();
+                let recovery = SecretString::new(&creation.recovery_kit.recovery_key);
+                let mut original = creation.vault;
+                let id = Uuid::new_v4();
+                original
+                    .write_envelope(
+                        original.record_path(id),
+                        id,
+                        "test_record",
+                        1,
+                        b"private-data",
+                    )
+                    .unwrap();
+                if fail_after.is_none() {
+                    fs::write(dir.path().join("audit/damaged.aipaudit"), b"invalid JSON").unwrap();
+                }
+                let before = original.sync_revision().unwrap();
+                FAIL_AFTER.with(|counter| counter.set(fail_after));
+                let result = match operation {
+                    "rotate" => original.advance_epoch_and_rewrap("test").map(|_| ()),
+                    "password" => original.change_master_password_with_kdf(
+                        &SecretString::new("new-master"),
+                        KdfParams::with_random_salt(1024, 1, 1),
+                    ),
+                    "recovery" => Vault::recover_master_password_with_kdf(
+                        dir.path(),
+                        &recovery,
+                        &SecretString::new("new-master"),
+                        KdfParams::with_random_salt(1024, 1, 1),
+                    )
+                    .map(|_| ()),
+                    "revoke" => original.revoke_device(original.device_id),
+                    _ => unreachable!(),
+                };
+                assert!(result.is_err(), "{operation}/{fail_after:?}");
+                assert_eq!(
+                    before,
+                    original.sync_revision().unwrap(),
+                    "{operation}/{fail_after:?}"
+                );
+                original.ensure_sync_ready().unwrap();
+                let reopened = Vault::open(dir.path(), &SecretString::new("master")).unwrap();
+                let envelope: ObjectEnvelope = read_json(reopened.record_path(id)).unwrap();
+                assert_eq!(
+                    reopened.decrypt_envelope_bytes(&envelope).unwrap(),
+                    b"private-data"
+                );
+                assert!(reopened
+                    .list_devices()
+                    .unwrap()
+                    .iter()
+                    .all(|d| d.trusted && d.revoked_at.is_none()));
+                assert!(Vault::open(dir.path(), &SecretString::new("new-master")).is_err());
+                // A failed password attempt must not remain in memory and
+                // become committed by the next unrelated epoch rotation.
+                if fail_after.is_none() {
+                    fs::remove_file(dir.path().join("audit/damaged.aipaudit")).unwrap();
+                }
+                original.advance_epoch_and_rewrap("retry").unwrap();
+                assert!(Vault::open(dir.path(), &SecretString::new("master")).is_ok());
+                assert!(Vault::recover_master_password_with_kdf(
+                    dir.path(),
+                    &recovery,
+                    &SecretString::new("recovered"),
+                    KdfParams::with_random_salt(1024, 1, 1)
+                )
+                .is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn interrupted_password_rotation_recovers_records_and_new_password_together() {
+        let dir = tempdir().unwrap();
+        let mut original = vault(dir.path());
+        let id = Uuid::new_v4();
+        original
+            .write_envelope(
+                original.record_path(id),
+                id,
+                "test_record",
+                1,
+                b"private-data",
+            )
+            .unwrap();
+        let mut header = original.header.clone();
+        original
+            .rewrap_root_key_for_new_password(
+                &mut header,
+                &SecretString::new("new-master"),
+                KdfParams::with_random_salt(1024, 1, 1),
+            )
+            .unwrap();
+        let snapshot = original
+            .prepare_epoch_rotation(header, "password", None)
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&snapshot).contains("private-data"));
+        atomic_write_bytes(dir.path().join(PENDING), &snapshot).unwrap();
+        FAIL_AFTER.with(|counter| counter.set(Some(1)));
+        assert!(original.finish_pending_sync().is_err());
+        assert!(original.ensure_sync_ready().is_err());
+        drop(original);
+        let recovered = Vault::open(dir.path(), &SecretString::new("master")).unwrap();
+        let envelope: ObjectEnvelope = read_json(recovered.record_path(id)).unwrap();
+        assert_eq!(
+            recovered.decrypt_envelope_bytes(&envelope).unwrap(),
+            b"private-data"
+        );
+        recovered.ensure_sync_ready().unwrap();
+        assert_eq!(recovered.current_epoch().epoch, 1);
+        assert!(Vault::open(dir.path(), &SecretString::new("master")).is_err());
+        assert!(Vault::open(dir.path(), &SecretString::new("new-master")).is_ok());
+    }
+
+    #[test]
+    fn encrypted_backup_preserves_local_pricing_without_synchronizing_it() {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        let original = vault(source.path());
+        let plaintext = br#"{"groups":[{"id":"custom","name":"Private prices"}],"assignments":[{"entryId":"provider","groupId":"custom","multiplier":1.5}]}"#;
+        let payload = original
+            .encrypt_local_state("proxy-pricing", plaintext)
+            .unwrap();
+        let bytes =
+            serde_json::to_vec(&serde_json::json!({"version":1,"payload":payload})).unwrap();
+        fs::write(source.path().join("pricing.aipstate"), &bytes).unwrap();
+        let sync = original.export_sync_snapshot().unwrap();
+        let (_, files) = original.decode_snapshot(&sync).unwrap();
+        assert!(!files
+            .files
+            .iter()
+            .any(|file| file.relative_path == Path::new("pricing.aipstate")));
+        let password = SecretString::new("export");
+        let backup = original
+            .export_encrypted_with_kdf(&password, KdfParams::with_random_salt(1024, 1, 1))
+            .unwrap();
+        Vault::import_encrypted(target.path(), &password, &backup).unwrap();
+        assert_eq!(
+            fs::read(target.path().join("pricing.aipstate")).unwrap(),
+            bytes
+        );
+        let restored = Vault::open(target.path(), &SecretString::new("master")).unwrap();
+        assert_eq!(
+            restored
+                .decrypt_local_state("proxy-pricing", &payload)
+                .unwrap(),
+            plaintext
+        );
     }
 
     #[test]

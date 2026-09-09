@@ -696,9 +696,13 @@ impl Vault {
         )?;
         let mut vault =
             Self::open_with_root_key(root, header, root_key, VaultError::RecoveryFailed)?;
-        let recovery_kit =
-            vault.rewrap_root_key_for_new_password_and_recovery(new_password, new_kdf)?;
-        vault.advance_epoch_and_rewrap("vault.recovered")?;
+        let mut header = vault.header.clone();
+        let recovery_kit = vault.rewrap_root_key_for_new_password_and_recovery(
+            &mut header,
+            new_password,
+            new_kdf,
+        )?;
+        vault.commit_epoch_rotation(header, "vault.recovered", None)?;
         Ok(VaultCreation {
             vault,
             recovery_kit,
@@ -842,19 +846,21 @@ impl Vault {
         new_password: &SecretString,
         new_kdf: KdfParams,
     ) -> Result<(), VaultError> {
-        self.rewrap_root_key_for_new_password(new_password, new_kdf)?;
-        self.advance_epoch_and_rewrap("vault.password_changed")?;
+        let mut header = self.header.clone();
+        self.rewrap_root_key_for_new_password(&mut header, new_password, new_kdf)?;
+        self.commit_epoch_rotation(header, "vault.password_changed", None)?;
         Ok(())
     }
 
     fn rewrap_root_key_for_new_password(
-        &mut self,
+        &self,
+        header: &mut VaultHeader,
         new_password: &SecretString,
         new_kdf: KdfParams,
     ) -> Result<(), VaultError> {
         let new_password_key = derive_master_key(new_password, &new_kdf)?;
-        self.header.kdf = new_kdf;
-        self.header.wrapped_root_key = encrypt_bytes(
+        header.kdf = new_kdf;
+        header.wrapped_root_key = encrypt_bytes(
             new_password_key.as_bytes(),
             root_key_aad(self.header.vault_id).as_bytes(),
             self.root_key.as_bytes(),
@@ -863,14 +869,15 @@ impl Vault {
     }
 
     fn rewrap_root_key_for_new_password_and_recovery(
-        &mut self,
+        &self,
+        header: &mut VaultHeader,
         new_password: &SecretString,
         new_kdf: KdfParams,
     ) -> Result<RecoveryKit, VaultError> {
-        self.rewrap_root_key_for_new_password(new_password, new_kdf)?;
+        self.rewrap_root_key_for_new_password(header, new_password, new_kdf)?;
         let recovery_secret = generate_recovery_secret();
         let recovery_key = derive_recovery_key(&SecretString::new(&recovery_secret))?;
-        self.header.recovery_wrapped_root_key = encrypt_bytes(
+        header.recovery_wrapped_root_key = encrypt_bytes(
             recovery_key.as_bytes(),
             root_key_aad(self.header.vault_id).as_bytes(),
             self.root_key.as_bytes(),
@@ -881,16 +888,7 @@ impl Vault {
     }
 
     pub fn advance_epoch_and_rewrap(&mut self, reason: &str) -> Result<VaultEpoch, VaultError> {
-        let old_epoch = self.epoch_key.clone();
-        let next_epoch = advance_epoch(&old_epoch)?;
-        let paths = self.encrypted_object_paths()?;
-        for path in paths {
-            self.reencrypt_envelope_with_new_epoch(&path, &old_epoch, &next_epoch)?;
-        }
-        self.epoch_key = next_epoch;
-        self.header.current_epoch = self.epoch_key.epoch().clone();
-        self.rewrap_header_keys()?;
-        self.audit(reason, None, Some("epoch advanced"))?;
+        self.commit_epoch_rotation(self.header.clone(), reason, None)?;
         Ok(self.header.current_epoch.clone())
     }
 
@@ -1884,12 +1882,7 @@ impl Vault {
         if !path.exists() {
             return Err(VaultError::DeviceNotFound);
         }
-        let mut device: DeviceRecord = self.decrypt_envelope_path(&path)?;
-        device.trusted = false;
-        device.revoked_at = Some(OffsetDateTime::now_utc());
-        device.last_epoch = self.header.current_epoch.epoch + 1;
-        self.write_device(device)?;
-        self.advance_epoch_and_rewrap("device.revoke")?;
+        self.commit_epoch_rotation(self.header.clone(), "device.revoke", Some(device_id))?;
         Ok(())
     }
 
@@ -1956,9 +1949,9 @@ impl Vault {
         for file in payload.files {
             let relative_path = checked_relative_path(&file.relative_path)?;
             if !sync_snapshot::sync_path_allowed(&relative_path)
-                && relative_path != Path::new("manifest.aipmanifest")
-                && relative_path != Path::new("sync-checkpoint.aipcheckpoint")
-                && relative_path != Path::new("server-config.aipstate")
+                && !BACKUP_ROOT_FILES
+                    .iter()
+                    .any(|name| relative_path == Path::new(name))
             {
                 return Err(VaultError::InvalidExport);
             }
@@ -2025,6 +2018,19 @@ impl Vault {
         schema_version: u16,
         plaintext: &[u8],
     ) -> Result<(), VaultError> {
+        let envelope =
+            self.build_envelope(&path, object_id, object_type, schema_version, plaintext)?;
+        write_json(path, &envelope)
+    }
+
+    fn build_envelope(
+        &self,
+        path: &Path,
+        object_id: Uuid,
+        object_type: &str,
+        schema_version: u16,
+        plaintext: &[u8],
+    ) -> Result<ObjectEnvelope, VaultError> {
         let updated_at = OffsetDateTime::now_utc();
         let previous_lamport = read_json::<ObjectEnvelope>(&path)
             .ok()
@@ -2041,7 +2047,7 @@ impl Vault {
             .max(previous_lamport)
             .max(known_lamport)
             .saturating_add(1);
-        let mut envelope = ObjectEnvelope {
+        let envelope = ObjectEnvelope {
             format: "aipass-object".to_string(),
             version: 1,
             vault_id: self.header.vault_id,
@@ -2056,20 +2062,7 @@ impl Vault {
             payload: None,
             tombstone: false,
         };
-        let aad = object_aad(&envelope);
-        let record_dek = generate_record_dek();
-        envelope.payload = Some(encrypt_bytes(
-            record_dek.as_bytes(),
-            aad.as_bytes(),
-            plaintext,
-        )?);
-        envelope.wrapped_dek = Some(wrap_record_dek(
-            &self.epoch_key,
-            &record_dek,
-            aad.as_bytes(),
-        )?);
-        write_json(path, &envelope)?;
-        Ok(())
+        encrypt_envelope(envelope, plaintext, &self.epoch_key)
     }
 
     fn decrypt_provider_path(&self, path: &Path) -> Result<ProviderRecordPlaintext, VaultError> {
@@ -2094,41 +2087,6 @@ impl Vault {
 
     fn decrypt_envelope_bytes(&self, envelope: &ObjectEnvelope) -> Result<Vec<u8>, VaultError> {
         decrypt_envelope_with_epoch(envelope, &self.epoch_key)
-    }
-
-    fn reencrypt_envelope_with_new_epoch(
-        &self,
-        path: &Path,
-        old_epoch: &VaultEpochKey,
-        new_epoch: &VaultEpochKey,
-    ) -> Result<(), VaultError> {
-        let mut envelope: ObjectEnvelope = read_json(path)?;
-        if envelope.tombstone || envelope.wrapped_dek.is_none() || envelope.payload.is_none() {
-            return Ok(());
-        }
-        let plaintext = decrypt_envelope_with_epoch(&envelope, old_epoch)?;
-        envelope.device_id = self.device_id;
-        envelope.updated_at = OffsetDateTime::now_utc();
-        envelope.lamport = envelope.lamport.saturating_add(1);
-        let aad = object_aad(&envelope);
-        let record_dek = generate_record_dek();
-        envelope.payload = Some(encrypt_bytes(
-            record_dek.as_bytes(),
-            aad.as_bytes(),
-            &plaintext,
-        )?);
-        envelope.wrapped_dek = Some(wrap_record_dek(new_epoch, &record_dek, aad.as_bytes())?);
-        write_json(path, &envelope)?;
-        Ok(())
-    }
-
-    fn encrypted_object_paths(&self) -> Result<Vec<PathBuf>, VaultError> {
-        let mut paths = Vec::new();
-        paths.extend(encrypted_paths(&self.root.join("objects"), "aipobj")?);
-        paths.extend(encrypted_paths(&self.root.join("devices"), "aipdevice")?);
-        paths.extend(encrypted_paths(&self.root.join("grants"), "aipgrant")?);
-        paths.extend(encrypted_paths(&self.root.join("audit"), "aipaudit")?);
-        Ok(paths)
     }
 
     fn record_path(&self, id: Uuid) -> PathBuf {
@@ -2196,23 +2154,6 @@ impl Vault {
         )
     }
 
-    fn rewrap_header_keys(&mut self) -> Result<(), VaultError> {
-        self.header.wrapped_epoch_key = encrypt_bytes(
-            self.root_key.as_bytes(),
-            header_key_aad(self.header.vault_id, "epoch").as_bytes(),
-            self.epoch_key.as_bytes(),
-        )?;
-        self.header.wrapped_index_key = encrypt_bytes(
-            self.root_key.as_bytes(),
-            header_key_aad(self.header.vault_id, "index").as_bytes(),
-            &self.index_key,
-        )?;
-        self.header.current_epoch = self.epoch_key.epoch().clone();
-        self.header.updated_at = OffsetDateTime::now_utc();
-        write_json(self.root.join("manifest.aipmanifest"), &self.header)?;
-        Ok(())
-    }
-
     #[cfg(test)]
     fn decrypt_envelope_with_epoch_for_test(
         &self,
@@ -2227,6 +2168,22 @@ impl Vault {
     fn epoch_key_for_test(&self) -> VaultEpochKey {
         self.epoch_key.clone()
     }
+}
+
+fn encrypt_envelope(
+    mut envelope: ObjectEnvelope,
+    plaintext: &[u8],
+    epoch: &VaultEpochKey,
+) -> Result<ObjectEnvelope, VaultError> {
+    let aad = object_aad(&envelope);
+    let record_dek = generate_record_dek();
+    envelope.payload = Some(encrypt_bytes(
+        record_dek.as_bytes(),
+        aad.as_bytes(),
+        plaintext,
+    )?);
+    envelope.wrapped_dek = Some(wrap_record_dek(epoch, &record_dek, aad.as_bytes())?);
+    Ok(envelope)
 }
 
 fn decrypt_envelope_with_epoch(
@@ -2507,13 +2464,16 @@ fn create_dirs(root: &Path) -> Result<(), VaultError> {
     Ok(())
 }
 
+const BACKUP_ROOT_FILES: &[&str] = &[
+    "manifest.aipmanifest",
+    "sync-checkpoint.aipcheckpoint",
+    "server-config.aipstate",
+    "pricing.aipstate",
+];
+
 fn exportable_files(root: &Path) -> Result<Vec<PathBuf>, VaultError> {
     let mut files = Vec::new();
-    for relative in [
-        "manifest.aipmanifest",
-        "sync-checkpoint.aipcheckpoint",
-        "server-config.aipstate",
-    ] {
+    for relative in BACKUP_ROOT_FILES {
         let path = root.join(relative);
         if path.exists() {
             files.push(PathBuf::from(relative));

@@ -1883,44 +1883,60 @@ mod tests {
             upstream.set_nonblocking(true).unwrap();
             let server = std::thread::spawn(move || {
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                let mut stream = loop {
-                    match upstream.accept() {
-                        Ok((stream, _)) => break stream,
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            assert!(std::time::Instant::now() < deadline);
-                            std::thread::sleep(Duration::from_millis(10));
+                loop {
+                    let mut stream = loop {
+                        match upstream.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(std::time::Instant::now() < deadline);
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                            Err(error) => panic!("{error}"),
                         }
-                        Err(error) => panic!("{error}"),
+                    };
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    // TCP reads can split the headers and body. Consume the whole
+                    // request before closing so unread bytes cannot reset the reply.
+                    let mut request = Vec::new();
+                    let mut byte = [0];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        assert!(request.len() < 8192);
+                        stream.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
                     }
-                };
-                stream.set_nonblocking(false).unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(3)))
-                    .unwrap();
-                // TCP reads can split the headers and body. Consume the whole
-                // request before closing so unread bytes cannot reset the reply.
-                let mut request = Vec::new();
-                let mut byte = [0];
-                while !request.ends_with(b"\r\n\r\n") {
-                    assert!(request.len() < 8192);
-                    stream.read_exact(&mut byte).unwrap();
-                    request.push(byte[0]);
+                    let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                    // Local development listener discovery can send GET / before
+                    // this fixture's API request. Ignore only unauthenticated root
+                    // probes; keep the POST, body and rotated-key assertions.
+                    if request.starts_with("get / http/1.1\r\n")
+                        && !request.contains("\r\nauthorization:")
+                    {
+                        write!(stream, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                        assert!(std::time::Instant::now() < deadline);
+                        continue;
+                    }
+                    assert!(
+                        request.starts_with("post /v1/responses "),
+                        "unexpected upstream request: {:?}",
+                        request.lines().next()
+                    );
+                    let length: usize = request
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    assert_eq!(length, 2);
+                    let mut input = [0; 2];
+                    stream.read_exact(&mut input).unwrap();
+                    assert_eq!(&input, b"{}");
+                    let body = r#"{"id":"ok","status":"completed","output":[]}"#;
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+                    break request;
                 }
-                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
-                assert!(request.starts_with("post /v1/responses "));
-                let length: usize = request
-                    .lines()
-                    .find_map(|line| line.strip_prefix("content-length: "))
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                assert_eq!(length, 2);
-                let mut input = [0; 2];
-                stream.read_exact(&mut input).unwrap();
-                assert_eq!(&input, b"{}");
-                let body = r#"{"id":"ok","status":"completed","output":[]}"#;
-                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
-                request
             });
             let response = reqwest::blocking::Client::builder()
                 .no_proxy()
