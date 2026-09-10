@@ -378,7 +378,7 @@ impl AmToCc {
                     out.push(self.chunk(
                         json!({"tool_calls": [{
                             "index": tool_index,
-                            "id": block.get("id").cloned().unwrap_or(Value::Null),
+                            "id": block.get("id").cloned().unwrap_or_else(|| json!(format!("call_conv_{tool_index}"))),
                             "type": "function",
                             "function": {"name": block.get("name").cloned().unwrap_or(Value::Null), "arguments": ""},
                         }]}),
@@ -730,7 +730,7 @@ impl AmToRs {
                         let item = json!({
                             "type": "function_call",
                             "id": format!("{}_fc_{index}", self.id),
-                            "call_id": block.get("id").cloned().unwrap_or(Value::Null),
+                            "call_id": block.get("id").cloned().unwrap_or_else(|| json!(format!("call_conv_{index}"))),
                             "name": block.get("name").cloned().unwrap_or(Value::Null),
                             "arguments": "",
                             "status": "in_progress",
@@ -1292,6 +1292,51 @@ mod tests {
         assert_eq!(events[7].1["response"]["output"][0], events[6].1["item"]);
         // terminal fallback: message_stop without message_delta still completes
         assert_eq!(events[7].1["response"]["usage"]["output_tokens"], 0);
+    }
+
+    #[test]
+    fn missing_tool_call_ids_are_synthesized() {
+        // Upstreams may omit tool_call/tool_use ids; emitted items must still
+        // carry usable ids so the client's tool results can pair back up.
+        let mut c = StreamConverter::new(CC, AM).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                "data: [DONE]\n\n",
+            ],
+        );
+        let events = parsed(&out);
+        assert_eq!(events[1].1["content_block"]["id"], "toolu_conv_0");
+
+        let mut c = StreamConverter::new(AM, CC).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"m\"}}\n\n",
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"f\"}}\n\n",
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let chunk: Value = serde_json::from_str(&parse_sse(&out[1]).unwrap().data).unwrap();
+        assert_eq!(
+            chunk["choices"][0]["delta"]["tool_calls"][0]["id"],
+            "call_conv_0"
+        );
+
+        let mut c = StreamConverter::new(AM, RS).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"m\"}}\n\n",
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"f\"}}\n\n",
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let events = parsed(&out);
+        assert_eq!(events[2].1["item"]["call_id"], "call_conv_0");
     }
 
     // --- framing & passthrough ----------------------------------------------

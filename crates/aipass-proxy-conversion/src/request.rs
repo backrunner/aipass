@@ -164,8 +164,9 @@ fn am_to_cc(payload: Value) -> Result<Value, ConversionError> {
         .get("messages")
         .and_then(Value::as_array)
         .ok_or_else(|| invalid(AM, "missing messages array"))?;
+    let mut generated_ids = 0u64;
     for message in am_messages {
-        am_message_to_cc(message, &mut messages);
+        am_message_to_cc(message, &mut messages, &mut generated_ids);
     }
     out.insert("messages".into(), Value::Array(messages));
 
@@ -195,7 +196,7 @@ fn am_to_cc(payload: Value) -> Result<Value, ConversionError> {
     Ok(Value::Object(out))
 }
 
-fn am_message_to_cc(message: &Value, out: &mut Vec<Value>) {
+fn am_message_to_cc(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u64) {
     let role = message
         .get("role")
         .and_then(Value::as_str)
@@ -219,7 +220,11 @@ fn am_message_to_cc(message: &Value, out: &mut Vec<Value>) {
                         }
                     }
                     "tool_use" => tool_calls.push(json!({
-                        "id": block.get("id").cloned().unwrap_or(Value::Null),
+                        "id": block.get("id").cloned().unwrap_or_else(|| {
+                            let id = json!(format!("call_conv_{generated_ids}"));
+                            *generated_ids += 1;
+                            id
+                        }),
                         "type": "function",
                         "function": {
                             "name": block.get("name").cloned().unwrap_or(Value::Null),
@@ -284,8 +289,9 @@ fn am_to_rs(payload: Value) -> Result<Value, ConversionError> {
         .and_then(Value::as_array)
         .ok_or_else(|| invalid(AM, "missing messages array"))?;
     let mut input = Vec::new();
+    let mut generated_ids = 0u64;
     for message in am_messages {
-        am_message_to_rs(message, &mut input);
+        am_message_to_rs(message, &mut input, &mut generated_ids);
     }
     out.insert("input".into(), Value::Array(input));
 
@@ -313,7 +319,7 @@ fn am_to_rs(payload: Value) -> Result<Value, ConversionError> {
     Ok(Value::Object(out))
 }
 
-fn am_message_to_rs(message: &Value, out: &mut Vec<Value>) {
+fn am_message_to_rs(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u64) {
     let role = message
         .get("role")
         .and_then(Value::as_str)
@@ -345,7 +351,11 @@ fn am_message_to_rs(message: &Value, out: &mut Vec<Value>) {
                     }
                     "tool_use" => calls.push(json!({
                         "type": "function_call",
-                        "call_id": block.get("id").cloned().unwrap_or(Value::Null),
+                        "call_id": block.get("id").cloned().unwrap_or_else(|| {
+                            let id = json!(format!("call_conv_{generated_ids}"));
+                            *generated_ids += 1;
+                            id
+                        }),
                         "name": block.get("name").cloned().unwrap_or(Value::Null),
                         "arguments": json_string(block.get("input").unwrap_or(&Value::Null)),
                     })),
@@ -595,6 +605,7 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
     out.insert("max_tokens".into(), json!(max_tokens));
 
     let mut messages: Vec<(String, Vec<Value>)> = Vec::new();
+    let mut generated_ids = 0u64;
     match src.get("input") {
         Some(Value::String(text)) => {
             messages.push((
@@ -614,7 +625,7 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
                         }
                     }
                 } else {
-                    rs_item_to_am(item, &mut messages)?;
+                    rs_item_to_am(item, &mut messages, &mut generated_ids)?;
                 }
             }
         }
@@ -659,6 +670,7 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
 fn rs_item_to_am(
     item: &Value,
     messages: &mut Vec<(String, Vec<Value>)>,
+    generated_ids: &mut u64,
 ) -> Result<(), ConversionError> {
     match item.get("type").and_then(Value::as_str) {
         Some("function_call") => {
@@ -672,11 +684,19 @@ fn rs_item_to_am(
                     format!("function_call arguments are not valid JSON: {err}"),
                 )
             })?;
+            let id = item
+                .get("call_id")
+                .or_else(|| item.get("id"))
+                .cloned()
+                .unwrap_or_else(|| {
+                    *generated_ids += 1;
+                    json!(format!("toolu_conv_{generated_ids}"))
+                });
             messages.push((
                 "assistant".to_string(),
                 vec![json!({
                     "type": "tool_use",
-                    "id": item.get("call_id").or_else(|| item.get("id")).cloned().unwrap_or(Value::Null),
+                    "id": id,
                     "name": item.get("name").cloned().unwrap_or(Value::Null),
                     "input": input,
                 })],
@@ -1047,6 +1067,43 @@ mod tests {
                 "unsupported history {kind} must not disappear"
             );
         }
+    }
+
+    #[test]
+    fn missing_tool_call_ids_are_synthesized() {
+        // History items without call ids still need valid tool_use ids so the
+        // pairing survives the next round-trip.
+        let out = rs_to_am(json!({
+            "model": "m",
+            "input": [{"type": "function_call", "name": "f", "arguments": "{}"}]
+        }))
+        .unwrap();
+        assert_eq!(out["messages"][0]["content"][0]["id"], "toolu_conv_1");
+
+        // Ids stay unique across messages in the same request.
+        let out = am_to_cc(json!({
+            "model": "m",
+            "messages": [
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "name": "f", "input": {}}
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "name": "g", "input": {}}
+                ]}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(out["messages"][0]["tool_calls"][0]["id"], "call_conv_0");
+        assert_eq!(out["messages"][1]["tool_calls"][0]["id"], "call_conv_1");
+
+        let out = am_to_rs(json!({
+            "model": "m",
+            "messages": [{"role": "assistant", "content": [
+                {"type": "tool_use", "name": "f", "input": {}}
+            ]}]
+        }))
+        .unwrap();
+        assert_eq!(out["input"][0]["call_id"], "call_conv_0");
     }
 
     #[test]

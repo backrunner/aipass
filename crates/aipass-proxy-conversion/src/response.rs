@@ -148,9 +148,10 @@ fn am_to_cc(payload: Value) -> Result<Value, ConversionError> {
     let (text, tool_uses) = am_content_parts(src.get("content"));
     let tool_calls: Vec<Value> = tool_uses
         .iter()
-        .map(|block| {
+        .enumerate()
+        .map(|(index, block)| {
             json!({
-                "id": block.get("id").cloned().unwrap_or(Value::Null),
+                "id": block.get("id").cloned().unwrap_or_else(|| json!(format!("call_conv_{index}"))),
                 "type": "function",
                 "function": {
                     "name": block.get("name").cloned().unwrap_or(Value::Null),
@@ -204,8 +205,9 @@ fn am_to_rs(payload: Value) -> Result<Value, ConversionError> {
             "content": [{"type": "output_text", "text": text}],
         }));
     }
-    for block in &tool_uses {
-        let call_id = block.get("id").and_then(Value::as_str).unwrap_or("");
+    for (index, block) in tool_uses.iter().enumerate() {
+        let fallback = format!("call_conv_{index}");
+        let call_id = block.get("id").and_then(Value::as_str).unwrap_or(&fallback);
         output.push(json!({
             "type": "function_call",
             "id": swap_id_prefix(call_id, "toolu_", "fc_"),
@@ -274,11 +276,11 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
         _ => {}
     }
     if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
-        for call in tool_calls {
+        for (index, call) in tool_calls.iter().enumerate() {
             let function = call.get("function").cloned().unwrap_or(Value::Null);
             content.push(json!({
                 "type": "tool_use",
-                "id": call.get("id").cloned().unwrap_or(Value::Null),
+                "id": call.get("id").cloned().unwrap_or_else(|| json!(format!("toolu_conv_{index}"))),
                 "name": function.get("name").cloned().unwrap_or(Value::Null),
                 "input": parse_tool_arguments(function.get("arguments"), CC)?,
             }));
@@ -312,7 +314,7 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
 
     let mut content: Vec<Value> = Vec::new();
     let mut saw_tool = false;
-    for item in output {
+    for (index, item) in output.iter().enumerate() {
         match item.get("type").and_then(Value::as_str) {
             Some("message") => {
                 if let Some(parts) = item.get("content").and_then(Value::as_array) {
@@ -327,7 +329,7 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
                 saw_tool = true;
                 content.push(json!({
                     "type": "tool_use",
-                    "id": item.get("call_id").or_else(|| item.get("id")).cloned().unwrap_or(Value::Null),
+                    "id": item.get("call_id").or_else(|| item.get("id")).cloned().unwrap_or_else(|| json!(format!("toolu_conv_{index}"))),
                     "name": item.get("name").cloned().unwrap_or(Value::Null),
                     "input": parse_tool_arguments(item.get("arguments"), RS)?,
                 }));
@@ -513,6 +515,52 @@ mod tests {
         assert_eq!(out["stop_reason"], "tool_use");
         assert_eq!(out["usage"]["input_tokens"], 10);
         assert_eq!(out["usage"]["cache_read_input_tokens"], 2);
+    }
+
+    #[test]
+    fn missing_tool_call_ids_are_synthesized() {
+        // OpenAI-compatible upstreams may omit tool_call ids; the converted
+        // items must still carry usable ids for tool_result round-trips.
+        let out = cc_to_am(json!({
+            "id": "chatcmpl_1", "model": "m",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": null, "tool_calls": [
+                {"type": "function", "function": {"name": "f", "arguments": "{}"}},
+                {"id": "call_kept", "type": "function", "function": {"name": "g", "arguments": "{}"}}
+            ]}, "finish_reason": "tool_calls"}]
+        }))
+        .unwrap();
+        assert_eq!(out["content"][0]["id"], "toolu_conv_0");
+        assert_eq!(out["content"][1]["id"], "call_kept");
+
+        let out = rs_to_am(json!({
+            "id": "resp_1", "status": "completed", "model": "m",
+            "output": [
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "x"}]},
+                {"type": "function_call", "name": "f", "arguments": "{}"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(out["content"][1]["id"], "toolu_conv_1");
+
+        let out = am_to_cc(json!({
+            "id": "msg_1", "model": "m",
+            "content": [{"type": "tool_use", "name": "f", "input": {}}],
+            "stop_reason": "tool_use", "usage": {"input_tokens": 0, "output_tokens": 0}
+        }))
+        .unwrap();
+        assert_eq!(
+            out["choices"][0]["message"]["tool_calls"][0]["id"],
+            "call_conv_0"
+        );
+
+        let out = am_to_rs(json!({
+            "id": "msg_1", "model": "m",
+            "content": [{"type": "tool_use", "name": "f", "input": {}}],
+            "stop_reason": "tool_use", "usage": {"input_tokens": 0, "output_tokens": 0}
+        }))
+        .unwrap();
+        assert_eq!(out["output"][0]["call_id"], "call_conv_0");
+        assert_eq!(out["output"][0]["id"], "fc_call_conv_0");
     }
 
     #[test]
