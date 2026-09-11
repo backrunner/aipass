@@ -47,6 +47,7 @@
     ProbeResult,
     ProviderCounts,
     ProviderFilter,
+    SecretKeyMetadata,
     ProxyConfig,
     ProxyLogEntry,
     ProxyRouteConfig,
@@ -1635,7 +1636,7 @@
           }
         });
         committed = true;
-        if (!current()) return false;
+        if (!current()) return true;
         // Reset to the default view before selecting, so a filter, query, or
         // favorites/archive view cannot hide the just-created entry.
         resetProviderListView();
@@ -1670,7 +1671,7 @@
           }
         });
         committed = true;
-        if (!current()) return false;
+        if (!current()) return true;
       } else {
         return false;
       }
@@ -1680,9 +1681,11 @@
       protocolTouched = { providerId: false, interfaceType: false, authScheme: false };
       await loadEntries();
       openPendingDeepLink();
-      return current();
+      // Once the write is durable the edit is done even when the list view
+      // moved on mid-save — never strand the user in an open editor.
+      return committed;
     } catch (err) {
-      if (!current()) return false;
+      if (!current()) return committed;
       const message = String(err);
       reportError(message.includes("websocket_probe_unconfirmed:")
         ? localizedMessage("providerForm.websocketProbeFailed", { message: message.split("websocket_probe_unconfirmed:")[1].trim() })
@@ -1738,7 +1741,7 @@
     }, 1800);
   }
 
-  async function addSecondarySecret() {
+  async function addSecondarySecret(metadata?: SecretKeyMetadata) {
     if (!selected || !newSecretLabel.trim() || !newSecretKey.trim()) return;
     clearError();
     secretBusy = "add";
@@ -1746,7 +1749,13 @@
       await invokeTauri("secret_add", {
         id: selected.id,
         label: newSecretLabel.trim(),
-        apiKey: newSecretKey
+        apiKey: newSecretKey,
+        metadata: metadata && (metadata.interfaceType || metadata.group?.trim())
+          ? {
+              interfaceType: metadata.interfaceType || undefined,
+              group: metadata.group?.trim() || undefined
+            }
+          : undefined
       });
       newSecretLabel = "fallback";
       newSecretKey = "";
@@ -1761,7 +1770,7 @@
     }
   }
 
-  async function updateSecret(secretId: string, label: string, apiKey?: string) {
+  async function updateSecret(secretId: string, label: string, apiKey?: string, metadata?: SecretKeyMetadata) {
     if (!selected || !label.trim()) return;
     clearError();
     secretBusy = secretId;
@@ -1770,7 +1779,15 @@
         id: selected.id,
         secretId,
         label: label.trim(),
-        apiKey: apiKey?.trim() || undefined
+        apiKey: apiKey?.trim() || undefined,
+        // Always send the current field state: a blanked group is an explicit
+        // clear, an interface pick is an explicit override.
+        metadata: metadata
+          ? {
+              interfaceType: metadata.interfaceType || undefined,
+              group: metadata.group?.trim() ?? ""
+            }
+          : undefined
       });
       const nextRevealed = { ...revealedSecrets };
       delete nextRevealed[secretId];
@@ -2577,6 +2594,7 @@
     try {
       const result = await invokeTauri<UsageProbeResult>("provider_usage_probe", {
         id: selected.id,
+        secretId: request.secretId?.trim() || undefined,
         mode: request.mode,
         timeoutSeconds: 15,
         baseUrl: request.baseUrl?.trim() || undefined,
@@ -2611,13 +2629,15 @@
       result.gateway,
       result.source === "sub_api_v1_usage"
     );
-    if (!quota && !gateway) return;
+    if (!quota && !gateway && !result.subscription) return;
     clearError();
     // The usage dialog owns its apply error and retry state.
     await invokeTauri("provider_usage_apply", {
       id: selected.id,
       quota,
-      gateway
+      gateway,
+      source: result.source === "unknown" ? undefined : result.source,
+      subscription: result.subscription
     });
     await loadEntries();
     notice = localizedMessage("notice.usageProbeApplied");
@@ -2665,7 +2685,7 @@
             mode: "auto",
             timeoutSeconds: 15
           });
-          if (!result.ok || (!result.quota && !result.gateway)) continue;
+          if (!result.ok || (!result.quota && !result.gateway && !result.subscription)) continue;
           const quota = mergeQuota(
             entry.quota,
             result.quota,
@@ -2676,8 +2696,14 @@
             result.gateway,
             result.source === "sub_api_v1_usage"
           );
-          if (!quota && !gateway) continue;
-          await invokeTauri("provider_usage_apply", { id: entry.id, quota, gateway });
+          if (!quota && !gateway && !result.subscription) continue;
+          await invokeTauri("provider_usage_apply", {
+            id: entry.id,
+            quota,
+            gateway,
+            source: result.source === "unknown" ? undefined : result.source,
+            subscription: result.subscription
+          });
         } catch (err) {
           console.debug("periodic provider usage unavailable", entry.id, err);
         }
@@ -2693,6 +2719,9 @@
 
   function usageProbeCandidates(): ProviderEntry[] {
     return countEntries.filter((entry) => {
+      // A stored probe source means this entry answered a usage probe before,
+      // even when its provider id, title, or endpoint matches no relay name.
+      if (entry.usageSource) return true;
       const provider = entry.providerId?.toLowerCase() ?? "";
       const endpoint = entry.endpoints.find((item) => item.kind === "api")?.url ?? entry.endpoints[0]?.url ?? "";
       const normalizedProvider = provider.replaceAll("-", "_");
