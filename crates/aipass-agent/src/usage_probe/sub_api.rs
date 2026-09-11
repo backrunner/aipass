@@ -1,5 +1,5 @@
 use aipass_agent_protocol::{UsageProbeQuota, UsageProbeResult, UsageProbeSource};
-use aipass_provider_registry::GatewayMetadata;
+use aipass_provider_registry::{GatewayMetadata, SubscriptionSnapshot, SubscriptionWindow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
@@ -7,8 +7,8 @@ use super::errors::{parse_failure, validation_failure};
 use super::http::get_json;
 use super::urls::{subapi_billing_urls, subapi_usage_urls};
 use super::values::{
-    data_object, format_amount, is_valid_like, is_wallet_plan_name, number_field, response_message,
-    string_field,
+    data_object, expires_at, format_amount, is_valid_like, is_wallet_plan_name, number_field,
+    response_message, string_field,
 };
 
 pub(super) fn run_subapi_probe(
@@ -133,6 +133,9 @@ fn parse_subapi_usage(
         .or_else(|| string_field(data, "name"));
     let unit = string_field(data, "unit").unwrap_or_else(|| "USD".to_string());
     let quota_obj = data.get("quota").and_then(Value::as_object);
+    let subscription = data
+        .get("subscription")
+        .and_then(|value| parse_subapi_subscription(value, plan_name.clone()));
 
     let quota = if let Some(quota_obj) = quota_obj {
         let quota_value = Value::Object(quota_obj.clone());
@@ -152,21 +155,34 @@ fn parse_subapi_usage(
             unit: string_field(&quota_value, "unit").or_else(|| Some(unit.clone())),
         })
     } else {
-        let remaining = number_field(data, "remaining")
-            .or_else(|| number_field(data, "balance"))
-            .filter(|value| value.is_finite() && *value >= 0.0);
-        remaining.map(|remaining| UsageProbeQuota {
-            label: plan_name.clone().or_else(|| Some("SubAPI".to_string())),
-            limit: number_field(data, "total")
-                .filter(|v| v.is_finite() && *v >= 0.0)
-                .map(format_amount),
-            used: number_field(data, "used")
-                .filter(|v| v.is_finite() && *v >= 0.0)
-                .map(format_amount),
-            remaining: Some(format_amount(remaining)),
-            reset_at: None,
-            unit: Some(unit.clone()),
-        })
+        // Unrestricted mode: `remaining` is the wallet balance or the smallest
+        // subscription headroom. Upstream uses -1 for a subscription with no
+        // configured period limits; surface that as "unlimited" instead of
+        // dropping the quota entirely.
+        let remaining = number_field(data, "remaining").or_else(|| number_field(data, "balance"));
+        match remaining.filter(|value| value.is_finite()) {
+            Some(remaining) if remaining >= 0.0 => Some(UsageProbeQuota {
+                label: plan_name.clone().or_else(|| Some("SubAPI".to_string())),
+                limit: number_field(data, "total")
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .map(format_amount),
+                used: number_field(data, "used")
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .map(format_amount),
+                remaining: Some(format_amount(remaining)),
+                reset_at: None,
+                unit: Some(unit.clone()),
+            }),
+            Some(_) if subscription.is_some() => Some(UsageProbeQuota {
+                label: plan_name.clone().or_else(|| Some("SubAPI".to_string())),
+                limit: Some("unlimited".to_string()),
+                used: None,
+                remaining: None,
+                reset_at: None,
+                unit: Some(unit.clone()),
+            }),
+            _ => None,
+        }
     };
 
     let gateway = plan_name
@@ -177,7 +193,7 @@ fn parse_subapi_usage(
             rate: None,
         });
 
-    if quota.is_none() && gateway.is_none() {
+    if quota.is_none() && gateway.is_none() && subscription.is_none() {
         return Err("response is missing SubAPI quota fields".to_string());
     }
 
@@ -189,9 +205,98 @@ fn parse_subapi_usage(
         status: Some(status),
         quota,
         gateway,
+        subscription,
         plan_name,
         message: mode.map(|mode| format!("SubAPI usage mode: {mode}")),
         error: None,
+    })
+}
+
+/// Map a SubAPI `subscription` object into a snapshot of daily/weekly/monthly
+/// windows. The endpoint reports usage and limits per period but not the
+/// window boundaries, so only the weekly reset (anchored at
+/// `weekly_window_start`) and the subscription expiry carry timestamps.
+fn parse_subapi_subscription(
+    subscription: &Value,
+    plan_name: Option<String>,
+) -> Option<SubscriptionSnapshot> {
+    let object = subscription.as_object()?;
+
+    let window = |id: &str, label: &str, minutes: u64, used_field: &str, limit_field: &str| {
+        let used = number_field(subscription, used_field).filter(|v| v.is_finite() && *v >= 0.0);
+        let limit = number_field(subscription, limit_field).filter(|v| v.is_finite() && *v > 0.0);
+        (used.is_some() || limit.is_some()).then(|| SubscriptionWindow {
+            id: id.to_string(),
+            label: label.to_string(),
+            used_percent: match (used, limit) {
+                (Some(used), Some(limit)) => Some((used / limit * 100.0).clamp(0.0, 100.0)),
+                _ => None,
+            },
+            resets_at: None,
+            window_minutes: Some(minutes),
+            source: Some("sub2api-usage".to_string()),
+        })
+    };
+
+    let mut windows = Vec::new();
+    for item in [
+        window(
+            "daily",
+            "Daily",
+            24 * 60,
+            "daily_usage_usd",
+            "daily_limit_usd",
+        ),
+        window(
+            "weekly",
+            "Weekly",
+            7 * 24 * 60,
+            "weekly_usage_usd",
+            "weekly_limit_usd",
+        ),
+        window(
+            "monthly",
+            "Monthly",
+            30 * 24 * 60,
+            "monthly_usage_usd",
+            "monthly_limit_usd",
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        windows.push(item);
+    }
+
+    // Weekly windows roll over seven days after their anchor.
+    if let Some(weekly) = windows.iter_mut().find(|window| window.id == "weekly") {
+        weekly.resets_at = subscription
+            .get("weekly_window_start")
+            .and_then(Value::as_str)
+            .and_then(|raw| {
+                time::OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339)
+                    .ok()
+            })
+            .map(|start| start + time::Duration::days(7))
+            .and_then(|reset| {
+                reset
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            });
+    }
+
+    if object.is_empty() && windows.is_empty() {
+        return None;
+    }
+    Some(SubscriptionSnapshot {
+        plan: plan_name,
+        subscription_expires_at: expires_at(subscription.get("expires_at")),
+        windows,
+        observed_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default(),
+        source: "sub2api-usage".to_string(),
+        ..SubscriptionSnapshot::default()
     })
 }
 

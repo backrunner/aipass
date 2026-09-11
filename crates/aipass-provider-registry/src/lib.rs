@@ -321,6 +321,11 @@ pub struct ProviderEntry {
     #[serde(default)]
     pub subscription: Option<SubscriptionSnapshot>,
     pub gateway: Option<GatewayMetadata>,
+    /// Which upstream usage endpoint produced the stored quota/gateway
+    /// snapshot. Its presence marks the entry as usage-probeable even when the
+    /// provider id or endpoint does not match a known relay name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_source: Option<String>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
     #[serde(with = "time::serde::rfc3339")]

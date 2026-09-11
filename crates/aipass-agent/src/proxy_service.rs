@@ -13,7 +13,7 @@ use aipass_proxy::{
     UsageGranularity, UsageRow, UsageStore, UsageTimeseriesPoint,
 };
 use aipass_storage::atomic_write_bytes;
-use aipass_vault::Vault;
+use aipass_vault::{Vault, VaultError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -315,6 +315,9 @@ impl ProxyService {
         self.capture_ws_events();
         self.handle.take();
         self.load_config(vault)?;
+        // Prune references to credentials removed elsewhere before validating;
+        // a stale target must not block startup.
+        self.reconcile_missing_credentials(vault)?;
         validate_config(&self.config)?;
         if !self.config.routes.iter().any(|route| route.enabled) {
             return Err(ServiceError::new(
@@ -780,6 +783,59 @@ impl ProxyService {
         Ok(true)
     }
 
+    /// Drop route targets whose provider entry or credential is gone for good —
+    /// a record deleted on another device and synced in, or a key removed while
+    /// the agent was offline. An archived entry keeps its targets: archiving is
+    /// recoverable and the credential still exists. Targets that fail to resolve
+    /// for any other reason stay untouched, and routes that lose their last
+    /// target are dropped.
+    pub fn reconcile_missing_credentials(&mut self, vault: &Vault) -> ServiceResult<bool> {
+        self.load_config(vault)?;
+        let mut removed: Vec<(Uuid, String)> = Vec::new();
+        self.config.routes.retain_mut(|route| {
+            let before = route.targets.len();
+            route.targets.retain(|target| {
+                let gone = match vault.get_provider_summary(target.provider_entry_id) {
+                    Ok(entry) => {
+                        entry.deleted_at.is_some()
+                            || !entry
+                                .secret_refs
+                                .iter()
+                                .any(|secret| secret.id == target.secret_id)
+                    }
+                    Err(VaultError::RecordNotFound) => true,
+                    Err(_) => false,
+                };
+                if gone {
+                    removed.push((target.provider_entry_id, target.secret_id.clone()));
+                }
+                !gone
+            });
+            !route.targets.is_empty() || before == 0
+        });
+        if removed.is_empty() {
+            return Ok(false);
+        }
+        for (entry_id, secret_id) in removed {
+            if let Err(err) = self.remove_pricing_assignments(vault, entry_id, Some(&secret_id)) {
+                write_component_log(
+                    AGENT_LOG,
+                    "WARN",
+                    &format!(
+                        "failed to remove pricing assignments for removed credential {secret_id} code={:?}",
+                        err.code
+                    ),
+                );
+            }
+        }
+        self.save_config(vault)?;
+        // Reconcile never stops the listener: a synced credential removal must
+        // keep the proxy serving its remaining routes, and an emptied route set
+        // simply rejects requests until the user configures new targets.
+        self.reload_if_running(vault)?;
+        Ok(true)
+    }
+
     pub fn refresh_provider_credentials(
         &mut self,
         vault: &Vault,
@@ -791,6 +847,10 @@ impl ProxyService {
             .is_some_and(|handle| handle.status().running);
         let result = (|| -> ServiceResult<bool> {
             self.load_config(vault)?;
+            // A credential deleted through another path (for example synced
+            // in from a peer device) must drop its target rather than fail the
+            // whole refresh.
+            self.reconcile_missing_credentials(vault)?;
             let referenced = self.config.routes.iter().any(|route| {
                 route
                     .targets
@@ -869,6 +929,20 @@ impl ProxyService {
                 if target.group != next_group {
                     target.group = next_group;
                     config_changed = true;
+                }
+                // A wire format bound to the key is the upstream protocol for
+                // this credential — relay keys in one entry may speak
+                // different protocols. Keys without an override keep the
+                // configured/route-level protocol untouched.
+                if let Some(protocol) = secret
+                    .interface_type
+                    .as_ref()
+                    .and_then(|interface| key_upstream_protocol(interface, &entry))
+                {
+                    if target.protocol != Some(protocol) {
+                        target.protocol = Some(protocol);
+                        config_changed = true;
+                    }
                 }
             }
             if config_changed {
@@ -1114,6 +1188,30 @@ pub(crate) fn proxy_auth_scheme(auth_scheme: &AuthScheme) -> Option<&'static str
         AuthScheme::XApiKey => Some("x_api_key"),
         AuthScheme::AzureApiKey => Some("azure_api_key"),
         AuthScheme::GoogleApiKey | AuthScheme::AwsProfile => None,
+    }
+}
+
+/// Upstream wire protocol for a key's bound interface, mirroring the desktop
+/// `nativeProtocolForEntry` mapping: first-party OpenAI (and Codex OAuth) speak
+/// the Responses API, every other OpenAI-compatible endpoint speaks Chat
+/// Completions. Interfaces without a proxy protocol return `None`.
+fn key_upstream_protocol(
+    interface: &InterfaceType,
+    entry: &aipass_vault::EntrySummary,
+) -> Option<aipass_proxy::Protocol> {
+    match interface {
+        InterfaceType::AnthropicMessages => Some(aipass_proxy::Protocol::AnthropicMessages),
+        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => {
+            if entry.provider_id.as_deref() == Some("openai")
+                || (entry.provider_id.as_deref() == Some("codex")
+                    && entry.credential_kind == CredentialKind::OAuth)
+            {
+                Some(aipass_proxy::Protocol::OpenAiResponses)
+            } else {
+                Some(aipass_proxy::Protocol::OpenAiChatCompletions)
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1423,6 +1521,7 @@ mod tests {
                 weight: 1,
                 enabled: true,
                 protocol: None,
+                prefer_ws: false,
             }];
             service.save_config(&vault).unwrap();
             let status = service.start(&vault).unwrap();
@@ -1689,6 +1788,7 @@ mod tests {
             weight: 1,
             enabled: true,
             protocol: None,
+            prefer_ws: false,
         }];
         config.enabled = true;
 
@@ -1781,6 +1881,7 @@ mod tests {
                     weight: 1,
                     enabled: true,
                     protocol: None,
+                    prefer_ws: false,
                 },
                 api_key: upstream_api_key.into(),
             }],
@@ -1847,6 +1948,7 @@ mod tests {
                     weight: 1,
                     enabled: true,
                     protocol: None,
+                    prefer_ws: false,
                 });
             }
             service.save_config(&vault).unwrap();
@@ -1969,6 +2071,7 @@ mod tests {
             weight: 1,
             enabled: true,
             protocol: None,
+            prefer_ws: false,
         }];
         service
             .save_config(&creation.vault)
@@ -2097,6 +2200,7 @@ mod tests {
             weight: 1,
             enabled: true,
             protocol: None,
+            prefer_ws: false,
         }];
         service
             .save_config(&creation.vault)
@@ -2189,6 +2293,7 @@ mod tests {
             weight: 1,
             enabled: true,
             protocol: None,
+            prefer_ws: false,
         }];
         assert!(service.runtime_config(&creation.vault).is_ok());
 
@@ -2231,6 +2336,192 @@ mod tests {
             runtime.routes[0].targets[0].config.protocol,
             Some(aipass_proxy::Protocol::OpenAiResponses)
         );
+    }
+
+    #[test]
+    fn key_bound_interface_syncs_target_protocol_on_refresh() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let provider_id = creation
+            .vault
+            .add_provider(provider_input(
+                "upstream-key",
+                "http://127.0.0.1:9/v1".into(),
+                "header",
+            ))
+            .expect("add provider");
+        let primary_id = creation
+            .vault
+            .get_provider_summary(provider_id)
+            .expect("provider summary")
+            .secret_refs[0]
+            .id
+            .clone();
+        // A second key bound to the Anthropic wire format: the same entry can
+        // relay differently-shaped groups.
+        let anthropic_key = creation
+            .vault
+            .add_secret_with_metadata(
+                provider_id,
+                "anthropic",
+                "sk-ant-key",
+                &SecretMetadataInput {
+                    interface_type: Some(InterfaceType::AnthropicMessages),
+                    group: Some("claude".into()),
+                    ..SecretMetadataInput::default()
+                },
+            )
+            .expect("add anthropic key");
+
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        service.config = config_with_token("aipass-key-protocol");
+        service.config.routes[0].targets = vec![ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: provider_id,
+            secret_id: anthropic_key.clone(),
+            label: "anthropic".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            protocol: None,
+            prefer_ws: false,
+        }];
+        assert!(service
+            .refresh_provider_credentials(&creation.vault, provider_id)
+            .expect("refresh proxy"));
+
+        let target = &service.config.routes[0].targets[0];
+        assert_eq!(
+            target.protocol,
+            Some(aipass_proxy::Protocol::AnthropicMessages)
+        );
+        assert_eq!(target.group.as_deref(), Some("claude"));
+
+        // The unbound sibling keeps its route-level protocol untouched.
+        service.config.routes[0].targets.push(ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: provider_id,
+            secret_id: primary_id,
+            label: "primary".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 1,
+            weight: 1,
+            enabled: true,
+            protocol: None,
+            prefer_ws: false,
+        });
+        service
+            .save_config(&creation.vault)
+            .expect("persist second target");
+        assert!(service
+            .refresh_provider_credentials(&creation.vault, provider_id)
+            .expect("refresh proxy"));
+        assert_eq!(service.config.routes[0].targets[1].protocol, None);
+    }
+
+    /// A key deleted elsewhere — synced from a peer device, for example —
+    /// leaves a dangling route target. Reconciliation must drop it durably so
+    /// the next cold start does not fail on the missing credential, while
+    /// untouched keys stay in place.
+    #[test]
+    fn reconcile_prunes_targets_whose_credential_was_removed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .expect("create vault");
+        let provider_id = creation
+            .vault
+            .add_provider(provider_input(
+                "upstream-key",
+                "http://127.0.0.1:9/v1".into(),
+                "header",
+            ))
+            .expect("add provider");
+        let primary_id = creation
+            .vault
+            .get_provider_summary(provider_id)
+            .expect("provider summary")
+            .secret_refs[0]
+            .id
+            .clone();
+        let second_key = creation
+            .vault
+            .add_secret(provider_id, "secondary", "sk-second")
+            .expect("add second key");
+
+        let target_for = |secret_id: &str, priority: u16| ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: provider_id,
+            secret_id: secret_id.to_string(),
+            label: secret_id.to_string(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority,
+            weight: 1,
+            enabled: true,
+            protocol: None,
+            prefer_ws: false,
+        };
+        let mut service = ProxyService::new(temp.path()).expect("proxy service");
+        service.config = config_with_token("aipass-reconcile");
+        service.config.routes[0].targets =
+            vec![target_for(&primary_id, 0), target_for(&second_key, 1)];
+        service
+            .set_pricing_assignment(&creation.vault, provider_id, second_key.clone(), None, 1.0)
+            .expect("pricing assignment");
+        service
+            .save_config(&creation.vault)
+            .expect("save proxy config");
+
+        // The vault-side delete bypasses the handler cleanup, mirroring a
+        // synced record where the key is simply gone.
+        creation
+            .vault
+            .remove_secret(provider_id, &second_key)
+            .expect("remove second key");
+        assert!(service
+            .reconcile_missing_credentials(&creation.vault)
+            .expect("reconcile"));
+
+        let route = &service.config.routes[0];
+        assert_eq!(route.targets.len(), 1);
+        assert_eq!(route.targets[0].secret_id, primary_id);
+        assert!(service
+            .pricing_config(&creation.vault)
+            .expect("pricing config")
+            .assignments
+            .iter()
+            .all(|assignment| assignment.secret_id != second_key));
+
+        // Trashing the entry removes its remaining target and the emptied
+        // route, and a fresh start no longer trips over stale references.
+        creation
+            .vault
+            .trash_provider(provider_id)
+            .expect("trash provider");
+        assert!(service
+            .reconcile_missing_credentials(&creation.vault)
+            .expect("reconcile after trash"));
+        assert!(service.config.routes.is_empty());
+        let error = service.start(&creation.vault).expect_err("no routes left");
+        assert!(error
+            .message
+            .contains("enable at least one proxy route group"));
     }
 
     #[test]
@@ -2503,6 +2794,7 @@ mod tests {
             weight: 1,
             enabled: true,
             protocol: Some(aipass_proxy::Protocol::AnthropicMessages),
+            prefer_ws: false,
         }];
         assert!(validate_config(&config).is_err());
         config.routes[0].conversion_enabled = true;
@@ -2543,6 +2835,7 @@ mod tests {
             weight: 1,
             enabled: true,
             protocol: None,
+            prefer_ws: false,
         }];
         let runtime = service
             .runtime_config(&creation.vault)
@@ -2741,6 +3034,7 @@ mod tests {
             weight: 1,
             enabled: true,
             protocol: None,
+            prefer_ws: false,
         }];
         service
             .save_config(&creation.vault)

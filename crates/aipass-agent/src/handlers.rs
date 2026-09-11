@@ -676,9 +676,19 @@ fn dispatch_request(
                     .collect(),
             })
         }),
-        AgentRequest::SecretAdd { id, label, secret } => with_vault(state, false, |vault| {
+        AgentRequest::SecretAdd {
+            id,
+            label,
+            secret,
+            metadata,
+        } => with_vault(state, false, |vault| {
             let secret_id = vault
-                .add_secret(id, label, secret.into_inner())
+                .add_secret_with_metadata(
+                    id,
+                    label,
+                    secret.into_inner(),
+                    &metadata.unwrap_or_default(),
+                )
                 .map_err(map_vault_error)?;
             refresh_proxy_provider_credentials(state, vault, id)?;
             Ok(secret_id)
@@ -689,8 +699,9 @@ fn dispatch_request(
             secret_id,
             label,
             secret,
+            metadata,
         } => with_vault(state, false, |vault| {
-            let updated = vault
+            let mut updated = vault
                 .update_secret(
                     id,
                     &secret_id,
@@ -698,6 +709,11 @@ fn dispatch_request(
                     secret.map(SensitiveString::into_inner),
                 )
                 .map_err(map_vault_error)?;
+            if let Some(metadata) = metadata {
+                updated |= vault
+                    .set_secret_metadata(id, &secret_id, &metadata)
+                    .map_err(map_vault_error)?;
+            }
             if updated {
                 refresh_proxy_provider_credentials(state, vault, id)?;
             }
@@ -763,6 +779,7 @@ fn dispatch_request(
         }
         AgentRequest::ProviderUsageProbe {
             id,
+            secret_id,
             mode,
             timeout_seconds,
             base_url,
@@ -770,9 +787,19 @@ fn dispatch_request(
             user_id,
         } => {
             let (entry, secret) = with_vault(state, true, |vault| {
+                let selector = secret_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                let secret = match selector {
+                    Some(selector) => vault
+                        .reveal_secret_field(id, selector)
+                        .map_err(map_vault_error)?,
+                    None => vault.reveal_secret(id).map_err(map_vault_error)?,
+                };
                 Ok((
                     vault.get_provider_summary(id).map_err(map_vault_error)?,
-                    vault.reveal_secret(id).map_err(map_vault_error)?,
+                    secret,
                 ))
             })?;
             Ok(AgentResponse::success(
@@ -789,11 +816,31 @@ fn dispatch_request(
                 ),
             ))
         }
-        AgentRequest::ProviderUsageApply { id, quota, gateway } => {
+        AgentRequest::ProviderUsageApply {
+            id,
+            quota,
+            gateway,
+            source,
+            subscription,
+        } => {
+            let usage_source = source.and_then(|source| {
+                serde_json::to_value(source)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_string))
+            });
             with_vault(state, false, |vault| {
                 vault
-                    .update_provider_usage(id, quota, gateway)
-                    .map_err(map_vault_error)
+                    .update_provider_usage(id, quota, gateway, usage_source.as_deref())
+                    .map_err(map_vault_error)?;
+                // A probe-sourced apply replaces the subscription snapshot
+                // wholesale: an upstream that reports no subscription window
+                // (e.g. SubAPI wallet mode) must clear a previously stored one.
+                if subscription.is_some() || usage_source.is_some() {
+                    vault
+                        .update_provider_subscription(id, subscription)
+                        .map_err(map_vault_error)?;
+                }
+                Ok(())
             })
             .map(|_| AgentResponse::empty())
         }

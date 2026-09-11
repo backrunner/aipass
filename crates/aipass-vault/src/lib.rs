@@ -5,9 +5,8 @@ use aipass_crypto::{
     VaultEpochKey, VaultRootKey, WrappedDek, KEY_LEN,
 };
 use aipass_provider_registry::{
-    primary_secret_ref_mut, AuthScheme, BillingRule, CredentialKind, GatewayMetadata,
-    InterfaceType, OAuthProvider, ProviderEndpoint, ProviderEntry, ProviderKind, QuotaInfo,
-    SecretRef, SubscriptionSnapshot,
+    AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, OAuthProvider,
+    ProviderEndpoint, ProviderEntry, ProviderKind, QuotaInfo, SecretRef, SubscriptionSnapshot,
 };
 use aipass_storage::atomic_write_bytes;
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
@@ -335,6 +334,10 @@ pub struct EntrySummary {
     #[serde(default)]
     pub subscription: Option<SubscriptionSnapshot>,
     pub gateway: Option<GatewayMetadata>,
+    /// The upstream usage endpoint that produced the stored quota/gateway
+    /// snapshot; marks the entry as usage-probeable for background refresh.
+    #[serde(default)]
+    pub usage_source: Option<String>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
     pub header_names: Vec<String>,
@@ -401,17 +404,16 @@ fn clean_secret_label(value: Option<&str>) -> Option<String> {
 
 fn normalize_user_secret_label(value: &str) -> Option<String> {
     let value = value.trim();
-    // "primary" is reserved for the first-key selector; a user label with
-    // that name could never be addressed by `reveal_secret_field`.
-    (!value.is_empty()
-        && value.len() <= 64
-        && !value.chars().any(char::is_control)
-        && !value.eq_ignore_ascii_case(PRIMARY_SECRET_FIELD))
-    .then(|| value.to_string())
+    // "primary" is a valid label: the first-key selector only applies when no
+    // credential actually owns the label, so a literal label wins by matching
+    // first in `find_secret_ref_position`.
+    (!value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control))
+        .then(|| value.to_string())
 }
 
 /// Resolve a `label_or_id` selector deterministically: an exact id match
-/// always wins, and a label match is only used when no secret owns that id.
+/// always wins, then an exact label match, and only when neither matches does
+/// the special "primary" selector fall back to the first credential.
 fn find_secret_ref_position(secret_refs: &[SecretRef], label_or_id: &str) -> Option<usize> {
     secret_refs
         .iter()
@@ -421,6 +423,7 @@ fn find_secret_ref_position(secret_refs: &[SecretRef], label_or_id: &str) -> Opt
                 .iter()
                 .position(|secret| secret.label == label_or_id)
         })
+        .or_else(|| (label_or_id == PRIMARY_SECRET_FIELD && !secret_refs.is_empty()).then_some(0))
 }
 
 pub struct VaultCreation {
@@ -930,6 +933,7 @@ impl Vault {
             quota: input.quota,
             subscription: input.subscription,
             gateway: input.gateway,
+            usage_source: None,
             tags: input.tags,
             notes: input.notes,
             created_at: now,
@@ -1058,12 +1062,9 @@ impl Vault {
     ) -> Result<bool, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
-        let secret = match find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id) {
-            Some(index) => plaintext.entry.secret_refs.get_mut(index),
-            None if label_or_id == PRIMARY_SECRET_FIELD => plaintext.entry.secret_refs.first_mut(),
-            None => None,
-        }
-        .ok_or(VaultError::RecordNotFound)?;
+        let secret = find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
+            .and_then(|index| plaintext.entry.secret_refs.get_mut(index))
+            .ok_or(VaultError::RecordNotFound)?;
         if !metadata.apply_to(secret) {
             return Ok(false);
         }
@@ -1154,20 +1155,22 @@ impl Vault {
             }
         }
         if secret_refs.is_empty() {
-            secret_refs.push(SecretRef::new(
+            let mut primary = SecretRef::new(
                 secret_id.clone(),
                 updated_secret_label.as_deref().unwrap_or("primary"),
                 mask_secret(&api_key),
                 fingerprint,
-            ));
+            );
+            input.secret_metadata.apply_to(&mut primary);
+            secret_refs.push(primary);
         } else if let Some(primary) = secret_refs.first_mut() {
             if let Some(label) = updated_secret_label {
                 primary.label = label;
             }
             primary.masked = mask_secret(&api_key);
             primary.fingerprint = fingerprint;
-        }
-        if let Some(primary) = primary_secret_ref_mut(&mut secret_refs) {
+            // The entry-level edit form always edits the first key, so its
+            // label, value and metadata land on the same credential.
             input.secret_metadata.apply_to(primary);
         }
         // Keep the historical auto-disable explanation until recovery succeeds.
@@ -1209,6 +1212,7 @@ impl Vault {
             quota: input.quota,
             subscription: input.subscription.or(old.entry.subscription),
             gateway: input.gateway,
+            usage_source: old.entry.usage_source,
             tags: input.tags,
             notes: input.notes,
             created_at: old.entry.created_at,
@@ -1247,9 +1251,16 @@ impl Vault {
         id: Uuid,
         quota: Option<QuotaInfo>,
         gateway: Option<GatewayMetadata>,
+        usage_source: Option<&str>,
     ) -> Result<(), VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
+        if let Some(source) = usage_source
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            plaintext.entry.usage_source = Some(source.to_string());
+        }
         if quota.is_some() {
             // The caller sends a complete merged snapshot. Replacing it is
             // important when an upstream explicitly omits used (for example
@@ -1478,17 +1489,9 @@ impl Vault {
     pub fn reveal_secret_field(&self, id: Uuid, label_or_id: &str) -> Result<String, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
-        let secret_id = if label_or_id == PRIMARY_SECRET_FIELD {
-            plaintext
-                .entry
-                .secret_refs
-                .first()
-                .map(|secret| secret.id.clone())
-        } else {
-            find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
-                .map(|index| plaintext.entry.secret_refs[index].id.clone())
-        }
-        .ok_or(VaultError::RecordNotFound)?;
+        let secret_id = find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
+            .map(|index| plaintext.entry.secret_refs[index].id.clone())
+            .ok_or(VaultError::RecordNotFound)?;
         let secret = plaintext
             .secrets
             .get(&secret_id)
@@ -2305,6 +2308,7 @@ fn summary_from_plaintext(plaintext: &ProviderRecordPlaintext) -> EntrySummary {
         quota: entry.quota.clone(),
         subscription: entry.subscription.clone(),
         gateway: entry.gateway.clone(),
+        usage_source: entry.usage_source.clone(),
         tags: entry.tags.clone(),
         notes: entry.notes.clone(),
         header_names: entry.headers.iter().map(|(name, _)| name.clone()).collect(),
@@ -3116,6 +3120,7 @@ mod tests {
                     group: Some("vip".to_string()),
                     rate: Some("0.8x".to_string()),
                 }),
+                Some("sub_api_v1_usage"),
             )
             .unwrap();
 
@@ -3142,6 +3147,7 @@ mod tests {
             after.quota.as_ref().and_then(|quota| quota.used.as_deref()),
             Some("12.5")
         );
+        assert_eq!(after.usage_source.as_deref(), Some("sub_api_v1_usage"));
 
         // A successful wallet probe can explicitly omit both used and group;
         // an empty snapshot must clear values learned by an older probe.
@@ -3160,6 +3166,7 @@ mod tests {
                     group: None,
                     rate: None,
                 }),
+                Some("sub_api_v1_usage"),
             )
             .unwrap();
         let wallet = vault.get_provider_summary(id).unwrap();
@@ -3395,22 +3402,53 @@ mod tests {
     }
 
     #[test]
-    fn primary_label_is_reserved_for_the_first_key_selector() {
+    fn primary_is_a_valid_label_and_resolves_label_first() {
         let dir = tempdir().unwrap();
         let password = SecretString::new("correct horse battery staple");
         let vault = create_test_vault(dir.path(), &password);
-        let id = vault.add_provider(input("sk-ant-api03-primary")).unwrap();
+        let id = vault.add_provider(input("sk-ant-api03-first")).unwrap();
+        let first_id = vault.get_provider_summary(id).unwrap().secret_refs[0]
+            .id
+            .clone();
+        assert_eq!(
+            vault.get_provider_summary(id).unwrap().secret_refs[0].label,
+            "primary"
+        );
+
+        // The first key owns the label by default, so a duplicate is rejected
+        // with the label-conflict error rather than a reserved-word error.
         assert!(matches!(
             vault.add_secret(id, "primary", "sk-ant-api03-extra"),
-            Err(VaultError::InvalidSecretLabel)
+            Err(VaultError::DuplicateSecretLabel)
         ));
         assert!(matches!(
             vault.add_secret(id, "Primary", "sk-ant-api03-extra"),
-            Err(VaultError::InvalidSecretLabel)
+            Ok(_)
         ));
+
+        // Renaming the first key frees the label for another credential.
+        assert!(vault.update_secret(id, &first_id, "main", None).unwrap());
+        let primary_labelled_id = vault
+            .add_secret(id, "primary", "sk-ant-api03-labelled")
+            .unwrap();
+
+        // The "primary" selector resolves the key that owns the label; the
+        // first-key fallback only applies when no key is labelled "primary".
+        assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-labelled");
+        assert_eq!(
+            vault.reveal_secret_field(id, &primary_labelled_id).unwrap(),
+            "sk-ant-api03-labelled"
+        );
+        assert_eq!(
+            vault.reveal_secret_field(id, &first_id).unwrap(),
+            "sk-ant-api03-first"
+        );
+
+        // With no "primary" label left the selector falls back to the first key.
         assert!(vault
-            .add_secret(id, "primary-2", "sk-ant-api03-extra")
-            .is_ok());
+            .update_secret(id, &primary_labelled_id, "named", None)
+            .unwrap());
+        assert_eq!(vault.reveal_secret(id).unwrap(), "sk-ant-api03-first");
     }
 
     #[test]

@@ -9,7 +9,7 @@ pub use aipass_proxy::{
     RouteStrategy, UsageAggregate, UsageGranularity, UsageTimeseriesModel, UsageTimeseriesPoint,
 };
 use aipass_sync::{SyncObject, SyncStatus};
-use aipass_vault::{
+pub use aipass_vault::{
     EncryptedVaultExport, EntrySummary, ProviderEntryInput, ProviderEntryUpdateInput, RecoveryKit,
     SecretMetadataInput, TtlGrantSummary,
 };
@@ -392,6 +392,10 @@ pub struct UsageProbeResult {
     pub status: Option<u16>,
     pub quota: Option<UsageProbeQuota>,
     pub gateway: Option<GatewayMetadata>,
+    /// Subscription window data when the upstream reports per-period usage
+    /// (for example SubAPI subscription groups).
+    #[serde(default)]
+    pub subscription: Option<aipass_provider_registry::SubscriptionSnapshot>,
     pub plan_name: Option<String>,
     pub message: Option<String>,
     pub error: Option<String>,
@@ -683,6 +687,10 @@ pub enum AgentRequest {
         id: Uuid,
         label: String,
         secret: SensitiveString,
+        /// Group, wire format and billing for the new key; unset fields stay
+        /// unset on the stored `SecretRef`.
+        #[serde(default)]
+        metadata: Option<SecretMetadataInput>,
     },
     #[serde(rename = "secret.update")]
     SecretUpdate {
@@ -690,6 +698,9 @@ pub enum AgentRequest {
         secret_id: String,
         label: String,
         secret: Option<SensitiveString>,
+        /// Optional metadata patch applied to the same key in the same update.
+        #[serde(default)]
+        metadata: Option<SecretMetadataInput>,
     },
     #[serde(rename = "secret.remove")]
     SecretRemove { id: Uuid, label: String },
@@ -710,6 +721,10 @@ pub enum AgentRequest {
     #[serde(rename = "provider.usage_probe")]
     ProviderUsageProbe {
         id: Uuid,
+        /// Which stored credential to probe with: a secret id, a label, or the
+        /// "primary" first-key selector when absent.
+        #[serde(default)]
+        secret_id: Option<String>,
         #[serde(default)]
         mode: UsageProbeMode,
         timeout_seconds: u64,
@@ -725,6 +740,13 @@ pub enum AgentRequest {
         id: Uuid,
         quota: Option<QuotaInfo>,
         gateway: Option<GatewayMetadata>,
+        /// Which upstream usage endpoint produced this snapshot. Persisted so
+        /// background refresh keeps probing entries whose name or endpoint do
+        /// not match a known relay heuristic.
+        #[serde(default)]
+        source: Option<UsageProbeSource>,
+        #[serde(default)]
+        subscription: Option<aipass_provider_registry::SubscriptionSnapshot>,
     },
     /// Discover locally authenticated official accounts and refresh their
     /// provider-owned subscription snapshots. No credential values are returned.
@@ -1441,6 +1463,7 @@ mod tests {
     fn probes_outlive_the_upstream_timeout_they_request() {
         let timeout = AgentRequest::ProviderUsageProbe {
             id: uuid::Uuid::nil(),
+            secret_id: None,
             mode: UsageProbeMode::default(),
             timeout_seconds: 45,
             base_url: None,

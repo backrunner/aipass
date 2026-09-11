@@ -42,6 +42,7 @@
     PricingApplyScope,
     PricingGroup,
     ProbeResult,
+    SecretKeyMetadata,
     ToolConfigApplyResult,
     ToolConfigMode,
     ToolConfigPreview,
@@ -93,9 +94,9 @@
   export let onRevealSecret: (secretId: string) => MaybePromise = () => {};
   export let onReadSecret: (secretId: string) => Promise<string> = async () => "";
   export let onCopySecret: (secretId: string) => MaybePromise = () => {};
-  export let onUpdateSecret: (secretId: string, label: string, apiKey?: string) => MaybePromise = () => {};
+  export let onUpdateSecret: (secretId: string, label: string, apiKey?: string, metadata?: SecretKeyMetadata) => MaybePromise = () => {};
   export let onRemoveSecret: (secretId: string) => MaybePromise = () => {};
-  export let onAddSecret: () => MaybePromise = () => {};
+  export let onAddSecret: (metadata?: SecretKeyMetadata) => MaybePromise = () => {};
   export let onCopyValue: (label: string, value: string) => MaybePromise = () => {};
   export let onInferDraftFromDomain: () => MaybePromise = () => {};
   export let onProviderChanged: () => MaybePromise = () => {};
@@ -147,10 +148,16 @@
   }
 
   let showAddSecret = false;
+  // Wire format and gateway group are per-key attributes: one provider entry
+  // can hold keys that speak different protocols to different groups.
+  let newSecretInterface: InterfaceType = "openai_compatible";
+  let newSecretGroup = "";
   let editingSecretId = "";
   let editingSecretEntryId = "";
   let editingSecretLabel = "";
   let editingSecretValue = "";
+  let editingSecretInterface: InterfaceType = "openai_compatible";
+  let editingSecretGroup = "";
   let editingSecretVisible = false;
   let editingSecretLoading = false;
   let secretEditGeneration = 0;
@@ -210,10 +217,31 @@
     cancelSecretEdit();
   }
 
+  const keyInterfaceValues: InterfaceType[] = [
+    "openai_compatible",
+    "anthropic_messages",
+    "azure_openai",
+    "gemini",
+    "bedrock",
+    "custom_http"
+  ];
+  $: keyInterfaceOptions = keyInterfaceValues.map((value) => ({
+    value,
+    label: $t(interfaceLabelKey(value))
+  }));
+
+  function openAddSecret() {
+    newSecretInterface = selected?.interfaceType ?? "openai_compatible";
+    newSecretGroup = "";
+    showAddSecret = true;
+  }
+
   async function beginSecretEdit(secret: SecretRef) {
     editingSecretEntryId = selected?.id ?? "";
     editingSecretId = secret.id;
     editingSecretLabel = secret.label;
+    editingSecretInterface = secret.interfaceType ?? selected?.interfaceType ?? "openai_compatible";
+    editingSecretGroup = secret.group ?? "";
     editingSecretVisible = false;
     editingSecretValue = "";
     editingSecretLoading = true;
@@ -244,7 +272,8 @@
       await onUpdateSecret(
         editingSecretId,
         editingSecretLabel.trim(),
-        editingSecretValue.trim()
+        editingSecretValue.trim(),
+        { interfaceType: editingSecretInterface, group: editingSecretGroup }
       );
       cancelSecretEdit();
     } catch {
@@ -626,6 +655,19 @@
                     <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
                       <Undo2 size={13} />
                     </IconButton>
+                    <div class="secret-edit-meta">
+                      <select value={editingSecretInterface} aria-label={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} on:change={(event) => (editingSecretInterface = event.currentTarget.value as InterfaceType)}>
+                        {#each keyInterfaceOptions as option}
+                          <option value={option.value}>{option.label}</option>
+                        {/each}
+                      </select>
+                      <input
+                        bind:value={editingSecretGroup}
+                        aria-label={$t("providerDetail.keyGroup")}
+                        placeholder={$t("providerDetail.keyGroupPlaceholder")}
+                        disabled={editingSecretLoading}
+                      />
+                    </div>
                   </div>
                 {:else}
                   <div class="key-row">
@@ -700,16 +742,28 @@
                     type="password"
                     placeholder={$t("providerDetail.apiKey")}
                   />
-                  <Button variant="secondary" size="sm" disabled={secretBusy === "add" || !newSecretLabel.trim() || !newSecretKey.trim()} on:click={() => onAddSecret()}>
+                  <Button variant="secondary" size="sm" disabled={secretBusy === "add" || !newSecretLabel.trim() || !newSecretKey.trim()} on:click={() => onAddSecret({ interfaceType: newSecretInterface, group: newSecretGroup })}>
                     {$t("common.save")}
                   </Button>
                   <Button variant="ghost" size="sm" on:click={() => { showAddSecret = false; newSecretKey = ""; }}>
                     <Trash2 size={13} />
                   </Button>
+                  <div class="secret-edit-meta">
+                    <select value={newSecretInterface} aria-label={$t("providerDetail.keyFormat")} on:change={(event) => (newSecretInterface = event.currentTarget.value as InterfaceType)}>
+                      {#each keyInterfaceOptions as option}
+                        <option value={option.value}>{option.label}</option>
+                      {/each}
+                    </select>
+                    <input
+                      bind:value={newSecretGroup}
+                      aria-label={$t("providerDetail.keyGroup")}
+                      placeholder={$t("providerDetail.keyGroupPlaceholder")}
+                    />
+                  </div>
                 </div>
               {/if}
               {#if !showAddSecret}
-                <button type="button" class="add-chip" on:click={() => (showAddSecret = true)}>
+                <button type="button" class="add-chip" on:click={openAddSecret}>
                   <Plus size={12} />
                   <span>{$t("providerDetail.addKey")}</span>
                 </button>
@@ -717,7 +771,7 @@
             </div>
           </section>
         {:else}
-          <button type="button" class="add-chip standalone" on:click={() => (showAddSecret = true)}>
+          <button type="button" class="add-chip standalone" on:click={openAddSecret}>
             <Plus size={12} />
             <span>{$t("providerDetail.addAnotherKey")}</span>
           </button>
@@ -759,12 +813,25 @@
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretLabel.trim() || !editingSecretValue.trim()}
+                  disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretValue.trim()}
                   on:click={saveSecretEdit}
                 >{$t("common.save")}</Button>
                 <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
                   <Undo2 size={13} />
                 </IconButton>
+                <div class="secret-edit-meta">
+                  <select value={editingSecretInterface} aria-label={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} on:change={(event) => (editingSecretInterface = event.currentTarget.value as InterfaceType)}>
+                    {#each keyInterfaceOptions as option}
+                      <option value={option.value}>{option.label}</option>
+                    {/each}
+                  </select>
+                  <input
+                    bind:value={editingSecretGroup}
+                    aria-label={$t("providerDetail.keyGroup")}
+                    placeholder={$t("providerDetail.keyGroupPlaceholder")}
+                    disabled={editingSecretLoading}
+                  />
+                </div>
               </div>
             {:else}
               <div class="kv-row secret" class:copied-flash={copied === `secret:${secret.id}`}>
@@ -844,7 +911,7 @@
                   variant="secondary"
                   size="sm"
                   disabled={secretBusy === "add" || !newSecretLabel.trim() || !newSecretKey.trim()}
-                  on:click={() => onAddSecret()}
+                  on:click={() => onAddSecret({ interfaceType: newSecretInterface, group: newSecretGroup })}
                 >{$t("common.save")}</Button>
                 <IconButton
                   size="sm"
@@ -853,9 +920,21 @@
                 >
                   <Undo2 size={13} />
                 </IconButton>
+                <div class="secret-edit-meta">
+                  <select value={newSecretInterface} aria-label={$t("providerDetail.keyFormat")} on:change={(event) => (newSecretInterface = event.currentTarget.value as InterfaceType)}>
+                    {#each keyInterfaceOptions as option}
+                      <option value={option.value}>{option.label}</option>
+                    {/each}
+                  </select>
+                  <input
+                    bind:value={newSecretGroup}
+                    aria-label={$t("providerDetail.keyGroup")}
+                    placeholder={$t("providerDetail.keyGroupPlaceholder")}
+                  />
+                </div>
               </div>
             {:else}
-              <button type="button" class="add-chip" on:click={() => (showAddSecret = true)}>
+              <button type="button" class="add-chip" on:click={openAddSecret}>
                 <Plus size={12} />
                 <span>{$t("providerDetail.addKey")}</span>
               </button>
@@ -1671,7 +1750,8 @@
       grid-column: 1 / -1;
     }
 
-    input {
+    input,
+    select {
       width: 100%;
       min-width: 0;
       min-height: 32px;
@@ -1689,6 +1769,13 @@
         box-shadow: 0 0 0 3px var(--accent-ring);
       }
     }
+  }
+
+  .secret-edit-meta {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
   }
 
   .credential-inline-editor {

@@ -423,6 +423,7 @@ export type EntrySummary = {
   quota?: QuotaInfo;
   subscription?: SubscriptionSnapshot;
   gateway?: ProviderEntry["gateway"];
+  usageSource?: string;
   tags: string[];
   notes?: string;
   headerNames?: string[];
@@ -520,6 +521,7 @@ export type UsageProbeResult = {
   status?: number;
   quota?: UsageProbeQuota;
   gateway?: ProviderEntry["gateway"];
+  subscription?: SubscriptionSnapshot;
   planName?: string;
   message?: string;
   error?: string;
@@ -527,9 +529,16 @@ export type UsageProbeResult = {
 
 export type UsageProbeRequest = {
   mode: UsageProbeMode;
+  secretId?: string;
   baseUrl?: string;
   accessToken?: string;
   userId?: string;
+};
+
+/** Per-key attributes editable in the detail pane's key list. */
+export type SecretKeyMetadata = {
+  interfaceType?: InterfaceType;
+  group?: string;
 };
 
 export type ToolConfigPreview = {

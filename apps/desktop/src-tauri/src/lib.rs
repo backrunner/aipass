@@ -2772,6 +2772,7 @@ mod tests {
             tags: Vec::new(),
             notes: None,
             subscription: None,
+            usage_source: None,
             header_names: Vec::new(),
             created_at: now,
             updated_at: now,

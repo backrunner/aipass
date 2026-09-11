@@ -150,6 +150,8 @@ export interface ProviderEntry {
   quota?: QuotaInfo;
   subscription?: SubscriptionSnapshot;
   gateway?: GatewayMetadata;
+  /** Upstream usage endpoint that produced the stored quota/gateway snapshot. */
+  usageSource?: string;
   tags: string[];
   notes?: string;
   headerNames?: string[];

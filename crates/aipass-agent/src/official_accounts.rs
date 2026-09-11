@@ -1255,6 +1255,7 @@ mod tests {
             quota: None,
             subscription: None,
             gateway: None,
+            usage_source: None,
             tags: Vec::new(),
             notes: None,
             header_names: Vec::new(),

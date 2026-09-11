@@ -2007,6 +2007,7 @@ fn probe_entry(
             weight: 1,
             enabled: true,
             protocol: Some(ProxyProtocol::OpenAiResponses),
+            prefer_ws: false,
         },
     });
     let observation = state.and_then(|state| {
@@ -2739,6 +2740,7 @@ pub(crate) mod tests {
                     id,
                     label: "private-label".into(),
                     secret: "fake-second-key".into(),
+                    metadata: None,
                 },
                 AgentRequest::ProviderArchive { id },
                 AgentRequest::ProviderRestore { id },
@@ -2846,6 +2848,7 @@ pub(crate) mod tests {
                             weight: 1,
                             enabled: true,
                             protocol: None,
+                            prefer_ws: false,
                         }],
                         retry: aipass_proxy::RetryPolicy::default(),
                         enabled: true,
@@ -2957,6 +2960,7 @@ pub(crate) mod tests {
             quota: None,
             subscription: None,
             gateway: None,
+            usage_source: None,
             tags: Vec::new(),
             notes: None,
             header_names: Vec::new(),

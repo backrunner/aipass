@@ -400,11 +400,15 @@ fn refresh_applied_vault(state: &AgentState, vault: &Vault) -> ServiceResult<()>
     // A later failed apply may itself require recovery. Never read a mixed
     // on-disk vault into the running proxy while its journal still gates access.
     if vault.ensure_sync_ready().is_ok() {
-        state
+        let mut proxy = state
             .proxy
             .lock()
-            .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy lock poisoned")))?
-            .reload_if_running(vault)?;
+            .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy lock poisoned")))?;
+        // A credential removed on a peer device must leave its route group
+        // durably, not just be skipped at runtime — a stale target would fail
+        // the next cold start.
+        proxy.reconcile_missing_credentials(vault)?;
+        proxy.reload_if_running(vault)?;
     }
     Ok(())
 }
@@ -1809,6 +1813,7 @@ mod tests {
                                 weight: 1,
                                 enabled: true,
                                 protocol: None,
+                                prefer_ws: false,
                             }],
                         }],
                         ..Default::default()

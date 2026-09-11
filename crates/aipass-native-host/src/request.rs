@@ -443,6 +443,7 @@ fn handle_request_inner(
                 config,
                 &AgentRequest::ProviderUsageProbe {
                     id: entry_id,
+                    secret_id: None,
                     mode,
                     timeout_seconds: timeout_seconds.max(1),
                     base_url: None,
@@ -464,6 +465,8 @@ fn handle_request_inner(
                     id: entry_id,
                     quota,
                     gateway,
+                    source: None,
+                    subscription: None,
                 },
             )?;
             Ok(json!({ "entryId": entry_id }))

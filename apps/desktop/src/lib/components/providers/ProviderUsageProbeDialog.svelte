@@ -29,11 +29,19 @@
   let usageBaseUrl = "";
   let usageAccessToken = "";
   let usageUserId = "";
+  let usageSecretId = "";
   let usagePreview: UsageProbeResult | undefined;
   let usageProbeError: MessageValue = "";
   let usageApplying = false;
   let previousOpen = false;
   let previousSelectedId = "";
+
+  // Wallet balances are user-scoped, but key usage totals and billing groups
+  // are key-scoped — let the user probe a specific credential.
+  $: usageSecretOptions = (selected?.secretRefs ?? []).map((secret) => ({
+    value: secret.id,
+    label: secret.label
+  }));
 
   $: usageModeOptions = [
     { value: "auto" as UsageProbeMode, label: $t("providerDetail.usageProbeAuto") },
@@ -51,6 +59,7 @@
       usageBaseUrl = endpointDisplay(selected);
       usageAccessToken = "";
       usageUserId = "";
+      usageSecretId = selected?.secretRefs[0]?.id ?? "";
       usagePreview = usageProbeResult;
       usageProbeError = "";
       usageApplying = false;
@@ -78,6 +87,7 @@
     usageProbeError = "";
     const request: UsageProbeRequest = {
       mode: usageMode,
+      secretId: usageSecretId || undefined,
       baseUrl: usageBaseUrl.trim() || undefined,
       accessToken: usageAccessToken.trim() || undefined,
       userId: usageUserId.trim() || undefined
@@ -135,6 +145,20 @@
               onChange={(value) => (usageMode = value)}
             />
           </div>
+
+          {#if usageSecretOptions.length > 1}
+            <label class="usage-field">
+              <span class="usage-label">{$t("providerDetail.usageProbeKey")}</span>
+              <select
+                value={usageSecretId}
+                on:change={(event) => (usageSecretId = event.currentTarget.value)}
+              >
+                {#each usageSecretOptions as option}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
 
           <label class="usage-field">
             <span class="usage-label">{$t("providerDetail.baseUrlOverride")}</span>
@@ -375,7 +399,8 @@
     gap: 7px;
     min-width: 0;
 
-    input {
+    input,
+    select {
       width: 100%;
       min-height: 34px;
       padding: 0 11px;

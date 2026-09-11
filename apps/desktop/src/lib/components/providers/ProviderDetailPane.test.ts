@@ -106,7 +106,73 @@ test("prefills an existing key masked, allows reveal, and saves its value", asyn
   flushSync();
   expect(input.type).toBe("text");
   document.querySelector<HTMLButtonElement>(".credential-inline-editor .btn")!.click();
-  await vi.waitFor(() => expect(onUpdateSecret).toHaveBeenCalledWith("key", "Production", "fixture-existing-key"));
+  await vi.waitFor(() => expect(onUpdateSecret).toHaveBeenCalledWith(
+    "key",
+    "Production",
+    "fixture-existing-key",
+    { interfaceType: "custom_http", group: "" }
+  ));
+});
+
+test("key editing carries the key's own interface and group", async () => {
+  const keyEntry: ProviderEntry = {
+    ...selected,
+    interfaceType: "openai_compatible",
+    secretRefs: [
+      {
+        id: "key",
+        label: "Production",
+        masked: "••••",
+        fingerprint: "test",
+        interfaceType: "anthropic_messages",
+        group: "vip"
+      }
+    ]
+  };
+  const onReadSecret = vi.fn(async () => "fixture-existing-key");
+  const onUpdateSecret = vi.fn(async () => {});
+  render({ selected: keyEntry, onReadSecret, onUpdateSecret });
+  document.querySelector<HTMLButtonElement>(".kv-actions button:not(.copy-hint):not([aria-pressed])")!.click();
+  await vi.waitFor(() => {
+    flushSync();
+    expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-existing-key");
+  });
+  // The editor prefills the key's own attributes rather than the provider's.
+  const format = document.querySelector<HTMLSelectElement>(".credential-inline-editor select")!;
+  expect(format.value).toBe("anthropic_messages");
+  const group = document.querySelector<HTMLInputElement>('.credential-inline-editor .secret-edit-meta input')!;
+  expect(group.value).toBe("vip");
+  document.querySelector<HTMLButtonElement>(".credential-inline-editor .btn")!.click();
+  await vi.waitFor(() => expect(onUpdateSecret).toHaveBeenCalledWith(
+    "key",
+    "Production",
+    "fixture-existing-key",
+    { interfaceType: "anthropic_messages", group: "vip" }
+  ));
+});
+
+test("adding a key sends its interface and group metadata", async () => {
+  const onAddSecret = vi.fn(async () => {});
+  render({ onAddSecret });
+  document.querySelector<HTMLButtonElement>(".add-chip")!.click();
+  flushSync();
+  const inputs = document.querySelectorAll<HTMLInputElement>(".add-secret-row input");
+  (inputs[0] as HTMLInputElement).value = "claude";
+  inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
+  (inputs[1] as HTMLInputElement).value = "sk-new-key";
+  inputs[1].dispatchEvent(new Event("input", { bubbles: true }));
+  const format = document.querySelector<HTMLSelectElement>(".add-secret-row select")!;
+  format.value = "anthropic_messages";
+  format.dispatchEvent(new Event("change", { bubbles: true }));
+  const group = document.querySelector<HTMLInputElement>(".add-secret-row .secret-edit-meta input")!;
+  group.value = "vip";
+  group.dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
+  document.querySelector<HTMLButtonElement>(".add-secret-row .btn")!.click();
+  await vi.waitFor(() => expect(onAddSecret).toHaveBeenCalledWith({
+    interfaceType: "anthropic_messages",
+    group: "vip"
+  }));
 });
 
 test("a cancelled key read cannot repopulate a later editor", async () => {

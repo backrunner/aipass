@@ -52,6 +52,7 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     quota: summary.quota,
     subscription: summary.subscription,
     gateway: summary.gateway,
+    usageSource: summary.usageSource,
     tags: summary.tags,
     notes: summary.notes,
     headerNames: summary.headerNames,

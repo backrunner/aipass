@@ -51,6 +51,7 @@ pub(crate) fn probe_provider_usage(
             status: None,
             quota: None,
             gateway: None,
+            subscription: None,
             plan_name: None,
             message: None,
             error: Some("provider has no API endpoint".to_string()),
@@ -72,6 +73,7 @@ pub(crate) fn probe_provider_usage(
                 status: None,
                 quota: None,
                 gateway: None,
+                subscription: None,
                 plan_name: None,
                 message: None,
                 error: Some(err.to_string()),
@@ -207,6 +209,7 @@ fn run_auto_probe(
         status: failures.iter().find_map(|result| result.status),
         quota: None,
         gateway: None,
+        subscription: None,
         plan_name: None,
         message: None,
         error: Some(if message.is_empty() {

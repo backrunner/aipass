@@ -25,9 +25,9 @@ use aipass_agent_protocol::{
     ToolConfigApplyResponse as AgentToolConfigApplyResponse,
     ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
     ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageGranularity, UsageProbeMode,
-    UsageProbeResult as AgentUsageProbeResult, UsageTimeseriesPoint,
+    UsageProbeResult as AgentUsageProbeResult, UsageProbeSource, UsageTimeseriesPoint,
 };
-use aipass_provider_registry::{GatewayMetadata, OAuthProvider, QuotaInfo};
+use aipass_provider_registry::{GatewayMetadata, OAuthProvider, QuotaInfo, SubscriptionSnapshot};
 use aipass_proxy::{ProxyConfig, ProxyStatus};
 use aipass_sync::SyncReport;
 use aipass_vault::{DeviceRecord, EntrySummary};
@@ -833,6 +833,7 @@ pub(crate) async fn secret_add(
     id: Uuid,
     label: String,
     api_key: SensitiveString,
+    metadata: Option<aipass_vault::SecretMetadataInput>,
 ) -> Result<String, String> {
     agent_request_async(
         app,
@@ -840,6 +841,7 @@ pub(crate) async fn secret_add(
             id,
             label,
             secret: api_key,
+            metadata,
         },
     )
     .await
@@ -852,6 +854,7 @@ pub(crate) async fn secret_update(
     secret_id: String,
     label: String,
     api_key: Option<SensitiveString>,
+    metadata: Option<aipass_vault::SecretMetadataInput>,
 ) -> Result<(), String> {
     let _: serde_json::Value = agent_request_async(
         app,
@@ -860,6 +863,7 @@ pub(crate) async fn secret_update(
             secret_id,
             label,
             secret: api_key,
+            metadata,
         },
     )
     .await?;
@@ -935,6 +939,7 @@ pub(crate) async fn provider_probe(
 pub(crate) async fn provider_usage_probe(
     app: AppHandle,
     id: Uuid,
+    secret_id: Option<String>,
     mode: Option<UsageProbeMode>,
     timeout_seconds: Option<u64>,
     base_url: Option<String>,
@@ -945,6 +950,7 @@ pub(crate) async fn provider_usage_probe(
         app,
         AgentRequest::ProviderUsageProbe {
             id,
+            secret_id,
             mode: mode.unwrap_or_default(),
             timeout_seconds: timeout_seconds.unwrap_or(15),
             base_url,
@@ -961,9 +967,20 @@ pub(crate) async fn provider_usage_apply(
     id: Uuid,
     quota: Option<QuotaInfo>,
     gateway: Option<GatewayMetadata>,
+    source: Option<UsageProbeSource>,
+    subscription: Option<SubscriptionSnapshot>,
 ) -> Result<(), String> {
-    let _: serde_json::Value =
-        agent_request_async(app, AgentRequest::ProviderUsageApply { id, quota, gateway }).await?;
+    let _: serde_json::Value = agent_request_async(
+        app,
+        AgentRequest::ProviderUsageApply {
+            id,
+            quota,
+            gateway,
+            source,
+            subscription,
+        },
+    )
+    .await?;
     Ok(())
 }
 
