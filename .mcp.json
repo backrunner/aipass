@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "aipass-proxy": {
+      "command": "cargo",
+      "args": ["run", "--package", "aipass-mcp-proxy", "--bin", "aipass-mcp-proxy"],
+      "description": "AiPass Proxy MCP Server - Manage local proxy operations, routes, groups, and targets"
+    }
+  }
+}

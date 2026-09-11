@@ -10,7 +10,7 @@
     "bundle": "tauri build --ci",
     "dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "dev:register": "node ../../scripts/register-desktop-dev.mjs",
-    "dev:agent": "cargo build -p aipass-agent -p aipass-native-host",
+    "dev:agent": "cargo build -p aipass-agent -p aipass-native-host -p aipass-cli && node ../../scripts/stage-cli-sidecar.mjs debug",
     "dev:web": "vite --host 127.0.0.1",
     "lint": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",

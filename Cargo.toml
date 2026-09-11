@@ -12,7 +12,8 @@ members = [
   "crates/aipass-sync",
   "crates/aipass-native-host",
   "crates/aipass-proxy-conversion",
-  "crates/aipass-proxy"
+  "crates/aipass-proxy",
+  "crates/aipass-mcp-proxy"
 ]
 resolver = "2"
 

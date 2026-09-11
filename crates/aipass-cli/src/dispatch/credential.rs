@@ -1,308 +1,14 @@
-use super::*;
+use crate::*;
 
-pub(crate) fn run(cli: Cli) -> Result<()> {
-    let json = cli.json;
-    let vault = cli.vault.clone();
-    let cli_password = cli.password.clone();
-    match cli.command {
-        Command::Doctor => {
-            let report = doctor_report(vault.clone(), cli_password.is_some())?;
-            let ok = report
-                .get("checks")
-                .and_then(|value| value.as_array())
-                .map(|checks| {
-                    checks.iter().all(|check| {
-                        check
-                            .get("ok")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false);
-            let text = doctor_text(&report, ok);
-            output(json, report, &text)
-        }
-        Command::Completions { shell } => {
-            let mut command = Cli::command();
-            generate(shell, &mut command, "aipass", &mut io::stdout());
-            Ok(())
-        }
-        Command::Vault { command } => match command {
-            VaultCommand::Status => {
-                let dir = vault_dir(vault.clone())?;
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let status = agent
-                    .request_no_unlock::<SessionStatus>(AgentRequest::SessionStatus)
-                    .unwrap_or(SessionStatus {
-                        exists: dir.join("manifest.aipmanifest").exists(),
-                        locked: true,
-                        policy: Default::default(),
-                        last_lock_reason: Some(LockReason::AgentRestart),
-                        vault_namespace: None,
-                        initial_sync_pending: false,
-                        initial_sync_failed: false,
-                        sync_revision: 0,
-                        sync_status: None,
-                    });
-                output(
-                    json,
-                    serde_json::json!({
-                        "exists": status.exists,
-                        "locked": status.locked,
-                        "policy": status.policy,
-                        "vaultDir": dir,
-                    }),
-                    if status.exists {
-                        if status.locked {
-                            "Vault exists (locked)"
-                        } else {
-                            "Vault exists (unlocked)"
-                        }
-                    } else {
-                        "Vault not initialized"
-                    },
-                )
-            }
-            VaultCommand::ChangePassword { new_password } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let result: serde_json::Value =
-                    agent.request(AgentRequest::VaultChangePassword {
-                        new_password: new_password.into(),
-                    })?;
-                output(json, result, "Master password changed")
-            }
-            VaultCommand::Rotate { reason } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let result: serde_json::Value =
-                    agent.request(AgentRequest::VaultRotate { reason })?;
-                output(json, result, "Vault epoch rotated")
-            }
-            VaultCommand::Devices => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let devices: Vec<aipass_vault::DeviceRecord> =
-                    agent.request(AgentRequest::DevicesList)?;
-                output(
-                    json,
-                    serde_json::to_value(&devices)?,
-                    &format!("{} devices", devices.len()),
-                )
-            }
-            VaultCommand::RevokeDevice { id } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let result: serde_json::Value = agent.request(AgentRequest::DeviceRevoke { id })?;
-                output(json, result, "Device revoked and vault epoch rotated")
-            }
-            VaultCommand::Export {
-                output: export_path,
-                export_password,
-            } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let result: serde_json::Value = agent.request(AgentRequest::VaultExport {
-                    output: export_path.clone(),
-                    export_password: export_password.into(),
-                })?;
-                output(json, result, "Encrypted vault export written")
-            }
-            VaultCommand::Import {
-                input,
-                export_password,
-            } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let dir = vault_dir(vault.clone())?;
-                let export: serde_json::Value = agent.request(AgentRequest::VaultImport {
-                    input,
-                    export_password: export_password.into(),
-                })?;
-                output(
-                    json,
-                    serde_json::json!({ "ok": true, "vaultDir": dir, "result": export }),
-                    "Encrypted vault import restored",
-                )
-            }
-        },
-        Command::Secret { command } => match command {
-            SecretCommand::List { id } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let entry: aipass_vault::EntrySummary =
-                    agent.request(AgentRequest::ProviderGet { id })?;
-                output(
-                    json,
-                    serde_json::to_value(&entry.secret_refs)?,
-                    &format!("{} secrets", entry.secret_refs.len()),
-                )
-            }
-            SecretCommand::Add { id, label, api_key } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let secret_id: String = agent.request(AgentRequest::SecretAdd {
-                    id,
-                    label,
-                    secret: api_key.into(),
-                })?;
-                output(
-                    json,
-                    serde_json::json!({ "ok": true, "id": id, "secretId": secret_id }),
-                    "Secret added",
-                )
-            }
-            SecretCommand::Remove { id, label } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let _: serde_json::Value = agent.request(AgentRequest::SecretRemove {
-                    id,
-                    label: label.clone(),
-                })?;
-                output(
-                    json,
-                    serde_json::json!({ "ok": true, "id": id, "removed": label }),
-                    "Secret removed",
-                )
-            }
-        },
-        Command::Accounts { command } => match command {
-            AccountsCommand::Refresh { provider_ids } => {
-                let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-                let results: Vec<OfficialAccountRefreshResult> =
-                    agent.request(AgentRequest::OfficialAccountsRefresh { provider_ids })?;
-                let imported = results
-                    .iter()
-                    .filter(|result| result.status == "imported")
-                    .count();
-                let refreshed = results
-                    .iter()
-                    .filter(|result| result.status == "refreshed")
-                    .count();
-                output(
-                    json,
-                    serde_json::to_value(&results)?,
-                    &format!("{imported} imported, {refreshed} refreshed"),
-                )
-            }
-        },
-        Command::NativeHost { command } => match command {
-            NativeHostCommand::Manifest {
-                host_path,
-                extension_id,
-            } => {
-                let host_path = native_host_binary_path(host_path)?;
-                let origins = allowed_origins(&extension_id)?;
-                let manifest = native_manifest(&host_path, &origins);
-                println!("{}", serde_json::to_string_pretty(&manifest)?);
-                Ok(())
-            }
-            NativeHostCommand::Install {
-                host_path,
-                extension_id,
-                output: manifest_output,
-                browser,
-            } => {
-                let host_path = native_host_binary_path(host_path)?;
-                let origins = allowed_origins(&extension_id)?;
-                let install_path = manifest_output.unwrap_or_else(|| {
-                    default_native_manifest_path(&browser).expect("manifest path")
-                });
-                if let Some(parent) = install_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let manifest = native_manifest(&host_path, &origins);
-                atomic_write_bytes(&install_path, &serde_json::to_vec_pretty(&manifest)?)?;
-                let settings_path = aipass_native_host::save_allowed_extension_ids(&extension_id)?;
-                install_native_manifest_reference(&browser, &install_path)?;
-                output(
-                    json,
-                    serde_json::json!({
-                        "ok": true,
-                        "browser": browser_name(&browser),
-                        "hostPath": host_path,
-                        "manifestPath": install_path,
-                        "settingsPath": settings_path,
-                        "allowedOrigins": origins,
-                    }),
-                    "Native messaging host installed",
-                )
-            }
-        },
-        Command::Agent { command } => match command {
-            AgentSubcommand::Install => install_agent_service(json, vault.clone()),
-            AgentSubcommand::Uninstall => uninstall_agent_service(json, vault.clone()),
-            AgentSubcommand::Status => {
-                let dir = vault_dir(vault.clone())?;
-                let autostart = aipass_agent::query_agent_autostart(&dir)?;
-                let status: SessionStatus = AgentClientConfig::for_vault(dir.clone())
-                    .ok()
-                    .map(AgentClient::new)
-                    .and_then(|client| {
-                        client
-                            .request::<SessionStatus>(&AgentRequest::SessionStatus)
-                            .ok()
-                    })
-                    .unwrap_or(SessionStatus {
-                        exists: manifest_exists(vault.clone())?,
-                        locked: true,
-                        policy: Default::default(),
-                        last_lock_reason: Some(LockReason::AgentRestart),
-                        vault_namespace: None,
-                        initial_sync_pending: false,
-                        initial_sync_failed: false,
-                        sync_revision: 0,
-                        sync_status: None,
-                    });
-                output(
-                    json,
-                    serde_json::json!({
-                        "vaultDir": dir,
-                        "autostart": autostart_status_json(&autostart),
-                        "session": status,
-                    }),
-                    if autostart.running {
-                        if status.locked {
-                            "Agent autostart running (locked)"
-                        } else {
-                            "Agent autostart running (unlocked)"
-                        }
-                    } else if autostart.registered {
-                        "Agent autostart registered (stopped)"
-                    } else {
-                        "Agent autostart not installed"
-                    },
-                )
-            }
-            AgentSubcommand::Start => start_agent_service(json, vault.clone()),
-            AgentSubcommand::Stop => stop_agent_service(json, vault.clone()),
-        },
-        Command::Login => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-            agent.ensure_running()?;
-            let status = agent.unlock_for_request()?;
-            output(json, serde_json::to_value(&status)?, "Vault unlocked")
-        }
-        Command::Lock => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-            let status: SessionStatus = agent.request_no_unlock(AgentRequest::SessionLock {
-                reason: LockReason::Manual,
-            })?;
-            output(json, serde_json::to_value(&status)?, "Vault locked")
-        }
-        Command::Init { password } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
-            agent.ensure_running()?;
-            let password = password
-                .or(cli_password.clone())
-                .context("provide --password or AIPASS_MASTER_PASSWORD")?;
-            let dir = vault_dir(vault.clone())?;
-            let creation: VaultCreateResponse =
-                agent.request_no_unlock(AgentRequest::VaultCreate {
-                    local_only: false,
-                    password: password.into(),
-                })?;
-            let recovery_key = creation.recovery_kit.recovery_key;
-            let text = format!(
-                "Vault created\nRecovery key (shown once): {recovery_key}\nStore this key offline; it cannot be shown again."
-            );
-            output(
-                json,
-                serde_json::json!({ "ok": true, "vaultDir": dir, "recoveryKey": recovery_key }),
-                &text,
-            )
-        }
+pub(crate) fn handle_credential_command(
+    json: bool,
+    vault: Option<PathBuf>,
+    cli_password: Option<String>,
+    command: Command,
+) -> Result<()> {
+    let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
+
+    match command {
         Command::Add {
             title,
             provider,
@@ -330,7 +36,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             notes,
             tag,
         } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let provider_guess = provider.or_else(|| {
                 domain.first().and_then(|domain| {
                     match_provider_by_domain(domain).map(|provider| provider.id.to_string())
@@ -388,7 +93,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             archived,
             all,
         } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let mut items = if all {
                 agent
                     .request::<Vec<aipass_vault::EntrySummary>>(AgentRequest::EntriesList {
@@ -441,8 +145,9 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             billing_unit_price,
             notes,
             tag,
+            max_concurrent_requests,
+            supports_websockets,
         } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let existing: aipass_vault::EntrySummary =
                 agent.request(AgentRequest::ProviderGet { id })?;
             let domains = if domain.is_empty() {
@@ -467,8 +172,8 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                 billing_unit_price,
             );
             let input = ProviderEntryUpdateInput {
-                max_concurrent_requests: None,
-                supports_websockets: None,
+                max_concurrent_requests,
+                supports_websockets,
                 title: title.unwrap_or(existing.title),
                 provider_kind: provider_kind_for_id(provider_guess.as_deref()),
                 provider_id: provider_guess,
@@ -514,7 +219,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Archive { id } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let _: serde_json::Value = agent.request(AgentRequest::ProviderArchive { id })?;
             output(
                 json,
@@ -523,7 +227,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Restore { id } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let _: serde_json::Value = agent.request(AgentRequest::ProviderRestore { id })?;
             output(
                 json,
@@ -535,7 +238,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             if !yes {
                 anyhow::bail!("permanent delete requires --yes");
             }
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let _: serde_json::Value = agent.request(AgentRequest::ProviderDelete { id })?;
             output(
                 json,
@@ -544,7 +246,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Search { query } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let items: Vec<aipass_vault::EntrySummary> =
                 agent.request(AgentRequest::EntriesSearch { query })?;
             let len = items.len();
@@ -558,7 +259,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             id,
             timeout_seconds,
         } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let result: ProbeResult = agent.request(AgentRequest::ProviderProbe {
                 id,
                 timeout_seconds,
@@ -574,7 +274,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Get { id, reveal, field } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let field = field.unwrap_or_else(|| "api_key".to_string());
             if reveal && is_secret_field(&field) {
                 let secret: SecretValue = agent.request(AgentRequest::SecretRevealField {
@@ -599,7 +298,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Copy { id, field } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let value = if is_secret_field(&field) {
                 agent
                     .request::<SecretValue>(AgentRequest::SecretRevealField {
@@ -621,7 +319,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Env { id, format } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let item: aipass_vault::EntrySummary =
                 agent.request(AgentRequest::ProviderGet { id })?;
             let secret: SecretValue = agent.request(AgentRequest::SecretRevealField {
@@ -643,7 +340,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Exec { id, command } | Command::Inject { id, command } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let item: aipass_vault::EntrySummary =
                 agent.request(AgentRequest::ProviderGet { id })?;
             let secret: SecretValue = agent.request(AgentRequest::SecretRevealField {
@@ -676,7 +372,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             codex_api_key_mode,
             yes,
         } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let id = resolve_entry_id(&agent, &id)?;
             let request = ToolConfigRequest {
                 tool: tool.into(),
@@ -698,7 +393,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Rollback { operation_id } => {
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let result: serde_json::Value =
                 agent.request(AgentRequest::ToolConfigRollback { operation_id })?;
             output(json, serde_json::to_value(&result)?, "Rollback applied")
@@ -720,7 +414,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
                     "choose exactly one sync target: --dir, --icloud, --onedrive, or --webdav-url"
                 );
             }
-            let agent = CliAgent::from_parts(vault.clone(), cli_password.clone())?;
             let report: aipass_sync::SyncReport = if let Some(url) = webdav_url {
                 agent.request_no_unlock(AgentRequest::SyncWebDav {
                     url,
@@ -742,5 +435,6 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
             };
             output(json, serde_json::to_value(&report)?, "Sync complete")
         }
+        _ => unreachable!("credential command should only handle credential-related commands"),
     }
 }

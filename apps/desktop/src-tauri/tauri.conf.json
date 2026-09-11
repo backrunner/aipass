@@ -57,6 +57,7 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "../../../target/release/cli/*": "",
       "../../../target/release/aipass-agent*": "",
       "../../../target/release/aipass-native-host*": "",
       "../../extension/build/aipass-extension.zip": "browser-extension/aipass-extension.zip",

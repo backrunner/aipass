@@ -116,6 +116,8 @@ dependencies = [
  "aipass-crypto",
  "aipass-native-host",
  "aipass-provider-registry",
+ "aipass-proxy",
+ "aipass-proxy-conversion",
  "aipass-storage",
  "aipass-sync",
  "aipass-vault",
@@ -186,6 +188,7 @@ dependencies = [
  "base64 0.22.1",
  "directories",
  "interprocess",
+ "log",
  "minisign-verify",
  "objc2-app-kit",
  "objc2-quartz-core",
@@ -203,6 +206,21 @@ dependencies = [
  "url",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "aipass-mcp-proxy"
+version = "0.2.0-beta.1"
+dependencies = [
+ "aipass-agent",
+ "aipass-agent-protocol",
+ "aipass-config-writers",
+ "aipass-proxy",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

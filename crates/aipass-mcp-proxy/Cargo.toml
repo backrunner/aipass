@@ -1,0 +1,19 @@
+[package]
+name = "aipass-mcp-proxy"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "aipass-mcp-proxy"
+path = "src/main.rs"
+
+[dependencies]
+aipass-agent = { path = "../aipass-agent" }
+aipass-agent-protocol = { path = "../aipass-agent-protocol" }
+aipass-config-writers = { path = "../aipass-config-writers" }
+aipass-proxy = { path = "../aipass-proxy" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+uuid = { workspace = true, features = ["v4"] }

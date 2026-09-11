@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptsDir, "..");
-const packages = ["-p", "aipass-agent", "-p", "aipass-native-host"];
-const binaries = ["aipass-agent", "aipass-native-host"];
+const packages = ["-p", "aipass-agent", "-p", "aipass-native-host", "-p", "aipass-cli"];
+const binaries = ["aipass-agent", "aipass-native-host", "aipass"];
 
 if (isTruthy(process.env.AIPASS_MACOS_UNIVERSAL)) {
   buildUniversalMacosSidecars();
@@ -16,6 +16,16 @@ if (isTruthy(process.env.AIPASS_MACOS_UNIVERSAL)) {
 }
 removeSidecarBuildMetadata();
 signMacosSidecars();
+stageCliBinary();
+
+// Bundles the CLI under target/release/cli/ so its resource glob does not
+// collide with the aipass-* sidecar names.
+function stageCliBinary() {
+  run(process.execPath, [
+    join(scriptsDir, "stage-cli-sidecar.mjs"),
+    "release",
+  ]);
+}
 
 function signMacosSidecars() {
   // Release builds ship the sidecars inside the signed and notarized .app;

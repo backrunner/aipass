@@ -1,4 +1,5 @@
 mod auth_tasks;
+mod cli_install;
 #[cfg(target_os = "macos")]
 mod cloudkit;
 mod commands;
@@ -2356,6 +2357,8 @@ pub fn run() {
             let _ = logging::log_event("desktop.tray.ready", &[]);
             #[cfg(target_os = "macos")]
             cloudkit::start(app.handle().clone());
+            // Install CLI on first run
+            cli_install::ensure_cli_installed();
             ensure_agent_resident_async(app.handle().clone());
             runtime_check::start(app.handle().clone());
             let extension_sync_handle = app.handle().clone();
