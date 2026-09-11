@@ -3,7 +3,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::{invalid, number, ConversionError, ProxyProtocol};
+use crate::{invalid, number, parse_tool_arguments, ConversionError, ProxyProtocol};
 
 use ProxyProtocol::{AnthropicMessages as AM, OpenAiChatCompletions as CC, OpenAiResponses as RS};
 
@@ -125,19 +125,6 @@ fn openai_usage_to_am(usage: Option<&Value>, input_key: &str, details_key: &str)
         "output_tokens": number(usage.get("output_tokens")).max(number(usage.get("completion_tokens"))),
         "cache_read_input_tokens": cache_read,
         "cache_creation_input_tokens": cache_creation,
-    })
-}
-
-fn parse_tool_arguments(
-    arguments: Option<&Value>,
-    protocol: ProxyProtocol,
-) -> Result<Value, ConversionError> {
-    let raw = arguments.and_then(Value::as_str).unwrap_or("{}");
-    serde_json::from_str(raw).map_err(|err| {
-        invalid(
-            protocol,
-            format!("tool arguments are not valid JSON: {err}"),
-        )
     })
 }
 
@@ -307,6 +294,19 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
 
 fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
     let src = object(&payload, RS)?;
+    // A failed/cancelled upstream response must not masquerade as a normal
+    // end_turn; surface it so the proxy can fail the attempt.
+    if matches!(
+        src.get("status").and_then(Value::as_str),
+        Some("failed" | "cancelled")
+    ) {
+        let detail = src
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("upstream response did not complete");
+        return Err(invalid(RS, format!("response {detail}")));
+    }
     let output = src
         .get("output")
         .and_then(Value::as_array)
@@ -561,6 +561,34 @@ mod tests {
         .unwrap();
         assert_eq!(out["output"][0]["call_id"], "call_conv_0");
         assert_eq!(out["output"][0]["id"], "fc_call_conv_0");
+    }
+
+    #[test]
+    fn object_arguments_and_failed_status_are_handled() {
+        // Some upstreams return arguments as an object, not a JSON string.
+        let out = cc_to_am(json!({
+            "id": "chatcmpl_1", "model": "m",
+            "choices": [{"index": 0, "message": {"role": "assistant", "tool_calls": [
+                {"id": "c", "type": "function", "function": {"name": "f", "arguments": {"a": 1}}}
+            ]}, "finish_reason": "tool_calls"}]
+        }))
+        .unwrap();
+        assert_eq!(out["content"][0]["input"], json!({"a": 1}));
+
+        let out = rs_to_am(json!({
+            "id": "resp_1", "status": "completed", "model": "m",
+            "output": [{"type": "function_call", "call_id": "c", "name": "f", "arguments": {"a": 1}}]
+        }))
+        .unwrap();
+        assert_eq!(out["content"][0]["input"], json!({"a": 1}));
+
+        // Failed/cancelled upstream responses must not look like end_turn.
+        for status in ["failed", "cancelled"] {
+            assert!(
+                rs_to_am(json!({"id": "r", "status": status, "output": []})).is_err(),
+                "{status} must surface as a conversion error"
+            );
+        }
     }
 
     #[test]

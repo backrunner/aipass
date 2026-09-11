@@ -147,6 +147,10 @@ struct CcToAm {
     open: Option<AmBlock>,
     /// CC tool index -> AM block index, for fragments of already-seen calls.
     tool_blocks: HashMap<u64, u64>,
+    /// AM block index -> buffered freeform text of a `custom` tool call. The
+    /// input is wrapped as `{"input": ...}` and emitted when the block closes
+    /// so accumulated partial_json always parses.
+    custom_buffers: HashMap<u64, String>,
     input_tokens: u64,
     output_tokens: u64,
     terminated: bool,
@@ -160,9 +164,23 @@ impl CcToAm {
             self.finish(&mut out);
             return Ok(out);
         }
+        if self.terminated {
+            return Ok(out);
+        }
         let Some(chunk) = parse_payload(&parsed, CC)? else {
             return Ok(out);
         };
+        // Some providers deliver mid-stream failures as an {"error": ...}
+        // payload; surface it instead of silently ending with end_turn.
+        if let Some(error) = chunk.get("error") {
+            self.close_open(&mut out);
+            out.push(emit_typed(
+                "error",
+                &json!({"type": "error", "error": error}),
+            ));
+            self.terminated = true;
+            return Ok(out);
+        }
         if self.id.is_none() {
             self.id = chunk.get("id").and_then(Value::as_str).map(str::to_string);
         }
@@ -183,27 +201,58 @@ impl CcToAm {
         self.ensure_started(&mut out);
 
         let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
-        if let Some(content) = delta.get("content").and_then(Value::as_str) {
-            if !content.is_empty() {
-                let index = self.open_text(&mut out);
-                out.push(emit_typed(
-                    "content_block_delta",
-                    &json!({"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": content}}),
-                ));
+        // A few providers stream structured content parts instead of a plain
+        // string; fold the text parts so the content is not dropped.
+        let content = match delta.get("content") {
+            Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
+            Some(Value::Array(parts)) => {
+                let text = parts
+                    .iter()
+                    .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<String>();
+                (!text.is_empty()).then_some(text)
             }
+            _ => None,
+        };
+        if let Some(content) = content {
+            let index = self.open_text(&mut out);
+            out.push(emit_typed(
+                "content_block_delta",
+                &json!({"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": content}}),
+            ));
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for call in tool_calls {
                 let cc_index = call.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let am_index = self.open_tool(cc_index, call, &mut out);
-                if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str)
-                {
-                    if !arguments.is_empty() {
-                        out.push(emit_typed(
-                            "content_block_delta",
-                            &json!({"type": "content_block_delta", "index": am_index, "delta": {"type": "input_json_delta", "partial_json": arguments}}),
-                        ));
+                // Freeform ("custom") calls stream plain text under
+                // custom.input, which is not JSON; buffer it and emit a
+                // wrapped {"input": ...} object at block close.
+                let is_custom = call.get("type").and_then(Value::as_str) == Some("custom")
+                    || call.pointer("/custom/input").is_some()
+                    || self.custom_buffers.contains_key(&am_index);
+                if is_custom {
+                    if let Some(text) = call.pointer("/custom/input").and_then(Value::as_str) {
+                        self.custom_buffers
+                            .entry(am_index)
+                            .or_default()
+                            .push_str(text);
                     }
+                    continue;
+                }
+                // Some providers emit the arguments object inline instead of
+                // a JSON string.
+                let arguments = match call.pointer("/function/arguments") {
+                    Some(Value::String(text)) => (!text.is_empty()).then(|| text.clone()),
+                    Some(value) if !value.is_null() => Some(value.to_string()),
+                    _ => None,
+                };
+                if let Some(arguments) = arguments {
+                    out.push(emit_typed(
+                        "content_block_delta",
+                        &json!({"type": "content_block_delta", "index": am_index, "delta": {"type": "input_json_delta", "partial_json": arguments}}),
+                    ));
                 }
             }
         }
@@ -284,6 +333,7 @@ impl CcToAm {
             .unwrap_or_else(|| format!("toolu_conv_{cc_index}"));
         let name = call
             .pointer("/function/name")
+            .or_else(|| call.pointer("/custom/name"))
             .and_then(Value::as_str)
             .unwrap_or("");
         out.push(emit_typed(
@@ -300,6 +350,13 @@ impl CcToAm {
             Some(AmBlock::Text(index)) | Some(AmBlock::Tool(_, index)) => index,
             None => return,
         };
+        if let Some(input) = self.custom_buffers.remove(&index) {
+            let wrapped = json!({"input": input}).to_string();
+            out.push(emit_typed(
+                "content_block_delta",
+                &json!({"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": wrapped}}),
+            ));
+        }
         out.push(emit_typed(
             "content_block_stop",
             &json!({"type": "content_block_stop", "index": index}),
@@ -431,6 +488,26 @@ impl AmToCc {
                 out.push("data: [DONE]\n\n".to_string());
                 self.done = true;
             }
+            // Upstream errors must reach the client; an unnoticed failure
+            // would look like a cleanly truncated stream.
+            "error" if !self.done => {
+                let error = payload.get("error").cloned().unwrap_or(Value::Null);
+                let id = if self.id.is_empty() {
+                    "chatcmpl_conv".to_string()
+                } else {
+                    self.id.clone()
+                };
+                out.push(emit_data(&json!({
+                    "id": id,
+                    "object": "chat.completion.chunk",
+                    "created": self.created,
+                    "model": self.model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "error": error,
+                })));
+                out.push("data: [DONE]\n\n".to_string());
+                self.done = true;
+            }
             // content_block_stop, ping, and unknown types carry no CC meaning.
             _ => {}
         }
@@ -474,10 +551,31 @@ impl RsToAm {
         let Some(payload) = parse_payload(&parsed, RS)? else {
             return Ok(out);
         };
+        if self.terminated {
+            return Ok(out);
+        }
         let Some(kind) = event_kind(&parsed, &payload) else {
             return Ok(out);
         };
         match kind.as_str() {
+            "response.failed" | "response.cancelled" => {
+                // Surface upstream failure as an AM error event instead of
+                // ending the stream with no terminal message events.
+                self.close_open(&mut out);
+                let response = payload.get("response").cloned().unwrap_or(Value::Null);
+                let error = response
+                    .get("error")
+                    .filter(|error| !error.is_null())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        json!({"type": "api_error", "message": "upstream response did not complete"})
+                    });
+                out.push(emit_typed(
+                    "error",
+                    &json!({"type": "error", "error": error}),
+                ));
+                self.terminated = true;
+            }
             "response.created" | "response.in_progress" => {
                 let response = payload.get("response").cloned().unwrap_or(Value::Null);
                 if self.id.is_none() {
@@ -547,7 +645,11 @@ impl RsToAm {
                         index
                     }
                 };
-                let partial = payload.get("delta").and_then(Value::as_str).unwrap_or("");
+                let partial = match payload.get("delta") {
+                    Some(Value::String(text)) => text.clone(),
+                    Some(value) if !value.is_null() => value.to_string(),
+                    _ => String::new(),
+                };
                 out.push(emit_typed(
                     "content_block_delta",
                     &json!({"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": partial}}),
@@ -674,6 +776,7 @@ struct AmToRs {
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
     sequence: u64,
+    terminated: bool,
 }
 
 impl AmToRs {
@@ -686,7 +789,30 @@ impl AmToRs {
         let Some(kind) = event_kind(&parsed, &payload) else {
             return Ok(out);
         };
+        if self.terminated {
+            return Ok(out);
+        }
         match kind.as_str() {
+            "error" => {
+                // Forward upstream failures as an RS error + response.failed;
+                // dropping them would leave the client waiting on a stream
+                // that never completes.
+                self.finalize_open(&mut out);
+                let error = payload.get("error").cloned().unwrap_or(Value::Null);
+                out.push(emit_typed(
+                    "error",
+                    &json!({
+                        "type": "error",
+                        "code": error.get("type").cloned().unwrap_or(Value::Null),
+                        "message": error.get("message").cloned().unwrap_or(Value::Null),
+                        "param": Value::Null,
+                    }),
+                ));
+                let mut failed = self.response_envelope("response.failed", "failed");
+                failed["response"]["error"] = error;
+                out.push(emit_typed("response.failed", &failed));
+                self.terminated = true;
+            }
             "message_start" => {
                 let message = payload.get("message").cloned().unwrap_or(Value::Null);
                 self.id = swap_id_prefix(
@@ -1337,6 +1463,110 @@ mod tests {
         );
         let events = parsed(&out);
         assert_eq!(events[2].1["item"]["call_id"], "call_conv_0");
+    }
+
+    #[test]
+    fn upstream_stream_errors_surface_as_terminal_events() {
+        // CC mid-stream error payload -> AM error event, nothing after it.
+        let mut c = StreamConverter::new(CC, AM).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
+                "data: {\"id\":\"chatcmpl_1\",\"error\":{\"type\":\"server_error\",\"message\":\"boom\"}}\n\n",
+                "data: [DONE]\n\n",
+            ],
+        );
+        let events = parsed(&out);
+        assert_eq!(events.last().unwrap().0.as_deref(), Some("error"));
+        assert_eq!(events.last().unwrap().1["error"]["type"], "server_error");
+        assert!(!kinds(&out).contains(&"message_stop".to_string()));
+
+        // RS response.failed -> AM error event.
+        let mut c = StreamConverter::new(RS, AM).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n\n",
+                "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_1\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"boom\"}}}\n\n",
+            ],
+        );
+        let events = parsed(&out);
+        assert_eq!(events.last().unwrap().0.as_deref(), Some("error"));
+        assert_eq!(events.last().unwrap().1["error"]["code"], "server_error");
+
+        // AM error -> CC error chunk + [DONE].
+        let mut c = StreamConverter::new(AM, CC).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"m\"}}\n\n",
+                "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n",
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        assert_eq!(out.last().unwrap(), "data: [DONE]\n\n");
+        let chunk: Value = serde_json::from_str(&parse_sse(&out[1]).unwrap().data).unwrap();
+        assert_eq!(chunk["error"]["type"], "overloaded_error");
+        assert_eq!(out.len(), 3); // role chunk, error chunk, [DONE]
+
+        // AM error -> RS error + response.failed; a trailing message_stop
+        // must not emit response.completed afterwards.
+        let mut c = StreamConverter::new(AM, RS).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"m\"}}\n\n",
+                "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n",
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ],
+        );
+        let events = parsed(&out);
+        assert_eq!(events[2].0.as_deref(), Some("error"));
+        assert_eq!(events[3].0.as_deref(), Some("response.failed"));
+        assert_eq!(events[3].1["response"]["status"], "failed");
+        assert!(!kinds(&out).contains(&"response.completed".to_string()));
+    }
+
+    #[test]
+    fn cc_nonstandard_deltas_and_custom_calls_are_preserved() {
+        let mut c = StreamConverter::new(CC, AM).unwrap();
+        let out = convert_all(
+            &mut c,
+            &[
+                // structured content parts inside a delta
+                "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}]}\n\n",
+                // freeform custom call: name under custom.name
+                "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"custom\",\"custom\":{\"name\":\"apply_patch\"}}]}}]}\n\n",
+                "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"custom\":{\"input\":\"*** patch\"}}]}}]}\n\n",
+                // a second, regular call whose arguments arrive as an object
+                "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":{\"a\":1}}}]}}]}\n\n",
+                "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                "data: [DONE]\n\n",
+            ],
+        );
+        let events = parsed(&out);
+        assert_eq!(
+            events[2].1["delta"],
+            json!({"type": "text_delta", "text": "hi"})
+        );
+        assert_eq!(
+            events[4].1["content_block"],
+            json!({"type": "tool_use", "id": "call_1", "name": "apply_patch"})
+        );
+        // freeform input is wrapped so accumulated partial_json parses
+        assert_eq!(
+            events[5].1["delta"],
+            json!({"type": "input_json_delta", "partial_json": "{\"input\":\"*** patch\"}"})
+        );
+        assert_eq!(
+            events[7].1["content_block"],
+            json!({"type": "tool_use", "id": "call_2", "name": "f"})
+        );
+        assert_eq!(
+            events[8].1["delta"],
+            json!({"type": "input_json_delta", "partial_json": "{\"a\":1}"})
+        );
     }
 
     // --- framing & passthrough ----------------------------------------------

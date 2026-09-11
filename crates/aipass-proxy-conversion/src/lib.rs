@@ -163,6 +163,24 @@ pub(crate) fn number(value: Option<&Value>) -> u64 {
     value.and_then(Value::as_u64).unwrap_or_default()
 }
 
+/// Tool call arguments are a JSON string per spec, but some providers emit
+/// the object directly; accept both rather than silently substituting `{}`.
+pub(crate) fn parse_tool_arguments(
+    arguments: Option<&Value>,
+    protocol: ProxyProtocol,
+) -> Result<Value, ConversionError> {
+    match arguments {
+        Some(Value::String(raw)) => serde_json::from_str(raw).map_err(|err| {
+            invalid(
+                protocol,
+                format!("tool arguments are not valid JSON: {err}"),
+            )
+        }),
+        Some(value) if !value.is_null() => Ok(value.clone()),
+        _ => Ok(Value::Object(serde_json::Map::new())),
+    }
+}
+
 fn extract_usage(protocol: ProxyProtocol, payload: &Value) -> TokenUsage {
     let usage = payload.get("usage").unwrap_or(payload);
     match protocol {

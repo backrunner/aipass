@@ -5,7 +5,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::{invalid, ConversionError, ProxyProtocol};
+use crate::{invalid, parse_tool_arguments, ConversionError, ProxyProtocol};
 
 use ProxyProtocol::{AnthropicMessages as AM, OpenAiChatCompletions as CC, OpenAiResponses as RS};
 
@@ -425,14 +425,22 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
                 }
                 if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
                     for call in tool_calls {
-                        let function = call.get("function").cloned().unwrap_or(Value::Null);
-                        let arguments = function
-                            .get("arguments")
-                            .and_then(Value::as_str)
-                            .unwrap_or("{}");
-                        let input: Value = serde_json::from_str(arguments).map_err(|err| {
-                            invalid(CC, format!("tool_call arguments are not valid JSON: {err}"))
-                        })?;
+                        // Freeform ("custom") calls carry a plain-text input;
+                        // wrap it so the shape matches function-style calls
+                        // like Codex's apply_patch.
+                        let (name, input) = match call.get("type").and_then(Value::as_str) {
+                            Some("custom") => (
+                                call.pointer("/custom/name").cloned().unwrap_or(Value::Null),
+                                json!({"input": call.pointer("/custom/input").cloned().unwrap_or(Value::Null)}),
+                            ),
+                            _ => {
+                                let function = call.get("function").cloned().unwrap_or(Value::Null);
+                                (
+                                    function.get("name").cloned().unwrap_or(Value::Null),
+                                    parse_tool_arguments(function.get("arguments"), CC)?,
+                                )
+                            }
+                        };
                         let id = call
                             .get("id")
                             .and_then(Value::as_str)
@@ -444,7 +452,7 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
                         blocks.push(json!({
                             "type": "tool_use",
                             "id": id,
-                            "name": function.get("name").cloned().unwrap_or(Value::Null),
+                            "name": name,
                             "input": input,
                         }));
                     }
@@ -477,8 +485,7 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
     let mut tools = Vec::new();
     if let Some(cc_tools) = src.get("tools").and_then(Value::as_array) {
         for tool in cc_tools {
-            let function = tool.get("function").cloned().unwrap_or(tool.clone());
-            tools.push(cc_function_to_am_tool(&function));
+            tools.push(cc_tool_to_am(tool));
         }
     }
     if let Some(functions) = src.get("functions").and_then(Value::as_array) {
@@ -538,6 +545,30 @@ fn data_url_to_am_source(url: &str) -> Value {
         }
     }
     json!({"type": "url", "url": url})
+}
+
+/// A CC `tools` entry is `{"type":"function","function":{...}}`, a bare
+/// function object, or a freeform `{"type":"custom",...}` tool. Custom tools
+/// map to a single-string-parameter function, matching the shape Codex uses
+/// for its function-form apply_patch tool.
+fn cc_tool_to_am(tool: &Value) -> Value {
+    if tool.get("type").and_then(Value::as_str) == Some("custom") {
+        let custom = tool
+            .get("custom")
+            .filter(|custom| custom.is_object())
+            .cloned()
+            .unwrap_or_else(|| tool.clone());
+        return json!({
+            "name": custom.get("name").cloned().unwrap_or(Value::Null),
+            "description": custom.get("description").cloned().unwrap_or(Value::Null),
+            "input_schema": {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]},
+        });
+    }
+    let function = tool
+        .get("function")
+        .cloned()
+        .unwrap_or_else(|| tool.clone());
+    cc_function_to_am_tool(&function)
 }
 
 fn cc_function_to_am_tool(function: &Value) -> Value {
@@ -674,16 +705,7 @@ fn rs_item_to_am(
 ) -> Result<(), ConversionError> {
     match item.get("type").and_then(Value::as_str) {
         Some("function_call") => {
-            let arguments = item
-                .get("arguments")
-                .and_then(Value::as_str)
-                .unwrap_or("{}");
-            let input: Value = serde_json::from_str(arguments).map_err(|err| {
-                invalid(
-                    RS,
-                    format!("function_call arguments are not valid JSON: {err}"),
-                )
-            })?;
+            let input = parse_tool_arguments(item.get("arguments"), RS)?;
             let id = item
                 .get("call_id")
                 .or_else(|| item.get("id"))
@@ -1104,6 +1126,42 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(out["input"][0]["call_id"], "call_conv_0");
+    }
+
+    #[test]
+    fn cc_object_arguments_and_custom_tools_are_preserved() {
+        // Providers may emit arguments as an object, and Codex-style custom
+        // tools must map to a single-string-parameter function shape.
+        let out = cc_to_am(json!({
+            "model": "m",
+            "messages": [{"role": "assistant", "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "f", "arguments": {"a": 1}}},
+                {"id": "c2", "type": "custom", "custom": {"name": "apply_patch", "input": "*** patch"}}
+            ]}],
+            "tools": [
+                {"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}},
+                {"type": "custom", "custom": {"name": "apply_patch", "description": "edit files"}}
+            ]
+        }))
+        .unwrap();
+        let blocks = out["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["input"], json!({"a": 1}));
+        assert_eq!(
+            blocks[1],
+            json!({"type": "tool_use", "id": "c2", "name": "apply_patch", "input": {"input": "*** patch"}})
+        );
+        assert_eq!(
+            out["tools"][1],
+            json!({"name": "apply_patch", "description": "edit files", "input_schema": {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]}})
+        );
+
+        // Responses function_call items may also carry object arguments.
+        let out = rs_to_am(json!({
+            "model": "m",
+            "input": [{"type": "function_call", "call_id": "c", "name": "f", "arguments": {"a": 1}}]
+        }))
+        .unwrap();
+        assert_eq!(out["messages"][0]["content"][0]["input"], json!({"a": 1}));
     }
 
     #[test]
