@@ -1511,10 +1511,28 @@ fn retry_policy_defaults_hold_fields_for_legacy_json() {
 fn hold_on_failure_retries_with_backoff_until_upstream_recovers() {
     let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
-    let upstream_thread = std::thread::spawn(move || {
-        for index in 0..3 {
-            let (mut stream, _) = upstream.accept().unwrap();
-            let _ = read_http_request(&mut stream);
+    // Answer 500 for the first two connections and 200 for every later one,
+    // keeping sockets open until the process ends. An abruptly closed socket
+    // or an early-exiting listener can race later attempts into transport
+    // errors and flake the hold loop.
+    std::thread::spawn(move || {
+        let mut streams = Vec::new();
+        let mut index = 0_u32;
+        while let Ok((mut stream, _)) = upstream.accept() {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let mut received = Vec::new();
+            let mut buffer = [0_u8; 8192];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => {
+                        received.extend_from_slice(&buffer[..read]);
+                        if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                }
+            }
             let (status, body) = if index < 2 {
                 (
                     "HTTP/1.1 500 Internal Server Error",
@@ -1523,13 +1541,14 @@ fn hold_on_failure_retries_with_backoff_until_upstream_recovers() {
             } else {
                 ("HTTP/1.1 200 OK", r#"{"status":"completed"}"#)
             };
-            write!(
-                    stream,
-                    "{status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
+            let _ = write!(
+                stream,
+                "{status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            index = index.saturating_add(1);
+            streams.push(stream);
         }
     });
 
@@ -1566,7 +1585,6 @@ fn hold_on_failure_retries_with_backoff_until_upstream_recovers() {
         response.json::<serde_json::Value>().unwrap()["status"],
         "completed"
     );
-    upstream_thread.join().unwrap();
 }
 
 #[test]
@@ -1576,6 +1594,9 @@ fn hold_on_failure_returns_502_after_max_duration() {
     let request_count = Arc::new(AtomicU64::new(0));
     let counter = request_count.clone();
     std::thread::spawn(move || {
+        // Keep accepted sockets open until the process ends so an abrupt
+        // close cannot race the proxy's read into a transport error.
+        let mut streams = Vec::new();
         for _ in 0..20 {
             let Ok((mut stream, _)) = upstream.accept() else {
                 return;
@@ -1583,13 +1604,17 @@ fn hold_on_failure_returns_502_after_max_duration() {
             let _ = read_http_request(&mut stream);
             counter.fetch_add(1, Ordering::SeqCst);
             let body = r#"{"error":{"message":"upstream down"}}"#;
-            write!(
-                    stream,
-                    "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
+            if write!(
+                stream,
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .is_err()
+            {
+                continue;
+            }
+            streams.push(stream);
         }
     });
 
@@ -1767,10 +1792,29 @@ async fn hold_deadline_does_not_cut_off_a_committed_stream() {
 fn hold_on_failure_waits_for_circuit_cooldown() {
     let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
-    let upstream_thread = std::thread::spawn(move || {
-        for index in 0..2 {
-            let (mut stream, _) = upstream.accept().unwrap();
-            let _ = read_http_request(&mut stream);
+    // Answer a 500 once, then 200 for every later connection, and keep each
+    // socket open until the process ends. Dropping a socket right after the
+    // write can race the proxy's read into a transport error, and a listener
+    // that exits early turns later attempts into connect refusals; either
+    // outcome makes the hold loop exhaust its budget and flakes the test.
+    std::thread::spawn(move || {
+        let mut streams = Vec::new();
+        let mut index = 0_u32;
+        while let Ok((mut stream, _)) = upstream.accept() {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let mut received = Vec::new();
+            let mut buffer = [0_u8; 8192];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => {
+                        received.extend_from_slice(&buffer[..read]);
+                        if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                }
+            }
             let (status, body) = if index == 0 {
                 (
                     "HTTP/1.1 500 Internal Server Error",
@@ -1779,13 +1823,14 @@ fn hold_on_failure_waits_for_circuit_cooldown() {
             } else {
                 ("HTTP/1.1 200 OK", r#"{"status":"completed"}"#)
             };
-            write!(
-                    stream,
-                    "{status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .unwrap();
+            let _ = write!(
+                stream,
+                "{status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            index = index.saturating_add(1);
+            streams.push(stream);
         }
     });
 
@@ -1826,7 +1871,6 @@ fn hold_on_failure_waits_for_circuit_cooldown() {
         response.json::<serde_json::Value>().unwrap()["status"],
         "completed"
     );
-    upstream_thread.join().unwrap();
 }
 
 #[test]
