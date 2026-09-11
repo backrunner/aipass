@@ -27,6 +27,7 @@ fn test_route(base_url: String) -> ResolvedRoute {
             weight: 1,
             enabled: true,
             protocol: None,
+            prefer_ws: false,
         },
         api_key: UPSTREAM_KEY.into(),
     };
