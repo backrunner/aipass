@@ -213,6 +213,16 @@ fn ensure_debug_bundle_resource_placeholders() {
         }
     }
 
+    // The bundle resources glob `target/release/cli/*`, so the directory needs
+    // at least one file before the real CLI binary is staged there.
+    let cli_dir = release_dir.join("cli");
+    if std::fs::create_dir_all(&cli_dir).is_ok() {
+        let placeholder = cli_dir.join("aipass.resource-placeholder");
+        if !placeholder.exists() {
+            let _ = std::fs::write(&placeholder, []);
+        }
+    }
+
     let extension_build_dir = workspace_root.join("apps").join("extension").join("build");
     if std::fs::create_dir_all(&extension_build_dir).is_err() {
         return;
