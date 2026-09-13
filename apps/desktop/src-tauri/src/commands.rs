@@ -936,6 +936,7 @@ pub(crate) async fn provider_probe(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn provider_usage_probe(
     app: AppHandle,
     id: Uuid,

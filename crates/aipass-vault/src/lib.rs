@@ -3421,10 +3421,9 @@ mod tests {
             vault.add_secret(id, "primary", "sk-ant-api03-extra"),
             Err(VaultError::DuplicateSecretLabel)
         ));
-        assert!(matches!(
-            vault.add_secret(id, "Primary", "sk-ant-api03-extra"),
-            Ok(_)
-        ));
+        assert!(vault
+            .add_secret(id, "Primary", "sk-ant-api03-extra")
+            .is_ok());
 
         // Renaming the first key frees the label for another credential.
         assert!(vault.update_secret(id, &first_id, "main", None).unwrap());
