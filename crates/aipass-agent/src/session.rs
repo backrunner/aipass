@@ -1108,7 +1108,7 @@ pub fn map_vault_error(err: VaultError) -> ServiceError {
         VaultError::RecordNotFound | VaultError::DeviceNotFound => {
             ServiceError::new(AgentErrorCode::NotFound, err.to_string())
         }
-        VaultError::DuplicateSecretLabel | VaultError::LastSecret | VaultError::AlreadyExists => {
+        VaultError::DuplicateSecretLabel | VaultError::AlreadyExists => {
             ServiceError::new(AgentErrorCode::Conflict, err.to_string())
         }
         VaultError::UnsupportedVersion

@@ -1,7 +1,7 @@
 import type { ProviderEntry, ProviderKind } from "@aipass/schemas";
 import { describe, expect, it } from "vitest";
 
-import { isExpiringSoon, mergeHeaderPairs, providerCounts } from "./providers";
+import { isExpiringSoon, mergeHeaderPairs, providerCounts, summaryToEntry } from "./providers";
 
 function entry(
   id: string,
@@ -114,4 +114,11 @@ describe("mergeHeaderPairs", () => {
     expect(mergeHeaderPairs(existing, [])).toEqual([["x-version", "1"]]);
     expect(mergeHeaderPairs([], [["x-version", "1"]])).toEqual([["x-version", "1"]]);
   });
+});
+
+
+it("preserves an explicitly empty key list while supporting legacy summaries", () => {
+  const summary = { ...entry("empty", "official"), maskedSecret: "••••", fingerprint: "fixture" };
+  expect(summaryToEntry(summary).secretRefs).toEqual([]);
+  expect(summaryToEntry({ ...summary, secretRefs: undefined }).secretRefs).toHaveLength(1);
 });

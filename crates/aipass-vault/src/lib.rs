@@ -56,8 +56,6 @@ pub enum VaultError {
     InvalidSecretLabel,
     #[error("secret value is invalid")]
     InvalidSecretValue,
-    #[error("cannot remove the last secret from a provider")]
-    LastSecret,
     #[error("invalid encrypted vault export")]
     InvalidExport,
     #[error("io error: {0}")]
@@ -1096,9 +1094,6 @@ impl Vault {
     pub fn remove_secret(&self, id: Uuid, label_or_id: &str) -> Result<String, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
-        if plaintext.entry.secret_refs.len() <= 1 {
-            return Err(VaultError::LastSecret);
-        }
         let before = plaintext.entry.secret_refs.len();
         let removed = find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
             .map(|index| plaintext.entry.secret_refs[index].id.clone())
@@ -1132,12 +1127,7 @@ impl Vault {
             .map(|secret| secret.id.clone())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let old_secret = old.secrets.get(&secret_id).cloned();
-        let api_key = input
-            .api_key
-            .clone()
-            .or(old_secret)
-            .ok_or(VaultError::RecordNotFound)?;
-        let fingerprint = hmac_fingerprint(&self.index_key, &api_key);
+        let api_key = input.api_key.clone().or(old_secret);
         let mut secret_refs = old.entry.secret_refs;
         let updated_secret_label = match input.secret_label.as_deref() {
             Some(label) => {
@@ -1154,24 +1144,27 @@ impl Vault {
                 return Err(VaultError::DuplicateSecretLabel);
             }
         }
-        if secret_refs.is_empty() {
-            let mut primary = SecretRef::new(
-                secret_id.clone(),
-                updated_secret_label.as_deref().unwrap_or("primary"),
-                mask_secret(&api_key),
-                fingerprint,
-            );
-            input.secret_metadata.apply_to(&mut primary);
-            secret_refs.push(primary);
-        } else if let Some(primary) = secret_refs.first_mut() {
-            if let Some(label) = updated_secret_label {
-                primary.label = label;
+        if let Some(api_key) = api_key.as_ref() {
+            let fingerprint = hmac_fingerprint(&self.index_key, api_key);
+            if secret_refs.is_empty() {
+                let mut primary = SecretRef::new(
+                    secret_id.clone(),
+                    updated_secret_label.as_deref().unwrap_or("primary"),
+                    mask_secret(api_key),
+                    fingerprint,
+                );
+                input.secret_metadata.apply_to(&mut primary);
+                secret_refs.push(primary);
+            } else if let Some(primary) = secret_refs.first_mut() {
+                if let Some(label) = updated_secret_label {
+                    primary.label = label;
+                }
+                primary.masked = mask_secret(api_key);
+                primary.fingerprint = fingerprint;
+                // Legacy callers may explicitly update the first credential.
+                // Provider-only edits leave key fields and metadata unchanged.
+                input.secret_metadata.apply_to(primary);
             }
-            primary.masked = mask_secret(&api_key);
-            primary.fingerprint = fingerprint;
-            // The entry-level edit form always edits the first key, so its
-            // label, value and metadata land on the same credential.
-            input.secret_metadata.apply_to(primary);
         }
         // Keep the historical auto-disable explanation until recovery succeeds.
         // Changed transport settings invalidate runtime evidence by config key,
@@ -1222,7 +1215,9 @@ impl Vault {
             deleted_at: old.entry.deleted_at,
         };
         let mut secrets = old.secrets;
-        secrets.insert(secret_id, api_key);
+        if let Some(api_key) = api_key {
+            secrets.insert(secret_id, api_key);
+        }
         self.write_provider_record(id, &ProviderRecordPlaintext { entry, secrets })?;
         self.audit("provider.update", Some(id), None)?;
         Ok(())
@@ -3283,7 +3278,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_secret_records_can_add_reveal_and_remove_secondary_keys() {
+    fn multi_secret_records_can_remove_all_keys_and_add_again() {
         let dir = tempdir().unwrap();
         let password = SecretString::new("correct horse battery staple");
         let vault = create_test_vault(dir.path(), &password);
@@ -3316,10 +3311,31 @@ mod tests {
         assert_eq!(removed, fallback_id);
         let summary = vault.get_provider_summary(id).unwrap();
         assert_eq!(summary.secret_refs.len(), 1);
+        vault.remove_secret(id, "primary").unwrap();
+        assert!(vault
+            .get_provider_summary(id)
+            .unwrap()
+            .secret_refs
+            .is_empty());
         assert!(matches!(
-            vault.remove_secret(id, "primary"),
-            Err(VaultError::LastSecret)
+            vault.reveal_secret(id),
+            Err(VaultError::RecordNotFound)
         ));
+        // Metadata-only edits must not require or recreate a deleted key.
+        vault.update_provider(id, update_input(None)).unwrap();
+        let reopened = Vault::open(dir.path(), &password).unwrap();
+        assert!(reopened
+            .get_provider_summary(id)
+            .unwrap()
+            .secret_refs
+            .is_empty());
+        let replacement = reopened
+            .add_secret(id, "replacement", "sk-replacement")
+            .unwrap();
+        assert_eq!(
+            reopened.reveal_secret_field(id, &replacement).unwrap(),
+            "sk-replacement"
+        );
     }
 
     #[test]

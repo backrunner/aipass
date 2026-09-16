@@ -26,6 +26,8 @@
   export let websocketProbing = false;
   export let compactProviderSelect = false;
   export let showSecretLabel = true;
+  // Existing credentials are managed individually by the parent key list.
+  export let showSecretFields = true;
   // Set when editing an official OAuth entry: the proxy sends the OAuth token
   // to whatever endpoint is configured, so the form warns about untrusted URLs.
   export let isOfficialOauth = false;
@@ -148,7 +150,7 @@
     const initial = new Set<FieldId>();
     if (formMode === "edit") {
       for (const field of optionalFields) {
-        if (field.hasValue()) initial.add(field.id);
+        if (field.hasValue() && (showSecretFields || (field.id !== "group" && field.id !== "billing"))) initial.add(field.id);
       }
     } else {
       initial.add("domain");
@@ -221,6 +223,7 @@
   );
   $: advancedAvailable = optionalFields.filter(
     (field) => field.section === "advanced" && !visibleFields.has(field.id)
+      && (showSecretFields || (field.id !== "group" && field.id !== "billing"))
   );
 
   $: detailsVisible =
@@ -247,34 +250,36 @@
     <Field label={$t("providerForm.title")} class="title-field">
       <input bind:value={draft.title} placeholder={$t("providerForm.titlePlaceholder")} />
     </Field>
-    {#if showSecretLabel && (formMode === "add" || itemLayout)}
-      <Field label={$t("providerForm.secretLabel")} class="secret-label-field">
-        <input bind:value={draft.secretLabel} placeholder={$t("providerForm.secretLabelPlaceholder")} />
-      </Field>
+    {#if showSecretFields}
+      {#if showSecretLabel && (formMode === "add" || itemLayout)}
+        <Field label={$t("providerForm.secretLabel")} class="secret-label-field">
+          <input bind:value={draft.secretLabel} placeholder={$t("providerForm.secretLabelPlaceholder")} />
+        </Field>
+      {/if}
+      <slot name="secret">
+        <Field label={$t("providerForm.apiKey")} class="api-key-field">
+          <div class="secret-input">
+            <input
+              bind:value={draft.apiKey}
+              type={showApiKey ? "text" : "password"}
+              placeholder={$t("providerForm.pasteApiKey")}
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button
+              type="button"
+              class="secret-toggle"
+              aria-label={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
+              aria-pressed={showApiKey}
+              title={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
+              on:click={() => (showApiKey = !showApiKey)}
+            >
+              {#if showApiKey}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+            </button>
+          </div>
+        </Field>
+      </slot>
     {/if}
-    <slot name="secret">
-      <Field label={$t("providerForm.apiKey")} class="api-key-field">
-        <div class="secret-input">
-          <input
-            bind:value={draft.apiKey}
-            type={showApiKey ? "text" : "password"}
-            placeholder={$t("providerForm.pasteApiKey")}
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <button
-            type="button"
-            class="secret-toggle"
-            aria-label={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
-            aria-pressed={showApiKey}
-            title={$t(showApiKey ? "providerForm.hideApiKey" : "providerForm.showApiKey")}
-            on:click={() => (showApiKey = !showApiKey)}
-          >
-            {#if showApiKey}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-          </button>
-        </div>
-      </Field>
-    </slot>
   </div>
 </section>
 

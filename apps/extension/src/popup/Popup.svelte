@@ -1086,16 +1086,14 @@
   }
 
   function entrySecrets(entry: Entry) {
-    return entry.secretRefs?.length
-      ? entry.secretRefs
-      : [
-          {
-            id: "primary",
-            label: "",
-            masked: entry.maskedSecret,
-            fingerprint: entry.fingerprint
-          }
-        ];
+    return entry.secretRefs ?? [
+      {
+        id: "primary",
+        label: "",
+        masked: entry.maskedSecret,
+        fingerprint: entry.fingerprint
+      }
+    ];
   }
 
   /**

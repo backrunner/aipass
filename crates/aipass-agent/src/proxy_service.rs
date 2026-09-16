@@ -773,13 +773,9 @@ impl ProxyService {
             return Ok(false);
         }
         self.save_config(vault)?;
-        if self.handle.is_some() {
-            if self.config.enabled && self.config.routes.iter().any(|route| route.enabled) {
-                self.restart(vault)?;
-            } else {
-                self.stop_and_save(vault)?;
-            }
-        }
+        // Match synced deletions: unavailable siblings and an empty target set
+        // must not prevent invalidating the live credential snapshot.
+        self.reload_if_running(vault)?;
         Ok(true)
     }
 
@@ -2522,6 +2518,86 @@ mod tests {
         assert!(error
             .message
             .contains("enable at least one proxy route group"));
+    }
+
+    #[test]
+    fn deleting_first_and_last_keys_cleans_live_routes_and_pricing_by_id() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let creation = Vault::create(temp.path(), &SecretString::new("test password")).unwrap();
+        let vault = &creation.vault;
+        let provider_id = vault
+            .add_provider(provider_input(
+                "first-key",
+                "http://127.0.0.1:9/v1".into(),
+                "header",
+            ))
+            .unwrap();
+        let first_id = vault.get_provider_summary(provider_id).unwrap().secret_refs[0]
+            .id
+            .clone();
+        let second_id = vault
+            .add_secret(provider_id, "second", "second-key")
+            .unwrap();
+        let target_for = |secret_id: &str| ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: provider_id,
+            secret_id: secret_id.into(),
+            label: secret_id.into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            protocol: None,
+            prefer_ws: false,
+        };
+        let mut service = ProxyService::new(temp.path()).unwrap();
+        service.config = config_with_token("aipass-delete-keys");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        service.config.bind_addr = listener.local_addr().unwrap().to_string();
+        drop(listener);
+        service.config.routes[0].targets = vec![target_for(&first_id), target_for(&second_id)];
+        let surviving_target = service.config.routes[0].targets[1].id;
+        for id in [&first_id, &second_id] {
+            service
+                .set_pricing_assignment(vault, provider_id, id.clone(), None, 2.0)
+                .unwrap();
+        }
+        service.save_config(vault).unwrap();
+        service.start(vault).unwrap();
+
+        vault.remove_secret(provider_id, &first_id).unwrap();
+        service
+            .remove_provider_references(vault, provider_id, Some(&first_id))
+            .unwrap();
+        assert!(service.status().running);
+        assert_eq!(service.status().total_channels, 1);
+        let remaining = &service.config.routes[0].targets;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, surviving_target);
+        assert_eq!(remaining[0].secret_id, second_id);
+        let pricing = service.pricing_config(vault).unwrap();
+        assert_eq!(pricing.assignments.len(), 1);
+        assert_eq!(pricing.assignments[0].secret_id, second_id);
+        assert_eq!(vault.reveal_secret(provider_id).unwrap(), "second-key");
+
+        vault.remove_secret(provider_id, &second_id).unwrap();
+        service
+            .remove_provider_references(vault, provider_id, Some(&second_id))
+            .unwrap();
+        assert!(service.status().running);
+        assert_eq!(service.status().total_channels, 0);
+        assert!(service.config.routes.is_empty());
+        assert!(service
+            .pricing_config(vault)
+            .unwrap()
+            .assignments
+            .is_empty());
+        let mut reopened = ProxyService::new(temp.path()).unwrap();
+        assert!(reopened.load_config(vault).unwrap().routes.is_empty());
+        service.stop().unwrap();
     }
 
     #[test]

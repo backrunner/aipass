@@ -110,7 +110,7 @@ test("prefills an existing key masked, allows reveal, and saves its value", asyn
     "key",
     "Production",
     "fixture-existing-key",
-    { interfaceType: "custom_http", group: "" }
+    { interfaceType: "custom_http", group: "", billing: { rate: "", currency: "", unitPrice: "" } }
   ));
 });
 
@@ -147,7 +147,7 @@ test("key editing carries the key's own interface and group", async () => {
     "key",
     "Production",
     "fixture-existing-key",
-    { interfaceType: "anthropic_messages", group: "vip" }
+    { interfaceType: "anthropic_messages", group: "vip", billing: { rate: "", currency: "", unitPrice: "" } }
   ));
 });
 
@@ -187,4 +187,85 @@ test("a cancelled key read cannot repopulate a later editor", async () => {
   flushSync();
   expect(document.querySelector(".credential-inline-editor")).toBeNull();
   expect(document.body.innerHTML).not.toContain("late-fixture-key");
+});
+
+
+test("all keys share editing, deletion and pricing controls, including the only key", async () => {
+  setLocale("en");
+  const onRemoveSecret = vi.fn();
+  const onReadSecret = vi.fn(async () => "fixture-key");
+  const onUpdateSecret = vi.fn(async () => {});
+  render({ editMode: true, onRemoveSecret, onReadSecret, onUpdateSecret });
+  expect(document.querySelector(".provider-form-fields .secret-input")).toBeNull();
+  expect(document.querySelectorAll(".key-row")).toHaveLength(1);
+  const buttons = document.querySelectorAll<HTMLButtonElement>(".key-row-actions button");
+  buttons[1].click();
+  expect(onRemoveSecret).toHaveBeenCalledWith("key");
+  buttons[0].click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-key"); });
+  document.querySelector<HTMLButtonElement>(".secret-edit-row .btn")!.click();
+  await vi.waitFor(() => expect(onUpdateSecret).toHaveBeenCalledWith("key", "Production", "fixture-key", expect.objectContaining({ interfaceType: "custom_http" })));
+});
+
+test("pricing controls remain bound to each key id", () => {
+  const onSetPricingAssignment = vi.fn();
+  render({ editMode: true, selected: { ...selected, secretRefs: [selected.secretRefs[0], { ...selected.secretRefs[0], id: "other", label: "Other" }] }, onSetPricingAssignment });
+  const multipliers = document.querySelectorAll<HTMLInputElement>(".key-pricing input");
+  expect(multipliers).toHaveLength(2);
+  multipliers[0].value = "2";
+  multipliers[0].dispatchEvent(new Event("change", { bubbles: true }));
+  multipliers[1].value = "3";
+  multipliers[1].dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onSetPricingAssignment.mock.calls).toEqual([["provider", "key", null, 2], ["provider", "other", null, 3]]);
+});
+
+
+test("provider save commits the open key editor first and stops on key failure", async () => {
+  setLocale("en");
+  const calls: string[] = [];
+  let fail = true;
+  const onUpdateSecret = vi.fn(async () => { calls.push("key"); if (fail) throw new Error("fixture write failure"); });
+  const onEditSave = vi.fn(async () => { calls.push("provider"); });
+  render({ editMode: true, onReadSecret: async () => "fixture-key", onUpdateSecret, onEditSave });
+  document.querySelector<HTMLButtonElement>(".key-row-actions button")!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-key"); });
+  document.querySelector<HTMLButtonElement>(".actions .btn-primary")!.click();
+  await vi.waitFor(() => { flushSync(); expect(onUpdateSecret).toHaveBeenCalledTimes(1); expect(document.querySelector<HTMLButtonElement>(".actions .btn-primary")!.disabled).toBe(false); });
+  expect(calls).toEqual(["key"]);
+  expect(document.querySelector(".secret-edit-row")).toBeTruthy();
+  fail = false;
+  document.querySelector<HTMLButtonElement>(".actions .btn-primary")!.click();
+  await vi.waitFor(() => expect(onEditSave).toHaveBeenCalledTimes(1));
+  expect(calls).toEqual(["key", "key", "provider"]);
+});
+
+test("a completed save cannot close a newer key editor", async () => {
+  let finish!: () => void;
+  const onUpdateSecret = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  render({
+    editMode: true,
+    selected: { ...selected, secretRefs: [selected.secretRefs[0], { ...selected.secretRefs[0], id: "other", label: "Other" }] },
+    onReadSecret: async id => `fixture-${id}`, onUpdateSecret
+  });
+  document.querySelector<HTMLButtonElement>(".key-row-actions button")!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-key"); });
+  document.querySelector<HTMLButtonElement>(".secret-edit-row .btn")!.click();
+  flushSync();
+  document.querySelector<HTMLButtonElement>(".key-row-actions button")!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-other"); });
+  finish();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLButtonElement>(".secret-edit-row .btn")!.disabled).toBe(false); });
+  expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-other");
+});
+
+test("provider save creates a pending key before saving metadata", async () => {
+  const calls: string[] = [];
+  render({ editMode: true, newSecretLabel: "New", newSecretKey: "fixture-key", onAddSecret: async () => { calls.push("add"); }, onEditSave: async () => { calls.push("provider"); } });
+  document.querySelector<HTMLButtonElement>(".add-chip")!.click(); flushSync();
+  const key = document.querySelector<HTMLInputElement>('.add-secret-row input[type="password"]')!;
+  key.value = "fixture-key";
+  key.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+  document.querySelector<HTMLButtonElement>(".actions .btn-primary")!.click();
+  await vi.waitFor(() => { flushSync(); expect(calls).toEqual(["add", "provider"]); });
+  expect(document.querySelector(".add-secret-row")).toBeNull();
 });

@@ -62,7 +62,7 @@ test.each([false, true])("correcting an invalid endpoint closes the saved editor
     entries_list: (args) => { if (saved && failRefresh) throw new Error("fixture refresh failed"); return args.archived ? [] : [structuredClone(fixtureEntry)]; }
   });
   button("Edit").click();
-  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-input input")?.value).toBe("fixture-existing-key"); });
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".detail.editing")).toBeTruthy(); });
   input('input[placeholder="https://api.example.com"]', "ftp://invalid.test");
   button("Save changes").click();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector(".error-toast")).toBeTruthy(); expect(button("Save changes").disabled).toBe(false); });

@@ -539,6 +539,7 @@ export type UsageProbeRequest = {
 export type SecretKeyMetadata = {
   interfaceType?: InterfaceType;
   group?: string;
+  billing?: SecretRef["billing"];
 };
 
 export type ToolConfigPreview = {

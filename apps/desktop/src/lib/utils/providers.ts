@@ -37,16 +37,14 @@ export function summaryToEntry(summary: EntrySummary): ProviderEntry {
     supportsWebsockets: summary.supportsWebsockets,
     websocketWarning: summary.websocketWarning,
     authScheme: summary.authScheme,
-    secretRefs: summary.secretRefs?.length
-      ? summary.secretRefs
-      : [
-          {
-            id: "primary",
-            label: "primary",
-            masked: summary.maskedSecret,
-            fingerprint: summary.fingerprint
-          }
-        ],
+    secretRefs: summary.secretRefs ?? [
+      {
+        id: "primary",
+        label: "primary",
+        masked: summary.maskedSecret,
+        fingerprint: summary.fingerprint
+      }
+    ],
     defaultModel: summary.defaultModel,
     modelAliases: summary.modelAliases,
     quota: summary.quota,

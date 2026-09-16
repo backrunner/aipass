@@ -21,6 +21,7 @@ const fixtureEntry: EntrySummary = {
   providerId: "custom_http", domains: [], endpoints: [{ id: "api", kind: "api", url: "https://fixture.test/v1" }],
   interfaceType: "openai_compatible", authScheme: "bearer", supportsWebsockets: false,
   secretRefs: [{ id: "key", label: "primary", masked: "••••", fingerprint: "test" }], tags: [],
+  gateway: { group: "legacy", rate: "2" },
   maskedSecret: "••••", fingerprint: "test", faviconUrl: "data:image/png;base64,AA=="
 };
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === label)!;
@@ -52,7 +53,7 @@ async function render(overrides: Record<string, (args: any) => unknown> = {}) {
 
 async function openEditorAndSave() {
   button("Edit").click();
-  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-input input")?.value).toBe("fixture-existing-key"); });
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".detail.editing")).toBeTruthy(); });
   const title = document.querySelector<HTMLInputElement>('input[placeholder="My provider"]')!;
   title.value = "Renamed provider";
   title.dispatchEvent(new Event("input", { bubbles: true }));
@@ -69,8 +70,12 @@ test("a provider whose default key label is \"primary\" saves and returns to the
     provider_update: (args) => { saved = args.request; fixtureEntry.title = args.request.title; }
   });
   await openEditorAndSave();
-  // The vault accepts the literal "primary" label; the request must carry it.
-  expect(saved.secretLabel).toBe("primary");
+  // Provider metadata saves must never overwrite a separately managed key.
+  expect(saved.secretLabel).toBeUndefined();
+  expect(saved.apiKey).toBeUndefined();
+  expect(saved.secretMetadata).toBeUndefined();
+  expect(saved.gateway).toEqual({ group: "legacy", rate: "2" });
+  expect(invoke.mock.calls.some(([cmd]) => cmd === "secret_reveal_field")).toBe(false);
   // A committed save closes the editor and reloads the detail view.
   expect(document.querySelector(".detail.editing")).toBeNull();
   expect(document.querySelector(".detail h1")?.textContent).toBe("Renamed provider");
@@ -84,4 +89,34 @@ test("a failed save keeps the editor open with the error visible", async () => {
   await openEditorAndSave();
   expect(document.querySelector(".detail.editing")).toBeTruthy();
   expect(document.querySelector(".error-toast")?.textContent).toContain("validation_failed");
+});
+
+
+test("deleting the first and final keys then saving provider metadata never resurrects a key", async () => {
+  const entry = structuredClone(fixtureEntry);
+  entry.secretRefs!.push({ id: "other", label: "Other", masked: "••••", fingerprint: "other" });
+  let saved: any;
+  await render({
+    entries_list: args => args.archived ? [] : [structuredClone(entry)],
+    secret_remove: args => { entry.secretRefs = entry.secretRefs!.filter(secret => secret.id !== args.label); },
+    provider_update: args => { saved = args.request; }
+  });
+  button("Edit").click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelectorAll(".key-row")).toHaveLength(2); });
+  document.querySelector<HTMLButtonElement>('.key-row-actions button[aria-label="Remove key"]')!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelectorAll(".key-row")).toHaveLength(1); });
+  expect(document.querySelector(".key-row-label")?.textContent).toBe("Other");
+  expect(invoke).toHaveBeenCalledWith("secret_remove", { id: "provider", label: "key" });
+  document.querySelector<HTMLButtonElement>('.key-row-actions button[aria-label="Remove key"]')!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelectorAll(".key-row")).toHaveLength(0); });
+  expect(invoke).toHaveBeenCalledWith("secret_remove", { id: "provider", label: "other" });
+  button("Save changes").click();
+  await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
+  expect(saved.apiKey).toBeUndefined();
+  expect(saved.secretLabel).toBeUndefined();
+  expect(saved.secretMetadata).toBeUndefined();
+  expect(saved.gateway).toEqual({ group: "legacy", rate: "2" });
+  expect(document.querySelectorAll(".kv-row.secret")).toHaveLength(0);
+  expect(document.querySelector(".credential-add-row .add-chip")).toBeTruthy();
+  expect(document.querySelector(".tool-side")).toBeNull();
 });

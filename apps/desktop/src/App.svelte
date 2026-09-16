@@ -13,7 +13,7 @@
     type ProviderEntry,
     type QuotaInfo
   } from "@aipass/schemas";
-  import { applyBillingToDraft, Banner, billingFromDraft, billingPatchFromDraft, Brand, Button, encodeListValues, encodePairValues, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
+  import { Banner, billingFromDraft, billingPatchFromDraft, Brand, Button, encodeListValues, encodePairValues, groupFromDraft, parseHttpEndpoint, ProgressButton } from "@aipass/ui";
   import { onDestroy, onMount, tick } from "svelte";
 
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
@@ -317,7 +317,7 @@
   let devices: DeviceRecord[] = [];
   let devicesLoading = false;
   let activeDetailId = "";
-  let newSecretLabel = "fallback";
+  let newSecretLabel = "";
   let newSecretKey = "";
   let secretBusy = "";
   let probeResult: ProbeResult | undefined;
@@ -1467,10 +1467,6 @@
   async function openEdit(entry: ProviderEntry) {
     const generation = ++editRequestGeneration;
     clearError();
-    let apiKey = "";
-    if (entry.credentialKind !== "oauth" && entry.secretRefs[0]) {
-      try { apiKey = await readSecretForEdit(entry.secretRefs[0].id); } catch { return; }
-    }
     if (generation !== editRequestGeneration || selected?.id !== entry.id || status.locked) return;
     formMode = "edit";
     // An existing entry's protocol is already an explicit choice; never let
@@ -1502,8 +1498,8 @@
       websocketWarning: entry.websocketWarning,
       websocketPreferenceTouched: false,
       authScheme: entry.authScheme,
-      apiKey,
-      secretLabel: entry.secretRefs[0]?.label ?? "",
+      apiKey: "",
+      secretLabel: "",
       defaultModel: entry.defaultModel ?? "",
       modelAlias: encodePairValues(entry.modelAliases ?? []),
       tag: encodeListValues(entry.tags),
@@ -1522,15 +1518,6 @@
       billingUnitPrice: "",
       notes: entry.notes ?? ""
     };
-    // Group and billing live on the key; fall back to the entry's legacy
-    // gateway blob for records written before that move.
-    const primaryKey = entry.secretRefs[0];
-    draft.interfaceType = primaryKey?.interfaceType ?? entry.interfaceType;
-    applyBillingToDraft(
-      draft,
-      primaryKey?.group ?? entry.gateway?.group,
-      primaryKey?.billing ?? (entry.gateway?.rate ? { rate: entry.gateway.rate } : undefined)
-    );
     editQuotaSnapshot = quotaDraftState();
     detailEditMode = true;
   }
@@ -1569,10 +1556,6 @@
     const entry = selected;
     const generation = editRequestGeneration;
     const current = () => generation === editRequestGeneration && !status.locked;
-    if (formMode === "edit" && draft.credentialKind !== "oauth" && selected?.secretRefs.length && !draft.apiKey.trim()) {
-      reportError(localizedMessage("providerForm.apiKeyRequired"), showForm ? "provider-form" : "toast");
-      return false;
-    }
     if (formMode === "add" && providerFilter === "all") {
       inferDraftFromEndpoint();
     }
@@ -1607,8 +1590,8 @@
       // `undefined` is reserved for fields that were not supplied.
       accountIdentity:
         formMode === "add" ? draft.accountIdentity?.trim() || undefined : draft.accountIdentity?.trim(),
-      apiKey: draft.apiKey || undefined,
-      secretLabel: draft.secretLabel.trim() || undefined,
+      apiKey: formMode === "add" ? draft.apiKey || undefined : undefined,
+      secretLabel: formMode === "add" ? draft.secretLabel.trim() || undefined : undefined,
       defaultModel: draft.defaultModel || undefined,
       modelAliases: modelAliasPairs(draft.modelAlias),
       headers: headerPairs(draft.header),
@@ -1620,10 +1603,11 @@
         formMode === "edit" && quotaDraftState() === editQuotaSnapshot
           ? selected?.quota
           : quotaFromDraft(),
+      gateway: formMode === "edit" ? entry?.gateway : undefined,
       tags: listValues(draft.tag),
       notes: draft.notes || undefined
     };
-    const secretMetadata = secretMetadataFromDraft();
+    const secretMetadata = formMode === "add" ? secretMetadataFromDraft() : undefined;
     providerSaving = true;
     let committed = false;
     try {
@@ -1741,8 +1725,10 @@
     }, 1800);
   }
 
-  async function addSecondarySecret(metadata?: SecretKeyMetadata) {
-    if (!selected || !newSecretLabel.trim() || !newSecretKey.trim()) return;
+  async function addSecret(metadata?: SecretKeyMetadata) {
+    if (!selected || status.locked || secretBusy || !newSecretLabel.trim() || !newSecretKey.trim()) throw new Error("Key creation is unavailable");
+    const entryId = selected.id;
+    const generation = editRequestGeneration;
     clearError();
     secretBusy = "add";
     try {
@@ -1757,21 +1743,24 @@
             }
           : undefined
       });
-      newSecretLabel = "fallback";
-      newSecretKey = "";
+      if (selected?.id === entryId && editRequestGeneration === generation) {
+        newSecretLabel = "";
+        newSecretKey = "";
+      }
       await loadEntries();
       await loadServer();
       notice = localizedMessage("notice.secretAdded");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       reportError(String(err));
+      throw err;
     } finally {
       secretBusy = "";
     }
   }
 
   async function updateSecret(secretId: string, label: string, apiKey?: string, metadata?: SecretKeyMetadata) {
-    if (!selected || !label.trim()) return;
+    if (!selected || status.locked || secretBusy || !label.trim()) throw new Error("Key update is unavailable");
     clearError();
     secretBusy = secretId;
     try {
@@ -1785,7 +1774,8 @@
         metadata: metadata
           ? {
               interfaceType: metadata.interfaceType || undefined,
-              group: metadata.group?.trim() ?? ""
+              group: metadata.group?.trim() ?? "",
+              billing: metadata.billing
             }
           : undefined
       });
@@ -1804,23 +1794,31 @@
     }
   }
 
-  async function removeSecondarySecret(secretId: string) {
-    if (!selected || selected.secretRefs.length <= 1) return;
+  async function removeSecret(secretId: string) {
+    if (!selected || status.locked || secretBusy || !selected.secretRefs.some((secret) => secret.id === secretId)) return;
+    const entryId = selected.id;
     clearError();
+    beginServerMutation();
     secretBusy = secretId;
     try {
-      await invokeTauri("secret_remove", { id: selected.id, label: secretId });
+      await invokeTauri("secret_remove", { id: entryId, label: secretId });
       const nextRevealed = { ...revealedSecrets };
       delete nextRevealed[secretId];
       revealedSecrets = nextRevealed;
+      pricingConfig = {
+        ...pricingConfig,
+        assignments: pricingConfig.assignments.filter(
+          (assignment) => assignment.entryId !== entryId || assignment.secretId !== secretId
+        )
+      };
       await loadEntries();
-      void loadServer();
       notice = localizedMessage("notice.secretRemoved");
       setTimeout(() => (notice = ""), 1800);
     } catch (err) {
       reportError(String(err));
     } finally {
       secretBusy = "";
+      endServerMutation();
     }
   }
 
@@ -3393,8 +3391,8 @@
         onReadSecret={readSecretForEdit}
         onCopySecret={copySecretById}
         onUpdateSecret={updateSecret}
-        onRemoveSecret={removeSecondarySecret}
-        onAddSecret={addSecondarySecret}
+        onRemoveSecret={removeSecret}
+        onAddSecret={addSecret}
         onCopyValue={copyValue}
         onInferDraftFromDomain={inferDraftFromDomain}
         onProviderChanged={providerChanged}

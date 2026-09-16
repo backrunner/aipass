@@ -117,7 +117,7 @@ test("provider edit persists concurrency limits and WS opt-out across reopening"
   await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
   expect(document.querySelector(".quota-value")?.textContent).toContain("42.1234USD");
   button("Edit").click();
-  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-input input")?.value).toBe("fixture-existing-key"); });
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".detail.editing")).toBeTruthy(); });
   document.querySelector<HTMLButtonElement>(".advanced-toggle")!.click();
   flushSync();
   const limit = document.querySelector<HTMLInputElement>("[name=maxConcurrentRequests]")!;
@@ -131,7 +131,7 @@ test("provider edit persists concurrency limits and WS opt-out across reopening"
   expect(ws.getAttribute("aria-checked")).toBe("false");
   button("Save changes").click();
   await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
-  expect(invoke).toHaveBeenCalledWith("provider_update", expect.objectContaining({ request: expect.objectContaining({ maxConcurrentRequests: 3, supportsWebsockets: false, apiKey: "fixture-existing-key", quota: expect.objectContaining({ unit: "USD", remaining: "42.1234" }) }) }));
+  expect(invoke).toHaveBeenCalledWith("provider_update", expect.objectContaining({ request: expect.objectContaining({ maxConcurrentRequests: 3, supportsWebsockets: false, apiKey: undefined, quota: expect.objectContaining({ unit: "USD", remaining: "42.1234" }) }) }));
   button("Edit").click();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector(".advanced-section [role=switch]")?.getAttribute("aria-checked")).toBe("false"); });
   const reopenedLimit = document.querySelector<HTMLInputElement>("[name=maxConcurrentRequests]")!;
@@ -218,7 +218,7 @@ test("background WS disable preserves other edits and failed recovery keeps the 
   await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
   expect(document.querySelector(".quota-value")?.textContent).toContain("42.1234USD");
   button("Edit").click();
-  await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(".secret-input input")?.value).toBe("fixture-existing-key"); });
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".detail.editing")).toBeTruthy(); });
   const title = document.querySelector<HTMLInputElement>('input[placeholder="My provider"]')!;
   title.value = "unsaved title";
   title.dispatchEvent(new Event("input", { bubbles: true }));
@@ -245,7 +245,7 @@ test("background WS disable preserves other edits and failed recovery keeps the 
   button("Save changes").click();
   await vi.waitFor(() => { flushSync(); expect(document.body.textContent).toContain("Your edits are preserved"); });
   expect(document.body.textContent).toContain("503");
-  expect(document.querySelector<HTMLInputElement>(".secret-input input")?.value).toBe("fixture-existing-key");
+  expect(document.querySelector(".detail.editing")).toBeTruthy();
   expect(document.querySelector(".advanced-section [role=switch]")?.getAttribute("aria-checked")).toBe("true");
   expect(entry.supportsWebsockets).toBe(false);
   rejectRecovery = false;

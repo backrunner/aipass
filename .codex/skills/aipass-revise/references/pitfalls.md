@@ -178,6 +178,13 @@ Newest entries last within each section.
 
 ## Proxy credential snapshot (proxy_service / handlers)
 
+### Unified key editors must not resubmit a first-key snapshot
+- **Symptom**: the first key had a separate editor and could not be deleted; provider saves could overwrite an independently edited key or relabel its successor after deletion.
+- **Root cause**: `apps/desktop/src/App.svelte::openEdit` copied the first credential into the provider draft; `saveProvider` resubmitted it, while `summaryToEntry` treated an empty key list as missing legacy data.
+- **Fix**: edit every key by stable ID, omit key fields from desktop provider updates, preserve explicit empty lists, and allow keyless provider metadata saves. Local deletion reloads live proxy credentials using the same tolerant path as sync.
+- **Guardrail**: do not hydrate key fields into a provider-only draft. Distinguish absent legacy `secretRefs` from `[]`; test first/last deletion, subsequent provider saves, recreation, and per-key pricing/route cleanup without retargeting siblings. Save open key editors before provider metadata; retain the editor on failure and ignore completions from an older editor. Preserve legacy gateway defaults in provider-only saves.
+- **Watch points**: desktop `ProviderDetailPane`, `App.repro.test.ts`, extension `entrySecrets`, vault `update_provider`, and proxy `deleting_first_and_last_keys_cleans_live_routes_and_pricing_by_id`.
+
 ### Codex local tokens must keep their conversational protocol scope
 - **Symptom**: a Codex-configured local proxy token could be reused against another inbound API route such as Chat Completions.
 - **Root cause**: local authentication is token based, so protocol scoping depends on the route selection predicate remaining aligned with Codex's `wire_api = "responses"` configuration.

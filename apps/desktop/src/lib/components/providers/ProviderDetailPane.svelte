@@ -67,7 +67,7 @@
   export let showTrash = false;
   export let copied = "";
   export let revealedSecrets: Record<string, string> = {};
-  export let newSecretLabel = "fallback";
+  export let newSecretLabel = "";
   export let newSecretKey = "";
   export let secretBusy = "";
   export let probeResult: ProbeResult | undefined;
@@ -138,9 +138,13 @@
 
   let saving = false;
   async function saveEdit() {
-    if (saving) return;
+    if (saving || secretBusy || editingSecretSaving || editingSecretLoading) return;
+    const entryId = selected?.id;
     saving = true;
     try {
+      if (editingSecretId && !(await saveSecretEdit())) return;
+      if (showAddSecret && !(await saveNewSecret())) return;
+      if (selected?.id !== entryId) return;
       await onEditSave();
     } finally {
       saving = false;
@@ -158,8 +162,11 @@
   let editingSecretValue = "";
   let editingSecretInterface: InterfaceType = "openai_compatible";
   let editingSecretGroup = "";
+  let editingSecretBilling = { rate: "", currency: "", unitPrice: "" };
   let editingSecretVisible = false;
   let editingSecretLoading = false;
+  let editingSecretSaving = false;
+  let addingSecret = false;
   let secretEditGeneration = 0;
   let startingEdit = false;
   let usageDialogOpen = false;
@@ -241,7 +248,12 @@
     editingSecretId = secret.id;
     editingSecretLabel = secret.label;
     editingSecretInterface = secret.interfaceType ?? selected?.interfaceType ?? "openai_compatible";
-    editingSecretGroup = secret.group ?? "";
+    editingSecretGroup = secret.group ?? selected?.gateway?.group ?? "";
+    editingSecretBilling = {
+      rate: secret.billing?.rate ?? selected?.gateway?.rate ?? "",
+      currency: secret.billing?.currency ?? "",
+      unitPrice: secret.billing?.unitPrice ?? ""
+    };
     editingSecretVisible = false;
     editingSecretValue = "";
     editingSecretLoading = true;
@@ -263,21 +275,45 @@
     editingSecretEntryId = "";
     editingSecretLabel = "";
     editingSecretValue = "";
+    editingSecretBilling = { rate: "", currency: "", unitPrice: "" };
     editingSecretVisible = false;
   }
 
-  async function saveSecretEdit() {
-    if (!editingSecretId || editingSecretLoading || !editingSecretLabel.trim() || !editingSecretValue.trim()) return;
+  async function saveSecretEdit(): Promise<boolean> {
+    if (!editingSecretId || editingSecretLoading || editingSecretSaving || secretBusy || !editingSecretLabel.trim() || !editingSecretValue.trim()) return false;
+    const generation = secretEditGeneration;
+    editingSecretSaving = true;
     try {
       await onUpdateSecret(
         editingSecretId,
         editingSecretLabel.trim(),
         editingSecretValue.trim(),
-        { interfaceType: editingSecretInterface, group: editingSecretGroup }
+        { interfaceType: editingSecretInterface, group: editingSecretGroup, billing: editingSecretBilling }
       );
+      if (generation !== secretEditGeneration) return false;
       cancelSecretEdit();
+      return true;
     } catch {
       // Parent reports the error in a toast and this editor remains open.
+      return false;
+    } finally {
+      editingSecretSaving = false;
+    }
+  }
+
+  async function saveNewSecret(): Promise<boolean> {
+    if (addingSecret || secretBusy || !newSecretLabel.trim() || !newSecretKey.trim()) return false;
+    const entryId = selected?.id;
+    addingSecret = true;
+    try {
+      await onAddSecret({ interfaceType: newSecretInterface, group: newSecretGroup });
+      if (selected?.id !== entryId) return false;
+      showAddSecret = false;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      addingSecret = false;
     }
   }
   $: hasQuota = Boolean(
@@ -309,7 +345,7 @@
     }
     return chips;
   }
-  $: integrationTools = selected
+  $: integrationTools = selected?.secretRefs.length
     ? compatibleToolsFor({
         id: selected.id,
         title: selected.title,
@@ -492,7 +528,7 @@
         {/if}
         {#if editMode}
           <Button variant="ghost" disabled={saving} on:click={cancelEdit}>{$t("common.cancel")}</Button>
-          <Button variant="primary" loading={saving} on:click={saveEdit}>{$t("providerModal.saveChanges")}</Button>
+          <Button variant="primary" loading={saving} disabled={Boolean(secretBusy) || editingSecretSaving || editingSecretLoading || addingSecret || Boolean(editingSecretId && (!editingSecretLabel.trim() || !editingSecretValue.trim())) || (showAddSecret && (!newSecretLabel.trim() || !newSecretKey.trim()))} on:click={saveEdit}>{$t("providerModal.saveChanges")}</Button>
         {:else if showTrash}
           <Button variant="ghost" on:click={() => onRestore()}>
             <Undo2 size={14} /> {$t("providerDetail.restore")}
@@ -522,11 +558,11 @@
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content sideOffset={6} align="end" class="dropdown-content">
-                <DropdownMenu.Item class="dropdown-item" onSelect={() => onProbe()} disabled={probing}>
+                <DropdownMenu.Item class="dropdown-item" onSelect={() => onProbe()} disabled={probing || !selected.secretRefs.length}>
                   <Wifi size={14} />
                   <span>{probing ? $t("providerDetail.probing") : $t("providerDetail.probeEndpoint")}</span>
                 </DropdownMenu.Item>
-                <DropdownMenu.Item class="dropdown-item" onSelect={openUsageProbe} disabled={usageProbing}>
+                <DropdownMenu.Item class="dropdown-item" onSelect={openUsageProbe} disabled={usageProbing || !selected.secretRefs.length}>
                   <Gauge size={14} />
                   <span>{usageProbing ? $t("providerDetail.usageProbing") : $t("providerDetail.refreshUsage")}</span>
                 </DropdownMenu.Item>
@@ -563,6 +599,7 @@
 
       {#if editMode}
         <ProviderFormFields
+          showSecretFields={false}
           showConcurrencySetting
           showWebsocketSetting
           websocketWarning={selected.websocketWarning}
@@ -577,23 +614,85 @@
           {isOfficialOauth}
         />
 
-        {#if selected.secretRefs.length > 0}
-          {@const primary = selected.secretRefs[0]}
-          {@const primaryAssignment = assignmentFor(primary.id)}
-          <section class="form-section">
-            <h3 class="section-title">{$t("providerDetail.apiKey")} · {$t("pricing.group")}</h3>
-            <div class="section-fields">
+        <section class="form-section">
+          <h3 class="section-title">{$t("providerDetail.keys")}</h3>
+          <div class="section-fields">
+            {#each selected.secretRefs as secret (secret.id)}
+              {@const assignment = assignmentFor(secret.id)}
+              {#if editingSecretId === secret.id}
+                <div class="secret-edit-row">
+                  <input
+                    bind:value={editingSecretLabel}
+                    aria-label={$t("providerDetail.secretLabel")}
+                    placeholder={$t("providerDetail.secretLabelPlaceholder")}
+                  />
+                  <div class="secret-edit-input">
+                    <input bind:value={editingSecretValue} aria-label={$t("providerDetail.secretValue")} type={editingSecretVisible ? "text" : "password"} disabled={editingSecretLoading} autocomplete="off" spellcheck="false" />
+                    <button type="button" class="secret-toggle" disabled={editingSecretLoading} aria-label={$t(editingSecretVisible ? "providerForm.hideApiKey" : "providerForm.showApiKey")} aria-pressed={editingSecretVisible} on:click={() => (editingSecretVisible = !editingSecretVisible)}>
+                      {#if editingSecretVisible}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+                    </button>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={editingSecretLoading || editingSecretSaving || Boolean(secretBusy) || !editingSecretLabel.trim() || !editingSecretValue.trim()}
+                    on:click={saveSecretEdit}
+                  >{$t("common.save")}</Button>
+                  <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
+                    <Undo2 size={13} />
+                  </IconButton>
+                  <div class="secret-edit-meta">
+                    <select value={editingSecretInterface} aria-label={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} on:change={(event) => (editingSecretInterface = event.currentTarget.value as InterfaceType)}>
+                      {#each keyInterfaceOptions as option}
+                        <option value={option.value}>{option.label}</option>
+                      {/each}
+                    </select>
+                    <input
+                      bind:value={editingSecretGroup}
+                      aria-label={$t("providerDetail.keyGroup")}
+                      placeholder={$t("providerDetail.keyGroupPlaceholder")}
+                      disabled={editingSecretLoading}
+                    />
+                  </div>
+                  <details class="secret-billing">
+                    <summary>{$t("providerForm.billing")}</summary>
+                    <div class="secret-billing-fields">
+                      <Field label={$t("providerDetail.gatewayRate")}><input bind:value={editingSecretBilling.rate} disabled={editingSecretLoading} /></Field>
+                      <Field label={$t("providerForm.billingCurrency")}><input bind:value={editingSecretBilling.currency} disabled={editingSecretLoading} /></Field>
+                      <Field label={$t("providerForm.billingUnitPrice")}><input bind:value={editingSecretBilling.unitPrice} disabled={editingSecretLoading} /></Field>
+                    </div>
+                  </details>
+                </div>
+              {:else}
+                <div class="key-row">
+                  <span class="key-row-label">{secret.label}</span>
+                  <code class="key-row-value mono">{revealedSecrets[secret.id] || fullyMasked()}</code>
+                  <div class="key-row-actions">
+                    <IconButton size="sm" label={$t("providerDetail.editKey")} on:click={() => beginSecretEdit(secret)}>
+                      <Pencil size={13} />
+                    </IconButton>
+                    <IconButton
+                      size="sm"
+                      label={$t("providerDetail.removeKey")}
+                      on:click={() => onRemoveSecret(secret.id)}
+                      disabled={Boolean(secretBusy) || saving || editingSecretSaving}
+                    >
+                      <Trash2 size={13} />
+                    </IconButton>
+                  </div>
+                </div>
+              {/if}
               <div class="key-pricing">
                 <SelectField
                   label={$t("pricing.group")}
-                  value={primaryAssignment?.groupId ?? ""}
+                  value={assignment?.groupId ?? ""}
                   options={pricingGroupOptions}
                   onValueChange={(groupId) =>
                     onSetPricingAssignment(
                       selected.id,
-                      primary.id,
+                      secret.id,
                       groupId || null,
-                      primaryAssignment?.multiplier ?? 1
+                      assignment?.multiplier ?? 1
                     )}
                 />
                 <Field label={$t("pricing.multiplier")}>
@@ -601,13 +700,13 @@
                     type="number"
                     min="0"
                     step="0.1"
-                    value={primaryAssignment?.multiplier ?? 1}
+                    value={assignment?.multiplier ?? 1}
                     on:change={(event) => {
                       const multiplier = Number(event.currentTarget.value);
                       onSetPricingAssignment(
                         selected.id,
-                        primary.id,
-                        primaryAssignment?.groupId ?? null,
+                        secret.id,
+                        assignment?.groupId ?? null,
                         Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1
                       );
                     }}
@@ -618,164 +717,53 @@
                   class="key-pricing-advanced"
                   title={$t("pricing.advanced")}
                   aria-label={$t("pricing.advanced")}
-                  on:click={() => openPricingDialog(primary.id)}
+                  on:click={() => openPricingDialog(secret.id)}
                 >
                   <SlidersHorizontal size={13} />
                 </button>
               </div>
-            </div>
-          </section>
-        {/if}
-
-        {#if selected.secretRefs.length > 1 || showAddSecret}
-          <section class="form-section">
-            <h3 class="section-title">{$t("providerDetail.additionalKeys")}</h3>
-            <div class="section-fields">
-              {#each selected.secretRefs.slice(1) as secret}
-                {@const assignment = assignmentFor(secret.id)}
-                {#if editingSecretId === secret.id}
-                  <div class="secret-edit-row">
-                    <input
-                      bind:value={editingSecretLabel}
-                      aria-label={$t("providerDetail.secretLabel")}
-                      placeholder={$t("providerDetail.secretLabelPlaceholder")}
-                    />
-                    <div class="secret-edit-input">
-                      <input bind:value={editingSecretValue} aria-label={$t("providerDetail.secretValue")} type={editingSecretVisible ? "text" : "password"} disabled={editingSecretLoading} autocomplete="off" spellcheck="false" />
-                      <button type="button" class="secret-toggle" disabled={editingSecretLoading} aria-label={$t(editingSecretVisible ? "providerForm.hideApiKey" : "providerForm.showApiKey")} aria-pressed={editingSecretVisible} on:click={() => (editingSecretVisible = !editingSecretVisible)}>
-                        {#if editingSecretVisible}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-                      </button>
-                    </div>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretLabel.trim() || !editingSecretValue.trim()}
-                      on:click={saveSecretEdit}
-                    >{$t("common.save")}</Button>
-                    <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
-                      <Undo2 size={13} />
-                    </IconButton>
-                    <div class="secret-edit-meta">
-                      <select value={editingSecretInterface} aria-label={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} on:change={(event) => (editingSecretInterface = event.currentTarget.value as InterfaceType)}>
-                        {#each keyInterfaceOptions as option}
-                          <option value={option.value}>{option.label}</option>
-                        {/each}
-                      </select>
-                      <input
-                        bind:value={editingSecretGroup}
-                        aria-label={$t("providerDetail.keyGroup")}
-                        placeholder={$t("providerDetail.keyGroupPlaceholder")}
-                        disabled={editingSecretLoading}
-                      />
-                    </div>
-                  </div>
-                {:else}
-                  <div class="key-row">
-                    <span class="key-row-label">{secret.label}</span>
-                    <code class="key-row-value mono">{revealedSecrets[secret.id] || fullyMasked()}</code>
-                    <div class="key-row-actions">
-                      <IconButton size="sm" label={$t("providerDetail.editKey")} on:click={() => beginSecretEdit(secret)}>
-                        <Pencil size={13} />
-                      </IconButton>
-                      <IconButton
-                        size="sm"
-                        label={$t("providerDetail.removeKey")}
-                        on:click={() => onRemoveSecret(secret.id)}
-                        disabled={secretBusy === secret.id}
-                      >
-                        <Trash2 size={13} />
-                      </IconButton>
-                    </div>
-                  </div>
-                {/if}
-                <div class="key-pricing">
-                  <SelectField
-                    label={$t("pricing.group")}
-                    value={assignment?.groupId ?? ""}
-                    options={pricingGroupOptions}
-                    onValueChange={(groupId) =>
-                      onSetPricingAssignment(
-                        selected.id,
-                        secret.id,
-                        groupId || null,
-                        assignment?.multiplier ?? 1
-                      )}
-                  />
-                  <Field label={$t("pricing.multiplier")}>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={assignment?.multiplier ?? 1}
-                      on:change={(event) => {
-                        const multiplier = Number(event.currentTarget.value);
-                        onSetPricingAssignment(
-                          selected.id,
-                          secret.id,
-                          assignment?.groupId ?? null,
-                          Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1
-                        );
-                      }}
-                    />
-                  </Field>
-                  <button
-                    type="button"
-                    class="key-pricing-advanced"
-                    title={$t("pricing.advanced")}
-                    aria-label={$t("pricing.advanced")}
-                    on:click={() => openPricingDialog(secret.id)}
-                  >
-                    <SlidersHorizontal size={13} />
-                  </button>
-                </div>
-              {/each}
-              {#if showAddSecret}
-                <div class="add-secret-row">
+            {/each}
+            {#if showAddSecret}
+              <div class="add-secret-row">
+                <input
+                  bind:value={newSecretLabel}
+                  aria-label={$t("providerDetail.secretLabel")}
+                  placeholder={$t("providerDetail.secretLabelPlaceholder")}
+                />
+                <input
+                  bind:value={newSecretKey}
+                  aria-label={$t("providerDetail.secretValue")}
+                  type="password"
+                  placeholder={$t("providerDetail.apiKey")}
+                />
+                <Button variant="secondary" size="sm" disabled={addingSecret || Boolean(secretBusy) || !newSecretLabel.trim() || !newSecretKey.trim()} on:click={saveNewSecret}>
+                  {$t("common.save")}
+                </Button>
+                <Button variant="ghost" size="sm" on:click={() => { showAddSecret = false; newSecretKey = ""; }}>
+                  <Trash2 size={13} />
+                </Button>
+                <div class="secret-edit-meta">
+                  <select value={newSecretInterface} aria-label={$t("providerDetail.keyFormat")} on:change={(event) => (newSecretInterface = event.currentTarget.value as InterfaceType)}>
+                    {#each keyInterfaceOptions as option}
+                      <option value={option.value}>{option.label}</option>
+                    {/each}
+                  </select>
                   <input
-                    bind:value={newSecretLabel}
-                    aria-label={$t("providerDetail.secretLabel")}
-                    placeholder={$t("providerDetail.secretLabelPlaceholder")}
+                    bind:value={newSecretGroup}
+                    aria-label={$t("providerDetail.keyGroup")}
+                    placeholder={$t("providerDetail.keyGroupPlaceholder")}
                   />
-                  <input
-                    bind:value={newSecretKey}
-                    aria-label={$t("providerDetail.secretValue")}
-                    type="password"
-                    placeholder={$t("providerDetail.apiKey")}
-                  />
-                  <Button variant="secondary" size="sm" disabled={secretBusy === "add" || !newSecretLabel.trim() || !newSecretKey.trim()} on:click={() => onAddSecret({ interfaceType: newSecretInterface, group: newSecretGroup })}>
-                    {$t("common.save")}
-                  </Button>
-                  <Button variant="ghost" size="sm" on:click={() => { showAddSecret = false; newSecretKey = ""; }}>
-                    <Trash2 size={13} />
-                  </Button>
-                  <div class="secret-edit-meta">
-                    <select value={newSecretInterface} aria-label={$t("providerDetail.keyFormat")} on:change={(event) => (newSecretInterface = event.currentTarget.value as InterfaceType)}>
-                      {#each keyInterfaceOptions as option}
-                        <option value={option.value}>{option.label}</option>
-                      {/each}
-                    </select>
-                    <input
-                      bind:value={newSecretGroup}
-                      aria-label={$t("providerDetail.keyGroup")}
-                      placeholder={$t("providerDetail.keyGroupPlaceholder")}
-                    />
-                  </div>
                 </div>
-              {/if}
-              {#if !showAddSecret}
-                <button type="button" class="add-chip" on:click={openAddSecret}>
-                  <Plus size={12} />
-                  <span>{$t("providerDetail.addKey")}</span>
-                </button>
-              {/if}
-            </div>
-          </section>
-        {:else}
-          <button type="button" class="add-chip standalone" on:click={openAddSecret}>
-            <Plus size={12} />
-            <span>{$t("providerDetail.addAnotherKey")}</span>
-          </button>
-        {/if}
+              </div>
+            {/if}
+            {#if !showAddSecret}
+              <button type="button" class="add-chip" on:click={openAddSecret}>
+                <Plus size={12} />
+                <span>{$t("providerDetail.addKey")}</span>
+              </button>
+            {/if}
+          </div>
+        </section>
       {:else}
         <Card title={$t("providerDetail.credentials")} padded={false}>
           {#if selected.credentialKind === "oauth"}
@@ -795,7 +783,7 @@
               </span>
             </button>
           {/if}
-          {#each selected.secretRefs as secret}
+          {#each selected.secretRefs as secret (secret.id)}
             {@const pricingAssignment = assignmentFor(secret.id)}
             {#if editingSecretId === secret.id}
               <div class="credential-inline-editor">
@@ -813,7 +801,7 @@
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretLabel.trim() || !editingSecretValue.trim()}
+                  disabled={editingSecretLoading || editingSecretSaving || Boolean(secretBusy) || !editingSecretLabel.trim() || !editingSecretValue.trim()}
                   on:click={saveSecretEdit}
                 >{$t("common.save")}</Button>
                 <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
@@ -832,9 +820,17 @@
                     disabled={editingSecretLoading}
                   />
                 </div>
+                <details class="secret-billing">
+                  <summary>{$t("providerForm.billing")}</summary>
+                  <div class="secret-billing-fields">
+                    <Field label={$t("providerDetail.gatewayRate")}><input bind:value={editingSecretBilling.rate} disabled={editingSecretLoading} /></Field>
+                    <Field label={$t("providerForm.billingCurrency")}><input bind:value={editingSecretBilling.currency} disabled={editingSecretLoading} /></Field>
+                    <Field label={$t("providerForm.billingUnitPrice")}><input bind:value={editingSecretBilling.unitPrice} disabled={editingSecretLoading} /></Field>
+                  </div>
+                </details>
               </div>
             {:else}
-              <div class="kv-row secret" class:copied-flash={copied === `secret:${secret.id}`}>
+              <div class="kv-row secret clickable" class:copied-flash={copied === `secret:${secret.id}`}>
                 <div class="credential-heading">
                   <span class="kv-label"><KeyRound size={13} />{secret.label}</span>
                   {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
@@ -844,9 +840,8 @@
                     </span>
                   {/if}
                 </div>
-                <button type="button" class="secret-copy" aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}>
-                  <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
-                </button>
+                <button type="button" class="secret-copy" aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}></button>
+                <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
                 <span class="kv-actions">
                   {#if copied === `secret:${secret.id}`}
                     <span class="kv-hint copied"><Check size={13} /> {$t("providerDetail.copied")}</span>
@@ -876,19 +871,13 @@
                     {#if revealedSecrets[secret.id]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
                   </button>
                 </span>
-              </div>
-            {/if}
-            <!-- Group, wire format and billing belong to this key: one relay
-                 entry can hold a differently-configured key per group. -->
-            {#if secretMeta(selected, secret).length}
-              <div class="kv-row">
-                <span class="kv-label"></span>
-                <div class="chips kv-value">
-                  {#each secretMeta(selected, secret) as chip}
-                    <span class="chip" class:mono={chip.mono}>{chip.label}: {chip.value}</span>
-                  {/each}
-                </div>
-                <span></span>
+                {#if secretMeta(selected, secret).length}
+                  <div class="chips secret-meta">
+                    {#each secretMeta(selected, secret) as chip}
+                      <span class="chip" class:mono={chip.mono}>{chip.label}: {chip.value}</span>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/if}
           {/each}
@@ -910,8 +899,8 @@
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={secretBusy === "add" || !newSecretLabel.trim() || !newSecretKey.trim()}
-                  on:click={() => onAddSecret({ interfaceType: newSecretInterface, group: newSecretGroup })}
+                  disabled={addingSecret || Boolean(secretBusy) || !newSecretLabel.trim() || !newSecretKey.trim()}
+                  on:click={saveNewSecret}
                 >{$t("common.save")}</Button>
                 <IconButton
                   size="sm"
@@ -1152,18 +1141,31 @@
     grid-column: 2;
     grid-row: 1 / 3;
   }
-  .secret-copy {
+  .secret-billing {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .secret-billing summary { cursor: pointer; }
+  .secret-billing-fields {
     display: grid;
-    gap: 6px;
-    min-width: 0;
-    grid-column: 1;
-    grid-row: 2;
-    text-align: left;
-    border-radius: 4px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .secret-copy {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+    background: transparent;
+    border: 0;
   }
   .secret-copy:focus-visible {
     outline: 2px solid var(--accent-ring);
-    outline-offset: 4px;
+    outline-offset: -2px;
   }
   .secret:focus-within .copy-hint, .secret:hover .copy-hint {
     opacity: 1;
@@ -1182,7 +1184,6 @@
   .credential-heading .pricing-badge { max-width: 70%; }
   .quota-unit { margin-left: 0.3em; }
   .kv-row.secret > .kv-actions { grid-row: 2; }
-  .secret-copy .kv-value { grid-row: auto; }
   .notes-body {
     overflow-wrap: anywhere;
   }
@@ -1463,7 +1464,28 @@
   }
 
   .kv-row.secret {
+    position: relative;
+    isolation: isolate;
     --row-bg: var(--surface-2);
+  }
+
+  .secret .credential-heading, .secret > .kv-value, .secret-meta, .secret .kv-hint {
+    pointer-events: none;
+  }
+
+  .secret-meta {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .secret .kv-actions {
+    pointer-events: none;
+  }
+
+  .secret .kv-actions button {
+    position: relative;
+    z-index: 2;
+    pointer-events: auto;
   }
 
   @keyframes kv-copy-flash {
