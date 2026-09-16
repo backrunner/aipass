@@ -813,7 +813,7 @@
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretValue.trim()}
+                  disabled={editingSecretLoading || secretBusy === secret.id || !editingSecretLabel.trim() || !editingSecretValue.trim()}
                   on:click={saveSecretEdit}
                 >{$t("common.save")}</Button>
                 <IconButton size="sm" label={$t("common.cancel")} on:click={cancelSecretEdit}>
