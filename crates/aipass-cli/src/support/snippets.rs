@@ -5,12 +5,21 @@ pub(crate) fn field_value(item: &aipass_vault::EntrySummary, field: &str) -> Res
         "api_key" | "secret" => Ok(item.masked_secret.clone()),
         "title" => Ok(item.title.clone()),
         "provider" | "provider_id" => Ok(item.provider_id.clone().unwrap_or_default()),
-        "provider_kind" => Ok(format!("{:?}", item.provider_kind)),
+        "provider_kind" => serde_json::to_value(&item.provider_kind)?
+            .as_str()
+            .map(str::to_string)
+            .context("provider kind is not a string"),
         "domain" | "domains" => Ok(item.domains.join(",")),
         "endpoint" | "base_url" => Ok(endpoint_url(&item.endpoints).unwrap_or_default()),
         "console_url" | "console" => Ok(console_url(&item.endpoints).unwrap_or_default()),
-        "interface" => Ok(format!("{:?}", item.interface_type)),
-        "auth" => Ok(format!("{:?}", item.auth_scheme)),
+        "interface" => serde_json::to_value(&item.interface_type)?
+            .as_str()
+            .map(str::to_string)
+            .context("interface type is not a string"),
+        "auth" => serde_json::to_value(&item.auth_scheme)?
+            .as_str()
+            .map(str::to_string)
+            .context("auth scheme is not a string"),
         "default_model" => Ok(item.default_model.clone().unwrap_or_default()),
         "curl" | "curl_snippet" => Ok(curl_snippet_for_entry(item)),
         "env" | "env_export" => Ok(env_export_for_entry(item)),

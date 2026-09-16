@@ -502,7 +502,10 @@ impl ProxyMcpServer {
         let entry: EntrySummary = agent.request(&AgentRequest::ProviderGet { id: provider_id })?;
         let base_url = aipass_config_writers::endpoint_url(&entry.endpoints)
             .context("provider has no API endpoint")?;
-        let auth_scheme = format!("{:?}", entry.auth_scheme);
+        let auth_scheme = serde_json::to_value(&entry.auth_scheme)?
+            .as_str()
+            .map(str::to_string)
+            .context("provider auth scheme is not a string")?;
 
         let route = config
             .routes

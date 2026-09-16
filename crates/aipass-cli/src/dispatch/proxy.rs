@@ -1,5 +1,12 @@
 use crate::*;
 
+fn entry_auth_scheme(entry: &aipass_vault::EntrySummary) -> Result<String> {
+    serde_json::to_value(&entry.auth_scheme)?
+        .as_str()
+        .map(str::to_string)
+        .context("provider auth scheme is not a string")
+}
+
 pub(crate) fn handle_proxy_command(
     json: bool,
     vault: Option<PathBuf>,
@@ -79,7 +86,7 @@ pub(crate) fn handle_proxy_command(
                 agent.request(AgentRequest::ProviderGet { id: provider_id })?;
             let base_url = aipass_config_writers::endpoint_url(&entry.endpoints)
                 .context("provider has no API endpoint")?;
-            let auth_scheme = format!("{:?}", entry.auth_scheme);
+            let auth_scheme = entry_auth_scheme(&entry)?;
             let route = ProxyRouteConfig {
                 id: Uuid::new_v4(),
                 name,
@@ -508,7 +515,7 @@ pub(crate) fn handle_proxy_command(
                 agent.request(AgentRequest::ProviderGet { id: provider_id })?;
             let base_url = aipass_config_writers::endpoint_url(&entry.endpoints)
                 .context("provider has no API endpoint")?;
-            let auth_scheme = format!("{:?}", entry.auth_scheme);
+            let auth_scheme = entry_auth_scheme(&entry)?;
 
             let route = config
                 .routes
