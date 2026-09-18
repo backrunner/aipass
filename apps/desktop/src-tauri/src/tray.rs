@@ -171,7 +171,7 @@ impl TrayFeedback {
         #[cfg(not(target_os = "macos"))]
         let _ = items
             .install_login_agent
-            .set_text(&tr("tray.repairAutostart"));
+            .set_text(tr("tray.repairAutostart"));
     }
 }
 
@@ -211,57 +211,57 @@ pub(crate) fn setup(app: &App) -> tauri::Result<()> {
 
 #[cfg(not(target_os = "macos"))]
 fn setup_menu(app: &App) -> tauri::Result<()> {
-    let status = MenuItem::with_id(app, MENU_STATUS, &tr("tray.checking"), false, None::<&str>)?;
-    let open = MenuItem::with_id(app, MENU_OPEN, &tr("ext.openApp"), true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, MENU_HIDE, &tr("tray.hideWindow"), true, None::<&str>)?;
-    let refresh = MenuItem::with_id(app, MENU_REFRESH, &tr("ext.refresh"), true, None::<&str>)?;
+    let status = MenuItem::with_id(app, MENU_STATUS, tr("tray.checking"), false, None::<&str>)?;
+    let open = MenuItem::with_id(app, MENU_OPEN, tr("ext.openApp"), true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, MENU_HIDE, tr("tray.hideWindow"), true, None::<&str>)?;
+    let refresh = MenuItem::with_id(app, MENU_REFRESH, tr("ext.refresh"), true, None::<&str>)?;
     let start_agent = MenuItem::with_id(
         app,
         MENU_START_AGENT,
-        &tr("tray.startAgent"),
+        tr("tray.startAgent"),
         false,
         None::<&str>,
     )?;
-    let lock = MenuItem::with_id(app, MENU_LOCK, &tr("titlebar.lock"), false, None::<&str>)?;
+    let lock = MenuItem::with_id(app, MENU_LOCK, tr("titlebar.lock"), false, None::<&str>)?;
     let proxy_status = MenuItem::with_id(
         app,
         MENU_PROXY_STATUS,
-        &tr("tray.checking"),
+        tr("tray.checking"),
         false,
         None::<&str>,
     )?;
     let proxy_open = MenuItem::with_id(
         app,
         MENU_PROXY_OPEN,
-        &tr("tray.openServer"),
+        tr("tray.openServer"),
         true,
         None::<&str>,
     )?;
     let proxy_start = MenuItem::with_id(
         app,
         MENU_PROXY_START,
-        &tr("tray.startProxy"),
+        tr("tray.startProxy"),
         false,
         None::<&str>,
     )?;
     let proxy_stop = MenuItem::with_id(
         app,
         MENU_PROXY_STOP,
-        &tr("tray.stopProxy"),
+        tr("tray.stopProxy"),
         false,
         None::<&str>,
     )?;
     let proxy_refresh = MenuItem::with_id(
         app,
         MENU_PROXY_REFRESH,
-        &tr("ext.refresh"),
+        tr("ext.refresh"),
         true,
         None::<&str>,
     )?;
-    let group_menu = Submenu::with_items(app, &tr("tray.switchGroup"), true, &[])?;
+    let group_menu = Submenu::with_items(app, tr("tray.switchGroup"), true, &[])?;
     let proxy_menu = Submenu::with_items(
         app,
-        &tr("tray.proxy"),
+        tr("tray.proxy"),
         true,
         &[
             &proxy_status,
@@ -278,12 +278,12 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
     let install_login_agent = MenuItem::with_id(
         app,
         MENU_INSTALL_LOGIN_AGENT,
-        &tr("tray.repairAutostart"),
+        tr("tray.repairAutostart"),
         true,
         None::<&str>,
     )?;
 
-    let quit = MenuItem::with_id(app, MENU_QUIT, &tr("tray.quit"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, MENU_QUIT, tr("tray.quit"), true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
