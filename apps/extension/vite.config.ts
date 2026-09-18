@@ -115,7 +115,8 @@ async function extensionPrivateKey() {
 export default defineConfig({
   plugins: [svelte({ preprocess: vitePreprocess() }), classicContentScriptBuild(), extensionManifestKey()],
   resolve: {
-    dedupe: ["svelte", "bits-ui"]
+    dedupe: ["svelte", "bits-ui"],
+    conditions: ["browser"]
   },
   optimizeDeps: {
     exclude: ["@aipass/ui"]

@@ -27,7 +27,7 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 6 requires verified WS preference recovery and automatic capability warnings.
 // Version 7 requires provider concurrency persistence and runtime admission limits.
 // Version 8 requires verified automatic migration of existing macOS vaults to CloudKit.
-pub const AGENT_PROTOCOL_VERSION: u32 = 8;
+pub const AGENT_PROTOCOL_VERSION: u32 = 9;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -107,6 +107,34 @@ impl Default for SessionPolicy {
             lock_on_screen_lock: true,
         }
     }
+}
+
+/// Local presentation preference shared by desktop, tray and extension.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LocalePreference {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UiLocale {
+    #[default]
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageSettings {
+    pub locale: LocalePreference,
+    pub resolved_locale: UiLocale,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -554,6 +582,14 @@ pub enum AgentRequest {
     SessionTouch,
     #[serde(rename = "session.policy.get")]
     SessionPolicyGet,
+    #[serde(rename = "preferences.language.get")]
+    LanguageSettingsGet {
+        /// Import the old desktop preference only if the agent has none yet.
+        #[serde(default)]
+        legacy_locale: Option<LocalePreference>,
+    },
+    #[serde(rename = "preferences.language.set")]
+    LanguageSettingsSet { locale: LocalePreference },
     #[serde(rename = "session.policy.set")]
     SessionPolicySet { policy: SessionPolicy },
     #[serde(rename = "server.status")]
@@ -963,6 +999,8 @@ impl AgentRequest {
             Self::SessionUnlock { .. } => "session.unlock",
             Self::SessionLock { .. } => "session.lock",
             Self::SessionTouch => "session.touch",
+            Self::LanguageSettingsGet { .. } => "preferences.language.get",
+            Self::LanguageSettingsSet { .. } => "preferences.language.set",
             Self::SessionPolicyGet => "session.policy.get",
             Self::SessionPolicySet { .. } => "session.policy.set",
             Self::ServerStatus => "server.status",

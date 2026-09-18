@@ -3,6 +3,18 @@ import Foundation
 /// Status snapshot pushed from the Rust side as JSON.
 /// Field names match the camelCase serde DTO in `tray.rs`.
 public struct TrayStatus: Codable {
+    var locale: String
+    var messages: [String: String]
+
+    func text(_ key: String) -> String { messages[key] ?? "" }
+
+    func text(_ key: String, time: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: locale)
+        formatter.timeStyle = .short
+        return text(key).replacingOccurrences(of: "{time}", with: formatter.string(from: time))
+    }
+
     /// e.g. "Agent: running (unlocked)"
     var agentText: String
     /// checking | unlocked | locked | no-vault | unreachable
@@ -25,13 +37,15 @@ public struct TrayStatus: Codable {
     var tooltip: String
 
     static let checking = TrayStatus(
-        agentText: "Agent: checking...",
+        locale: "en",
+        messages: [:],
+        agentText: "",
         agentState: "checking",
         canStartAgent: false,
         canLock: false,
-        proxyText: "Status: checking...",
+        proxyText: "",
         proxyState: "checking",
-        proxyStateText: "Checking…",
+        proxyStateText: "",
         proxyDetail: nil,
         proxyGroups: [],
         proxyRunning: false,

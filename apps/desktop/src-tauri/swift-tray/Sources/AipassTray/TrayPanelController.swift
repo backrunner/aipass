@@ -205,36 +205,37 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
     private func showContextMenu() {
         guard let statusItem else { return }
         let snapshot = status
+        let text: (String) -> String = (snapshot ?? .checking).text
         let menu = NSMenu()
         menu.delegate = self
 
-        let agentLine = NSMenuItem(title: snapshot?.agentText ?? "Agent: checking...", action: nil, keyEquivalent: "")
+        let agentLine = NSMenuItem(title: snapshot?.agentText ?? text("tray.checking"), action: nil, keyEquivalent: "")
         agentLine.isEnabled = false
         menu.addItem(agentLine)
         menu.addItem(.separator())
-        menu.addItem(makeItem("Open AIPass", action: "open"))
-        menu.addItem(makeItem("Hide Window", action: "hide"))
+        menu.addItem(makeItem(text("ext.openApp"), action: "open"))
+        menu.addItem(makeItem(text("tray.hideWindow"), action: "hide"))
         menu.addItem(.separator())
-        menu.addItem(makeItem("Refresh Status", action: "refresh"))
-        menu.addItem(makeItem("Start Agent", action: "start-agent", enabled: snapshot?.canStartAgent ?? false))
-        menu.addItem(makeItem("Lock Vault", action: "lock-vault", enabled: snapshot?.canLock ?? false))
-        menu.addItem(makeItem("Repair Auto-Start", action: "repair-autostart"))
+        menu.addItem(makeItem(text("ext.refresh"), action: "refresh"))
+        menu.addItem(makeItem(text("tray.startAgent"), action: "start-agent", enabled: snapshot?.canStartAgent ?? false))
+        menu.addItem(makeItem(text("titlebar.lock"), action: "lock-vault", enabled: snapshot?.canLock ?? false))
+        menu.addItem(makeItem(text("tray.repairAutostart"), action: "repair-autostart"))
 
         let proxyMenu = NSMenu()
-        let proxyLine = NSMenuItem(title: snapshot?.proxyText ?? "Status: checking...", action: nil, keyEquivalent: "")
+        let proxyLine = NSMenuItem(title: snapshot?.proxyText ?? text("tray.checking"), action: nil, keyEquivalent: "")
         proxyLine.isEnabled = false
         proxyMenu.addItem(proxyLine)
-        proxyMenu.addItem(makeItem("Open Server", action: "proxy-open", enabled: snapshot?.canOpenProxy ?? true))
+        proxyMenu.addItem(makeItem(text("tray.openServer"), action: "proxy-open", enabled: snapshot?.canOpenProxy ?? true))
         proxyMenu.addItem(.separator())
-        proxyMenu.addItem(makeItem("Start Proxy", action: "proxy-start", enabled: snapshot?.canStartProxy ?? false))
-        proxyMenu.addItem(makeItem("Stop Proxy", action: "proxy-stop", enabled: snapshot?.canStopProxy ?? false))
-        proxyMenu.addItem(makeItem("Refresh Proxy Status", action: "refresh"))
-        let proxyItem = NSMenuItem(title: "Proxy Server", action: nil, keyEquivalent: "")
+        proxyMenu.addItem(makeItem(text("tray.startProxy"), action: "proxy-start", enabled: snapshot?.canStartProxy ?? false))
+        proxyMenu.addItem(makeItem(text("tray.stopProxy"), action: "proxy-stop", enabled: snapshot?.canStopProxy ?? false))
+        proxyMenu.addItem(makeItem(text("ext.refresh"), action: "refresh"))
+        let proxyItem = NSMenuItem(title: text("tray.proxy"), action: nil, keyEquivalent: "")
         proxyItem.submenu = proxyMenu
         menu.addItem(proxyItem)
 
         menu.addItem(.separator())
-        menu.addItem(makeItem("Quit AIPass", action: "quit"))
+        menu.addItem(makeItem(text("tray.quit"), action: "quit"))
 
         statusItem.menu = menu
         statusItem.button?.performClick(nil)

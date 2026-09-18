@@ -29,7 +29,8 @@
     ProviderIcon,
     type Draft
   } from "@aipass/ui";
-  import { t } from "@aipass/ui/i18n";
+  import { applyLanguageSettings, t } from "@aipass/ui/i18n";
+  import type { NativeSessionStatus } from "../native-client";
   import { Ban, Check, Copy, ExternalLink, Eye, EyeOff, KeyRound, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-svelte";
   import { onDestroy } from "svelte";
 
@@ -168,12 +169,13 @@
     statusText = "";
     statusError = false;
     if (!assumeUnlocked) {
-      const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
+      const ping = await sendToWorker<NativeSessionStatus>({ type: "aipass.ping" });
       if (!ping?.ok) {
         entriesLoading = false;
         connection = "missing";
         return;
       }
+      applyLanguageSettings(ping.data?.language);
       connection = ping.data?.locked ? "locked" : "connected";
     } else {
       connection = "connected";
@@ -230,7 +232,8 @@
     if (unlockBusy || sessionReconcileBusy) return;
     sessionReconcileBusy = true;
     try {
-      const ping = await sendToWorker<{ protocolVersion: number; locked?: boolean }>({ type: "aipass.ping" });
+      const ping = await sendToWorker<NativeSessionStatus>({ type: "aipass.ping" });
+      if (ping?.ok) applyLanguageSettings(ping.data?.language);
       const next: Connection = !ping?.ok ? "missing" : ping.data?.locked ? "locked" : "connected";
       if (next !== connection) await refresh({ scanActiveTab: false });
     } finally {

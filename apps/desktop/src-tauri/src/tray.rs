@@ -1,5 +1,6 @@
 #[cfg(target_os = "macos")]
 use crate::agent_request_no_unlock_detailed;
+use crate::tray_i18n::{tf, tr};
 use crate::{
     agent_client, agent_error_to_string, agent_request_no_unlock, ensure_agent_running_for_desktop,
     install_tray_autostart_for_current_desktop,
@@ -92,6 +93,23 @@ impl TrayFeedback {
             Self::Swift => crate::tray_swift::push_status(&snapshot.dto()),
             #[cfg(not(target_os = "macos"))]
             Self::Menu(items) => {
+                for (item, key) in [
+                    (&items.open, "ext.openApp"),
+                    (&items.hide, "tray.hideWindow"),
+                    (&items.refresh, "ext.refresh"),
+                    (&items.quit, "tray.quit"),
+                    (&items.start_agent, "tray.startAgent"),
+                    (&items.lock, "titlebar.lock"),
+                    (&items.install_login_agent, "tray.repairAutostart"),
+                    (&items.proxy_open, "tray.openServer"),
+                    (&items.proxy_start, "tray.startProxy"),
+                    (&items.proxy_stop, "tray.stopProxy"),
+                    (&items.proxy_refresh, "ext.refresh"),
+                ] {
+                    let _ = item.set_text(tr(key));
+                }
+                let _ = items.proxy_menu.set_text(tr("tray.proxy"));
+                let _ = items.group_menu.set_text(tr("tray.switchGroup"));
                 let _ = items.status.set_text(snapshot.agent.menu_text());
                 let _ = items.start_agent.set_enabled(snapshot.agent.can_start());
                 let _ = items.lock.set_enabled(snapshot.agent.can_lock());
@@ -151,13 +169,20 @@ impl TrayFeedback {
         #[cfg(not(target_os = "macos"))]
         let Self::Menu(items) = self;
         #[cfg(not(target_os = "macos"))]
-        let _ = items.install_login_agent.set_text("Repair Auto-Start");
+        let _ = items
+            .install_login_agent
+            .set_text(&tr("tray.repairAutostart"));
     }
 }
 
 #[cfg(not(target_os = "macos"))]
 #[derive(Clone)]
 struct TrayMenuItems {
+    open: MenuItem<tauri::Wry>,
+    hide: MenuItem<tauri::Wry>,
+    refresh: MenuItem<tauri::Wry>,
+    quit: MenuItem<tauri::Wry>,
+    proxy_menu: Submenu<tauri::Wry>,
     status: MenuItem<tauri::Wry>,
     start_agent: MenuItem<tauri::Wry>,
     lock: MenuItem<tauri::Wry>,
@@ -186,33 +211,57 @@ pub(crate) fn setup(app: &App) -> tauri::Result<()> {
 
 #[cfg(not(target_os = "macos"))]
 fn setup_menu(app: &App) -> tauri::Result<()> {
-    let status = MenuItem::with_id(app, MENU_STATUS, "Agent: checking...", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, MENU_OPEN, "Open AIPass", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, MENU_HIDE, "Hide Window", true, None::<&str>)?;
-    let refresh = MenuItem::with_id(app, MENU_REFRESH, "Refresh Status", true, None::<&str>)?;
-    let start_agent = MenuItem::with_id(app, MENU_START_AGENT, "Start Agent", false, None::<&str>)?;
-    let lock = MenuItem::with_id(app, MENU_LOCK, "Lock Vault", false, None::<&str>)?;
-    let proxy_status = MenuItem::with_id(
+    let status = MenuItem::with_id(app, MENU_STATUS, &tr("tray.checking"), false, None::<&str>)?;
+    let open = MenuItem::with_id(app, MENU_OPEN, &tr("ext.openApp"), true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, MENU_HIDE, &tr("tray.hideWindow"), true, None::<&str>)?;
+    let refresh = MenuItem::with_id(app, MENU_REFRESH, &tr("ext.refresh"), true, None::<&str>)?;
+    let start_agent = MenuItem::with_id(
         app,
-        MENU_PROXY_STATUS,
-        "Status: checking...",
+        MENU_START_AGENT,
+        &tr("tray.startAgent"),
         false,
         None::<&str>,
     )?;
-    let proxy_open = MenuItem::with_id(app, MENU_PROXY_OPEN, "Open Server", true, None::<&str>)?;
-    let proxy_start = MenuItem::with_id(app, MENU_PROXY_START, "Start Proxy", false, None::<&str>)?;
-    let proxy_stop = MenuItem::with_id(app, MENU_PROXY_STOP, "Stop Proxy", false, None::<&str>)?;
-    let proxy_refresh = MenuItem::with_id(
+    let lock = MenuItem::with_id(app, MENU_LOCK, &tr("titlebar.lock"), false, None::<&str>)?;
+    let proxy_status = MenuItem::with_id(
         app,
-        MENU_PROXY_REFRESH,
-        "Refresh Proxy Status",
+        MENU_PROXY_STATUS,
+        &tr("tray.checking"),
+        false,
+        None::<&str>,
+    )?;
+    let proxy_open = MenuItem::with_id(
+        app,
+        MENU_PROXY_OPEN,
+        &tr("tray.openServer"),
         true,
         None::<&str>,
     )?;
-    let group_menu = Submenu::with_items(app, "Switch Group", true, &[])?;
+    let proxy_start = MenuItem::with_id(
+        app,
+        MENU_PROXY_START,
+        &tr("tray.startProxy"),
+        false,
+        None::<&str>,
+    )?;
+    let proxy_stop = MenuItem::with_id(
+        app,
+        MENU_PROXY_STOP,
+        &tr("tray.stopProxy"),
+        false,
+        None::<&str>,
+    )?;
+    let proxy_refresh = MenuItem::with_id(
+        app,
+        MENU_PROXY_REFRESH,
+        &tr("ext.refresh"),
+        true,
+        None::<&str>,
+    )?;
+    let group_menu = Submenu::with_items(app, &tr("tray.switchGroup"), true, &[])?;
     let proxy_menu = Submenu::with_items(
         app,
-        "Proxy Server",
+        &tr("tray.proxy"),
         true,
         &[
             &proxy_status,
@@ -229,12 +278,12 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
     let install_login_agent = MenuItem::with_id(
         app,
         MENU_INSTALL_LOGIN_AGENT,
-        "Repair Auto-Start",
+        &tr("tray.repairAutostart"),
         true,
         None::<&str>,
     )?;
 
-    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit AIPass", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, MENU_QUIT, &tr("tray.quit"), true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -254,6 +303,11 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
     )?;
 
     let items = TrayMenuItems {
+        open,
+        hide,
+        refresh,
+        quit,
+        proxy_menu,
         status,
         start_agent,
         lock,
@@ -333,7 +387,7 @@ fn dispatch_action(app: &AppHandle, action_id: &str, feedback: &TrayFeedback) {
         action::OPEN => {
             if let Err(err) = open_main_window(app) {
                 eprintln!("failed to open AIPass from tray: {err}");
-                feedback.agent_transient("Agent: open failed");
+                feedback.agent_transient(&tr("tray.agent.openFailed"));
             }
             refresh_status_async(app.clone(), feedback.clone());
         }
@@ -347,7 +401,7 @@ fn dispatch_action(app: &AppHandle, action_id: &str, feedback: &TrayFeedback) {
         action::PROXY_OPEN => {
             if let Err(err) = open_server_window(app) {
                 eprintln!("failed to open proxy server workspace from tray: {err}");
-                feedback.proxy_transient("Status: open failed");
+                feedback.proxy_transient(&tr("tray.proxy.openFailed"));
             }
             refresh_status_async(app.clone(), feedback.clone());
         }
@@ -502,6 +556,11 @@ fn refresh_status(app: &AppHandle, feedback: &TrayFeedback) {
 }
 
 fn current_tray_snapshot(app: &AppHandle) -> TraySnapshot {
+    if let Ok(local) = crate::load_preferences(app) {
+        if let Ok(language) = crate::commands::load_language_settings(app, local.locale) {
+            crate::tray_i18n::set_locale(language.resolved_locale);
+        }
+    }
     let client = match agent_client(app) {
         Ok(client) => client,
         Err(err) => return TraySnapshot::unavailable(err),
@@ -566,7 +625,7 @@ fn recover_agent_and_refresh_status(app: &AppHandle, feedback: &TrayFeedback) {
         return;
     }
 
-    feedback.agent_transient("Agent: starting...");
+    feedback.agent_transient(&tr("tray.agent.starting"));
     feedback.set_agent_start_enabled(false);
 
     match ensure_agent_running_for_tray(app) {
@@ -587,11 +646,11 @@ fn ensure_agent_running_for_tray(app: &AppHandle) -> Result<(), String> {
 
 fn start_agent_async(app: AppHandle, feedback: TrayFeedback) {
     thread::spawn(move || {
-        feedback.agent_transient("Agent: starting...");
+        feedback.agent_transient(&tr("tray.agent.starting"));
         feedback.set_agent_start_enabled(false);
         if let Err(err) = ensure_agent_running_for_tray(&app) {
             eprintln!("failed to start AIPass agent from tray: {err}");
-            feedback.agent_transient("Agent: start failed");
+            feedback.agent_transient(&tr("tray.agent.startFailed"));
         }
         refresh_status(&app, &feedback);
     });
@@ -599,7 +658,7 @@ fn start_agent_async(app: AppHandle, feedback: TrayFeedback) {
 
 fn start_proxy_async(app: AppHandle, feedback: TrayFeedback) {
     thread::spawn(move || {
-        feedback.proxy_transient("Status: starting...");
+        feedback.proxy_transient(&tr("tray.proxy.starting"));
         feedback.set_proxy_start_enabled(false);
         let result = agent_request_no_unlock::<ProxyStatus>(&app, AgentRequest::ServerStart);
         match result {
@@ -610,7 +669,10 @@ fn start_proxy_async(app: AppHandle, feedback: TrayFeedback) {
                 eprintln!("failed to start proxy server from tray: {err}");
                 // Surface the agent's validation message (e.g. no enabled
                 // route group) instead of a bare "start failed".
-                feedback.proxy_transient(&format!("Status: start failed: {}", short_error(&err)));
+                feedback.proxy_transient(&tf(
+                    "tray.proxy.startFailed",
+                    &[("error", short_error(&err))],
+                ));
             }
         }
         refresh_status(&app, &feedback);
@@ -619,7 +681,7 @@ fn start_proxy_async(app: AppHandle, feedback: TrayFeedback) {
 
 fn stop_proxy_async(app: AppHandle, feedback: TrayFeedback) {
     thread::spawn(move || {
-        feedback.proxy_transient("Status: stopping...");
+        feedback.proxy_transient(&tr("tray.proxy.stopping"));
         feedback.set_proxy_stop_enabled(false);
         let result = agent_request_no_unlock::<ProxyStatus>(&app, AgentRequest::ServerStop);
         match result {
@@ -628,7 +690,7 @@ fn stop_proxy_async(app: AppHandle, feedback: TrayFeedback) {
             }
             Err(err) => {
                 eprintln!("failed to stop proxy server from tray: {err}");
-                feedback.proxy_transient("Status: stop failed");
+                feedback.proxy_transient(&tr("tray.proxy.stopFailed"));
             }
         }
         refresh_status(&app, &feedback);
@@ -637,7 +699,7 @@ fn stop_proxy_async(app: AppHandle, feedback: TrayFeedback) {
 
 fn select_proxy_route_async(app: AppHandle, route_id: uuid::Uuid, feedback: TrayFeedback) {
     thread::spawn(move || {
-        feedback.proxy_transient("Status: switching group...");
+        feedback.proxy_transient(&tr("tray.proxy.switching"));
         // The proxy supports multiple enabled groups: clicking an active
         // group disables it, clicking an inactive one enables it. The GET
         // only decides intent; the toggle itself is atomic on the agent so a
@@ -666,7 +728,7 @@ fn select_proxy_route_async(app: AppHandle, route_id: uuid::Uuid, feedback: Tray
         };
         if let Err(err) = result {
             eprintln!("failed to switch proxy group from tray: {err}");
-            feedback.proxy_transient("Status: group switch failed");
+            feedback.proxy_transient(&tr("tray.proxy.switchFailed"));
         } else {
             let _ = app.emit(PROXY_STATUS_CHANGED_EVENT, ());
         }
@@ -689,7 +751,7 @@ fn lock_vault_async(app: AppHandle, feedback: TrayFeedback) {
             }
             Err(err) => {
                 eprintln!("failed to lock AIPass vault from tray: {err}");
-                feedback.agent_transient("Agent: lock failed");
+                feedback.agent_transient(&tr("tray.agent.lockFailed"));
             }
         }
         refresh_status(&app, &feedback);
@@ -727,12 +789,10 @@ pub(crate) fn unlock_vault_with_password(app: AppHandle, password: String) {
 #[cfg(target_os = "macos")]
 fn friendly_unlock_error(error: &aipass_agent::AgentCommandError) -> String {
     match error.code {
-        Some(AgentErrorCode::InvalidPassword) => "Password incorrect. Try again.".to_string(),
-        Some(AgentErrorCode::ServiceUnavailable) => {
-            "Agent unavailable. Open AIPass and try again.".to_string()
-        }
-        Some(AgentErrorCode::Locked) => "Vault is locked. Enter your password.".to_string(),
-        _ => "Unable to unlock. Try again.".to_string(),
+        Some(AgentErrorCode::InvalidPassword) => tr("error.incorrectMasterPassword"),
+        Some(AgentErrorCode::ServiceUnavailable) => tr("tray.agentUnavailable"),
+        Some(AgentErrorCode::Locked) => tr("auth.unlock.desc"),
+        _ => tr("error.unlockFailed"),
     }
 }
 
@@ -760,7 +820,7 @@ fn install_login_agent_async(app: AppHandle, feedback: TrayFeedback) {
             }
             Err(err) => {
                 eprintln!("failed to install AIPass agent autostart: {err}");
-                feedback.agent_transient("Agent: autostart failed");
+                feedback.agent_transient(&tr("tray.agent.autostartFailed"));
             }
         }
     });
@@ -819,6 +879,8 @@ struct TrayIconAsset {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrayStatusDto {
+    locale: aipass_agent_protocol::UiLocale,
+    messages: std::collections::BTreeMap<String, String>,
     agent_text: String,
     agent_state: &'static str,
     can_start_agent: bool,
@@ -847,10 +909,10 @@ struct TrayGroupDto {
 impl TrayStatus {
     fn menu_text(&self) -> String {
         match self {
-            Self::Running(status) if !status.exists => "Agent: running (no vault)".to_string(),
-            Self::Running(status) if status.locked => "Agent: running (locked)".to_string(),
-            Self::Running(_) => "Agent: running (unlocked)".to_string(),
-            Self::Unavailable(_) => "Agent: not reachable".to_string(),
+            Self::Running(status) if !status.exists => tr("tray.agent.noVault"),
+            Self::Running(status) if status.locked => tr("tray.agent.locked"),
+            Self::Running(_) => tr("tray.agent.unlocked"),
+            Self::Unavailable(_) => tr("tray.agent.unavailable"),
         }
     }
 
@@ -866,16 +928,8 @@ impl TrayStatus {
 
     fn tooltip(&self) -> String {
         match self {
-            Self::Running(status) if !status.exists => {
-                "AIPass Agent is running; no vault exists".to_string()
-            }
-            Self::Running(status) if status.locked => {
-                "AIPass Agent is running; vault is locked".to_string()
-            }
-            Self::Running(_) => "AIPass Agent is running; vault is unlocked".to_string(),
-            Self::Unavailable(err) => {
-                format!("AIPass Agent is not reachable: {}", short_error(err))
-            }
+            Self::Unavailable(err) => format!("{}: {}", self.menu_text(), short_error(err)),
+            _ => self.menu_text(),
         }
     }
 
@@ -933,11 +987,11 @@ impl TraySnapshot {
             (
                 TrayStatus::Running(SessionStatus { exists: false, .. }),
                 ProxyTrayStatus::Available(ProxyStatus { running: false, .. }),
-            ) => "Status: no vault".to_string(),
+            ) => tf("tray.status", &[("status", tr("tray.noVault"))]),
             (
                 TrayStatus::Running(SessionStatus { locked: true, .. }),
                 ProxyTrayStatus::Available(ProxyStatus { running: false, .. }),
-            ) => "Status: Vault locked".to_string(),
+            ) => tf("tray.status", &[("status", tr("tray.vaultLocked"))]),
             _ => self.proxy.menu_text(),
         }
     }
@@ -946,6 +1000,8 @@ impl TraySnapshot {
     fn dto(&self) -> TrayStatusDto {
         let (proxy_state, proxy_state_text, proxy_detail) = self.proxy_panel_fields();
         TrayStatusDto {
+            locale: crate::tray_i18n::locale(),
+            messages: crate::tray_i18n::messages(),
             agent_text: self.agent.menu_text(),
             agent_state: self.agent.state_id(),
             can_start_agent: self.agent.can_start(),
@@ -980,11 +1036,11 @@ impl TraySnapshot {
             (
                 TrayStatus::Running(SessionStatus { exists: false, .. }),
                 ProxyTrayStatus::Available(ProxyStatus { running: false, .. }),
-            ) => ("no-vault", "No vault".to_string(), None),
+            ) => ("no-vault", tr("tray.noVault"), None),
             (
                 TrayStatus::Running(SessionStatus { locked: true, .. }),
                 ProxyTrayStatus::Available(ProxyStatus { running: false, .. }),
-            ) => ("locked", "Vault locked".to_string(), None),
+            ) => ("locked", tr("tray.vaultLocked"), None),
             (
                 _,
                 ProxyTrayStatus::Available(ProxyStatus {
@@ -995,47 +1051,47 @@ impl TraySnapshot {
                 }),
             ) => (
                 "running",
-                "Running".to_string(),
+                tr("server.running"),
                 Some(format!("{bind_addr} · {}", route_count(*active_routes))),
             ),
-            (_, ProxyTrayStatus::Available(_)) => ("stopped", "Stopped".to_string(), None),
-            (_, ProxyTrayStatus::Unavailable(_)) => {
-                ("unavailable", "Unavailable".to_string(), None)
-            }
+            (_, ProxyTrayStatus::Available(_)) => ("stopped", tr("server.stopped"), None),
+            (_, ProxyTrayStatus::Unavailable(_)) => ("unavailable", tr("tray.unavailable"), None),
         }
     }
 }
 
 impl ProxyTrayStatus {
     fn menu_text(&self) -> String {
-        match self {
+        let status = match self {
             Self::Available(status) if status.running => format!(
-                "Status: Running | {} | {}",
+                "{} | {} | {}",
+                tr("server.running"),
                 status.bind_addr,
                 route_count(status.active_routes)
             ),
-            Self::Available(_) => "Status: Stopped".to_string(),
-            Self::Unavailable(_) => "Status: unavailable".to_string(),
-        }
+            Self::Available(_) => tr("server.stopped"),
+            Self::Unavailable(_) => tr("tray.unavailable"),
+        };
+        tf("tray.status", &[("status", status)])
     }
 
     fn tooltip(&self) -> String {
         match self {
-            Self::Available(status) if status.running => format!(
-                "Proxy Server is running at {} with {}",
-                status.bind_addr,
-                route_count(status.active_routes)
-            ),
-            Self::Available(_) => "Proxy Server is stopped".to_string(),
-            Self::Unavailable(err) => {
-                format!("Proxy Server status is unavailable: {}", short_error(err))
-            }
+            Self::Unavailable(err) => format!("{}: {}", self.menu_text(), short_error(err)),
+            _ => self.menu_text(),
         }
     }
 }
 
 fn route_count(count: usize) -> String {
-    format!("{count} {}", if count == 1 { "route" } else { "routes" })
+    tf(
+        if count == 1 {
+            "tray.routes.one"
+        } else {
+            "tray.routes.other"
+        },
+        &[("count", count.to_string())],
+    )
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1091,14 +1147,14 @@ mod tests {
         if let TrayStatus::Running(status) = &mut no_vault.agent {
             status.exists = false;
         }
-        assert_eq!(no_vault.proxy_menu_text(), "Status: no vault");
+        assert_eq!(no_vault.proxy_menu_text(), "Status: No vault");
         assert_eq!(
             snapshot(
                 false,
                 ProxyTrayStatus::Unavailable("agent error".to_string())
             )
             .proxy_menu_text(),
-            "Status: unavailable"
+            "Status: Unavailable"
         );
     }
 
@@ -1186,7 +1242,7 @@ mod tests {
             message: "internal vault decryption details".to_string(),
         };
         let message = friendly_unlock_error(&invalid);
-        assert!(message.contains("Password incorrect"));
+        assert!(message.contains("The master password is incorrect"));
         assert!(!message.contains("internal vault"));
 
         let unavailable = aipass_agent::AgentCommandError {

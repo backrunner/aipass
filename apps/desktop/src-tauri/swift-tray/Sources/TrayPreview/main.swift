@@ -23,6 +23,7 @@ let sampleJSON = """
   "proxyState": "running",
   "proxyStateText": "Running",
   "proxyDetail": "127.0.0.1:8787 · 3 routes",
+  "proxyGroups": [],
   "proxyRunning": true,
   "canOpenProxy": true,
   "canStartProxy": false,
@@ -37,7 +38,17 @@ if let flag = args.firstIndex(of: "--status"), args.count > flag + 1 {
 } else {
     statusData = Data(sampleJSON.utf8)
 }
-let status = try JSONDecoder().decode(TrayStatus.self, from: statusData)
+var payload = try JSONSerialization.jsonObject(with: statusData) as! [String: Any]
+let locale = args.contains("zh-CN") ? "zh-CN" : "en"
+let catalogURL = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().appendingPathComponent("packages/ui/src/locales/\(locale).json")
+if payload["messages"] == nil {
+    payload["messages"] = try JSONSerialization.jsonObject(with: Data(contentsOf: catalogURL))
+}
+if payload["locale"] == nil { payload["locale"] = locale }
+let status = try JSONDecoder().decode(TrayStatus.self, from: JSONSerialization.data(withJSONObject: payload))
 
 _ = NSApplication.shared
 let model = TrayViewModel()

@@ -314,6 +314,7 @@ export type AppPreferences = {
   lockOnScreenLock: boolean;
   theme: ThemePreference;
   locale: LocalePreference;
+  resolvedLocale?: "en" | "zh-CN";
   officialAccountsImport: boolean;
 };
 

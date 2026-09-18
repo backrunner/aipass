@@ -13,6 +13,7 @@ mod runtime_lifecycle;
 mod self_install;
 mod singleton;
 mod tray;
+mod tray_i18n;
 #[cfg(target_os = "macos")]
 mod tray_swift;
 mod updates;
@@ -2379,6 +2380,7 @@ pub fn run() {
             vault_status,
             session_touch,
             preferences_load,
+            language_settings_load,
             preferences_save,
             server_status,
             server_logs,

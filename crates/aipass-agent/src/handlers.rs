@@ -72,6 +72,12 @@ fn dispatch_request(
             touch_session(state);
             Ok(AgentResponse::success(session_status(state)?))
         }
+        AgentRequest::LanguageSettingsGet { legacy_locale } => Ok(AgentResponse::success(
+            crate::language::load(&state.vault_dir, legacy_locale)?,
+        )),
+        AgentRequest::LanguageSettingsSet { locale } => Ok(AgentResponse::success(
+            crate::language::save(&state.vault_dir, locale)?,
+        )),
         AgentRequest::SessionPolicyGet => Ok(AgentResponse::success(current_policy(state)?)),
         AgentRequest::SessionPolicySet { policy } => {
             let policy = clamp_policy(policy);

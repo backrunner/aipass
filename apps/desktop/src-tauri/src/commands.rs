@@ -124,6 +124,7 @@ pub(crate) async fn session_touch(app: AppHandle) -> Result<VaultStatus, String>
 pub(crate) async fn preferences_load(app: AppHandle) -> Result<AppPreferences, String> {
     run_blocking(move || {
         let local = load_preferences(&app)?;
+        let language = load_language_settings(&app, local.locale)?;
         let policy = agent_request_no_unlock::<SessionPolicy>(&app, AgentRequest::SessionPolicyGet)
             .unwrap_or_default();
         Ok(AppPreferences {
@@ -132,7 +133,8 @@ pub(crate) async fn preferences_load(app: AppHandle) -> Result<AppPreferences, S
             lock_on_sleep: policy.lock_on_sleep,
             lock_on_screen_lock: policy.lock_on_screen_lock,
             theme: local.theme,
-            locale: local.locale,
+            locale: language.locale,
+            resolved_locale: Some(language.resolved_locale),
             official_accounts_import: local.official_accounts_import,
         })
     })
@@ -148,7 +150,8 @@ pub(crate) async fn preferences_save(
         let current_policy =
             agent_request_no_unlock::<SessionPolicy>(&app, AgentRequest::SessionPolicyGet)
                 .unwrap_or_default();
-        let stored = load_preferences(&app).unwrap_or_default();
+        let stored = load_preferences(&app)?;
+        let language = load_language_settings(&app, stored.locale)?;
         let preferences = AppPreferences {
             auto_lock_minutes: request.auto_lock_minutes.min(1_440),
             clipboard_clear_seconds: request.clipboard_clear_seconds.min(600),
@@ -159,12 +162,13 @@ pub(crate) async fn preferences_save(
                 .lock_on_screen_lock
                 .unwrap_or(current_policy.lock_on_screen_lock),
             theme: request.theme.unwrap_or(stored.theme),
-            locale: request.locale.unwrap_or(stored.locale),
+            locale: request.locale.unwrap_or(language.locale),
+            resolved_locale: None,
             official_accounts_import: request
                 .official_accounts_import
                 .unwrap_or(stored.official_accounts_import),
         };
-        save_preferences(&app, &preferences)?;
+
         let _: SessionPolicy = agent_request_no_unlock(
             &app,
             AgentRequest::SessionPolicySet {
@@ -175,9 +179,47 @@ pub(crate) async fn preferences_save(
                 },
             },
         )?;
+        let language: aipass_agent_protocol::LanguageSettings = agent_request_no_unlock(
+            &app,
+            AgentRequest::LanguageSettingsSet {
+                locale: preferences.locale,
+            },
+        )?;
+        crate::tray_i18n::set_locale(language.resolved_locale);
+        let _ = app.emit(crate::tray::REFRESH_PROXY_TRAY_EVENT, ());
+        let preferences = AppPreferences {
+            resolved_locale: Some(language.resolved_locale),
+            ..preferences
+        };
+        save_preferences(&app, &preferences)?;
         Ok(preferences)
     })
     .await
+}
+
+#[tauri::command]
+pub(crate) async fn language_settings_load(
+    app: AppHandle,
+) -> Result<aipass_agent_protocol::LanguageSettings, String> {
+    agent_request_no_unlock_async(
+        app,
+        AgentRequest::LanguageSettingsGet {
+            legacy_locale: None,
+        },
+    )
+    .await
+}
+
+pub(crate) fn load_language_settings(
+    app: &AppHandle,
+    legacy_locale: aipass_agent_protocol::LocalePreference,
+) -> Result<aipass_agent_protocol::LanguageSettings, String> {
+    agent_request_no_unlock(
+        app,
+        AgentRequest::LanguageSettingsGet {
+            legacy_locale: Some(legacy_locale),
+        },
+    )
 }
 
 #[tauri::command]

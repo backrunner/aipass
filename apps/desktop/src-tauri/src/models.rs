@@ -38,6 +38,8 @@ pub(crate) struct AppPreferences {
     pub(crate) theme: ThemePreference,
     #[serde(default)]
     pub(crate) locale: LocalePreference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resolved_locale: Option<aipass_agent_protocol::UiLocale>,
     #[serde(default)]
     pub(crate) official_accounts_import: bool,
 }
@@ -51,16 +53,7 @@ pub(crate) enum ThemePreference {
     Dark,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum LocalePreference {
-    #[default]
-    #[serde(rename = "system")]
-    System,
-    #[serde(rename = "en")]
-    En,
-    #[serde(rename = "zh-CN")]
-    ZhCn,
-}
+pub(crate) use aipass_agent_protocol::LocalePreference;
 
 impl Default for AppPreferences {
     fn default() -> Self {
@@ -71,6 +64,7 @@ impl Default for AppPreferences {
             lock_on_screen_lock: true,
             theme: ThemePreference::System,
             locale: LocalePreference::System,
+            resolved_locale: None,
             official_accounts_import: false,
         }
     }

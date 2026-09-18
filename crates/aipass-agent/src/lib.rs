@@ -4,6 +4,7 @@ pub mod client;
 pub mod cloudkit;
 pub mod desktop;
 pub mod ipc;
+pub(crate) mod language;
 pub mod launcher;
 pub mod logging;
 pub(crate) mod oauth;

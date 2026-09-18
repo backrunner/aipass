@@ -62,7 +62,14 @@ fn handle_request_inner(
             ..
         } => {
             let status = session_status(config)?;
+            let language: aipass_agent_protocol::LanguageSettings = request_agent(
+                config,
+                &AgentRequest::LanguageSettingsGet {
+                    legacy_locale: None,
+                },
+            )?;
             Ok(json!({
+                "language": language,
                 "protocolVersion": 1,
                 "locked": status.locked,
                 "exists": status.exists,

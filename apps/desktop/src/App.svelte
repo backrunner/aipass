@@ -87,7 +87,7 @@
   import { checkForUpdates, downloadUpdate, installPendingUpdate, installUpdate, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { emptyServerUsage, loadServerUsage } from "./lib/services/serverUsage";
-  import { isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
+  import { applyLanguageSettings, isLocalePreference, isLocalizedMessage, localeStore, localizedMessage, resolveMessage, setLocale, t } from "./lib/stores/i18n";
   import type { VaultImportSource, MessageValue } from "./lib/types";
 
   const hasTauriRuntime = () =>
@@ -224,6 +224,8 @@
   let createPasswordStrength = passwordStrength("", $t);
   let recoveryPasswordStrength = passwordStrength("", $t);
   let preferencesSaveChain: Promise<void> = Promise.resolve();
+  let preferencesRevision = 0;
+  let preferencesSavesPending = 0;
   let query = "";
   let copied = "";
   type ErrorTarget = "auth" | "provider-form" | "settings" | "toast";
@@ -602,7 +604,12 @@
     sessionRefreshInFlight = true;
     const wasUnlocked = status.exists && !status.locked;
     try {
-      const next = await invokeTauri<VaultStatus>("vault_status");
+      const languageRevision = preferencesRevision;
+      const [next, language] = await Promise.all([
+        invokeTauri<VaultStatus>("vault_status"),
+        invokeTauri("language_settings_load").catch(() => undefined)
+      ]);
+      if (languageRevision === preferencesRevision && preferencesSavesPending === 0) applyLanguageSettings(language);
       const nowUnlocked = next.exists && !next.locked;
       const syncChanged = next.syncRevision !== undefined && next.syncRevision !== status.syncRevision;
       const authChanged = next.exists !== status.exists || next.locked !== status.locked;
@@ -3157,7 +3164,8 @@
         setTheme(prefs.theme);
       }
       if (isLocalePreference(prefs.locale)) {
-        setLocale(prefs.locale);
+        if (prefs.resolvedLocale) applyLanguageSettings(prefs);
+        else setLocale(prefs.locale);
       }
     } catch (err) {
       reportError(String(err));
@@ -3165,10 +3173,12 @@
   }
 
   async function savePreferences() {
+    const revision = ++preferencesRevision;
+    preferencesSavesPending++;
     const operation = preferencesSaveChain.then(async () => {
       autoLockMinutes = clampPreference(autoLockMinutes, 0, 1440, 60);
       clipboardClearSeconds = clampPreference(clipboardClearSeconds, 0, 600, 45);
-      await invokeTauri<AppPreferences>("preferences_save", {
+      const saved = await invokeTauri<AppPreferences>("preferences_save", {
         request: {
           autoLockMinutes,
           clipboardClearSeconds,
@@ -3179,12 +3189,15 @@
           locale: $localeStore
         }
       });
+      if (revision === preferencesRevision && saved?.resolvedLocale) applyLanguageSettings(saved);
     });
     preferencesSaveChain = operation.catch(() => {});
     try {
       await operation;
     } catch (err) {
       reportError(String(err), showSettings ? "settings" : undefined);
+    } finally {
+      preferencesSavesPending--;
     }
   }
 

@@ -482,6 +482,15 @@ Newest entries last within each section.
 - **Guardrail**: unmount every sensitive dialog on lock. Keep failed mutations visible with their draft, close on explicit success, and distinguish committed writes from refresh failures. Test actual App-to-dialog paths, including late list responses, close-save failure and repeated submits at 960×640.
 - **Watch points**: `App.operations.test.ts`, `IntegrationCard.test.ts`, inline/provider-modal saves, settings close/Escape/outside events, OAuth account loading and login cancellation.
 
+## Shared language settings
+
+### Desktop, tray and extension could drift to different languages
+- **Symptom**: changing the desktop language did not update the tray or an already-open extension popup, and equivalent actions used different translations.
+- **Root cause**: the desktop stored its preference locally while the extension followed browser language and tray strings were hard-coded in Rust/Swift; each surface also kept separate message copies.
+- **Fix**: store the preference through the authenticated agent, return one resolved system locale, expose it through native-host ping, and load one shared English/Chinese catalog with aliases for synonymous messages.
+- **Guardrail**: route every surface through `LanguageSettingsGet/Set`; test first-run legacy migration, live extension polling, catalog key/interpolation parity, and the native tray render and 960×640 settings layout.
+- **Watch points**: `crates/aipass-agent/src/language.rs`, `crates/aipass-agent-protocol/src/lib.rs`, `apps/desktop/src/App.svelte`, `apps/desktop/src-tauri/src/tray.rs`, Swift tray DTO/view, native-host ping, and `packages/ui/src/locales/`.
+
 ## Desktop operation feedback
 
 ### Shared errors leaked into the selected provider

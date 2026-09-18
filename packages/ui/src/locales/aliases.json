@@ -1,0 +1,15 @@
+{
+  "ext.unlock.passwordPlaceholder": "auth.masterPassword",
+  "ext.unlock.action": "auth.unlock.submit",
+  "ext.unlock.showPassword": "password.show",
+  "ext.unlock.hidePassword": "password.hide",
+  "ext.unlock.wrongPassword": "error.incorrectMasterPassword",
+  "settings.masterPassword": "auth.masterPassword",
+  "settings.themeSystem": "locale.system",
+  "auth.errorDetails": "providerForm.details",
+  "ext.details": "providerForm.details",
+  "ext.currentSiteMatch": "ext.currentSite",
+  "server.usageProvider": "providerForm.provider",
+  "oauthConnect.accountsTitle": "oauthConnect.manageAccounts",
+  "auth.reset.cancel": "common.cancel"
+}

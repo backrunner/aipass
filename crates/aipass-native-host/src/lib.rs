@@ -197,6 +197,38 @@ mod tests {
     }
 
     #[test]
+    fn ping_shares_language_changes_without_unlocking_the_vault() {
+        use aipass_agent_protocol::{LanguageSettings, LocalePreference, UiLocale};
+        let agent = RunningAgent::start();
+        for (locale, resolved) in [
+            (LocalePreference::ZhCn, UiLocale::ZhCn),
+            (LocalePreference::En, UiLocale::En),
+            (LocalePreference::System, UiLocale::En),
+        ] {
+            let saved: LanguageSettings = agent
+                .client
+                .request(&AgentRequest::LanguageSettingsSet { locale })
+                .unwrap();
+            let response = handle_request_with_config(
+                NativeRequest::Ping {
+                    id: Uuid::new_v4(),
+                    protocol_version: 1,
+                    extension_id: Some("allowed".into()),
+                },
+                &agent.config_with_allowed_extension("allowed"),
+            );
+            assert!(response.ok, "{:?}", response.error);
+            assert_eq!(response.data["locked"], true);
+            let received: LanguageSettings =
+                serde_json::from_value(response.data["language"].clone()).unwrap();
+            assert_eq!(received, saved);
+            if locale != LocalePreference::System {
+                assert_eq!(received.resolved_locale, resolved);
+            }
+        }
+    }
+
+    #[test]
     fn session_unlock_requires_native_window_flow() {
         let agent = RunningAgent::start();
         let config = agent.config();

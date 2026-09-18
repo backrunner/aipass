@@ -45,6 +45,7 @@ export interface NativeSessionStatus {
   locked?: boolean;
   exists?: boolean;
   vaultNamespace?: string;
+  language?: { locale: "system" | "en" | "zh-CN"; resolvedLocale: "en" | "zh-CN" };
 }
 
 type NativeSessionStatusListener = (response: NativeResponse<NativeSessionStatus>) => void;

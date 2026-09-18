@@ -54,6 +54,7 @@ public struct TrayPanelView: View {
             divider
             footer
         }
+        .environment(\.locale, Locale(identifier: model.status.locale))
         .padding(12)
         .frame(width: TrayMetrics.panelWidth)
         .background(.ultraThinMaterial)
@@ -92,11 +93,11 @@ public struct TrayPanelView: View {
     private var agentPill: some View {
         let (label, color): (String, Color) = {
             switch model.status.agentState {
-            case "unlocked": return ("Unlocked", TrayColors.success)
-            case "locked": return ("Locked", TrayColors.warning)
-            case "no-vault": return ("No Vault", TrayColors.textTertiary)
-            case "unreachable": return ("Offline", TrayColors.danger)
-            default: return ("Checking…", TrayColors.textTertiary)
+            case "unlocked": return (model.status.text("tray.unlocked"), TrayColors.success)
+            case "locked": return (model.status.text("ext.state.locked"), TrayColors.warning)
+            case "no-vault": return (model.status.text("tray.noVault"), TrayColors.textTertiary)
+            case "unreachable": return (model.status.text("ext.state.missing"), TrayColors.danger)
+            default: return (model.status.text("tray.checking"), TrayColors.textTertiary)
             }
         }()
         return Text(label)
@@ -116,20 +117,20 @@ public struct TrayPanelView: View {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(TrayColors.warning)
-                Text("Vault Locked")
+                Text(model.status.text("tray.vaultLocked"))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(TrayColors.text)
             }
-            Text("Enter your master password")
+            Text(model.status.text("auth.unlock.desc"))
                 .font(.system(size: 11))
                 .foregroundStyle(TrayColors.textSecondary)
             HStack(spacing: 8) {
                 HStack(spacing: 0) {
                     Group {
                         if model.isPasswordVisible {
-                            TextField("Master Password", text: $model.unlockPassword)
+                            TextField(model.status.text("auth.masterPassword"), text: $model.unlockPassword)
                         } else {
-                            SecureField("Master Password", text: $model.unlockPassword)
+                            SecureField(model.status.text("auth.masterPassword"), text: $model.unlockPassword)
                         }
                     }
                     .textFieldStyle(.plain)
@@ -149,7 +150,7 @@ public struct TrayPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(model.busyAction == "unlock")
-                    .help(model.isPasswordVisible ? "Hide password" : "Show password")
+                    .help(model.isPasswordVisible ? model.status.text("password.hide") : model.status.text("password.show"))
                 }
                 .padding(.leading, 9)
                 .background(TrayColors.surface)
@@ -162,7 +163,7 @@ public struct TrayPanelView: View {
                             .scaleEffect(0.7)
                             .frame(width: 14, height: 14)
                     } else {
-                        Text("Unlock")
+                        Text(model.status.text("auth.unlock.submit"))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -206,7 +207,7 @@ public struct TrayPanelView: View {
             Circle()
                 .fill(proxyStateColor)
                 .frame(width: 7, height: 7)
-            Text("Proxy")
+            Text(model.status.text("tray.proxy"))
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(TrayColors.text)
             Spacer(minLength: 4)
@@ -216,13 +217,13 @@ public struct TrayPanelView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             if model.status.canStartProxy {
-                Button("Start") { onAction("proxy-start") }
+                Button(model.status.text("server.start")) { onAction("proxy-start") }
                     .buttonStyle(.borderedProminent)
                     .tint(TrayColors.accent)
                     .controlSize(.small)
                     .disabled(model.busyAction != nil)
             } else if model.status.canStopProxy {
-                Button("Stop") { onAction("proxy-stop") }
+                Button(model.status.text("server.stop")) { onAction("proxy-stop") }
                     .buttonStyle(.bordered)
                     .tint(TrayColors.danger)
                     .controlSize(.small)
@@ -240,9 +241,9 @@ public struct TrayPanelView: View {
         )
         .contextMenu {
             if model.status.proxyGroups.isEmpty {
-                Text("No groups")
+                Text(model.status.text("tray.noGroups"))
             } else {
-                Text("Switch Group")
+                Text(model.status.text("tray.switchGroup"))
                     .font(.system(size: 11, weight: .semibold))
                 ForEach(model.status.proxyGroups) { group in
                     Button {
@@ -267,7 +268,7 @@ public struct TrayPanelView: View {
     private var proxyStatusText: String {
         if model.status.proxyState == "running", let detail = model.status.proxyDetail {
             let routes = detail.components(separatedBy: "· ").last ?? detail
-            return "Running · \(routes)"
+            return "\(model.status.proxyStateText) · \(routes)"
         }
         return model.status.proxyStateText
     }
@@ -286,7 +287,7 @@ public struct TrayPanelView: View {
 
     private var actionsSection: some View {
         VStack(alignment: .leading, spacing: 2) {
-            actionRow("macwindow", title: "Open Desktop", action: "open")
+            actionRow("macwindow", title: model.status.text("ext.openApp"), action: "open")
             if model.status.agentState == "locked" {
                 Button {
                     unlockFieldFocused = true
@@ -295,7 +296,7 @@ public struct TrayPanelView: View {
                         Image(systemName: "lock.open")
                             .font(.system(size: 12))
                             .frame(width: 16, alignment: .center)
-                        Text("Unlock Vault")
+                        Text(model.status.text("auth.unlock.submit"))
                             .font(.system(size: 13))
                         Spacer()
                     }
@@ -306,7 +307,7 @@ public struct TrayPanelView: View {
                 }
                 .buttonStyle(TrayRowButtonStyle())
             } else if model.status.canLock {
-                actionRow("lock", title: "Lock Vault", action: "lock-vault")
+                actionRow("lock", title: model.status.text("titlebar.lock"), action: "lock-vault")
             }
         }
     }
@@ -349,14 +350,14 @@ public struct TrayPanelView: View {
                     .contentShape(RoundedRectangle(cornerRadius: TrayMetrics.rowRadius, style: .continuous))
             }
             .buttonStyle(TrayRowButtonStyle())
-            .help("Refresh Status")
+            .help(model.status.text("ext.refresh"))
 
             if let lastUpdated = model.lastUpdated {
-                Text("Updated at \(lastUpdated, style: .time)")
+                Text(model.status.text("tray.updatedAt", time: lastUpdated))
                     .font(.system(size: 11))
                     .foregroundStyle(TrayColors.textTertiary)
             } else {
-                Text("Checking…")
+                Text(model.status.text("tray.checking"))
                     .font(.system(size: 11))
                     .foregroundStyle(TrayColors.textTertiary)
             }
@@ -369,7 +370,7 @@ public struct TrayPanelView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "power")
                         .font(.system(size: 11, weight: .medium))
-                    Text("Quit")
+                    Text(model.status.text("tray.quit"))
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(TrayColors.danger)
