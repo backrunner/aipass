@@ -40,12 +40,19 @@ pub(super) struct Listener {
     pub socket: TcpListener,
     stop: watch::Sender<bool>,
     pub sessions: Arc<Sessions>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
         self.sessions.revoke_all();
         let _ = self.stop.send(true);
+        // The accept loop owns another socket handle. Wait for it to close before
+        // a local stop/re-enable can bind the same address. Runtime shutdown below
+        // remains bounded even if a blocking request is waiting on the panel lock.
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -101,14 +108,15 @@ impl Prepared {
         let (stop, mut stopped) = watch::channel(false);
         let sessions = Arc::new(Sessions::default());
         let address = self.address;
-        let listener = Listener {
+        let mut listener = Listener {
             address,
             socket: self.socket,
             stop,
             sessions: sessions.clone(),
+            worker: None,
         };
         let state = Arc::downgrade(state);
-        std::thread::spawn(move || {
+        listener.worker = Some(std::thread::spawn(move || {
             self.runtime.block_on(async move {
                 let socket = self.accept_socket;
                 let https = self.config.is_some();
@@ -188,7 +196,7 @@ impl Prepared {
                 }
             });
             self.runtime.shutdown_timeout(Duration::from_secs(1));
-        });
+        }));
         listener
     }
 }

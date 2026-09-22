@@ -379,6 +379,32 @@ fn optional_https_uses_a_verified_certificate_and_secure_cookie() {
 }
 
 #[test]
+fn listener_shutdown_releases_port_and_closes_incomplete_requests() {
+    use std::io::{Read, Write};
+
+    let fixture = Fixture::new(false);
+    let address = fixture.url.strip_prefix("http://").unwrap();
+    for _ in 0..8 {
+        let mut connection = std::net::TcpStream::connect(address).unwrap();
+        connection
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        connection.write_all(b"GET / HTTP/1.1\r\n").unwrap();
+        fixture.state.control_panel.shutdown();
+        let mut byte = [0];
+        match connection.read(&mut byte) {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            result => panic!("stopped listener left an incomplete connection open: {result:?}"),
+        }
+        ControlPanel::restore(&fixture.state);
+        let status = fixture.state.control_panel.status().unwrap();
+        assert!(status.running, "{status:?}");
+        assert_eq!(fixture.login(&fixture.code).status(), 200);
+    }
+}
+
+#[test]
 fn switching_credentials_clears_old_headers_and_survives_listener_restart() {
     let fixture = Fixture::new(false);
     let (cookie, csrf) = fixture.credentials();

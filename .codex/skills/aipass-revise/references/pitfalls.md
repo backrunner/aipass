@@ -539,3 +539,10 @@ Newest entries last within each section.
 - **Fix**: use an immediate switch backed by Agent status; call `control_panel_stop` directly when disabling, preserve unrelated drafts, and roll back a failed enable to the saved state.
 - **Guardrail**: keep stopping available independently of access-code, address, port and certificate validation. Verify immediate stop with invalid drafts, failed-enable rollback, and disabled persistence with the control-panel component and Agent tests.
 - **Watch points**: `ControlPanelSettings.svelte`, `panel_commands::control_panel_stop`, `ControlPanel::{stop,restore}`, tray Stop.
+
+### Stop must finish releasing the listener before returning
+- **Symptom**: an immediate stop/restart intermittently failed to bind the saved port during the full workspace test suite.
+- **Root cause**: `control_panel/transport.rs` signaled shutdown but returned while the accept thread still owned a cloned listening socket.
+- **Fix**: retain and join the listener thread after revocation and stop signaling; keep Tokio's blocking-task shutdown bounded. The regression repeatedly restarts while a client holds incomplete HTTP headers.
+- **Guardrail**: require stop to release its listening socket and close incomplete connections before reporting success. Run `cargo test --workspace` with the listener restart regression enabled.
+- **Watch points**: `transport::Listener::drop`, `Prepared::launch`, `ControlPanel::{configure,stop,shutdown,restore}`.
