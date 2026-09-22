@@ -42,14 +42,14 @@ use crate::{
     repair_native_host_manifest, run_blocking, run_blocking_agent, save_preferences, AppState,
 };
 
-async fn agent_request_async<T: DeserializeOwned + Send + 'static>(
+pub(crate) async fn agent_request_async<T: DeserializeOwned + Send + 'static>(
     app: AppHandle,
     request: AgentRequest,
 ) -> Result<T, String> {
     run_blocking(move || agent_request(&app, request)).await
 }
 
-async fn agent_request_no_unlock_async<T: DeserializeOwned + Send + 'static>(
+pub(crate) async fn agent_request_no_unlock_async<T: DeserializeOwned + Send + 'static>(
     app: AppHandle,
     request: AgentRequest,
 ) -> Result<T, String> {

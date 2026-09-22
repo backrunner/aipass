@@ -272,3 +272,7 @@ Microsoft Edge Add-ons submission material lives in [`apps/extension/store`](app
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+### LAN control panel
+
+The Agent includes an opt-in Svelte control panel for credential switching and local proxy management. HTTP uses an independent access code; HTTPS is optional. Explicitly grant remote unlock when generating a code on the host to unlock the vault from the webpage, including after Agent restart. See [setup and session behavior](docs/lan-control-panel.md).

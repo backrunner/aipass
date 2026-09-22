@@ -3,6 +3,7 @@ import Foundation
 /// Status snapshot pushed from the Rust side as JSON.
 /// Field names match the camelCase serde DTO in `tray.rs`.
 public struct TrayStatus: Codable {
+    var panelUrl: String? = nil
     var locale: String
     var messages: [String: String]
 

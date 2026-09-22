@@ -616,6 +616,31 @@ mod tests {
     }
 
     #[test]
+    fn remote_unlock_rejects_password_changed_by_pending_sync_recovery() {
+        let dir = tempdir().unwrap();
+        let original = vault(dir.path());
+        let code =
+            SecretString::new(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([73_u8; 32]));
+        let grant = original.seal_remote_unlock(&code).unwrap();
+        let mut header = original.header.clone();
+        original
+            .rewrap_root_key_for_new_password(
+                &mut header,
+                &SecretString::new("new-master"),
+                KdfParams::with_random_salt(1024, 1, 1),
+            )
+            .unwrap();
+        let snapshot = original
+            .prepare_epoch_rotation(header, "password", None)
+            .unwrap();
+        atomic_write_bytes(dir.path().join(PENDING), &snapshot).unwrap();
+        drop(original);
+        assert!(Vault::open_with_remote_unlock(dir.path(), &code, &grant).is_err());
+        assert!(Vault::open(dir.path(), &SecretString::new("new-master")).is_ok());
+        assert!(Vault::open_with_remote_unlock(dir.path(), &code, &grant).is_err());
+    }
+
+    #[test]
     fn interrupted_password_rotation_recovers_records_and_new_password_together() {
         let dir = tempdir().unwrap();
         let mut original = vault(dir.path());

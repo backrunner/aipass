@@ -7,6 +7,7 @@ mod deeplink;
 mod logging;
 mod models;
 mod oauth_browser;
+mod panel_commands;
 mod runtime_check;
 mod runtime_lifecycle;
 #[cfg(target_os = "macos")]
@@ -19,6 +20,7 @@ mod tray_swift;
 mod updates;
 
 use commands::*;
+use panel_commands::*;
 use updates::{
     check_for_updates, clear_pending_update, download_update, install_pending_update,
     install_update,
@@ -2374,6 +2376,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            control_panel_status,
+            control_panel_configure,
+            control_panel_stop,
+            control_panel_rotate_access_code,
+            control_panel_disable_remote_unlock,
+            control_panel_open,
+            control_panel_export_certificate,
             window_target,
             desktop_ready,
             desktop_startup_stage,

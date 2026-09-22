@@ -8,6 +8,7 @@ const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptsDir, "..");
 const packages = ["-p", "aipass-agent", "-p", "aipass-native-host", "-p", "aipass-cli"];
 const binaries = ["aipass-agent", "aipass-native-host", "aipass"];
+run("pnpm", ["--filter", "@aipass/control-panel", "build"]);
 
 if (isTruthy(process.env.AIPASS_MACOS_UNIVERSAL)) {
   buildUniversalMacosSidecars();

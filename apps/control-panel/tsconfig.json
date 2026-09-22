@@ -1,0 +1,5 @@
+{
+  "extends": "@aipass/tsconfig/svelte.json",
+  "compilerOptions": { "moduleResolution": "Bundler" },
+  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+}

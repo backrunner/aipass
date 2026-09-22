@@ -31,6 +31,7 @@ aipass-storage = { path = "../../../crates/aipass-storage" }
 aipass-sync = { path = "../../../crates/aipass-sync" }
 aipass-vault = { path = "../../../crates/aipass-vault" }
 anyhow.workspace = true
+arboard = { version = "3", default-features = false }
 base64.workspace = true
 directories.workspace = true
 interprocess.workspace = true

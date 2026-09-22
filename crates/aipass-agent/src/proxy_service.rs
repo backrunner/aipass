@@ -1191,7 +1191,7 @@ pub(crate) fn proxy_auth_scheme(auth_scheme: &AuthScheme) -> Option<&'static str
 /// `nativeProtocolForEntry` mapping: first-party OpenAI (and Codex OAuth) speak
 /// the Responses API, every other OpenAI-compatible endpoint speaks Chat
 /// Completions. Interfaces without a proxy protocol return `None`.
-fn key_upstream_protocol(
+pub(crate) fn key_upstream_protocol(
     interface: &InterfaceType,
     entry: &aipass_vault::EntrySummary,
 ) -> Option<aipass_proxy::Protocol> {

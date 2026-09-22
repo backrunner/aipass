@@ -61,6 +61,9 @@ static AGENT_START_LOCK: Mutex<()> = Mutex::new(());
 
 /// Canonical tray action ids shared by the classic menu and the Swift panel.
 mod action {
+    pub(crate) const PANEL_OPEN_URL: &str = "panel-open-url";
+    pub(crate) const PANEL_COPY: &str = "panel-copy";
+    pub(crate) const PANEL_STOP: &str = "panel-stop";
     pub(crate) const OPEN: &str = "open";
     pub(crate) const HIDE: &str = "hide";
     pub(crate) const REFRESH: &str = "refresh";
@@ -105,6 +108,9 @@ impl TrayFeedback {
                     (&items.proxy_start, "tray.startProxy"),
                     (&items.proxy_stop, "tray.stopProxy"),
                     (&items.proxy_refresh, "ext.refresh"),
+                    (&items.panel_open, "tray.panelOpen"),
+                    (&items.panel_copy, "tray.panelCopy"),
+                    (&items.panel_stop, "tray.panelStop"),
                 ] {
                     let _ = item.set_text(tr(key));
                 }
@@ -118,6 +124,19 @@ impl TrayFeedback {
                 let _ = items.proxy_start.set_enabled(snapshot.can_start_proxy());
                 let _ = items.proxy_stop.set_enabled(snapshot.can_stop_proxy());
                 let _ = items.proxy_refresh.set_enabled(true);
+                let panel_url = snapshot
+                    .panel
+                    .as_ref()
+                    .and_then(|panel| panel.url.as_deref());
+                let _ = items.panel_status.set_text(
+                    panel_url
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| tr("tray.panelOff")),
+                );
+                let _ = items.panel_menu.set_text(tr("tray.panel"));
+                for item in [&items.panel_open, &items.panel_copy, &items.panel_stop] {
+                    let _ = item.set_enabled(panel_url.is_some());
+                }
                 sync_group_menu(&items.group_menu, &snapshot.routes);
 
                 if let Some(tray) = app.tray_by_id(TRAY_ID) {
@@ -178,6 +197,11 @@ impl TrayFeedback {
 #[cfg(not(target_os = "macos"))]
 #[derive(Clone)]
 struct TrayMenuItems {
+    panel_menu: Submenu<tauri::Wry>,
+    panel_status: MenuItem<tauri::Wry>,
+    panel_open: MenuItem<tauri::Wry>,
+    panel_copy: MenuItem<tauri::Wry>,
+    panel_stop: MenuItem<tauri::Wry>,
     open: MenuItem<tauri::Wry>,
     hide: MenuItem<tauri::Wry>,
     refresh: MenuItem<tauri::Wry>,
@@ -284,6 +308,40 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
     )?;
 
     let quit = MenuItem::with_id(app, MENU_QUIT, tr("tray.quit"), true, None::<&str>)?;
+    let panel_status = MenuItem::with_id(
+        app,
+        "panel-status",
+        tr("tray.panelOff"),
+        false,
+        None::<&str>,
+    )?;
+    let panel_open = MenuItem::with_id(
+        app,
+        action::PANEL_OPEN_URL,
+        tr("tray.panelOpen"),
+        false,
+        None::<&str>,
+    )?;
+    let panel_copy = MenuItem::with_id(
+        app,
+        action::PANEL_COPY,
+        tr("tray.panelCopy"),
+        false,
+        None::<&str>,
+    )?;
+    let panel_stop = MenuItem::with_id(
+        app,
+        action::PANEL_STOP,
+        tr("tray.panelStop"),
+        false,
+        None::<&str>,
+    )?;
+    let panel_menu = Submenu::with_items(
+        app,
+        tr("tray.panel"),
+        true,
+        &[&panel_status, &panel_open, &panel_copy, &panel_stop],
+    )?;
     let menu = Menu::with_items(
         app,
         &[
@@ -297,12 +355,18 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
             &lock,
             &install_login_agent,
             &proxy_menu,
+            &panel_menu,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
     )?;
 
     let items = TrayMenuItems {
+        panel_menu,
+        panel_status,
+        panel_open,
+        panel_copy,
+        panel_stop,
         open,
         hide,
         refresh,
@@ -361,6 +425,9 @@ fn setup_menu(app: &App) -> tauri::Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn menu_action_for(id: &str) -> Option<&'static str> {
     match id {
+        action::PANEL_OPEN_URL => Some(action::PANEL_OPEN_URL),
+        action::PANEL_COPY => Some(action::PANEL_COPY),
+        action::PANEL_STOP => Some(action::PANEL_STOP),
         MENU_OPEN => Some(action::OPEN),
         MENU_HIDE => Some(action::HIDE),
         MENU_REFRESH | MENU_PROXY_REFRESH => Some(action::REFRESH),
@@ -406,6 +473,27 @@ fn dispatch_action(app: &AppHandle, action_id: &str, feedback: &TrayFeedback) {
             refresh_status_async(app.clone(), feedback.clone());
         }
         action::PROXY_START => start_proxy_async(app.clone(), feedback.clone()),
+        action::PANEL_OPEN_URL | action::PANEL_COPY | action::PANEL_STOP => {
+            let app = app.clone();
+            let feedback = feedback.clone();
+            let action_id = action_id.to_owned();
+            thread::spawn(move || {
+                let result = match action_id.as_str() {
+                    action::PANEL_OPEN_URL => crate::panel_commands::open_panel(&app),
+                    action::PANEL_STOP => agent_request_no_unlock::<
+                        aipass_agent_protocol::ControlPanelStatus,
+                    >(
+                        &app, AgentRequest::ControlPanelStop
+                    )
+                    .map(|_| ()),
+                    _ => crate::panel_commands::copy_panel_address(&app),
+                };
+                if result.is_err() {
+                    feedback.proxy_transient(&tr("tray.proxy.openFailed"));
+                }
+                refresh_status_async(app, feedback);
+            });
+        }
         action::PROXY_STOP => stop_proxy_async(app.clone(), feedback.clone()),
         #[cfg(not(target_os = "macos"))]
         id if id.starts_with(PROXY_GROUP_ACTION_PREFIX)
@@ -595,6 +683,7 @@ fn current_tray_snapshot(app: &AppHandle) -> TraySnapshot {
         agent: TrayStatus::Running(session),
         proxy,
         routes,
+        panel: client.request(&AgentRequest::ControlPanelStatus).ok(),
     }
 }
 
@@ -854,6 +943,7 @@ struct TraySnapshot {
     agent: TrayStatus,
     proxy: ProxyTrayStatus,
     routes: Vec<TrayRoute>,
+    panel: Option<aipass_agent_protocol::ControlPanelStatus>,
 }
 
 #[derive(Clone)]
@@ -879,6 +969,7 @@ struct TrayIconAsset {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrayStatusDto {
+    panel_url: Option<String>,
     locale: aipass_agent_protocol::UiLocale,
     messages: std::collections::BTreeMap<String, String>,
     agent_text: String,
@@ -948,6 +1039,7 @@ impl TraySnapshot {
             agent: TrayStatus::Unavailable(err.clone()),
             proxy: ProxyTrayStatus::Unavailable(err),
             routes: Vec::new(),
+            panel: None,
         }
     }
 
@@ -1000,6 +1092,7 @@ impl TraySnapshot {
     fn dto(&self) -> TrayStatusDto {
         let (proxy_state, proxy_state_text, proxy_detail) = self.proxy_panel_fields();
         TrayStatusDto {
+            panel_url: self.panel.as_ref().and_then(|panel| panel.url.clone()),
             locale: crate::tray_i18n::locale(),
             messages: crate::tray_i18n::messages(),
             agent_text: self.agent.menu_text(),
@@ -1254,6 +1347,7 @@ mod tests {
 
     fn snapshot(locked: bool, proxy: ProxyTrayStatus) -> TraySnapshot {
         TraySnapshot {
+            panel: None,
             agent: TrayStatus::Running(SessionStatus {
                 exists: true,
                 locked,

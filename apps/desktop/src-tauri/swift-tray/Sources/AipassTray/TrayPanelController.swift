@@ -174,7 +174,7 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
 
     private func handleAction(_ actionId: String) {
         switch actionId {
-        case "open", "hide", "quit", "lock-vault", "proxy-open":
+        case "open", "hide", "quit", "lock-vault", "proxy-open", "panel-open-url":
             closePanel()
         default:
             viewModel.markBusy(actionId)
@@ -233,6 +233,16 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
         let proxyItem = NSMenuItem(title: text("tray.proxy"), action: nil, keyEquivalent: "")
         proxyItem.submenu = proxyMenu
         menu.addItem(proxyItem)
+        let panelMenu = NSMenu()
+        let panelLine = NSMenuItem(title: snapshot?.panelUrl ?? text("tray.panelOff"), action: nil, keyEquivalent: "")
+        panelLine.isEnabled = false
+        panelMenu.addItem(panelLine)
+        panelMenu.addItem(makeItem(text("tray.panelOpen"), action: "panel-open-url", enabled: snapshot?.panelUrl != nil))
+        panelMenu.addItem(makeItem(text("tray.panelCopy"), action: "panel-copy", enabled: snapshot?.panelUrl != nil))
+        panelMenu.addItem(makeItem(text("tray.panelStop"), action: "panel-stop", enabled: snapshot?.panelUrl != nil))
+        let panelItem = NSMenuItem(title: text("tray.panel"), action: nil, keyEquivalent: "")
+        panelItem.submenu = panelMenu
+        menu.addItem(panelItem)
 
         menu.addItem(.separator())
         menu.addItem(makeItem(text("tray.quit"), action: "quit"))

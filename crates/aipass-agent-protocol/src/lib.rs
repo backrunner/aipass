@@ -1,4 +1,5 @@
 pub use aipass_config_writers::ToolId;
+mod control_panel;
 use aipass_provider_registry::{
     AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, OAuthProvider,
     ProviderEndpoint, QuotaInfo, SubscriptionSnapshot,
@@ -14,6 +15,7 @@ pub use aipass_vault::{
     SecretMetadataInput, TtlGrantSummary,
 };
 use anyhow::{bail, Result};
+pub use control_panel::*;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -27,7 +29,9 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 6 requires verified WS preference recovery and automatic capability warnings.
 // Version 7 requires provider concurrency persistence and runtime admission limits.
 // Version 8 requires verified automatic migration of existing macOS vaults to CloudKit.
-pub const AGENT_PROTOCOL_VERSION: u32 = 9;
+// Version 10 adds the opt-in HTTP/HTTPS control panel and its local management API.
+// Version 11 adds explicitly granted remote unlock and local grant revocation.
+pub const AGENT_PROTOCOL_VERSION: u32 = 11;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -572,6 +576,24 @@ pub struct AuthenticatedAgentRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum AgentRequest {
+    #[serde(rename = "control_panel.status")]
+    ControlPanelStatus,
+    #[serde(rename = "control_panel.configure")]
+    ControlPanelConfigure {
+        settings: ControlPanelSettings,
+        certificate: Option<ControlPanelCertificate>,
+        #[serde(default)]
+        regenerate_certificate: bool,
+    },
+    #[serde(rename = "control_panel.stop")]
+    ControlPanelStop,
+    #[serde(rename = "control_panel.rotate_access_code")]
+    ControlPanelRotateAccessCode {
+        #[serde(default)]
+        allow_remote_unlock: bool,
+    },
+    #[serde(rename = "control_panel.disable_remote_unlock")]
+    ControlPanelDisableRemoteUnlock,
     #[serde(rename = "session.status")]
     SessionStatus,
     #[serde(rename = "session.unlock")]
@@ -995,6 +1017,11 @@ impl AgentRequest {
     /// Stable diagnostics name. Never serialize a request just to identify it.
     pub fn event_name(&self) -> &'static str {
         match self {
+            Self::ControlPanelStatus => "control_panel.status",
+            Self::ControlPanelConfigure { .. } => "control_panel.configure",
+            Self::ControlPanelStop => "control_panel.stop",
+            Self::ControlPanelRotateAccessCode { .. } => "control_panel.rotate_access_code",
+            Self::ControlPanelDisableRemoteUnlock => "control_panel.disable_remote_unlock",
             Self::SessionStatus => "session.status",
             Self::SessionUnlock { .. } => "session.unlock",
             Self::SessionLock { .. } => "session.lock",
@@ -1100,6 +1127,7 @@ impl AgentRequest {
             self,
             Self::CloudKitExchange { .. }
                 | Self::SessionStatus
+                | Self::ControlPanelStatus
                 | Self::VaultStatus
                 | Self::SessionTouch
                 | Self::ServerStatus

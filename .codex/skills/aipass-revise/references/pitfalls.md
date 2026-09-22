@@ -515,3 +515,27 @@ Newest entries last within each section.
 - **Fix**: keep the latest Homebrew `rust`, upgrade Homebrew `llvm` to 23.1.0, and point only the Rust sysroot's `rust-objcopy` symlink to `$(brew --prefix llvm)/bin/llvm-objcopy`. Keep Rust's LLVM 22 library dependency unchanged. The same stripped-library reproducer fails with LLVM 22 and loads with LLVM 23; rebuild affected cached macros after the repair.
 - **Guardrail**: use Homebrew-managed Rust locally per the user's preference; verify Cargo/rustc provenance and the actual objcopy link before macOS validation. Recheck a freshly compiled stripped library after Rust upgrades/reinstalls, which can recreate the formula's original symlink. Do not replace the LLVM 22 library with LLVM 23 or switch to rustup to bypass the issue.
 - **Watch points**: desktop development, `scripts/build-desktop-sidecars.mjs`, Tauri release builds, and the local macOS validation shell.
+
+
+## LAN control panel
+
+### Remote authorization must follow the current vault session
+- **Symptom**: checking a browser session only when a request arrives can allow queued work to run after a local lock/unlock, password change, or access-code rotation; a code tied only to a directory can authorize a replacement vault.
+- **Root cause**: HTTP authentication and the actual vault operation occur at different lifecycle boundaries (`crates/aipass-agent/src/control_panel/transport.rs`, `session.rs`).
+- **Fix**: bind access-code verifiers to the vault UUID, bind browser sessions to the unlock instance and password envelope, and recheck scoped authorization under the vault session mutex. Keep background polling from touching either activity timer.
+- **Guardrail**: run `cargo test -p aipass-agent control_panel` when changing session replacement, password/sync reload, code rotation, or HTTP dispatch. Retain the replacement-vault, in-flight revocation, expiry, and proxy-continuity assertions.
+- **Watch points**: `control_panel/{mod,sessions,transport,tests}.rs`, `session::{with_vault,with_vault_mut,touch_session}`, and `Vault::password_revision`.
+
+### Remote unlock must activate through the shared session lifecycle
+- **Symptom**: requiring an unlocked host makes remote management unusable after lock/restart; a separate unlock path can skip proxy restoration or accept a revoked queued login.
+- **Root cause**: the original panel login only inspected `SessionState::Unlocked` in `control_panel/transport.rs`; post-unlock work lived inside password-only `session::unlock_with_password`.
+- **Fix**: locally opt in when generating a new random code, seal the root key under a domain-separated key derived from the raw code, validate UUID/password revision, and share `session::complete_unlock`. Serialize authorization and session installation with session→panel locks and reject old listener identities/generations.
+- **Guardrail**: never derive the wrapping key from the persisted verifier. Keep ordinary codes unable to unlock. Run vault `remote_unlock` and Agent `control_panel` tests, including locked restart, proxy restore, password revision changes and revocation before activation.
+- **Watch points**: `aipass-vault/src/remote_unlock.rs`, `aipass-crypto::derive_remote_unlock_key`, `control_panel::ControlPanel::login`, local code rotation/revocation, desktop grant controls.
+
+### Disabling remote access must bypass listener form validation
+- **Symptom**: a remote-access checkbox only changed a form draft; incomplete certificate files or invalid listener fields could block saving the disabled state.
+- **Root cause**: the checkbox in `ControlPanelSettings.svelte` shared the listener configuration form and its validation instead of calling the dedicated stop operation.
+- **Fix**: use an immediate switch backed by Agent status; call `control_panel_stop` directly when disabling, preserve unrelated drafts, and roll back a failed enable to the saved state.
+- **Guardrail**: keep stopping available independently of access-code, address, port and certificate validation. Verify immediate stop with invalid drafts, failed-enable rollback, and disabled persistence with the control-panel component and Agent tests.
+- **Watch points**: `ControlPanelSettings.svelte`, `panel_commands::control_panel_stop`, `ControlPanel::{stop,restore}`, tray Stop.

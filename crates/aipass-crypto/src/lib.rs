@@ -117,6 +117,28 @@ impl SecretString {
     }
 }
 
+/// Derive a wrapping key from a generated 256-bit panel code, never its stored verifier.
+/// The separate context prevents reuse as a recovery or password key.
+pub fn derive_remote_unlock_key(
+    code: &SecretString,
+    salt: &[u8; 16],
+) -> Result<MasterKey, CryptoError> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let raw = zeroize::Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(code.expose())
+            .map_err(|_| CryptoError::InvalidKeyLength)?,
+    );
+    if raw.len() != KEY_LEN {
+        return Err(CryptoError::InvalidKeyLength);
+    }
+    let mut key = zeroize::Zeroizing::new([0_u8; KEY_LEN]);
+    Hkdf::<Sha256>::new(Some(salt), &raw)
+        .expand(b"aipass remote unlock root key wrap v1", key.as_mut())
+        .map_err(|_| CryptoError::HkdfFailed)?;
+    Ok(MasterKey::from_bytes(*key))
+}
+
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct MasterKey([u8; KEY_LEN]);
 

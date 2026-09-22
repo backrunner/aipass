@@ -33,6 +33,40 @@ fn dispatch_request(
     request: AgentRequest,
 ) -> ServiceResult<AgentResponse> {
     match request {
+        AgentRequest::ControlPanelStatus => {
+            state.control_panel.status().map(AgentResponse::success)
+        }
+        AgentRequest::ControlPanelConfigure {
+            settings,
+            certificate,
+            regenerate_certificate,
+        } => with_vault(state, false, |vault| {
+            crate::control_panel::ControlPanel::configure(
+                state,
+                vault.vault_id(),
+                settings,
+                certificate,
+                regenerate_certificate,
+            )
+        })
+        .map(AgentResponse::success),
+        AgentRequest::ControlPanelStop => {
+            crate::control_panel::ControlPanel::stop(state).map(AgentResponse::success)
+        }
+        AgentRequest::ControlPanelDisableRemoteUnlock => {
+            crate::control_panel::ControlPanel::disable_remote_unlock(state)
+                .map(AgentResponse::success)
+        }
+        AgentRequest::ControlPanelRotateAccessCode {
+            allow_remote_unlock,
+        } => with_vault(state, false, |vault| {
+            crate::control_panel::ControlPanel::rotate_access_code(
+                state,
+                vault,
+                allow_remote_unlock,
+            )
+        })
+        .map(AgentResponse::success),
         AgentRequest::CloudKitExchange {
             completion,
             changed,
@@ -1168,7 +1202,7 @@ fn dispatch_request(
                 &format!("tool config rollback started operation_id={operation_id}"),
             );
             let result = with_vault(state, false, |vault| {
-                let home = home_dir()?;
+                let home = home_dir(vault)?;
                 let backup = aipass_config_writers::find_backup_by_operation(&home, operation_id)
                     .map_err(ServiceError::internal)?;
                 let backup_path = "redacted";

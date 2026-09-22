@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ControlPanelSettings from "./ControlPanelSettings.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getVersion } from "@tauri-apps/api/app";
   import { Dialog, Tabs } from "bits-ui";
@@ -62,6 +63,7 @@
   export let notice = "";
   export let serverConfig: ProxyConfig = { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [], upstreamProxy: { mode: "system" } };
   export let serverBusy = "";
+  export let onCopyAccessCode: ((code: string) => Promise<void>) | undefined = undefined;
   export let onClose: () => MaybePromise<boolean | void> = () => {};
   export let proxyRunning = false;
   export let onCheckProxyRunning: () => MaybePromise<boolean> = () => proxyRunning;
@@ -712,6 +714,7 @@
           </Tabs.Content>
 
           <Tabs.Content value="server" class="tab-panel">
+            <ControlPanelSettings {onCopyAccessCode} />
             <Card title={$t("settings.serverFailover")}>
               <p class="hint">{$t("settings.serverResponseWait")}</p>
               <div class="settings-stack">

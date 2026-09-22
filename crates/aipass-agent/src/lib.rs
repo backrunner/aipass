@@ -2,6 +2,7 @@ pub mod autostart;
 pub(crate) mod ccswitch;
 pub mod client;
 pub mod cloudkit;
+pub(crate) mod control_panel;
 pub mod desktop;
 pub mod ipc;
 pub(crate) mod language;

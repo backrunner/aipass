@@ -3490,6 +3490,11 @@
 
 {#if showSettings && !status.locked}
   <SettingsPanel
+    onCopyAccessCode={async (code) => {
+      await navigator.clipboard.writeText(code);
+      scheduleClipboardClear(code);
+      if (status.locked) await clearCopiedSecretFromClipboard();
+    }}
     error={errorTarget === "settings" ? errorText : ""}
     notice={noticeText}
     initialTab={settingsInitialTab}

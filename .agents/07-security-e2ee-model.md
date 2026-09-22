@@ -342,3 +342,13 @@ iCloud/WebDAV/本地文件夹同步只同步密文对象。
 - IETF MLS RFC 9420: https://www.rfc-editor.org/rfc/rfc9420.html
 - NIST SP 800-57 Part 1 Rev. 5: https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final
 - libsodium secretstream rekey API: https://libsodium.gitbook.io/doc/secret-key_cryptography/secretstream
+
+## 14. Opt-in LAN remote unlock
+
+- 首次授权必须在本机 Vault 已解锁时，通过受认证的本地 IPC 明确开启并生成新访问码。旧普通访问码不会自动获得解锁能力。
+- 访问码为随机 256-bit secret。持久化 SHA-256 verifier；远程解锁另存以原始访问码经独立域 HKDF-SHA256 派生密钥封装的 Vault Root Key，使用 XChaCha20-Poly1305。不能用已持久化 verifier 派生封装密钥。
+- envelope 的版本、vault UUID、密码 revision 和 salt 必须纳入 AAD；解锁前、pending sync 恢复后及已解锁登录时均验证绑定。密码修改、恢复或 Vault 替换后拒绝旧授权。
+- envelope 仅保存在 owner-only、不同步的本地设置文件中；不保存明文访问码、主密码或 root key。锁定清除内存中的 Vault；重启不会恢复解锁态，但授权码可再次解锁。
+- 网页不接收主密码。HTTP 会暴露访问码、cookie 和管理流量，也无法验证页面完整性；仅适用于用户明确接受此风险的可信局域网。HTTPS 可选。
+- 撤销清除 envelope/verifier 并停止面板，轮换作废既有会话。撤销不能追回已复制的访问码、envelope、明文凭据或历史 Vault 副本。
+- 验证入口：`cargo test -p aipass-vault remote_unlock` 与 `cargo test -p aipass-agent control_panel`；覆盖 verifier 不可解密、元数据篡改、密码变更/同步重载、重启解锁与代理恢复、锁定期间撤销和旧 listener/generation 的排队登录。

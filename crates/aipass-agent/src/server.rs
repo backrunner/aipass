@@ -135,6 +135,7 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         .context("failed to set agent listener to nonblocking accept mode")?;
     let auth_token = ipc::load_or_create_auth_token(&vault_dir)?;
     let state = Arc::new(AgentState {
+        control_panel: Default::default(),
         policy: Mutex::new(load_policy(&vault_dir)?),
         vault_dir: vault_dir.clone(),
         namespace,
@@ -168,13 +169,14 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
 #[path = "handlers.rs"]
 mod handlers;
 
-use handlers::handle_request;
+pub(crate) use handlers::handle_request;
 
 fn run_server_with_state(
     state: Arc<AgentState>,
     listener: Listener,
     launch_desktop_tray: bool,
 ) -> Result<()> {
+    crate::control_panel::ControlPanel::restore(&state);
     spawn_idle_lock_watcher(state.clone());
     crate::session::spawn_power_watcher(state.clone());
     crate::pricing::spawn_list_price_refresh(state.clone());
@@ -222,6 +224,7 @@ fn run_server_with_state(
         }
     }
 
+    state.control_panel.shutdown();
     let _ = ipc::clear_auth_token(&state.vault_dir);
     Ok(())
 }
@@ -1158,7 +1161,7 @@ fn build_tool_config_plan(
             "API key mode requires an API credential",
         ));
     }
-    let home = home_dir()?;
+    let home = home_dir(vault)?;
     let mut tool_entry = ToolEntry {
         supports_websockets: entry.supports_websockets,
         id: entry.id,
@@ -1347,7 +1350,7 @@ fn build_tool_config_proxy_plan(
         default_model,
         api_key: Some(route.token.clone()),
     };
-    let home = home_dir()?;
+    let home = home_dir(vault)?;
     let (plan, content) = match request.tool {
         ToolId::Codex => {
             (if preview { aipass_config_writers::preview_codex_plaintext_with_mode } else { plan_codex_plaintext_with_mode })(&home, &tool_entry, WriterCodexApiKeyMode::AuthJson).map_err(ServiceError::internal)?
@@ -2259,7 +2262,17 @@ fn conflict_root(vault_dir: &Path, request: &SyncConflictActionRequest) -> Servi
     }
 }
 
-fn home_dir() -> ServiceResult<PathBuf> {
+#[cfg(test)]
+pub(crate) static TOOL_HOME_OVERRIDES: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<Uuid, PathBuf>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+fn home_dir(_vault: &Vault) -> ServiceResult<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = TOOL_HOME_OVERRIDES.lock().unwrap().get(&_vault.vault_id()) {
+        return Ok(home.clone());
+    }
+
     std::env::var("HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
@@ -2661,6 +2674,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         Arc::new(AgentState {
+            control_panel: Default::default(),
             policy: Mutex::new(SessionPolicy::default()),
             vault_dir: vault_dir.clone(),
             namespace: "test".to_string(),

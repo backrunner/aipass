@@ -35,6 +35,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Verify embedded Svelte control panel is reproducible
+        run: git diff --exit-code -- apps/control-panel/embedded
 
   macos-desktop:
     name: macOS desktop bundle

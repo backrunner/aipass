@@ -45,6 +45,7 @@ async function render(overrides: Record<string, (args: any) => unknown> = {}) {
       case "entries_trash_list": case "take_pending_deep_links": case "tool_config_detect": case "server_usage_timeseries": case "server_usage_hourly_timeseries": case "sync_conflicts": case "devices_list": return [];
       case "server_config_get": return { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
       case "server_status": return { running: false, enabled: false, activeRoutes: 0, requests: 0, failures: 0 };
+      case "control_panel_status": return { settings: { enabled: false, address: "127.0.0.1", port: 8788, https: false }, running: false, addresses: ["127.0.0.1"], hasAccessCode: false };
       case "server_usage_summary": return { providers: [], models: [] };
       case "pricing_config_get": return { groups: [], assignments: [] };
       case "secret_reveal_field": return "fixture-existing-key";

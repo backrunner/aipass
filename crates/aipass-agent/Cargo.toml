@@ -39,6 +39,20 @@ url = "2"
 uuid.workspace = true
 zeroize.workspace = true
 tempfile.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tokio.workspace = true
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+rcgen = "0.14"
+if-addrs = "0.15"
+rand_core.workspace = true
+
+[build-dependencies]
+sha2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-service.workspace = true

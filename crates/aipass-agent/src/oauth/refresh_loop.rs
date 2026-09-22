@@ -349,6 +349,7 @@ mod tests {
         };
         creation.vault.add_oauth_account(account.clone()).unwrap();
         let state = Arc::new(AgentState {
+            control_panel: Default::default(),
             policy: Mutex::new(SessionPolicy::default()),
             vault_dir: vault_dir.clone(),
             namespace: "test".into(),

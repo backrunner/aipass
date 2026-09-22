@@ -74,6 +74,7 @@ pub struct StoredSyncSettings {
 }
 
 pub struct SessionInfo {
+    pub id: uuid::Uuid,
     pub vault: Vault,
     #[allow(dead_code)]
     pub unlocked_at: OffsetDateTime,
@@ -93,6 +94,7 @@ pub enum InitialSyncState {
 }
 
 pub struct AgentState {
+    pub(crate) control_panel: crate::control_panel::ControlPanel,
     pub vault_dir: PathBuf,
     pub namespace: String,
     pub auth_token: SensitiveString,
@@ -235,11 +237,16 @@ pub fn unlock_with_password(
     password.zeroize();
     replace_session_vault(&mut session, vault);
     drop(session);
+    complete_unlock(state);
+    session_status(state)
+}
+
+/// Shared post-unlock lifecycle for local passwords and explicitly granted remote codes.
+pub(crate) fn complete_unlock(state: &Arc<AgentState>) {
     clear_last_lock_reason(state);
     restore_proxy_if_enabled(state);
     state.session_changed.notify_all();
     crate::sync_watch::start_sync_watcher_for_current_settings(state);
-    session_status(state)
 }
 
 /// Recreate the local proxy runtime after unlocking an agent that was
@@ -491,9 +498,10 @@ pub fn set_session_vault(state: &Arc<AgentState>, vault: Vault) {
     state.session_changed.notify_all();
 }
 
-fn replace_session_vault(session: &mut SessionState, vault: Vault) {
+pub(crate) fn replace_session_vault(session: &mut SessionState, vault: Vault) {
     let now = OffsetDateTime::now_utc();
     *session = SessionState::Unlocked(Box::new(SessionInfo {
+        id: uuid::Uuid::new_v4(),
         vault,
         unlocked_at: now,
         last_activity_at: now,
@@ -509,6 +517,9 @@ fn clear_last_lock_reason(state: &Arc<AgentState>) {
 pub fn touch_session(state: &Arc<AgentState>) {
     if let Ok(mut session) = state.session.lock() {
         if let SessionState::Unlocked(info) = &mut *session {
+            if crate::control_panel::check_session(info).is_err() {
+                return;
+            }
             info.last_activity_at = OffsetDateTime::now_utc();
         }
     }
@@ -1058,12 +1069,15 @@ pub fn with_vault<T>(
             SessionState::Locked => {
                 return Err(ServiceError::new(AgentErrorCode::Locked, "vault is locked"))
             }
-            SessionState::Unlocked(info) => &info.vault,
+            SessionState::Unlocked(info) => {
+                crate::control_panel::check_session(info)?;
+                &info.vault
+            }
         };
         vault.ensure_sync_ready().map_err(map_vault_error)?;
         f(vault)?
     };
-    if touch {
+    if touch && !crate::control_panel::remote_request() {
         touch_session(state);
     }
     Ok(result)
@@ -1083,13 +1097,16 @@ pub fn with_vault_mut<T>(
             SessionState::Locked => {
                 return Err(ServiceError::new(AgentErrorCode::Locked, "vault is locked"))
             }
-            SessionState::Unlocked(info) => &mut info.vault,
+            SessionState::Unlocked(info) => {
+                crate::control_panel::check_session(info)?;
+                &mut info.vault
+            }
         };
         vault.ensure_sync_ready().map_err(map_vault_error)?;
         f(vault)?
     };
     state.sync_wake.fetch_add(1, Ordering::Relaxed);
-    if touch {
+    if touch && !crate::control_panel::remote_request() {
         touch_session(state);
     }
     Ok(result)
@@ -1140,6 +1157,7 @@ mod tests {
         )
         .unwrap();
         Arc::new(AgentState {
+            control_panel: Default::default(),
             policy: Mutex::new(SessionPolicy::default()),
             vault_dir: vault_dir.clone(),
             namespace: "test".to_string(),

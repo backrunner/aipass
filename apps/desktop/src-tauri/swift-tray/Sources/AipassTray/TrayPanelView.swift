@@ -49,6 +49,18 @@ public struct TrayPanelView: View {
                 unlockCard
             }
             proxyRow
+            if let url = model.status.panelUrl {
+                divider
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.status.text("tray.panel")).font(.system(size: 12, weight: .semibold))
+                    Text(url).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Button(model.status.text("panel.open")) { onAction("panel-open-url") }
+                        Button(model.status.text("panel.copyAddress")) { onAction("panel-copy") }
+                        Button(model.status.text("server.stop")) { onAction("panel-stop") }
+                    }.buttonStyle(.bordered).controlSize(.small).disabled(model.busyAction != nil)
+                }.padding(.horizontal, 8)
+            }
             divider
             actionsSection
             divider

@@ -42,7 +42,7 @@ fn verification_url(uri: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 
-fn browser_command() -> Command {
+pub(crate) fn browser_command() -> Command {
     #[cfg(target_os = "macos")]
     let command = Command::new("open");
     #[cfg(target_os = "windows")]

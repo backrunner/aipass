@@ -75,6 +75,7 @@ pub(crate) fn messages() -> Messages {
         .filter(|(key, _)| {
             [
                 "tray.",
+                "panel.",
                 "auth.",
                 "password.",
                 "ext.",

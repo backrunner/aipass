@@ -20,7 +20,9 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
+mod remote_unlock;
 mod sync_snapshot;
+pub use remote_unlock::RemoteUnlockEnvelope;
 pub use sync_snapshot::{VaultSnapshotSummary, VaultSyncSnapshot};
 
 const VAULT_FORMAT: &str = "aipass-vault";
@@ -516,6 +518,18 @@ impl Drop for Vault {
 }
 
 impl Vault {
+    /// Bind remote sessions to the current password envelope, including synced changes.
+    /// This digest is an internal revocation marker, never an authentication secret.
+    pub fn password_revision(&self) -> [u8; 32] {
+        Self::header_password_revision(&self.header)
+    }
+
+    fn header_password_revision(header: &VaultHeader) -> [u8; 32] {
+        let bytes = serde_json::to_vec(&(header.vault_id, &header.kdf, &header.wrapped_root_key))
+            .expect("serializable password envelope");
+        Sha256::digest(bytes).into()
+    }
+
     pub fn vault_id_from_manifest(root: impl AsRef<Path>) -> Result<Uuid, VaultError> {
         let header: VaultHeader = read_json(root.as_ref().join("manifest.aipmanifest"))?;
         validate_header(&header)?;
