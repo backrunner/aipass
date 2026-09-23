@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { Banner, Button, Badge, IconButton } from "@aipass/ui";
-  import { Eye, ScanSearch, X } from "lucide-svelte";
+  import { Banner, Button, IconButton } from "@aipass/ui";
+  import { Eye, ScanSearch, X, Check, Minus } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type {
@@ -194,7 +194,7 @@
             <span class="tool-identity">
               <span class="tool-icon"><IntegrationToolIcon tool={tool.id} /></span>
               <span class="tool-copy">
-                <span class="tool-name">{tool.name}</span>
+                <span class="tool-name" title={tool.name}>{tool.name}</span>
                 {#if tool.disabledReason}
                   <span class="tool-reason">{tool.disabledReason}</span>
                 {/if}
@@ -202,13 +202,13 @@
             </span>
             <span class="tool-side">
               {#if detections.length > 0}
-                <Badge tone={installed ? "success" : "neutral"} size="sm">
-                  {installed ? $t("server.installed") : $t("server.notInstalled")}
-                </Badge>
+                <span class="tool-status" class:installed title={installed ? $t("server.installed") : $t("server.notInstalled")} aria-label={installed ? $t("server.installed") : $t("server.notInstalled")}>
+                  {#if installed}<Check size={13} />{:else}<Minus size={13} />{/if}
+                </span>
               {/if}
-              <Button variant="ghost" size="sm" on:click={() => showPreview(tool, true)} disabled={state.busy || disabled || Boolean(tool.disabledReason)}>
-                <Eye size={13} /> {$t("providerDetail.preview")}
-              </Button>
+              <IconButton class="btn-ghost" size="sm" label={$t("providerDetail.preview")} on:click={() => showPreview(tool, true)} disabled={state.busy || disabled || Boolean(tool.disabledReason)}>
+                <Eye size={14} />
+              </IconButton>
               <Button variant="secondary" size="sm" on:click={() => showPreview(tool, false)} disabled={state.busy || disabled || Boolean(tool.disabledReason)}>
                 {$t("server.writeConfig")}
               </Button>
@@ -312,6 +312,7 @@
 
   .tool-row {
     display: flex;
+    flex-wrap: nowrap;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
@@ -319,6 +320,7 @@
 
   .tool-identity {
     display: inline-flex;
+    flex: 1 1 auto;
     align-items: center;
     gap: 10px;
     min-width: 0;
@@ -358,8 +360,12 @@
     white-space: normal;
   }
 
+  .tool-status { display: inline-flex; color: var(--text-tertiary); }
+  .tool-status.installed { color: var(--success); }
   .tool-side {
+    flex-shrink: 0;
     display: inline-flex;
+    margin-inline-start: auto;
     align-items: center;
     gap: 8px;
   }
@@ -398,19 +404,4 @@
     }
   }
 
-  @media (max-width: 620px) {
-    .tool-row {
-      align-items: flex-start;
-      flex-direction: column;
-    }
-
-    .tool-side {
-      width: 100%;
-      justify-content: flex-end;
-    }
-
-    .tool-options {
-      margin-inline-start: 0;
-    }
-  }
 </style>

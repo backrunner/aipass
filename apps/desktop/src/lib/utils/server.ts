@@ -1,4 +1,4 @@
-import { secretInterfaceType, type ProviderEntry, type SecretRef } from "@aipass/schemas";
+import { secretAuthScheme, secretInterfaceType, type ProviderEntry, type SecretRef } from "@aipass/schemas";
 
 import type { ProxyProtocol, ProxyRouteConfig, ProxyTargetConfig, RetryPolicy } from "../types";
 
@@ -56,7 +56,7 @@ export function proxySupportedEntry(entry: ProviderEntry, secret?: SecretRef): b
     interfaceType
   );
   const supportedAuth = ["bearer", "x_api_key", "azure_api_key", "custom_header"].includes(
-    entry.authScheme
+    secretAuthScheme(secret, entry.interfaceType, entry.authScheme)
   );
   return supportedInterface && supportedAuth;
 }
@@ -67,7 +67,7 @@ export function buildRouteTarget(
   priority: number,
   weight = 1
 ): ProxyTargetConfig | undefined {
-  const baseUrl = apiBaseUrl(entry);
+  const baseUrl = secret.endpoint ?? apiBaseUrl(entry);
   if (!baseUrl || !proxySupportedEntry(entry, secret)) return undefined;
   const headers: Array<[string, string]> =
     routeProtocolFor(entry, secret) === "anthropic_messages"
@@ -79,7 +79,7 @@ export function buildRouteTarget(
     secretId: secret.id,
     label: secret.label,
     baseUrl,
-    authScheme: entry.authScheme,
+    authScheme: secretAuthScheme(secret, entry.interfaceType, entry.authScheme),
     headers,
     group: secret.group ?? entry.gateway?.group,
     priority,

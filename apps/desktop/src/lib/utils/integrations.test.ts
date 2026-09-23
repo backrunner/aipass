@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compatibleToolsFor,
   integrationToolDefinitions,
   localProxyAvailability,
+  providerIntegrationAvailability,
   supportsIntegration
 } from "./integrations";
 
@@ -71,6 +73,22 @@ describe("local proxy integration availability", () => {
 });
 
 describe("provider integration support", () => {
+  it.each([undefined, "", "   "])("keeps Grok Build discoverable with missing model %s", (defaultModel) => {
+    const entry = {
+      id: "entry", title: "OpenAI compatible",
+      interfaceType: "openai_compatible" as const, authScheme: "bearer" as const,
+      defaultModel
+    };
+    expect(compatibleToolsFor(entry)).toContain(tool("grok"));
+    expect(providerIntegrationAvailability(tool("grok"), entry)).toBe("default-model");
+    expect(supportsIntegration("grok", entry)).toBe(false);
+    expect(supportsIntegration("grok", { ...entry, defaultModel: "fixture-model" })).toBe(true);
+  });
+
+  it.each(["open_ai_chat_completions", "open_ai_responses"] as const)("offers Grok Build for %s routes", (protocol) => {
+    expect(localProxyAvailability(tool("grok"), protocol, true)).toBe("available");
+  });
+
   it("offers Grok and Pi only when a default model is available", () => {
     const entry = {
       id: "entry",

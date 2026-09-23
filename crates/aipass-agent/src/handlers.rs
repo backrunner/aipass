@@ -279,6 +279,10 @@ fn dispatch_request(
                         Ok((
                             secret.id.clone(),
                             group,
+                            secret
+                                .endpoint
+                                .clone()
+                                .or_else(|| endpoint_url(&entry.endpoints)),
                             vault
                                 .reveal_secret_field(id, &secret.id)
                                 .map_err(map_vault_error)?,
@@ -324,11 +328,17 @@ fn dispatch_request(
                 }
             };
             let result = if pricing_kind == Some("new_api") {
-                if let Some(endpoint) = endpoint.as_deref() {
+                if credentials
+                    .iter()
+                    .any(|(_, _, endpoint, _)| endpoint.is_some())
+                {
                     let mut result = with_vault(state, true, |vault| {
                         crate::pricing::load_pricing_config(&state.vault_dir, vault)
                     })?;
-                    for (secret_id, group, secret) in &credentials {
+                    for (secret_id, group, key_endpoint, secret) in &credentials {
+                        let Some(endpoint) = key_endpoint.as_deref() else {
+                            continue;
+                        };
                         let Some(remote_pricing) = crate::pricing::fetch_newapi_pricing(
                             endpoint,
                             secret,
@@ -362,8 +372,8 @@ fn dispatch_request(
                 let mut result = with_vault(state, true, |vault| {
                     crate::pricing::load_pricing_config(&state.vault_dir, vault)
                 })?;
-                for (secret_id, _, secret) in &credentials {
-                    let Some(endpoint) = endpoint.as_deref() else {
+                for (secret_id, _, key_endpoint, secret) in &credentials {
+                    let Some(endpoint) = key_endpoint.as_deref() else {
                         continue;
                     };
                     let Some(payload) = crate::pricing::fetch_subapi_billing(
@@ -698,6 +708,16 @@ fn dispatch_request(
         AgentRequest::SecretRevealField { id, field } => with_vault(state, true, |vault| {
             vault
                 .reveal_secret_field(id, &field)
+                .map_err(map_vault_error)
+        })
+        .map(|secret| {
+            AgentResponse::success(SecretValue {
+                secret: secret.into(),
+            })
+        }),
+        AgentRequest::SecretRevealId { id, secret_id } => with_vault(state, true, |vault| {
+            vault
+                .reveal_secret_by_id(id, &secret_id)
                 .map_err(map_vault_error)
         })
         .map(|secret| {

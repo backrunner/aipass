@@ -113,6 +113,20 @@ Newest entries last within each section.
 
 ## Tool configuration writes (aipass-agent / config-writers)
 
+### Tool configuration and usage prices must bind an exact credential
+- **Symptom**: mixed-format site keys could write the primary key using another key's protocol; automatic price refresh could replace explicit multipliers or edited shared rules.
+- **Root cause**: tool requests selected only an entry and helpers read `api_key`; pricing inferred manual intent from a non-unit multiplier (`server::build_tool_config_plan`, `pricing::sync_newapi_pricing`).
+- **Fix**: carry the stable secret ID through desktop, panel, CLI, agent and helpers; apply per-key endpoint/model/auth overrides and distinct config/env identifiers. Persist manual assignment/rule ownership and preserve it during refresh. Pricing forms save explicitly and retain failed drafts.
+- **Guardrail**: reject ambiguous or missing key IDs; never fall back from a deleted selected key to a label or primary key. Invalidate previews on selection changes and all configuration inputs (including site auth and WebSocket settings), keep manual 1x settings, and require a visible history scope for shared rule edits/deletion.
+- **Watch points**: `ProviderDetailPane.test.ts`, `PricingGroupDialog.test.ts`, `App.operations.test.ts`, agent `tool_configuration_binds_the_selected_key_and_its_overrides`, pricing `explicit_unit_multiplier_and_edited_rules_survive_gateway_sync`, vault exact-ID tests, proxy runtime refresh and LAN preview generations.
+
+### Missing models must not hide compatible integrations
+- **Symptom**: Grok Build disappeared from provider quick integration until a default model was set, making a supported OpenAI endpoint look unsupported.
+- **Root cause**: `apps/desktop/src/lib/utils/integrations.ts::compatibleToolsFor` filtered on readiness, combining protocol compatibility with the default-model prerequisite.
+- **Fix**: list protocol-compatible tools and show a disabled reason for missing models; keep execution eligibility strict and use the Grok Build product name.
+- **Guardrail**: distinguish protocol compatibility from configuration prerequisites; treat whitespace-only models as missing in the UI and writer. Cover both OpenAI backends, catalog visibility and disabled controls.
+- **Watch points**: provider and route quick integration, `integrations.test.ts`, `ProviderDetailPane.test.ts`, and Grok config writer tests.
+
 ### Local diagnostics stopped at rotation limits and runtime boundaries
 - **Symptom**: component logs stopped after reaching the daily size cap; proxy failures disappeared after stopping/restarting; failed probes and sync could look successful at the IPC layer.
 - **Root cause**: `logging.rs` returned on overflow, `proxy::RuntimeStats` retained only in-memory errors, and request logging relied on transport success and serialized requests to discover their event names.

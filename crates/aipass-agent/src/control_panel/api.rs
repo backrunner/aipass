@@ -25,7 +25,7 @@ pub(super) fn snapshot(state: &Arc<AgentState>) -> ServiceResult<Value> {
         let providers: Vec<_> = entries.iter().filter(|e| e.archived_at.is_none() && e.deleted_at.is_none())
             .map(|entry| json!({"id":entry.id,"title":entry.title,"providerId":entry.provider_id,
                 "credentialKind":entry.credential_kind,"interfaceType":entry.interface_type,
-                "secrets":entry.secret_refs.iter().map(|s| json!({"id":s.id,"label":s.label,"masked":s.masked})).collect::<Vec<_>>() }))
+                "secrets":entry.secret_refs.iter().map(|s| json!({"id":s.id,"label":s.label,"masked":s.masked,"interfaceType":s.interface_type.as_ref().unwrap_or(&entry.interface_type)})).collect::<Vec<_>>() }))
             .collect();
         let routes: Vec<_> = config.routes.iter().map(|route| json!({
             "id":route.id,"name":route.name,"enabled":route.enabled,"strategy":route.strategy,
@@ -169,13 +169,18 @@ fn perform(
                 .ok_or_else(|| {
                     invalid("This credential does not support the proxy's protocols.")
                 })?;
-                target.base_url = aipass_agent_protocol::endpoint_url(&entry.endpoints)
+                target.base_url = secret
+                    .endpoint
+                    .clone()
+                    .or_else(|| aipass_agent_protocol::endpoint_url(&entry.endpoints))
                     .ok_or_else(|| invalid("Provider needs an API endpoint."))?;
-                target.auth_scheme = serde_json::to_value(&entry.auth_scheme)
-                    .map_err(|_| unavailable())?
-                    .as_str()
-                    .ok_or_else(|| invalid("Unsupported authentication scheme."))?
-                    .to_owned();
+                target.auth_scheme = serde_json::to_value(
+                    secret.effective_auth(&entry.interface_type, &entry.auth_scheme),
+                )
+                .map_err(|_| unavailable())?
+                .as_str()
+                .ok_or_else(|| invalid("Unsupported authentication scheme."))?
+                .to_owned();
                 target.provider_entry_id = provider_entry_id;
                 target.secret_id = secret_id;
                 target.label = entry.title;

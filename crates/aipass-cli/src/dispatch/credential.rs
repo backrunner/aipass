@@ -273,7 +273,22 @@ pub(crate) fn handle_credential_command(
                 },
             )
         }
-        Command::Get { id, reveal, field } => {
+        Command::Get {
+            id,
+            reveal,
+            field,
+            secret_id,
+        } => {
+            if let Some(secret_id) = secret_id {
+                let value: SecretValue =
+                    agent.request(AgentRequest::SecretRevealId { id, secret_id })?;
+                let secret = value.secret.into_inner();
+                return output(
+                    json,
+                    serde_json::json!({ "id": id, "secret": secret }),
+                    &secret,
+                );
+            }
             let field = field.unwrap_or_else(|| "api_key".to_string());
             if reveal && is_secret_field(&field) {
                 let secret: SecretValue = agent.request(AgentRequest::SecretRevealField {
@@ -361,6 +376,7 @@ pub(crate) fn handle_credential_command(
         Command::Configure {
             tool,
             id,
+            secret_id,
             mode,
             codex_api_key_mode,
             yes,
@@ -368,6 +384,7 @@ pub(crate) fn handle_credential_command(
         | Command::Switch {
             tool,
             id,
+            secret_id,
             mode,
             codex_api_key_mode,
             yes,
@@ -376,6 +393,7 @@ pub(crate) fn handle_credential_command(
             let request = ToolConfigRequest {
                 tool: tool.into(),
                 id,
+                secret_id,
                 mode: mode.into(),
                 codex_api_key_mode: codex_api_key_mode.map(Into::into),
             };

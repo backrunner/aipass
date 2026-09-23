@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
-  import { Badge, Banner, Button, Field, IconButton, SelectField, SwitchField } from "@aipass/ui";
+  import { Badge, Banner, Button, Field, IconButton, SelectField, SwitchField, interfaceLabel } from "@aipass/ui";
   import { Dialog, Switch } from "bits-ui";
   import { AlertTriangle, ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
 
@@ -52,13 +52,12 @@
   $: degradedTargetIds = new Set(status?.running && route?.enabled ? status.degradedTargetIds ?? [] : []);
 
   $: credentialOptions = entries
-    .filter((entry) => Boolean(apiBaseUrl(entry)))
     .flatMap((entry) =>
       entry.secretRefs
-        .filter((secret) => proxySupportedEntry(entry, secret))
+        .filter((secret) => Boolean(secret.endpoint ?? apiBaseUrl(entry)) && proxySupportedEntry(entry, secret))
         .map((secret) => ({
         value: `${entry.id}::${secret.id}`,
-        label: `${entry.title} · ${secret.label}`,
+        label: `${entry.title} · ${secret.label} · ${secret.masked} · ${interfaceLabel[secret.interfaceType ?? entry.interfaceType]}${secret.group ? ` · ${secret.group}` : ""}`,
         disabled: members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)
       }))
     );

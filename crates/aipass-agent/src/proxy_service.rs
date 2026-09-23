@@ -636,7 +636,32 @@ impl ProxyService {
         group_id: Option<Uuid>,
         multiplier: f64,
     ) -> ServiceResult<PricingConfig> {
+        if !multiplier.is_finite() || multiplier < 0.0 {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                "pricing multiplier must be a finite non-negative number",
+            ));
+        }
+        let entry = vault
+            .get_provider_summary(entry_id)
+            .map_err(map_vault_error)?;
+        if !entry
+            .secret_refs
+            .iter()
+            .any(|secret| secret.id == secret_id)
+        {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::NotFound,
+                "pricing credential no longer exists",
+            ));
+        }
         let mut config = crate::pricing::load_pricing_config(&self.vault_dir, vault)?;
+        if group_id.is_some_and(|id| !config.groups.iter().any(|group| group.id == id)) {
+            return Err(ServiceError::new(
+                aipass_agent_protocol::AgentErrorCode::NotFound,
+                "pricing group no longer exists",
+            ));
+        }
         match config
             .assignments
             .iter_mut()
@@ -645,12 +670,14 @@ impl ProxyService {
             Some(existing) => {
                 existing.group_id = group_id;
                 existing.multiplier = multiplier;
+                existing.manual = true;
             }
             None => config.assignments.push(CredentialAssignment {
                 entry_id,
                 secret_id,
                 group_id,
                 multiplier,
+                manual: true,
             }),
         }
         crate::pricing::save_pricing_config(&self.vault_dir, vault, &config)?;
@@ -663,8 +690,10 @@ impl ProxyService {
         group: PricingGroup,
         apply_scope: PricingApplyScope,
     ) -> ServiceResult<PricingConfig> {
+        crate::pricing::validate_group(&group)?;
         let mut config = crate::pricing::load_pricing_config(&self.vault_dir, vault)?;
         let mut group = group;
+        group.manual = true;
         match apply_scope {
             PricingApplyScope::AllHistory => {
                 // All history is repriced with the incoming rule set: collapse
@@ -688,6 +717,7 @@ impl ProxyService {
                 match config.groups.iter_mut().find(|item| item.id == group.id) {
                     Some(existing) => {
                         existing.name = group.name;
+                        existing.manual = true;
                         existing.versions.extend(group.versions);
                         normalize_versions(&mut existing.versions);
                     }
@@ -712,6 +742,7 @@ impl ProxyService {
         for assignment in &mut config.assignments {
             if assignment.group_id == Some(group_id) {
                 assignment.group_id = None;
+                assignment.manual = true;
             }
         }
         crate::pricing::save_pricing_config(&self.vault_dir, vault, &config)?;
@@ -735,6 +766,7 @@ impl ProxyService {
                     "pricing group not found",
                 )
             })?;
+        group.manual = true;
         group
             .versions
             .retain(|version| version.effective_from != effective_from);
@@ -869,23 +901,7 @@ impl ProxyService {
                         .endpoints
                         .iter()
                         .find_map(|endpoint| endpoint.url.as_deref())
-                })
-                .ok_or_else(|| {
-                    ServiceError::new(
-                        aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-                        format!("provider {} has no API endpoint", entry.title),
-                    )
-                })?;
-            let auth_scheme = proxy_auth_scheme(&entry.auth_scheme).ok_or_else(|| {
-                ServiceError::new(
-                    aipass_agent_protocol::AgentErrorCode::ValidationFailed,
-                    format!(
-                        "provider {} uses an unsupported proxy authentication scheme",
-                        entry.title
-                    ),
-                )
-            });
-            let auth_scheme = auth_scheme?;
+                });
             let mut config_changed = false;
             for target in self
                 .config
@@ -904,6 +920,13 @@ impl ProxyService {
                             "proxy target credential no longer exists",
                         )
                     })?;
+                let auth = secret.effective_auth(&entry.interface_type, &entry.auth_scheme);
+                let auth_scheme = proxy_auth_scheme(&auth).ok_or_else(|| {
+                    ServiceError::new(
+                        aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                        "credential uses an unsupported proxy authentication scheme",
+                    )
+                })?;
                 let next_group = secret.group.clone().or_else(|| {
                     entry
                         .gateway
@@ -914,8 +937,14 @@ impl ProxyService {
                     target.label.clone_from(&secret.label);
                     config_changed = true;
                 }
-                if target.base_url != base_url {
-                    target.base_url = base_url.to_string();
+                let key_url = secret.endpoint.as_deref().or(base_url).ok_or_else(|| {
+                    ServiceError::new(
+                        aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                        "credential needs an API endpoint",
+                    )
+                })?;
+                if target.base_url != key_url {
+                    target.base_url = key_url.to_string();
                     config_changed = true;
                 }
                 if target.auth_scheme != auth_scheme {
@@ -1061,15 +1090,18 @@ impl ProxyService {
                     let provider_headers = std::mem::take(&mut *credentials.headers);
                     let mut target_config = target.clone();
                     target_config.protocol = Some(target_protocol);
-                    if let Some(url) = entry
-                        .endpoints
-                        .iter()
-                        .find(|endpoint| endpoint.kind == EndpointKind::Api)
-                        .and_then(|endpoint| endpoint.url.as_deref())
-                    {
+                    if let Some(url) = credential.endpoint.as_deref().or_else(|| {
+                        entry
+                            .endpoints
+                            .iter()
+                            .find(|endpoint| endpoint.kind == EndpointKind::Api)
+                            .and_then(|endpoint| endpoint.url.as_deref())
+                    }) {
                         target_config.base_url = url.to_owned();
                     }
-                    if let Some(auth) = proxy_auth_scheme(&entry.auth_scheme) {
+                    if let Some(auth) = proxy_auth_scheme(
+                        &credential.effective_auth(&entry.interface_type, &entry.auth_scheme),
+                    ) {
                         target_config.auth_scheme = auth.to_owned();
                     }
 
@@ -2367,6 +2399,7 @@ mod tests {
                 "sk-ant-key",
                 &SecretMetadataInput {
                     interface_type: Some(InterfaceType::AnthropicMessages),
+                    endpoint: Some("http://127.0.0.1:19/anthropic".into()),
                     group: Some("claude".into()),
                     ..SecretMetadataInput::default()
                 },
@@ -2400,6 +2433,16 @@ mod tests {
             Some(aipass_proxy::Protocol::AnthropicMessages)
         );
         assert_eq!(target.group.as_deref(), Some("claude"));
+        assert_eq!(target.base_url, "http://127.0.0.1:19/anthropic");
+        assert_eq!(target.auth_scheme, "x_api_key");
+        let runtime = service
+            .runtime_config(&creation.vault)
+            .expect("key overrides at runtime");
+        assert_eq!(
+            runtime.routes[0].targets[0].config.base_url,
+            target.base_url
+        );
+        assert_eq!(runtime.routes[0].targets[0].config.auth_scheme, "x_api_key");
 
         // The unbound sibling keeps its route-level protocol untouched.
         service.config.routes[0].targets.push(ProxyTargetConfig {

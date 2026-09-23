@@ -28,6 +28,8 @@ pub struct ToolEntry {
     #[serde(default)]
     pub supports_websockets: Option<bool>,
     pub id: Uuid,
+    #[serde(default)]
+    pub secret_id: Option<String>,
     pub title: String,
     pub provider_id: Option<String>,
     pub endpoint: Option<String>,
@@ -36,6 +38,19 @@ pub struct ToolEntry {
     pub env_key: String,
     pub default_model: Option<String>,
     pub api_key: Option<String>,
+}
+
+impl ToolEntry {
+    pub fn credential_command(&self) -> String {
+        match &self.secret_id {
+            Some(id) => format!(
+                "aipass get {} --secret-id '{}' --reveal",
+                self.id,
+                id.replace('\'', "'\\''")
+            ),
+            None => format!("aipass get {} --field api_key --reveal", self.id),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

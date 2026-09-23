@@ -61,7 +61,7 @@
     : preview?.mode === "plaintext"
       ? $t("integration.plaintextNote")
       : preview?.mode === "helper"
-        ? $t("integration.helperNote")
+        ? $t(preview.tool === "claude-code" ? "integration.helperNote" : "integration.envNote")
         : preview?.mode === "env"
           ? $t("integration.envNote")
           : $t("integration.officialNote");

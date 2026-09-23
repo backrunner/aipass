@@ -30,6 +30,8 @@ pub(crate) fn handle_secret_command(
                 label,
                 secret: api_key.into(),
                 metadata: Some(SecretMetadataInput {
+                    endpoint: None,
+                    default_model: None,
                     group,
                     interface_type: interface.map(InterfaceType::from),
                     billing: None,

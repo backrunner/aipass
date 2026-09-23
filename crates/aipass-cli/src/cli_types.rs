@@ -197,6 +197,9 @@ pub enum Command {
     },
     Get {
         id: Uuid,
+        /// Read this exact key instead of the site's primary key.
+        #[arg(long, conflicts_with = "field", requires = "reveal")]
+        secret_id: Option<String>,
         #[arg(long)]
         field: Option<String>,
         #[arg(long)]
@@ -226,6 +229,8 @@ pub enum Command {
         #[arg(value_enum)]
         tool: ToolArg,
         id: String,
+        #[arg(long)]
+        secret_id: Option<String>,
         #[arg(long, value_enum, default_value = "helper")]
         mode: ConfigureMode,
         #[arg(long, value_enum)]
@@ -237,6 +242,8 @@ pub enum Command {
         #[arg(value_enum)]
         tool: ToolArg,
         id: String,
+        #[arg(long)]
+        secret_id: Option<String>,
         #[arg(long, value_enum, default_value = "helper")]
         mode: ConfigureMode,
         #[arg(long, value_enum)]

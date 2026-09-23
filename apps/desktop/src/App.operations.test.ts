@@ -235,3 +235,21 @@ test("toasts pause while being read and are cleared when the vault locks", async
   expect(document.querySelector(".error-toast")).toBeNull();
   expect(document.body.textContent).not.toContain("fixture transient failure");
 });
+
+
+test("pricing write failures preserve the key draft and support retry", async () => {
+  let fail = true;
+  await render({ pricing_assignment_set: (args) => {
+    if (fail) throw new Error("fixture pricing failure");
+    return { groups: [], assignments: [args] };
+  } });
+  document.querySelector<HTMLButtonElement>('button[aria-label="Usage pricing"]')!.click(); flushSync();
+  input('.pricing-key-dialog input[type="number"]', '2');
+  document.querySelector<HTMLButtonElement>('.pricing-key-dialog .btn-primary')!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.pricing-key-dialog')?.textContent).toContain('fixture pricing failure'); });
+  expect(document.querySelector<HTMLInputElement>('.pricing-key-dialog input[type="number"]')!.value).toBe('2');
+  fail = false;
+  document.querySelector<HTMLButtonElement>('.pricing-key-dialog .btn-primary')!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.pricing-key-dialog')).toBeNull(); });
+  expect(invoke.mock.calls.filter(([command]) => command === 'pricing_assignment_set')).toHaveLength(2);
+});

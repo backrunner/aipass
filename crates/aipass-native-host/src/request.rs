@@ -282,6 +282,7 @@ fn handle_request_inner(
                         group,
                         interface_type,
                         billing,
+                        ..Default::default()
                     },
                 },
             )?;
@@ -323,6 +324,8 @@ fn handle_request_inner(
                     .map(ProviderEndpoint::console),
             );
             let secret_metadata = aipass_vault::SecretMetadataInput {
+                endpoint: None,
+                default_model: None,
                 group: group
                     .and_then(non_empty)
                     .or_else(|| gateway.as_ref().and_then(|value| value.group.clone())),
@@ -397,6 +400,8 @@ fn handle_request_inner(
                     .map(ProviderEndpoint::console),
             );
             let secret_metadata = aipass_vault::SecretMetadataInput {
+                endpoint: None,
+                default_model: None,
                 // `Some("")` is an explicit clear from a full edit form;
                 // `None` comes from older clients and preserves stored data.
                 group: group.map(|value| value.trim().to_string()),

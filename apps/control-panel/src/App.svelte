@@ -14,7 +14,7 @@
   const themeLabel = $derived(theme === "system" ? tr("跟随系统", "System") : theme === "light" ? tr("浅色", "Light") : tr("深色", "Dark"));
   function cycleTheme() { theme = theme === "system" ? "light" : theme === "light" ? "dark" : "system"; }
   function protocolLabel(value: string) {
-    return ({ open_ai_responses: "OpenAI Responses", open_ai_chat_completions: "OpenAI Chat", anthropic_messages: "Anthropic Messages", gemini_generate_content: "Gemini" } as Record<string, string>)[value] ?? value;
+    return ({ openai_compatible: "OpenAI-compatible", gemini: "Gemini", azure_openai: "Azure OpenAI", bedrock: "Bedrock", custom_http: "Custom HTTP", open_ai_responses: "OpenAI Responses", open_ai_chat_completions: "OpenAI Chat", anthropic_messages: "Anthropic Messages", gemini_generate_content: "Gemini" } as Record<string, string>)[value] ?? value;
   }
   function strategyLabel(value: string) {
     return ({ fallback: tr("故障转移", "Failover"), round_robin: tr("轮询", "Round robin"), weighted: tr("加权分配", "Weighted") } as Record<string, string>)[value] ?? value;
@@ -33,16 +33,35 @@
   let tab = $state<"proxy" | "credentials">("proxy");
   let search = $state("");
   let providerId = $state("");
+  let secretId = $state("");
+  let keyProviderId = "";
   let tool = $state("codex");
   let mode = $state("helper");
   let preview = $state<Preview>();
   let editing = $state<{ routeId: string; revision: string; target: Target }>();
   let generation = 0;
+  let previewGeneration = 0;
   let controller: AbortController | undefined;
   let refreshPending = false;
   const providers = $derived(data?.providers.filter(p => `${p.title} ${p.providerId ?? ""}`.toLowerCase().includes(search.toLowerCase())) ?? []);
   const selected = $derived(data?.providers.find(p => p.id === providerId));
-  const tools = [ ["codex", "Codex"], ["claude-code", "Claude Code"], ["gemini-cli", "Gemini CLI"], ["open-code", "OpenCode"], ["grok", "Grok"], ["pi", "Pi"], ["cursor", "Cursor"] ];
+  $effect(() => {
+    if (selected?.id !== keyProviderId) {
+      keyProviderId = selected?.id ?? "";
+      secretId = selected?.secrets.length === 1 ? selected.secrets[0].id : "";
+      resetPreview();
+    } else if (secretId && !selected?.secrets.some(key => key.id === secretId)) {
+      secretId = ""; resetPreview();
+    }
+  });
+  const selectedKey = $derived(selected?.secrets.find(key => key.id === secretId));
+  const format = $derived(selectedKey?.interfaceType ?? selected?.interfaceType);
+  const compatible = $derived(mode === "official" ? selected?.credentialKind === "oauth"
+    : tool === "codex" ? format === "openai_compatible"
+    : tool === "claude-code" ? format === "anthropic_messages"
+    : tool === "gemini-cli" ? format === "gemini"
+    : tool === "open-code" || format === "openai_compatible" || format === "anthropic_messages");
+  const tools = [ ["codex", "Codex"], ["claude-code", "Claude Code"], ["gemini-cli", "Gemini CLI"], ["open-code", "OpenCode"], ["grok", "Grok Build"], ["pi", "Pi"], ["cursor", "Cursor"] ];
 
   function openDialog(node: HTMLDialogElement) {
     const previous = document.activeElement;
@@ -110,12 +129,13 @@
     preview = undefined;
     await run("preview", async () => {
       const current = generation;
+      const context = ++previewGeneration;
       const result = await request<Preview>("/api/action", { type: "tool_preview", selection }, data?.csrf);
-      if (current === generation) preview = result;
+      if (current === generation && context === previewGeneration) preview = result;
     });
   }
 
-  function resetPreview() { preview = undefined; }
+  function resetPreview() { previewGeneration++; preview = undefined; }
   function chooseProvider(id: string) { providerId = id; resetPreview(); }
   function editProvider(id: string) {
     if (!editing) return;
@@ -219,7 +239,7 @@
               </div>
             {/each}
           </div>
-          <div class="route-footer"><span class="footer-label"><Terminal size={14} />{tr("应用到本机工具", "Apply to host tool")}</span><div class="actions"><select aria-label={`${route.name} · ${tr("工具", "Tool")}`} bind:value={tool} disabled={!!busy} onchange={resetPreview}>{#each tools as [value, name]}<option {value}>{name}</option>{/each}</select>
+          <div class="route-footer"><span class="footer-label"><Terminal size={14} />{tr("应用到本机工具", "Apply to host tool")}</span><div class="actions"><select aria-label={`${route.name} · ${tr("工具", "Tool")}`} value={tool} disabled={!!busy} onchange={(event) => { tool = event.currentTarget.value; resetPreview(); }}>{#each tools as [value, name]}<option {value}>{name}</option>{/each}</select>
             <button disabled={!!busy} onclick={() => showPreview({ source: "proxy", request: { tool: tool.replaceAll("-", "_"), routeId: route.id } })}>{tr("预览配置", "Preview configuration")}<ArrowRight size={13} /></button></div></div>
         </section>
       {/each}
@@ -242,10 +262,15 @@
               <div class="secret-list">{#each selected.secrets as secret}<div><span>{secret.label}</span><code>{secret.masked}</code><ShieldCheck size={14} /></div>{/each}</div>
             </section>
             <section class="detail-card"><div class="card-heading"><Terminal size={14} /><h3>{tr("切换本机工具配置", "Switch host tool configuration")}</h3></div><div class="config-form">
-              <p class="subtle">{tr("使用主密钥更新运行 Agent 的电脑上的工具配置。", "Update the host tool configuration using this entry’s primary key.")}</p>
-              <div class="form-grid"><label>{tr("工具", "Tool")}<select bind:value={tool} disabled={!!busy} onchange={resetPreview}>{#each tools as [value, name]}<option {value}>{name}</option>{/each}</select></label>
+              <p class="subtle">{tr("选择具体凭据后，更新运行 Agent 的电脑上的工具配置。", "Select a specific credential to update the host tool configuration.")}</p>
+              <label>{tr("使用凭据", "Credential to use")}<select value={secretId} disabled={!!busy} onchange={(event) => { secretId = event.currentTarget.value; resetPreview(); }}>
+                <option value="" disabled>{tr("请选择凭据", "Select a credential")}</option>
+                {#each selected.secrets as key}<option value={key.id}>{key.label} · {key.masked} · {protocolLabel(key.interfaceType ?? selected.interfaceType)}</option>{/each}
+              </select></label>
+              <div class="form-grid"><label>{tr("工具", "Tool")}<select value={tool} disabled={!!busy} onchange={(event) => { tool = event.currentTarget.value; resetPreview(); }}>{#each tools as [value, name]}<option {value}>{name}</option>{/each}</select></label>
               <label>{tr("配置方式", "Mode")}<select bind:value={mode} disabled={!!busy} onchange={resetPreview}><option value="helper">Helper</option><option value="env">Env</option><option value="official">{tr("官方账号", "Official account")}</option><option value="plaintext">{tr("明文写入", "Plaintext")}</option></select></label></div>
-              <div class="config-actions"><button class="primary" disabled={!!busy} onclick={() => showPreview({ source: "credential", request: { tool, id: selected!.id, mode } })}>{tr("预览配置变更", "Preview changes")}<ArrowRight size={13} /></button></div>
+              {#if selectedKey && !compatible}<p class="subtle">{tr("所选凭据格式不支持此工具。", "This credential’s format does not support this tool.")}</p>{/if}
+              <div class="config-actions"><button class="primary" disabled={!!busy || !selectedKey || !compatible} onclick={() => showPreview({ source: "credential", request: { tool, id: selected!.id, secretId: selectedKey!.id, mode } })}>{tr("预览配置变更", "Preview changes")}<ArrowRight size={13} /></button></div>
             </div></section>
           {:else}<div class="empty"><KeyRound size={24} /><p>{tr("请先在桌面端添加凭据。", "Add credentials in the desktop app first.")}</p></div>{/if}
         </section>

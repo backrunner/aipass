@@ -90,6 +90,8 @@ pub(crate) fn secret_metadata_from_cli(
         })
     };
     SecretMetadataInput {
+        endpoint: None,
+        default_model: None,
         group,
         interface_type,
         billing,

@@ -460,6 +460,7 @@ mod tests {
         let password = SecretString::new("correct horse battery staple");
         let creation = Vault::create(dir.path(), &password).unwrap();
         let assignments = vec![CredentialAssignment {
+            manual: false,
             entry_id: uuid::Uuid::new_v4(),
             secret_id: "test-credential".into(),
             multiplier: 0.5,

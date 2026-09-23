@@ -4,7 +4,7 @@ export interface Provider {
   providerId: string | null;
   credentialKind: string;
   interfaceType: string;
-  secrets: { id: string; label: string; masked: string }[];
+  secrets: { id: string; label: string; masked: string; interfaceType?: string }[];
 }
 export interface Target {
   id: string;

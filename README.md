@@ -40,7 +40,13 @@ AIPass keeps API credentials for OpenAI, Anthropic, Gemini, self-hosted gateways
 
 AIPass includes definitions for OpenAI, Anthropic, Gemini, Azure OpenAI, AWS Bedrock, OpenRouter, DeepSeek, Qwen, Moonshot, Zhipu, Volcengine Ark, Together, Fireworks, Groq, New API, One API, LiteLLM, sub2api, custom OpenAI-compatible services, and custom HTTP APIs.
 
-It can configure Codex, Claude Code, Gemini CLI, and OpenCode while keeping configuration backups encrypted for rollback.
+It can configure Codex, Claude Code, Gemini CLI, OpenCode, Grok Build, Pi, and Cursor Agent Local while keeping configuration backups encrypted for rollback.
+
+A site can hold keys for different API formats. In **Credentials → Quick integration**, choose the key to use; its API format, endpoint and model overrides determine the generated configuration. Multiple keys require an explicit selection. CLI configuration accepts `--secret-id <key-id>`; list IDs with `aipass secret list <entry-id>`.
+
+Each key has separate usage pricing: a price rule set and multiplier. Saving an assignment recalculates that key's history; shared rule edits ask whether to apply from now or to all history. Gateway billing references remain separate from the USD estimates, and automatic refresh preserves manually saved rules and assignments.
+
+For Grok Build, select an enabled OpenAI Chat Completions or Responses route in **Local proxy → Quick integration**, then preview and write its configuration. Set a default model on a credential in that route first. AIPass writes the versioned base URL, matching `api_backend`, model and local route token to `~/.grok/config.toml`; upstream provider keys stay in AIPass. See Grok Build's [custom model configuration](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/11-custom-models.md).
 
 ### Local Proxy WebSocket Support
 

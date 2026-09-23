@@ -11,7 +11,7 @@ pub use backup::{
 pub use detect::{detect_tools, ToolDetection};
 pub use models::{
     ApplyResult, CodexApiKeyMode, CodexProviderMigration, CodexSessionMigration, ConfigPlan,
-    ConfigWriter, EncryptedBackup, ToolEntry, ToolId,
+    ConfigWriter, EncryptedBackup, PlannedWrite, ToolEntry, ToolId,
 };
 pub use plan::{
     plan_claude_code, plan_claude_code_official, plan_claude_code_plaintext, plan_codex,
@@ -35,6 +35,7 @@ mod tests {
         ToolEntry {
             supports_websockets: None,
             id: uuid::Uuid::new_v4(),
+            secret_id: None,
             title: "Anthropic Prod".to_string(),
             provider_id: Some("anthropic".to_string()),
             endpoint: Some("https://api.anthropic.com".to_string()),
@@ -739,17 +740,42 @@ mod tests {
         entry.default_model = Some("gpt-5.4".to_string());
         entry.api_key = Some("local-proxy-secret".to_string());
 
-        let (plan, content) =
-            plan_grok_plaintext_with_backend(dir.path(), &entry, GrokApiBackend::Responses)
-                .unwrap();
+        for (backend, expected) in [
+            (GrokApiBackend::ChatCompletions, "chat_completions"),
+            (GrokApiBackend::Responses, "responses"),
+        ] {
+            let (plan, content) =
+                plan_grok_plaintext_with_backend(dir.path(), &entry, backend).unwrap();
+            let doc = content.parse::<toml_edit::DocumentMut>().unwrap();
+            let config_id = doc["models"]["default"].as_str().unwrap();
+            let model = &doc["model"][config_id];
+            assert_eq!(plan.tool, ToolId::Grok);
+            assert_eq!(plan.target_path, target);
+            assert_eq!(doc["ui"]["yolo"].as_bool(), Some(false));
+            assert_eq!(model["api_backend"].as_str(), Some(expected));
+            assert_eq!(model["base_url"].as_str(), entry.endpoint.as_deref());
+            assert_eq!(model["model"].as_str(), Some("gpt-5.4"));
+            assert_eq!(model["api_key"].as_str(), Some("local-proxy-secret"));
+            assert!(!plan.preview.contains("local-proxy-secret"));
 
-        assert_eq!(plan.tool, ToolId::Grok);
-        assert!(content.contains("[ui]"));
-        assert!(content.contains("yolo = false"));
-        assert!(content.contains("api_backend = \"responses\""));
-        assert!(content.contains("model = \"gpt-5.4\""));
-        assert!(content.contains("api_key = \"local-proxy-secret\""));
-        assert!(!plan.preview.contains("local-proxy-secret"));
+            std::fs::write(&target, &content).unwrap();
+            let (_, repeated) =
+                plan_grok_plaintext_with_backend(dir.path(), &entry, backend).unwrap();
+            assert_eq!(repeated, content);
+        }
+    }
+
+    #[test]
+    fn grok_writer_requires_a_nonblank_default_model() {
+        let dir = tempdir().unwrap();
+        let mut entry = entry(InterfaceType::OpenAiCompatible, AuthScheme::Bearer);
+        for model in [None, Some(""), Some("   ")] {
+            entry.default_model = model.map(str::to_string);
+            assert!(plan_grok(dir.path(), &entry)
+                .unwrap_err()
+                .to_string()
+                .contains("requires a default model"));
+        }
     }
 
     #[test]

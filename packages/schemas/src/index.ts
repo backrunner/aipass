@@ -57,6 +57,9 @@ export interface SecretRef {
   group?: string;
   /** Wire format this key speaks; falls back to the entry when unset. */
   interfaceType?: InterfaceType;
+  /** Optional API base URL and default model; unset values inherit the site. */
+  endpoint?: string;
+  defaultModel?: string;
   billing?: BillingRule;
 }
 
@@ -70,6 +73,17 @@ export function secretInterfaceType(
   entryInterfaceType: InterfaceType
 ): InterfaceType {
   return secret?.interfaceType ?? entryInterfaceType;
+}
+
+/** An explicitly different key format uses that format's authentication. */
+export function secretAuthScheme(secret: Pick<SecretRef, "interfaceType"> | undefined,
+  entryInterfaceType: InterfaceType, entryAuthScheme: AuthScheme): AuthScheme {
+  if (!secret?.interfaceType || secret.interfaceType === entryInterfaceType) return entryAuthScheme;
+  const defaults: Partial<Record<InterfaceType, AuthScheme>> = {
+    openai_compatible: "bearer", anthropic_messages: "x_api_key", gemini: "google_api_key",
+    azure_openai: "azure_api_key", bedrock: "aws_profile"
+  };
+  return defaults[secret.interfaceType] ?? entryAuthScheme;
 }
 
 export interface QuotaInfo {

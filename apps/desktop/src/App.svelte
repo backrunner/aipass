@@ -2058,6 +2058,7 @@
       });
     } catch (err) {
       reportError(String(err));
+      throw err;
     }
   }
 
@@ -2081,15 +2082,16 @@
       }
     } catch (err) {
       reportError(String(err));
+      throw err;
     }
   }
 
   async function deletePricingGroup(groupId: string) {
-    if (!confirm($t("pricing.deleteGroupConfirm"))) return;
     try {
       pricingConfig = await invokeTauri<PricingConfig>("pricing_group_delete", { groupId });
     } catch (err) {
       reportError(String(err));
+      throw err;
     }
   }
 
@@ -2101,6 +2103,7 @@
       });
     } catch (err) {
       reportError(String(err));
+      throw err;
     }
   }
 
@@ -2776,6 +2779,7 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    secretId?: string;
     codexApiKeyMode?: CodexApiKeyMode;
   }) {
     clearError();
@@ -2786,6 +2790,7 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    secretId?: string;
     codexApiKeyMode?: CodexApiKeyMode;
   }) {
     clearError();

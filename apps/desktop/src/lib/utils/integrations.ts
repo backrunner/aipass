@@ -58,7 +58,7 @@ export const integrationToolDefinitions: IntegrationToolDefinition[] = [
   },
   {
     id: "grok",
-    name: "Grok",
+    name: "Grok Build",
     defaultMode: "helper",
     localProxyProtocols: [
       "open_ai_responses",
@@ -90,7 +90,7 @@ export const integrationToolDefinitions: IntegrationToolDefinition[] = [
   }
 ];
 
-export function supportsIntegration(tool: ToolConfigTarget, entry: IntegrationEntry): boolean {
+function supportsIntegrationProtocol(tool: ToolConfigTarget, entry: IntegrationEntry): boolean {
   switch (tool) {
     case "codex":
       return entry.interfaceType === "openai_compatible" && entry.authScheme === "bearer";
@@ -105,12 +105,6 @@ export function supportsIntegration(tool: ToolConfigTarget, entry: IntegrationEn
       return true;
     case "grok":
     case "pi":
-      return (
-        Boolean(entry.defaultModel) &&
-        ((entry.interfaceType === "openai_compatible" && entry.authScheme === "bearer") ||
-          (entry.interfaceType === "anthropic_messages" &&
-            (entry.authScheme === "x_api_key" || entry.authScheme === "bearer")))
-      );
     case "cursor":
       return (
         (entry.interfaceType === "openai_compatible" && entry.authScheme === "bearer") ||
@@ -118,6 +112,20 @@ export function supportsIntegration(tool: ToolConfigTarget, entry: IntegrationEn
           (entry.authScheme === "x_api_key" || entry.authScheme === "bearer"))
       );
   }
+}
+
+export function providerIntegrationAvailability(
+  tool: IntegrationToolDefinition,
+  entry: IntegrationEntry
+): LocalProxyAvailability {
+  if (!supportsIntegrationProtocol(tool.id, entry)) return "protocol";
+  if (tool.requiresDefaultModel && !entry.defaultModel?.trim()) return "default-model";
+  return "available";
+}
+
+export function supportsIntegration(tool: ToolConfigTarget, entry: IntegrationEntry): boolean {
+  const definition = integrationToolDefinitions.find((item) => item.id === tool);
+  return Boolean(definition && providerIntegrationAvailability(definition, entry) === "available");
 }
 
 export function localProxyAvailability(
@@ -132,7 +140,7 @@ export function localProxyAvailability(
 }
 
 export function compatibleToolsFor(entry: IntegrationEntry): IntegrationToolDefinition[] {
-  return integrationToolDefinitions.filter((tool) => supportsIntegration(tool.id, entry));
+  return integrationToolDefinitions.filter((tool) => supportsIntegrationProtocol(tool.id, entry));
 }
 
 export function integrationToolName(tool: ToolConfigTarget): string {

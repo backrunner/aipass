@@ -13,12 +13,30 @@ const selected: ProviderEntry = {
   secretRefs: [{ id: "key", label: "Production", masked: "••••", fingerprint: "test" }], tags: []
 };
 let app: ReturnType<typeof mount>;
-afterEach(async () => { if (app) await unmount(app); document.body.innerHTML = ""; });
+afterEach(async () => {
+  if (app) await unmount(app);
+  // Bits UI releases its body scroll lock on a 24 ms cleanup timer.
+  await new Promise(resolve => window.setTimeout(resolve, 30));
+  document.body.innerHTML = "";
+});
 
 function render(props: Partial<ComponentProps<typeof ProviderDetailPane>> = {}) {
+  setLocale("en");
   app = mount(ProviderDetailPane, { target: document.body, props: { selected, draft: emptyDraft(), probeResult: undefined, usageProbeResult: undefined, ...props } });
   flushSync();
 }
+
+test.each([undefined, "   ", "fixture-model"])("shows Grok Build and explains missing default model %s", (defaultModel) => {
+  setLocale("en");
+  render({ selected: { ...selected, interfaceType: "openai_compatible", defaultModel } });
+  const row = [...document.querySelectorAll<HTMLElement>(".tool-row")]
+    .find((item) => item.textContent?.includes("Grok Build"));
+  expect(row).toBeTruthy();
+  const missingModel = !defaultModel?.trim();
+  expect(row!.querySelector<HTMLButtonElement>(".btn-secondary")!.disabled).toBe(missingModel);
+  expect(row!.querySelector<HTMLButtonElement>(".btn-ghost")!.disabled).toBe(missingModel);
+  expect(row!.textContent?.includes("Set a default model for this credential first.")).toBe(missingModel);
+});
 
 test("copy, reveal and key editing are separate keyboard-focusable actions", () => {
   const onCopySecret = vi.fn();
@@ -33,7 +51,7 @@ test("copy, reveal and key editing are separate keyboard-focusable actions", () 
   expect(onCopySecret).not.toHaveBeenCalled();
   copy.click();
   expect(onCopySecret).toHaveBeenCalledWith("key");
-  document.querySelector<HTMLButtonElement>(".kv-actions button:not(.copy-hint):not([aria-pressed])")!.click();
+  document.querySelector<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")!.click();
   flushSync();
   expect(document.querySelector(".credential-inline-editor input[type='password']")).toBeTruthy();
   expect(onCopySecret).toHaveBeenCalledTimes(1);
@@ -62,14 +80,36 @@ test("provider selection invalidates previews and confirmation retains the previ
   flushSync();
   const write = () => document.querySelector<HTMLButtonElement>(".tool-side .btn-secondary")!;
   write().click(); flushSync();
-  expect(preview).toHaveBeenLastCalledWith({ tool: "codex", mode: "plaintext", id: "provider", codexApiKeyMode: "auth_json" });
+  expect(preview).toHaveBeenLastCalledWith({ tool: "codex", mode: "plaintext", id: "provider", secretId: "key", codexApiKeyMode: "auth_json" });
   selection.update(entry => ({ ...entry, id: "provider-b" })); flushSync();
   finish(); await Promise.resolve(); flushSync();
   expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
   write().click();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeTruthy(); });
   document.querySelector<HTMLButtonElement>(".dialog-actions .btn-primary")!.click();
-  await vi.waitFor(() => expect(apply).toHaveBeenCalledWith({ tool: "codex", mode: "plaintext", id: "provider-b", codexApiKeyMode: "auth_json" }));
+  await vi.waitFor(() => expect(apply).toHaveBeenCalledWith({ tool: "codex", mode: "plaintext", id: "provider-b", secretId: "key", codexApiKeyMode: "auth_json" }));
+});
+
+test.each([
+  { authScheme: "x_api_key" as const },
+  { supportsWebsockets: false }
+])("background configuration changes invalidate an open preview: %j", async (patch) => {
+  setLocale("en");
+  const selection = writable<ProviderEntry>({ ...selected, interfaceType: "openai_compatible" });
+  const state = fromStore(selection);
+  const apply = vi.fn();
+  app = mount(ProviderDetailPane, { target: document.body, props: {
+    get selected() { return state.current; }, draft: emptyDraft(), probeResult: undefined,
+    usageProbeResult: undefined, onApplyToolConfig: apply,
+    onPreviewToolConfig: async () => ({ tool: "codex", mode: "plaintext", entryId: selected.id,
+      entryTitle: selected.title, targetPath: "/fixture/config.toml", summary: "fixture", preview: "+ fixture" })
+  } });
+  flushSync();
+  document.querySelector<HTMLButtonElement>(".tool-side .btn-secondary")!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeTruthy(); });
+  selection.update(entry => ({ ...entry, ...patch })); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  expect(apply).not.toHaveBeenCalled();
 });
 
 test("disables save and cancel while a provider update is pending", async () => {
@@ -95,7 +135,7 @@ test("prefills an existing key masked, allows reveal, and saves its value", asyn
   const onReadSecret = vi.fn(async () => "fixture-existing-key");
   const onUpdateSecret = vi.fn(async () => {});
   render({ onReadSecret, onUpdateSecret });
-  document.querySelector<HTMLButtonElement>(".kv-actions button:not(.copy-hint):not([aria-pressed])")!.click();
+  document.querySelector<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")!.click();
   await vi.waitFor(() => {
     flushSync();
     expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-existing-key");
@@ -110,7 +150,7 @@ test("prefills an existing key masked, allows reveal, and saves its value", asyn
     "key",
     "Production",
     "fixture-existing-key",
-    { interfaceType: "custom_http", group: "", billing: { rate: "", currency: "", unitPrice: "" } }
+    { interfaceType: "custom_http", group: "", endpoint: "", defaultModel: "", billing: { rate: "", currency: "", unitPrice: "" } }
   ));
 });
 
@@ -132,7 +172,7 @@ test("key editing carries the key's own interface and group", async () => {
   const onReadSecret = vi.fn(async () => "fixture-existing-key");
   const onUpdateSecret = vi.fn(async () => {});
   render({ selected: keyEntry, onReadSecret, onUpdateSecret });
-  document.querySelector<HTMLButtonElement>(".kv-actions button:not(.copy-hint):not([aria-pressed])")!.click();
+  document.querySelector<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")!.click();
   await vi.waitFor(() => {
     flushSync();
     expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-existing-key");
@@ -147,7 +187,7 @@ test("key editing carries the key's own interface and group", async () => {
     "key",
     "Production",
     "fixture-existing-key",
-    { interfaceType: "anthropic_messages", group: "vip", billing: { rate: "", currency: "", unitPrice: "" } }
+    { interfaceType: "anthropic_messages", group: "vip", endpoint: "", defaultModel: "", billing: { rate: "", currency: "", unitPrice: "" } }
   ));
 });
 
@@ -171,14 +211,14 @@ test("adding a key sends its interface and group metadata", async () => {
   document.querySelector<HTMLButtonElement>(".add-secret-row .btn")!.click();
   await vi.waitFor(() => expect(onAddSecret).toHaveBeenCalledWith({
     interfaceType: "anthropic_messages",
-    group: "vip"
+    group: "vip", endpoint: "", defaultModel: ""
   }));
 });
 
 test("a cancelled key read cannot repopulate a later editor", async () => {
   let finish!: (key: string) => void;
   render({ onReadSecret: () => new Promise(resolve => { finish = resolve; }) });
-  document.querySelector<HTMLButtonElement>(".kv-actions button:not(.copy-hint):not([aria-pressed])")!.click();
+  document.querySelector<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")!.click();
   flushSync();
   expect(document.querySelector<HTMLButtonElement>(".credential-inline-editor .btn")!.disabled).toBe(true);
   [...document.querySelectorAll<HTMLButtonElement>(".credential-inline-editor button")].at(-1)!.click();
@@ -207,18 +247,59 @@ test("all keys share editing, deletion and pricing controls, including the only 
   await vi.waitFor(() => expect(onUpdateSecret).toHaveBeenCalledWith("key", "Production", "fixture-key", expect.objectContaining({ interfaceType: "custom_http" })));
 });
 
-test("pricing controls remain bound to each key id", () => {
-  const onSetPricingAssignment = vi.fn();
-  render({ editMode: true, selected: { ...selected, secretRefs: [selected.secretRefs[0], { ...selected.secretRefs[0], id: "other", label: "Other" }] }, onSetPricingAssignment });
-  const multipliers = document.querySelectorAll<HTMLInputElement>(".key-pricing input");
-  expect(multipliers).toHaveLength(2);
-  multipliers[0].value = "2";
-  multipliers[0].dispatchEvent(new Event("change", { bubbles: true }));
-  multipliers[1].value = "3";
-  multipliers[1].dispatchEvent(new Event("change", { bubbles: true }));
-  expect(onSetPricingAssignment.mock.calls).toEqual([["provider", "key", null, 2], ["provider", "other", null, 3]]);
+test("pricing changes save explicitly and stay bound to the chosen key", async () => {
+  const onSetPricingAssignment = vi.fn(async () => {});
+  render({ selected: { ...selected, secretRefs: [selected.secretRefs[0], { ...selected.secretRefs[0], id: "second", label: "Second" }] }, onSetPricingAssignment });
+  document.querySelectorAll<HTMLButtonElement>("button[aria-label='Usage pricing']")[1].click();
+  flushSync();
+  const input = document.querySelector<HTMLInputElement>("input[aria-label='Multiplier']")!;
+  input.value = "2"; input.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+  expect(onSetPricingAssignment).not.toHaveBeenCalled();
+  [...document.querySelectorAll<HTMLButtonElement>(".pricing-key-dialog button")].find(button => button.textContent?.trim() === "Save")!.click();
+  await vi.waitFor(() => expect(onSetPricingAssignment).toHaveBeenCalledWith("provider", "second", null, 2));
 });
 
+test("multiple formats require an explicit key and stale key previews cannot apply", async () => {
+  let finish!: (value: ToolConfigPreview) => void;
+  const preview = vi.fn(() => new Promise<ToolConfigPreview>(resolve => { finish = resolve; }));
+  const apply = vi.fn();
+  render({ selected: { ...selected, interfaceType: "openai_compatible", secretRefs: [
+    { ...selected.secretRefs[0], interfaceType: "openai_compatible" },
+    { ...selected.secretRefs[0], id: "claude", label: "Claude", interfaceType: "anthropic_messages", defaultModel: "key-specific-model" }
+  ] }, onPreviewToolConfig: preview, onApplyToolConfig: apply });
+  const select = document.querySelector<HTMLButtonElement>(".credential-picker-trigger")!;
+  expect(select.textContent).toContain("Choose a credential");
+  const choose = async (id: string) => {
+    select.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" })); flushSync();
+    await vi.waitFor(() => { flushSync(); expect(document.querySelector(`.credential-picker-option[data-value="${id}"]`)).toBeTruthy(); });
+    document.querySelector<HTMLElement>(`.credential-picker-option[data-value="${id}"]`)!.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerType: "mouse" })); flushSync();
+  };
+  expect([...document.querySelectorAll<HTMLButtonElement>(".tool-side .btn-secondary")].every(button => button.disabled)).toBe(true);
+  await choose("claude");
+  expect([...document.querySelectorAll(".tool-row")].some(row => row.textContent?.includes("Codex"))).toBe(false);
+  const grok = [...document.querySelectorAll<HTMLElement>(".tool-row")].find(row => row.textContent?.includes("Grok Build"))!;
+  expect(grok.querySelector<HTMLButtonElement>(".btn-secondary")!.disabled).toBe(false);
+  grok.querySelector<HTMLButtonElement>(".btn-secondary")!.click(); flushSync();
+  expect(preview).toHaveBeenCalledWith(expect.objectContaining({ id: "provider", secretId: "claude", tool: "grok" }));
+  await choose("key");
+  finish({ tool: "grok", mode: "plaintext", entryId: "provider", entryTitle: "Claude", targetPath: "/fixture/grok", summary: "fixture", preview: "+ fixture" });
+  await Promise.resolve(); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  expect(apply).not.toHaveBeenCalled();
+});
+
+test("pricing cancellation and invalid numbers never write an assignment", () => {
+  const save = vi.fn();
+  render({ onSetPricingAssignment: save });
+  document.querySelector<HTMLButtonElement>("button[aria-label='Usage pricing']")!.click(); flushSync();
+  const input = document.querySelector<HTMLInputElement>("input[aria-label='Multiplier']")!;
+  input.value = "-1"; input.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+  const buttons = () => [...document.querySelectorAll<HTMLButtonElement>(".pricing-key-dialog button")];
+  expect(buttons().find(button => button.textContent?.trim() === "Save")!.disabled).toBe(true);
+  input.value = "3"; input.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+  buttons().find(button => button.textContent?.trim() === "Cancel")!.click(); flushSync();
+  expect(save).not.toHaveBeenCalled();
+});
 
 test("provider save commits the open key editor first and stops on key failure", async () => {
   setLocale("en");

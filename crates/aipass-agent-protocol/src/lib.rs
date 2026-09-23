@@ -31,7 +31,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 8 requires verified automatic migration of existing macOS vaults to CloudKit.
 // Version 10 adds the opt-in HTTP/HTTPS control panel and its local management API.
 // Version 11 adds explicitly granted remote unlock and local grant revocation.
-pub const AGENT_PROTOCOL_VERSION: u32 = 11;
+// Version 12 binds tool configurations and helper reads to an exact credential.
+pub const AGENT_PROTOCOL_VERSION: u32 = 12;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -320,6 +321,9 @@ pub enum CodexApiKeyMode {
 pub struct ToolConfigRequest {
     pub tool: ToolConfigTool,
     pub id: Uuid,
+    /// Stable credential id. Required when the site has multiple keys.
+    #[serde(default)]
+    pub secret_id: Option<String>,
     pub mode: ToolConfigMode,
     #[serde(default)]
     pub codex_api_key_mode: Option<CodexApiKeyMode>,
@@ -738,6 +742,8 @@ pub enum AgentRequest {
     TrashEmpty,
     #[serde(rename = "secret.reveal_field")]
     SecretRevealField { id: Uuid, field: String },
+    #[serde(rename = "secret.reveal_id")]
+    SecretRevealId { id: Uuid, secret_id: String },
     #[serde(rename = "secret.reveal_headers")]
     SecretRevealHeaders { id: Uuid },
     #[serde(rename = "secret.add")]
@@ -1072,6 +1078,7 @@ impl AgentRequest {
             Self::TrashPurgeExpired => "trash.purge_expired",
             Self::TrashEmpty => "trash.empty",
             Self::SecretRevealField { .. } => "secret.reveal_field",
+            Self::SecretRevealId { .. } => "secret.reveal_id",
             Self::SecretRevealHeaders { .. } => "secret.reveal_headers",
             Self::SecretAdd { .. } => "secret.add",
             Self::SecretUpdate { .. } => "secret.update",
@@ -1397,6 +1404,8 @@ pub struct GroupPriceVersion {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PricingGroup {
+    /// Manual rule edits survive gateway price refreshes.
+    pub manual: bool,
     pub id: Uuid,
     pub name: String,
     pub versions: Vec<GroupPriceVersion>,
@@ -1409,6 +1418,9 @@ pub struct CredentialAssignment {
     pub secret_id: String,
     pub group_id: Option<Uuid>,
     pub multiplier: f64,
+    /// Explicit user settings must survive automatic gateway refreshes.
+    #[serde(default)]
+    pub manual: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -1500,6 +1512,7 @@ mod tests {
             request: ToolConfigRequest {
                 tool: ToolConfigTool::Codex,
                 id: uuid::Uuid::nil(),
+                secret_id: None,
                 mode: ToolConfigMode::Plaintext,
                 codex_api_key_mode: None,
             },

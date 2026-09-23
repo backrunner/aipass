@@ -241,12 +241,13 @@ export type ModelPriceRule = {
 };
 
 export type GroupPriceVersion = { effectiveFrom: number; rules: ModelPriceRule[] };
-export type PricingGroup = { id: string; name: string; versions: GroupPriceVersion[] };
+export type PricingGroup = { id: string; name: string; versions: GroupPriceVersion[]; manual?: boolean };
 export type CredentialAssignment = {
   entryId: string;
   secretId: string;
   groupId?: string;
   multiplier: number;
+  manual?: boolean;
 };
 export type PricingConfig = {
   groups: PricingGroup[];
@@ -539,6 +540,8 @@ export type UsageProbeRequest = {
 /** Per-key attributes editable in the detail pane's key list. */
 export type SecretKeyMetadata = {
   interfaceType?: InterfaceType;
+  endpoint?: string;
+  defaultModel?: string;
   group?: string;
   billing?: SecretRef["billing"];
 };

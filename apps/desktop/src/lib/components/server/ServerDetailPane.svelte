@@ -81,7 +81,7 @@
     integrateRoute?.targets.some(
       (target) =>
         target.enabled &&
-        Boolean(entryById(target.providerEntryId)?.defaultModel)
+        Boolean((entryById(target.providerEntryId)?.secretRefs.find(secret => secret.id === target.secretId)?.defaultModel ?? entryById(target.providerEntryId)?.defaultModel)?.trim())
     )
   );
   $: proxyIntegrationTools = integrateRoute

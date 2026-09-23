@@ -154,18 +154,36 @@ pub struct SecretMetadataInput {
     #[serde(default)]
     pub interface_type: Option<InterfaceType>,
     #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
     pub billing: Option<BillingRule>,
 }
 
 impl SecretMetadataInput {
     pub fn is_empty(&self) -> bool {
-        self.group.is_none() && self.interface_type.is_none() && self.billing.is_none()
+        self.group.is_none()
+            && self.interface_type.is_none()
+            && self.billing.is_none()
+            && self.endpoint.is_none()
+            && self.default_model.is_none()
     }
 
     /// Overlay set fields onto an existing key, keeping what the caller left
     /// unset. Returns whether anything changed.
     pub fn apply_to(&self, secret: &mut SecretRef) -> bool {
         let mut changed = false;
+        for (patch, current) in [
+            (&self.endpoint, &mut secret.endpoint),
+            (&self.default_model, &mut secret.default_model),
+        ] {
+            let next = patch_optional(patch, current.clone());
+            if *current != next {
+                *current = next;
+                changed = true;
+            }
+        }
         if let Some(group) = self.group.as_deref() {
             let group = clean_optional(Some(group));
             if secret.group != group {
@@ -1496,9 +1514,31 @@ impl Vault {
     }
 
     pub fn reveal_secret_field(&self, id: Uuid, label_or_id: &str) -> Result<String, VaultError> {
+        self.reveal_selected_secret(id, label_or_id, false)
+    }
+
+    pub fn reveal_secret_by_id(&self, id: Uuid, secret_id: &str) -> Result<String, VaultError> {
+        self.reveal_selected_secret(id, secret_id, true)
+    }
+
+    fn reveal_selected_secret(
+        &self,
+        id: Uuid,
+        label_or_id: &str,
+        exact: bool,
+    ) -> Result<String, VaultError> {
         let path = self.record_path(id);
         let mut plaintext = self.decrypt_provider_path(&path)?;
-        let secret_id = find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
+        let position = if exact {
+            plaintext
+                .entry
+                .secret_refs
+                .iter()
+                .position(|secret| secret.id == label_or_id)
+        } else {
+            find_secret_ref_position(&plaintext.entry.secret_refs, label_or_id)
+        };
+        let secret_id = position
             .map(|index| plaintext.entry.secret_refs[index].id.clone())
             .ok_or(VaultError::RecordNotFound)?;
         let secret = plaintext
@@ -3531,6 +3571,8 @@ mod tests {
         });
 
         let changed = SecretMetadataInput {
+            endpoint: None,
+            default_model: None,
             group: Some("  ".to_string()),
             interface_type: None,
             billing: Some(BillingRule {
@@ -3555,6 +3597,8 @@ mod tests {
         );
 
         SecretMetadataInput {
+            endpoint: None,
+            default_model: None,
             group: None,
             interface_type: None,
             billing: Some(BillingRule {
@@ -3564,6 +3608,48 @@ mod tests {
         }
         .apply_to(&mut secret);
         assert_eq!(secret.billing, None);
+    }
+
+    #[test]
+    fn exact_key_reads_never_fall_back_to_labels_or_primary() {
+        let dir = tempdir().unwrap();
+        let vault = create_test_vault(dir.path(), &SecretString::new("fixture-password"));
+        let id = vault.add_provider(input("fixture-primary")).unwrap();
+        let key = vault.add_secret(id, "second", "fixture-second").unwrap();
+        vault
+            .add_secret(id, key.clone(), "fixture-colliding-label")
+            .unwrap();
+        assert_eq!(
+            vault.reveal_secret_by_id(id, &key).unwrap(),
+            "fixture-second"
+        );
+        vault.remove_secret(id, &key).unwrap();
+        assert!(vault.reveal_secret_by_id(id, &key).is_err());
+        assert!(vault.reveal_secret_by_id(id, "primary").is_err());
+    }
+
+    #[test]
+    fn key_endpoint_and_model_patch_preserves_missing_and_clears_blank() {
+        let mut secret = SecretRef::new("key", "label", "masked", "fingerprint");
+        SecretMetadataInput {
+            endpoint: Some(" https://key.example.test/v1 ".into()),
+            default_model: Some(" key-model ".into()),
+            ..Default::default()
+        }
+        .apply_to(&mut secret);
+        assert_eq!(
+            secret.endpoint.as_deref(),
+            Some("https://key.example.test/v1")
+        );
+        assert_eq!(secret.default_model.as_deref(), Some("key-model"));
+        assert!(!SecretMetadataInput::default().apply_to(&mut secret));
+        SecretMetadataInput {
+            endpoint: Some(String::new()),
+            default_model: Some(String::new()),
+            ..Default::default()
+        }
+        .apply_to(&mut secret);
+        assert!(secret.endpoint.is_none() && secret.default_model.is_none());
     }
 
     #[test]

@@ -22,6 +22,29 @@ const NEWAPI_RATIO_MICROS_PER_UNIT: f64 = 2_000_000.0;
 const CONFIG_FILE: &str = "pricing.aipstate";
 const CONFIG_PURPOSE: &str = "proxy-pricing";
 
+pub fn validate_group(group: &PricingGroup) -> ServiceResult<()> {
+    let valid = !group.name.trim().is_empty()
+        && !group.versions.is_empty()
+        && group.versions.iter().all(|version| {
+            let mut models = std::collections::HashSet::new();
+            !version.rules.is_empty()
+                && version.rules.iter().all(|rule| {
+                    !rule.model.trim().is_empty()
+                        && models.insert(rule.model.trim())
+                        && rule.off_peak.as_ref().is_none_or(|window| {
+                            window.start_minute_utc < 1440 && window.end_minute_utc < 1440
+                        })
+                })
+        });
+    if !valid {
+        return Err(ServiceError::new(
+            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+            "pricing rules require a name, unique non-empty model patterns, and valid UTC times",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PersistedPricingConfig {
     version: u32,
@@ -175,6 +198,7 @@ pub fn sync_newapi_pricing(
             group.id
         } else {
             config.groups.push(PricingGroup {
+                manual: false,
                 id: Uuid::new_v4(),
                 name,
                 versions: Vec::new(),
@@ -188,7 +212,7 @@ pub fn sync_newapi_pricing(
             .find(|group| group.id == group_id)
             .expect("pricing group id must exist");
         let current_rules = group.versions.last().map(|version| &version.rules);
-        if current_rules != Some(&rules) {
+        if !group.manual && current_rules != Some(&rules) {
             group
                 .versions
                 .retain(|version| version.effective_from != now);
@@ -210,6 +234,7 @@ pub fn sync_newapi_pricing(
                 config
                     .assignments
                     .push(aipass_agent_protocol::CredentialAssignment {
+                        manual: false,
                         entry_id,
                         secret_id: secret_id.clone(),
                         group_id: Some(*group_id),
@@ -232,6 +257,9 @@ pub fn sync_newapi_pricing(
             .as_deref()
             .and_then(|name| group_ids.get(name))
             .copied();
+        if assignment.manual {
+            continue;
+        }
         let can_auto_update =
             managed_assignment || (assignment.group_id.is_none() && assignment.multiplier == 1.0);
         if next_group_id.is_some() && can_auto_update {
@@ -280,12 +308,18 @@ pub fn sync_subapi_pricing(
         return Ok(config);
     };
 
+    if config.assignments.iter().any(|assignment| {
+        assignment.entry_id == entry_id && assignment.secret_id == secret_id && assignment.manual
+    }) {
+        return Ok(config);
+    }
     let name = format!("SubAPI / {}", pricing_namespace(endpoint));
     let mut changed = false;
     let group_id = if let Some(group) = config.groups.iter().find(|group| group.name == name) {
         group.id
     } else {
         config.groups.push(PricingGroup {
+            manual: false,
             id: Uuid::new_v4(),
             name,
             versions: Vec::new(),
@@ -316,6 +350,7 @@ pub fn sync_subapi_pricing(
         config
             .assignments
             .push(aipass_agent_protocol::CredentialAssignment {
+                manual: false,
                 entry_id,
                 secret_id: secret_id.to_string(),
                 group_id: Some(group_id),
@@ -603,6 +638,85 @@ fn tokens_cost(
 mod tests {
     use super::*;
     use aipass_agent_protocol::{CredentialAssignment, GroupPriceVersion, PricingGroup};
+
+    #[test]
+    fn explicit_unit_multiplier_and_edited_rules_survive_gateway_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let creation = Vault::create(
+            dir.path(),
+            &aipass_crypto::SecretString::new("fixture-password"),
+        )
+        .unwrap();
+        let vault = &creation.vault;
+        let entry_id = vault
+            .add_provider(crate::server::tests::sync_test_provider(
+                "New API",
+                "fixture-key",
+            ))
+            .unwrap();
+        let key = vault.get_provider_summary(entry_id).unwrap().secret_refs[0]
+            .id
+            .clone();
+        let endpoint = "https://gateway.example.test/v1";
+        let payload = serde_json::json!({"success":true,"group_ratio":{"vip":2},"data":[{"model_name":"gpt-fixture","model_ratio":1,"completion_ratio":2,"enable_groups":["vip"]}]});
+        let groups = [(key.clone(), Some("vip".into()))];
+        let synced =
+            sync_newapi_pricing(dir.path(), vault, entry_id, endpoint, &groups, &payload).unwrap();
+        assert_eq!(synced.assignments.len(), 1);
+        let service = crate::proxy_service::ProxyService::new(dir.path()).unwrap();
+        service
+            .set_pricing_assignment(vault, entry_id, key.clone(), None, 1.0)
+            .unwrap();
+        let refreshed =
+            sync_newapi_pricing(dir.path(), vault, entry_id, endpoint, &groups, &payload).unwrap();
+        assert!(refreshed.assignments[0].manual);
+        assert_eq!(refreshed.assignments[0].group_id, None);
+        let refreshed = sync_subapi_pricing(
+            dir.path(),
+            vault,
+            entry_id,
+            &key,
+            endpoint,
+            &serde_json::json!({"effective_rate_multiplier":3}),
+        )
+        .unwrap();
+        assert_eq!(refreshed.assignments[0].multiplier, 1.0);
+        assert_eq!(refreshed.assignments[0].group_id, None);
+        let mut edited = synced.groups[0].clone();
+        edited.versions[0].rules[0].input_micros_per_million = 123;
+        service
+            .upsert_pricing_group(
+                vault,
+                edited,
+                aipass_agent_protocol::PricingApplyScope::AllHistory,
+            )
+            .unwrap();
+        let refreshed =
+            sync_newapi_pricing(dir.path(), vault, entry_id, endpoint, &groups, &payload).unwrap();
+        assert!(refreshed.groups[0].manual);
+        assert_eq!(
+            refreshed.groups[0].versions[0].rules[0].input_micros_per_million,
+            123
+        );
+        assert!(service
+            .set_pricing_assignment(vault, entry_id, key.clone(), None, f64::NAN)
+            .is_err());
+        assert!(service
+            .set_pricing_assignment(vault, entry_id, "missing".into(), None, 1.0)
+            .is_err());
+        assert!(service
+            .set_pricing_assignment(vault, entry_id, key, Some(Uuid::new_v4()), 1.0)
+            .is_err());
+        // Deleting an automatically assigned set is also an explicit choice.
+        save_pricing_config(dir.path(), vault, &synced).unwrap();
+        service
+            .delete_pricing_group(vault, synced.groups[0].id)
+            .unwrap();
+        let refreshed =
+            sync_newapi_pricing(dir.path(), vault, entry_id, endpoint, &groups, &payload).unwrap();
+        assert!(refreshed.assignments[0].manual);
+        assert_eq!(refreshed.assignments[0].group_id, None);
+    }
     use serde_json::json;
 
     const DAY: i64 = 86_400 * 20_000;
@@ -683,6 +797,7 @@ mod tests {
     #[test]
     fn managed_newapi_groups_are_scoped_to_the_endpoint() {
         let group = PricingGroup {
+            manual: false,
             id: Uuid::nil(),
             name: "New API / default @ example.com/proxy".to_string(),
             versions: Vec::new(),
@@ -694,6 +809,7 @@ mod tests {
         assert!(!is_managed_newapi_group(&group, "https://other.example/v1"));
         assert!(!is_managed_newapi_group(
             &PricingGroup {
+                manual: false,
                 id: Uuid::nil(),
                 name: "New API / default".to_string(),
                 versions: Vec::new(),
@@ -739,6 +855,7 @@ mod tests {
         PricingConfig {
             groups: vec![group],
             assignments: vec![CredentialAssignment {
+                manual: false,
                 entry_id: Uuid::nil(),
                 secret_id: "key".into(),
                 group_id: Some(Uuid::nil()),
@@ -798,6 +915,7 @@ mod tests {
     #[test]
     fn group_versions_segment_history_by_effective_from() {
         let group = PricingGroup {
+            manual: false,
             id: Uuid::nil(),
             name: "discounted".into(),
             versions: vec![
@@ -836,6 +954,7 @@ mod tests {
             cache_creation_micros_per_million: 0,
         });
         let group = PricingGroup {
+            manual: false,
             id: Uuid::nil(),
             name: "deepseek".into(),
             versions: vec![GroupPriceVersion {
@@ -884,6 +1003,7 @@ mod tests {
     #[test]
     fn multiplier_scales_group_and_fallback_costs() {
         let group = PricingGroup {
+            manual: false,
             id: Uuid::nil(),
             name: "reseller".into(),
             versions: vec![GroupPriceVersion {

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import ProviderEmptyState from "./ProviderEmptyState.svelte";
+  import CredentialPicker from "./CredentialPicker.svelte";
+  import CredentialTags from "./CredentialTags.svelte";
   import type { InterfaceType, ProviderEntry, ProviderKind, SecretRef } from "@aipass/schemas";
   import {
     Badge,
@@ -10,8 +12,6 @@
     IconButton,
     ProviderFormFields,
     ProviderIcon,
-    SelectField,
-    interfaceLabel,
     providerKindTone
   } from "@aipass/ui";
   import { DropdownMenu } from "bits-ui";
@@ -54,11 +54,15 @@
   import { localizedMessage, t } from "../../stores/i18n";
   import {
     compatibleToolsFor,
+    integrationToolDefinitions,
+    providerIntegrationAvailability,
     type IntegrationToolDefinition
   } from "../../utils/integrations";
+  import { secretAuthScheme, secretInterfaceType } from "@aipass/schemas";
   import { usageSourceLabelKey } from "../../utils/usageProbe";
   import Card from "../shared/Card.svelte";
   import IntegrationCard from "../integration/IntegrationCard.svelte";
+  import CredentialPricingDialog from "../pricing/CredentialPricingDialog.svelte";
   import PricingGroupDialog from "../pricing/PricingGroupDialog.svelte";
   import ProviderUsageProbeDialog from "./ProviderUsageProbeDialog.svelte";
 
@@ -106,6 +110,7 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    secretId?: string;
     codexApiKeyMode?: CodexApiKeyMode;
   }) => Promise<ToolConfigPreview> = async () => {
     throw localizedMessage("error.toolPreviewUnavailable");
@@ -114,6 +119,7 @@
     tool: ToolConfigTarget;
     mode: ToolConfigMode;
     id: string;
+    secretId?: string;
     codexApiKeyMode?: CodexApiKeyMode;
   }) => Promise<ToolConfigApplyResult> = async () => {
     throw localizedMessage("error.toolApplyUnavailable");
@@ -160,6 +166,10 @@
   let editingSecretEntryId = "";
   let editingSecretLabel = "";
   let editingSecretValue = "";
+  let editingSecretEndpoint = "";
+  let editingSecretModel = "";
+  let newSecretEndpoint = "";
+  let newSecretModel = "";
   let editingSecretInterface: InterfaceType = "openai_compatible";
   let editingSecretGroup = "";
   let editingSecretBilling = { rate: "", currency: "", unitPrice: "" };
@@ -174,8 +184,11 @@
   let codexIntegrationMode: CodexIntegrationMode = "auth_json";
   let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
   let lastIntegrationEntryId = "";
+  let integrationSecretId = "";
   let lastDialogEntryId = "";
   onDestroy(cancelSecretEdit);
+  let pricingSecretId = "";
+  $: pricingSecret = selected?.secretRefs.find(secret => secret.id === pricingSecretId);
   let pricingDialogOpen = false;
   let pricingDialogGroupId: string | undefined;
   let pricingDialogAssign: { entryId: string; secretId: string } | undefined;
@@ -190,11 +203,6 @@
     if (!groupId) return "";
     return pricingGroups.find((item) => item.id === groupId)?.name ?? "";
   }
-
-  $: pricingGroupOptions = [
-    { value: "", label: $t("pricing.none") },
-    ...pricingGroups.map((item) => ({ value: item.id, label: item.name }))
-  ];
 
   function openPricingDialog(secretId: string) {
     if (!selected) return;
@@ -240,6 +248,8 @@
   function openAddSecret() {
     newSecretInterface = selected?.interfaceType ?? "openai_compatible";
     newSecretGroup = "";
+    newSecretEndpoint = "";
+    newSecretModel = "";
     showAddSecret = true;
   }
 
@@ -248,6 +258,8 @@
     editingSecretId = secret.id;
     editingSecretLabel = secret.label;
     editingSecretInterface = secret.interfaceType ?? selected?.interfaceType ?? "openai_compatible";
+    editingSecretEndpoint = secret.endpoint ?? "";
+    editingSecretModel = secret.defaultModel ?? "";
     editingSecretGroup = secret.group ?? selected?.gateway?.group ?? "";
     editingSecretBilling = {
       rate: secret.billing?.rate ?? selected?.gateway?.rate ?? "",
@@ -288,7 +300,7 @@
         editingSecretId,
         editingSecretLabel.trim(),
         editingSecretValue.trim(),
-        { interfaceType: editingSecretInterface, group: editingSecretGroup, billing: editingSecretBilling }
+        { interfaceType: editingSecretInterface, group: editingSecretGroup, endpoint: editingSecretEndpoint, defaultModel: editingSecretModel, billing: editingSecretBilling }
       );
       if (generation !== secretEditGeneration) return false;
       cancelSecretEdit();
@@ -306,7 +318,7 @@
     const entryId = selected?.id;
     addingSecret = true;
     try {
-      await onAddSecret({ interfaceType: newSecretInterface, group: newSecretGroup });
+      await onAddSecret({ interfaceType: newSecretInterface, group: newSecretGroup, endpoint: newSecretEndpoint, defaultModel: newSecretModel });
       if (selected?.id !== entryId) return false;
       showAddSecret = false;
       return true;
@@ -321,41 +333,25 @@
       (selected.quota.label || selected.quota.limit || selected.quota.used || selected.quota.remaining || selected.quota.resetAt)
   );
   $: hasSubscription = Boolean(selected?.subscription);
-  /**
-   * Group, wire format and billing rule for one key. Falls back to the entry's
-   * values for records written before these moved onto the key.
-   */
-  function secretMeta(entry: ProviderEntry, secret: SecretRef) {
-    const chips: Array<{ label: string; value: string; mono?: boolean }> = [];
-    const group = secret.group ?? entry.gateway?.group;
-    if (group) chips.push({ label: $t("providerDetail.keyGroup"), value: group });
-    const format = secret.interfaceType ?? entry.interfaceType;
-    if (format) chips.push({ label: $t("providerDetail.keyFormat"), value: interfaceLabel[format] });
-    const rate = secret.billing?.rate ?? entry.gateway?.rate;
-    if (rate) chips.push({ label: $t("providerDetail.gatewayRate"), value: rate, mono: true });
-    if (secret.billing?.currency) {
-      chips.push({ label: $t("providerDetail.keyBilling"), value: secret.billing.currency });
-    }
-    if (secret.billing?.unitPrice) {
-      chips.push({
-        label: $t("providerDetail.billingUnitPrice"),
-        value: secret.billing.unitPrice,
-        mono: true
-      });
-    }
-    return chips;
+  function integrationEntry(entry: ProviderEntry, secret: SecretRef) {
+    return { ...entry, defaultModel: secret.defaultModel ?? entry.defaultModel, interfaceType: secretInterfaceType(secret, entry.interfaceType),
+      authScheme: secretAuthScheme(secret, entry.interfaceType, entry.authScheme) };
   }
+  $: integrationSecret = selected?.secretRefs.find((secret) => secret.id === integrationSecretId);
   $: integrationTools = selected?.secretRefs.length
-    ? compatibleToolsFor({
-        id: selected.id,
-        title: selected.title,
-        interfaceType: selected.interfaceType,
-        authScheme: selected.authScheme,
-        defaultModel: selected.defaultModel
-      })
+    ? (integrationSecret ? compatibleToolsFor(integrationEntry(selected, integrationSecret))
+      : integrationToolDefinitions.filter(tool => selected!.secretRefs.some(secret =>
+          compatibleToolsFor(integrationEntry(selected!, secret)).some(item => item.id === tool.id))))
+      .map((tool) => ({
+        ...tool,
+        disabledReason: integrationSecret && providerIntegrationAvailability(tool, integrationEntry(selected!, integrationSecret)) === "default-model"
+          ? $t("integration.providerDefaultModelRequired")
+          : undefined
+      }))
     : [];
   // Official OAuth accounts only support the tool's own credential store;
   // API credentials keep the previous write-mode choices.
+  $: keyFormats = selected ? [...new Set(selected.secretRefs.map(secret => secret.interfaceType ?? selected!.interfaceType))] : [];
   $: isOfficialOauth = selected?.credentialKind === "oauth" && selected?.providerKind === "official";
   $: codexIntegrationModeOptions = isOfficialOauth
     ? []
@@ -370,6 +366,10 @@
   $: if (selected?.id && selected.id !== lastIntegrationEntryId) {
     lastIntegrationEntryId = selected.id;
     codexIntegrationMode = "auth_json";
+    integrationSecretId = selected.secretRefs.length === 1 ? selected.secretRefs[0].id : "";
+  }
+  $: if (integrationSecretId && !selected?.secretRefs.some(secret => secret.id === integrationSecretId)) {
+    integrationSecretId = "";
   }
 
   // Close the dialogs only when the selected entry actually changes. Background
@@ -377,8 +377,9 @@
   // an open dialog; the usage dialog re-renders from the refreshed props anyway.
   $: if ((selected?.id ?? "") !== lastDialogEntryId) {
     lastDialogEntryId = selected?.id ?? "";
-    usageDialogOpen = false;
+    pricingSecretId = "";
     pricingDialogOpen = false;
+    usageDialogOpen = false;
     showAddSecret = false;
     newSecretKey = "";
     cancelSecretEdit();
@@ -404,8 +405,8 @@
   }
 
   async function previewIntegration(tool: IntegrationToolDefinition) {
-    if (!selected) throw new Error("no provider selected");
-    const request = integrationRequest(tool, selected.id);
+    if (!selected || !integrationSecret) throw new Error($t("integration.chooseKey"));
+    const request = { ...integrationRequest(tool, selected.id), secretId: integrationSecret.id };
     const apply = onApplyToolConfig;
     return {
       preview: await onPreviewToolConfig(request),
@@ -508,7 +509,7 @@
           <h1>{selected.title}</h1>
           <div class="meta">
             <Badge tone={providerKindTone[selected.providerKind]}>{$t(providerKindLabelKey(selected.providerKind))}</Badge>
-            <Badge>{$t(interfaceLabelKey(selected.interfaceType))}</Badge>
+            <Badge>{$t(keyFormats.length > 1 ? "credential.multipleFormats" : interfaceLabelKey(keyFormats[0] ?? selected.interfaceType))}</Badge>
             <Badge>{$t(selected.credentialKind === "oauth" ? "providerDetail.oauth" : "providerDetail.api")}</Badge>
             {#if selected.accountIdentity}<span class="account-identity">{selected.accountIdentity}</span>{/if}
           </div>
@@ -653,6 +654,9 @@
                       placeholder={$t("providerDetail.keyGroupPlaceholder")}
                       disabled={editingSecretLoading}
                     />
+                  <Field label={$t("credential.endpointOverride")}><input type="url" bind:value={editingSecretEndpoint} placeholder={endpointDisplay(selected)} /></Field>
+                  <Field label={$t("credential.modelOverride")}><input bind:value={editingSecretModel} placeholder={selected.defaultModel || $t("credential.inheritSite")} /></Field>
+                  <span class="inherit-hint">{$t("credential.inheritDefaults")}</span>
                   </div>
                   <details class="secret-billing">
                     <summary>{$t("providerForm.billing")}</summary>
@@ -682,46 +686,9 @@
                   </div>
                 </div>
               {/if}
-              <div class="key-pricing">
-                <SelectField
-                  label={$t("pricing.group")}
-                  value={assignment?.groupId ?? ""}
-                  options={pricingGroupOptions}
-                  onValueChange={(groupId) =>
-                    onSetPricingAssignment(
-                      selected.id,
-                      secret.id,
-                      groupId || null,
-                      assignment?.multiplier ?? 1
-                    )}
-                />
-                <Field label={$t("pricing.multiplier")}>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={assignment?.multiplier ?? 1}
-                    on:change={(event) => {
-                      const multiplier = Number(event.currentTarget.value);
-                      onSetPricingAssignment(
-                        selected.id,
-                        secret.id,
-                        assignment?.groupId ?? null,
-                        Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1
-                      );
-                    }}
-                  />
-                </Field>
-                <button
-                  type="button"
-                  class="key-pricing-advanced"
-                  title={$t("pricing.advanced")}
-                  aria-label={$t("pricing.advanced")}
-                  on:click={() => openPricingDialog(secret.id)}
-                >
-                  <SlidersHorizontal size={13} />
-                </button>
-              </div>
+              <button type="button" class="key-pricing-advanced" on:click={() => (pricingSecretId = secret.id)}>
+                <SlidersHorizontal size={13} /> {$t("pricing.credentialSettings")}
+              </button>
             {/each}
             {#if showAddSecret}
               <div class="add-secret-row">
@@ -753,6 +720,9 @@
                     aria-label={$t("providerDetail.keyGroup")}
                     placeholder={$t("providerDetail.keyGroupPlaceholder")}
                   />
+                  <Field label={$t("credential.endpointOverride")}><input type="url" bind:value={newSecretEndpoint} placeholder={endpointDisplay(selected)} /></Field>
+                  <Field label={$t("credential.modelOverride")}><input bind:value={newSecretModel} placeholder={selected.defaultModel || $t("credential.inheritSite")} /></Field>
+                  <span class="inherit-hint">{$t("credential.inheritDefaults")}</span>
                 </div>
               </div>
             {/if}
@@ -819,6 +789,9 @@
                     placeholder={$t("providerDetail.keyGroupPlaceholder")}
                     disabled={editingSecretLoading}
                   />
+                  <Field label={$t("credential.endpointOverride")}><input type="url" bind:value={editingSecretEndpoint} placeholder={endpointDisplay(selected)} /></Field>
+                  <Field label={$t("credential.modelOverride")}><input bind:value={editingSecretModel} placeholder={selected.defaultModel || $t("credential.inheritSite")} /></Field>
+                  <span class="inherit-hint">{$t("credential.inheritDefaults")}</span>
                 </div>
                 <details class="secret-billing">
                   <summary>{$t("providerForm.billing")}</summary>
@@ -832,15 +805,17 @@
             {:else}
               <div class="kv-row secret clickable" class:copied-flash={copied === `secret:${secret.id}`}>
                 <div class="credential-heading">
-                  <span class="kv-label"><KeyRound size={13} />{secret.label}</span>
+                  <span class="kv-label" title={secret.label}><KeyRound size={13} /><span>{secret.label}</span></span>
                   {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
-                    <span class="pricing-badge" title={pricingGroupName(pricingAssignment.groupId)}>
-                      {#if pricingAssignment.groupId}{pricingGroupName(pricingAssignment.groupId)}{/if}
-                      {#if pricingAssignment.multiplier !== 1}×{pricingAssignment.multiplier}{/if}
-                    </span>
+                    <button type="button" class="pricing-badge" title={pricingGroupName(pricingAssignment.groupId)}
+                      aria-label={`${$t("pricing.credentialSettings")}: ${pricingGroupName(pricingAssignment.groupId)} ×${pricingAssignment.multiplier}`}
+                      on:click|stopPropagation={() => (pricingSecretId = secret.id)}>
+                      {#if pricingAssignment.groupId}<span>{pricingGroupName(pricingAssignment.groupId)}</span>{/if}
+                      {#if pricingAssignment.multiplier !== 1}<span class="pricing-multiplier">×{pricingAssignment.multiplier}</span>{/if}
+                    </button>
                   {/if}
                 </div>
-                <button type="button" class="secret-copy" aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}></button>
+                <button type="button" class="secret-copy" title={secret.label} aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}></button>
                 <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
                 <span class="kv-actions">
                   {#if copied === `secret:${secret.id}`}
@@ -853,6 +828,8 @@
                       on:click={() => onCopySecret(secret.id)}
                     ><Copy size={13} /></button>
                   {/if}
+                  <button type="button" class="icon-btn" aria-label={$t("pricing.credentialSettings")}
+                    on:click|stopPropagation={() => (pricingSecretId = secret.id)}><SlidersHorizontal size={14} /></button>
                   <button
                     type="button"
                     class="icon-btn"
@@ -871,13 +848,9 @@
                     {#if revealedSecrets[secret.id]}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
                   </button>
                 </span>
-                {#if secretMeta(selected, secret).length}
-                  <div class="chips secret-meta">
-                    {#each secretMeta(selected, secret) as chip}
-                      <span class="chip" class:mono={chip.mono}>{chip.label}: {chip.value}</span>
-                    {/each}
-                  </div>
-                {/if}
+                <div class="secret-meta">
+                  <CredentialTags format={secretInterfaceType(secret, selected.interfaceType)} group={secret.group ?? selected.gateway?.group} />
+                </div>
               </div>
             {/if}
           {/each}
@@ -920,6 +893,9 @@
                     aria-label={$t("providerDetail.keyGroup")}
                     placeholder={$t("providerDetail.keyGroupPlaceholder")}
                   />
+                  <Field label={$t("credential.endpointOverride")}><input type="url" bind:value={newSecretEndpoint} placeholder={endpointDisplay(selected)} /></Field>
+                  <Field label={$t("credential.modelOverride")}><input bind:value={newSecretModel} placeholder={selected.defaultModel || $t("credential.inheritSite")} /></Field>
+                  <span class="inherit-hint">{$t("credential.inheritDefaults")}</span>
                 </div>
               </div>
             {:else}
@@ -1089,14 +1065,17 @@
         {#if integrationTools.length > 0}
           <IntegrationCard
             tools={integrationTools}
+            disabled={!integrationSecret}
             detections={toolDetections}
             onRefresh={onRefreshToolDetections}
             codexMode={codexIntegrationMode}
             codexModeOptions={codexIntegrationModeOptions}
             onCodexModeChange={setCodexIntegrationMode}
-            resetKey={`${selected.id}:${codexIntegrationMode}:${isOfficialOauth}`}
+            resetKey={JSON.stringify([selected.id, selected.title, selected.providerId, integrationSecret, selected.interfaceType, selected.authScheme, selected.endpoints, selected.defaultModel, selected.supportsWebsockets, codexIntegrationMode, isOfficialOauth])}
             onPreview={previewIntegration}
-          />
+          >
+            <CredentialPicker entry={selected} value={integrationSecretId} onValueChange={(value) => (integrationSecretId = value)} />
+          </IntegrationCard>
         {/if}
       {/if}
     </div>
@@ -1114,9 +1093,19 @@
     {onApplyUsageProbe}
   />
 
+  {#if pricingSecret}
+    <CredentialPricingDialog
+      entryId={selected.id} secret={pricingSecret} assignment={assignmentFor(pricingSecret.id)}
+      groups={pricingGroups} onSave={onSetPricingAssignment}
+      onEditGroup={() => { const id = pricingSecretId; pricingSecretId = ""; openPricingDialog(id); }}
+      onClose={() => (pricingSecretId = "")}
+    />
+  {/if}
+
   {#if pricingDialogOpen}
     <PricingGroupDialog
       group={pricingDialogGroup}
+      assignedCount={pricingDialogGroupId ? pricingAssignments.filter(item => item.groupId === pricingDialogGroupId).length : pricingDialogAssign ? 1 : 0}
       onSave={savePricingGroup}
       onDeleteGroup={deletePricingGroup}
       onDeleteVersion={onDeletePricingVersion}
@@ -1180,8 +1169,10 @@
     gap: 12px;
     min-width: 0;
   }
-  .credential-heading .kv-label { min-width: 0; overflow-wrap: anywhere; }
-  .credential-heading .pricing-badge { max-width: 70%; }
+  .credential-heading .kv-label { min-width: 0; }
+  .credential-heading .kv-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .credential-heading .kv-label :global(svg) { flex-shrink: 0; }
+  .credential-heading .pricing-badge { max-width: 48%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .quota-unit { margin-left: 0.3em; }
   .kv-row.secret > .kv-actions { grid-row: 2; }
   .notes-body {
@@ -1229,6 +1220,13 @@
     border-bottom: 1px solid var(--divider);
     background: transparent;
   }
+
+  .detail:not(.editing) .detail-header { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 8px; align-items: center; }
+  .detail:not(.editing) .identity, .detail:not(.editing) .identity-text { display: contents; }
+  .detail:not(.editing) .identity :global(.provider-icon) { grid-column: 1; grid-row: 1 / 3; }
+  .detail:not(.editing) .identity-text h1 { grid-column: 2; grid-row: 1; min-width: 0; font-size: 18px; }
+  .detail:not(.editing) .meta { grid-column: 2 / -1; grid-row: 2; flex-wrap: nowrap; overflow: hidden; }
+  .detail:not(.editing) .actions { grid-column: 3; grid-row: 1; }
 
   // Editing uses the header as a persistent action bar. Keeping the title and
   // save controls on one compact row leaves more room for the form at the
@@ -1474,6 +1472,9 @@
   }
 
   .secret-meta {
+    min-width: 0;
+    overflow: hidden;
+    padding-top: 3px;
     grid-column: 1 / -1;
     grid-row: 3;
   }
@@ -1756,8 +1757,16 @@
     color: var(--accent);
     font-size: 11px;
     font-weight: 500;
-    white-space: normal;
-    overflow-wrap: anywhere;
+    white-space: nowrap;
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+    position: relative;
+    z-index: 2;
+    pointer-events: auto;
+    cursor: pointer;
+    span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .pricing-multiplier { flex-shrink: 0; }
+    &:hover { border-color: var(--accent); }
+    &:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
   }
 
   .secret-edit-row,
@@ -1792,6 +1801,8 @@
       }
     }
   }
+
+  .inherit-hint { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 11px; }
 
   .secret-edit-meta {
     grid-column: 1 / -1;

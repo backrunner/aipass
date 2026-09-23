@@ -351,6 +351,8 @@ pub(crate) enum CodexApiKeyMode {
 pub(crate) struct ToolConfigRequest {
     pub(crate) tool: ToolConfigTool,
     pub(crate) id: Uuid,
+    #[serde(default)]
+    pub(crate) secret_id: Option<String>,
     pub(crate) mode: ToolConfigMode,
     #[serde(default)]
     pub(crate) codex_api_key_mode: Option<CodexApiKeyMode>,
@@ -484,6 +486,7 @@ pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> Agen
             ToolConfigTool::Cursor => AgentToolConfigTool::Cursor,
         },
         id: request.id,
+        secret_id: request.secret_id,
         mode: match request.mode {
             ToolConfigMode::Official => AgentToolConfigMode::Official,
             ToolConfigMode::Helper => AgentToolConfigMode::Helper,

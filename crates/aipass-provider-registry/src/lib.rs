@@ -175,10 +175,33 @@ pub struct SecretRef {
     #[serde(default)]
     pub interface_type: Option<InterfaceType>,
     #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
     pub billing: Option<BillingRule>,
 }
 
 impl SecretRef {
+    pub fn effective_auth(
+        &self,
+        site_interface: &InterfaceType,
+        site_auth: &AuthScheme,
+    ) -> AuthScheme {
+        match self
+            .interface_type
+            .as_ref()
+            .filter(|interface| *interface != site_interface)
+        {
+            Some(InterfaceType::OpenAiCompatible) => AuthScheme::Bearer,
+            Some(InterfaceType::AnthropicMessages) => AuthScheme::XApiKey,
+            Some(InterfaceType::Gemini) => AuthScheme::GoogleApiKey,
+            Some(InterfaceType::AzureOpenAi) => AuthScheme::AzureApiKey,
+            Some(InterfaceType::Bedrock) => AuthScheme::AwsProfile,
+            _ => site_auth.clone(),
+        }
+    }
+
     pub fn new(
         id: impl Into<String>,
         label: impl Into<String>,
@@ -192,6 +215,8 @@ impl SecretRef {
             fingerprint: fingerprint.into(),
             group: None,
             interface_type: None,
+            endpoint: None,
+            default_model: None,
             billing: None,
         }
     }

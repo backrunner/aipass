@@ -740,6 +740,8 @@ fn save_detected_secret(
 /// speaks OpenAI, and the entry can only name one of them.
 fn detected_secret_metadata(preview: &BrowserDetectedSecretPreview) -> SecretMetadataInput {
     SecretMetadataInput {
+        endpoint: None,
+        default_model: None,
         group: preview.group.clone(),
         interface_type: Some(preview.interface_type.clone()),
         billing: preview.billing.clone().filter(|rule| !rule.is_empty()),
@@ -1127,9 +1129,38 @@ fn build_tool_config_plan(
             "codex_api_key_mode requires tool=codex and mode=plaintext",
         ));
     }
-    let entry = vault
+    let mut entry = vault
         .get_provider_summary(request.id)
         .map_err(map_vault_error)?;
+    let secret = match request.secret_id.as_deref() {
+        Some(id) => entry
+            .secret_refs
+            .iter()
+            .find(|secret| secret.id == id)
+            .ok_or_else(|| {
+                ServiceError::new(
+                    AgentErrorCode::NotFound,
+                    "selected credential no longer exists",
+                )
+            })?,
+        None if entry.secret_refs.len() == 1 => &entry.secret_refs[0],
+        _ => {
+            return Err(ServiceError::new(
+                AgentErrorCode::ValidationFailed,
+                "select a credential by secret_id before configuring this tool",
+            ))
+        }
+    }
+    .clone();
+    entry.auth_scheme = secret.effective_auth(&entry.interface_type, &entry.auth_scheme);
+    entry.interface_type = secret
+        .interface_type
+        .clone()
+        .unwrap_or(entry.interface_type);
+    entry.title = format!("{} · {}", entry.title, secret.label);
+    if !matches!(request.mode, ToolConfigMode::Official) {
+        ensure_tool_credential(&request.tool, &entry)?;
+    }
     if matches!(request.mode, ToolConfigMode::Official) {
         // Official mode reuses the tool's own CLI credential store, so the
         // vault entry must be that provider's official OAuth account.
@@ -1165,9 +1196,13 @@ fn build_tool_config_plan(
     let mut tool_entry = ToolEntry {
         supports_websockets: entry.supports_websockets,
         id: entry.id,
+        secret_id: Some(secret.id.clone()),
         title: entry.title.clone(),
         provider_id: entry.provider_id.clone(),
-        endpoint: endpoint_url(&entry.endpoints),
+        endpoint: secret
+            .endpoint
+            .clone()
+            .or_else(|| endpoint_url(&entry.endpoints)),
         interface_type: entry.interface_type.clone(),
         auth_scheme: entry.auth_scheme.clone(),
         env_key: match &request.tool {
@@ -1176,15 +1211,37 @@ fn build_tool_config_plan(
             }
             ToolConfigTool::ClaudeCode => "ANTHROPIC_API_KEY".to_string(),
             ToolConfigTool::GeminiCli => "GEMINI_API_KEY".to_string(),
+            // Tools with configurable env names must not share one provider
+            // variable across independently selectable key configurations.
+            _ if matches!(request.mode, ToolConfigMode::Helper) => format!(
+                "AIPASS_KEY_{}_{}",
+                entry.id.simple(),
+                secret
+                    .id
+                    .chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() {
+                        ch.to_ascii_uppercase()
+                    } else {
+                        '_'
+                    })
+                    .collect::<String>()
+            ),
             _ => env_key_for_entry(&entry),
         },
-        default_model: entry.default_model.clone(),
+        default_model: secret
+            .default_model
+            .clone()
+            .or_else(|| entry.default_model.clone()),
         api_key: None,
     };
     if matches!(request.mode, ToolConfigMode::Plaintext) {
-        tool_entry.api_key = Some(vault.reveal_secret(entry.id).map_err(map_vault_error)?);
+        tool_entry.api_key = Some(
+            vault
+                .reveal_secret_by_id(entry.id, &secret.id)
+                .map_err(map_vault_error)?,
+        );
     }
-    let (plan, content) = match (&request.tool, &request.mode) {
+    let (mut plan, content) = match (&request.tool, &request.mode) {
         (ToolConfigTool::Codex, ToolConfigMode::Official) => (if preview {
             aipass_config_writers::preview_codex_official
         } else {
@@ -1279,7 +1336,48 @@ fn build_tool_config_plan(
             ))
         }
     };
+    if matches!(request.mode, ToolConfigMode::Helper)
+        && matches!(
+            request.tool,
+            ToolConfigTool::Codex
+                | ToolConfigTool::OpenCode
+                | ToolConfigTool::Grok
+                | ToolConfigTool::Pi
+        )
+    {
+        let (env_plan, env_content) =
+            plan_tool_env_helper(&home, request.tool.clone(), &tool_entry)?;
+        plan.extra_writes.push(aipass_config_writers::PlannedWrite {
+            target_path: env_plan.target_path,
+            backup_path: env_plan.backup_path,
+            content: env_content,
+        });
+    }
     Ok((entry, plan, content))
+}
+
+fn ensure_tool_credential(tool: &ToolConfigTool, entry: &EntrySummary) -> ServiceResult<()> {
+    let openai = entry.interface_type == InterfaceType::OpenAiCompatible
+        && entry.auth_scheme == AuthScheme::Bearer;
+    let anthropic = entry.interface_type == InterfaceType::AnthropicMessages
+        && matches!(entry.auth_scheme, AuthScheme::Bearer | AuthScheme::XApiKey);
+    let compatible = match tool {
+        ToolConfigTool::Codex => openai,
+        ToolConfigTool::ClaudeCode => anthropic,
+        ToolConfigTool::GeminiCli => {
+            entry.interface_type == InterfaceType::Gemini
+                && entry.auth_scheme == AuthScheme::GoogleApiKey
+        }
+        ToolConfigTool::Grok | ToolConfigTool::Pi | ToolConfigTool::Cursor => openai || anthropic,
+        ToolConfigTool::OpenCode => true,
+    };
+    if !compatible {
+        return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "selected credential's API format is incompatible with this tool",
+        ));
+    }
+    Ok(())
 }
 
 fn build_tool_config_proxy_plan(
@@ -1322,8 +1420,18 @@ fn build_tool_config_proxy_plan(
         .targets
         .iter()
         .filter(|target| target.enabled)
-        .filter_map(|target| vault.get_provider_summary(target.provider_entry_id).ok())
-        .find_map(|entry| entry.default_model.filter(|model| !model.trim().is_empty()));
+        .find_map(|target| {
+            let entry = vault.get_provider_summary(target.provider_entry_id).ok()?;
+            let secret = entry
+                .secret_refs
+                .iter()
+                .find(|secret| secret.id == target.secret_id)?;
+            secret
+                .default_model
+                .clone()
+                .or(entry.default_model)
+                .filter(|model| !model.trim().is_empty())
+        });
     if matches!(request.tool, ToolId::Grok | ToolId::Pi) && default_model.is_none() {
         return Err(ServiceError::new(
             AgentErrorCode::ValidationFailed,
@@ -1333,6 +1441,7 @@ fn build_tool_config_proxy_plan(
     let tool_entry = ToolEntry {
         supports_websockets: Some(true),
         id: route.id,
+        secret_id: None,
         title: route.name.clone(),
         provider_id: None,
         endpoint: Some(endpoint),
@@ -1563,8 +1672,8 @@ fn plan_tool_env_helper(
         _ => entry.env_key.as_str(),
     };
     let mut content = format!(
-        "# Generated by AIPass. This file stores helper references, not plaintext secrets.\nexport {env_key}=\"$(aipass get {} --field api_key --reveal)\"\n",
-        entry.id
+        "# Generated by AIPass. Source this file before starting the tool.\nexport {env_key}=\"$({})\"\n",
+        entry.credential_command()
     );
     if let Some(endpoint) = &entry.endpoint {
         let endpoint_key = match tool {
@@ -2630,6 +2739,76 @@ pub(crate) mod tests {
         assert!(files[0].diff.contains("sk-old-secret"));
         assert!(files[0].diff.contains("sk-new-secret"));
         assert_eq!(combined_tool_config_preview(&files), files[0].diff);
+    }
+
+    #[test]
+    fn tool_configuration_binds_the_selected_key_and_its_overrides() {
+        let dir = tempdir().unwrap();
+        let creation = Vault::create(
+            dir.path().join("vault"),
+            &SecretString::new("fixture-password"),
+        )
+        .unwrap();
+        let vault = &creation.vault;
+        TOOL_HOME_OVERRIDES
+            .lock()
+            .unwrap()
+            .insert(vault.vault_id(), dir.path().join("home"));
+        let id = vault
+            .add_provider(sync_test_provider("Mixed gateway", "fixture-openai-key"))
+            .unwrap();
+        let second = vault
+            .add_secret_with_metadata(
+                id,
+                "Claude",
+                "fixture-anthropic-key",
+                &aipass_vault::SecretMetadataInput {
+                    interface_type: Some(InterfaceType::AnthropicMessages),
+                    endpoint: Some("https://claude.example.test/v1".into()),
+                    default_model: Some("fixture-claude".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut request = ToolConfigRequest {
+            id,
+            secret_id: None,
+            tool: ToolConfigTool::ClaudeCode,
+            mode: ToolConfigMode::Plaintext,
+            codex_api_key_mode: None,
+        };
+        assert!(
+            build_tool_config_plan(vault, &request, true).is_err(),
+            "multiple keys require selection"
+        );
+        request.secret_id = Some(second.clone());
+        let (entry, _, content) = build_tool_config_plan(vault, &request, true).unwrap();
+        assert_eq!(entry.auth_scheme, AuthScheme::XApiKey);
+        assert!(content.contains("fixture-anthropic-key"));
+        assert!(content.contains("https://claude.example.test/v1"));
+        assert!(!content.contains("fixture-openai-key"));
+        request.tool = ToolConfigTool::Codex;
+        assert!(
+            build_tool_config_plan(vault, &request, true).is_err(),
+            "incompatible selected format"
+        );
+        request.tool = ToolConfigTool::Grok;
+        request.mode = ToolConfigMode::Helper;
+        let (_, plan, content) = build_tool_config_plan(vault, &request, true).unwrap();
+        assert!(content.contains("fixture-claude"));
+        let helper = &plan.extra_writes.last().unwrap().content;
+        assert!(helper.contains(&format!("--secret-id '{second}' --reveal")));
+        assert!(!helper.contains("--field api_key"));
+        assert!(!helper.contains("fixture-anthropic-key"));
+        vault.remove_secret(id, &second).unwrap();
+        assert!(
+            build_tool_config_plan(vault, &request, true).is_err(),
+            "deleted key cannot fall back"
+        );
+        TOOL_HOME_OVERRIDES
+            .lock()
+            .unwrap()
+            .remove(&vault.vault_id());
     }
 
     #[test]

@@ -243,8 +243,8 @@ test("offers credentials regardless of their native protocol", () => {
   const labels = [...document.body.querySelectorAll(".select-item .select-item-text")].map(
     (item) => item.textContent
   );
-  expect(labels).toContain("Provider · Primary");
-  expect(labels).toContain("OpenAI · Key");
+  expect(labels).toContain("Provider · Primary · **** · Anthropic Messages");
+  expect(labels).toContain("OpenAI · Key · **** · OpenAI-compatible");
 });
 
 test("uses the selected route protocol for mixed-protocol groups", async () => {

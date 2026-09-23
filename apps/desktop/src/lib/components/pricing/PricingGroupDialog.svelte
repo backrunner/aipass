@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Button } from "@aipass/ui";
+  import { Banner, Button } from "@aipass/ui";
   import { Dialog } from "bits-ui";
-  import { Plus, Trash2, X } from "lucide-svelte";
+  import { ChevronRight, History, Info, Plus, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type {
@@ -13,6 +13,7 @@
   } from "../../types";
 
   export let group: PricingGroup | undefined = undefined;
+  export let assignedCount = 0;
   export let onSave: (group: PricingGroup, applyScope: PricingApplyScope) => MaybePromise = () => {};
   export let onDeleteGroup: (groupId: string) => MaybePromise = () => {};
   export let onDeleteVersion: (groupId: string, effectiveFrom: number) => MaybePromise = () => {};
@@ -133,17 +134,26 @@
   let nameDraft = group?.name ?? "";
   let rules: RuleForm[] = latestRules(group).map(ruleFromModel);
   if (rules.length === 0) rules = [emptyRule()];
-  let view: "form" | "confirm" = "form";
+  let view: "form" | "confirm" | "delete" = "form";
+  let deletingVersion: number | undefined;
   let saving = false;
+  let error = "";
 
   $: versionsDesc = [...(group?.versions ?? [])].sort((a, b) => b.effectiveFrom - a.effectiveFrom);
   $: hasVersions = Boolean(group && group.versions.length > 0);
-  $: canSave = Boolean(nameDraft.trim()) && rules.some((rule) => rule.model.trim());
+  function validPrices(rule: Pick<RuleForm, "input" | "output" | "cacheRead" | "cacheCreation">) {
+    return [rule.input, rule.output, rule.cacheRead, rule.cacheCreation].every(value =>
+      value !== undefined && Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value * 1e6)));
+  }
+  $: canSave = Boolean(nameDraft.trim()) && rules.length > 0
+    && new Set(rules.map(rule => rule.model.trim())).size === rules.length
+    && rules.every(rule => rule.model.trim() && validPrices(rule) && (!rule.offPeak.enabled || validPrices(rule.offPeak)));
 
   let dialogOpen = true;
   let closing = false;
 
   function handleOpenChange(next: boolean) {
+    if (saving) return;
     if (next) {
       dialogOpen = true;
       return;
@@ -155,6 +165,7 @@
   }
 
   function handleClose() {
+    if (saving) return;
     handleOpenChange(false);
   }
 
@@ -194,9 +205,12 @@
   async function confirmSave(applyScope: PricingApplyScope) {
     if (saving) return;
     saving = true;
+    error = "";
     try {
       await onSave(buildGroup(), applyScope);
-      handleClose();
+      onClose();
+    } catch (err) {
+      error = String(err);
     } finally {
       saving = false;
     }
@@ -205,9 +219,13 @@
   async function removeGroup() {
     if (!group || saving) return;
     saving = true;
+    error = "";
     try {
-      await onDeleteGroup(group.id);
-      handleClose();
+      if (deletingVersion !== undefined) await onDeleteVersion(group.id, deletingVersion);
+      else await onDeleteGroup(group.id);
+      onClose();
+    } catch (err) {
+      error = String(err);
     } finally {
       saving = false;
     }
@@ -225,14 +243,21 @@
           </Dialog.Title>
           <Dialog.Close>
             {#snippet child({ props })}
-              <button {...props} type="button" class="close-btn" aria-label={$t("common.close")}>
+              <button {...props} type="button" class="close-btn" disabled={saving} aria-label={$t("common.close")}>
                 <X size={16} />
               </button>
             {/snippet}
           </Dialog.Close>
         </header>
 
-        {#if view === "confirm"}
+        {#if error}<Banner tone="danger">{error}</Banner>{/if}
+        {#if view === "delete"}
+          <div class="modal-body"><p>{$t(deletingVersion !== undefined ? "pricing.deleteVersionConfirm" : "pricing.deleteGroupConfirm")}</p><p>{$t("pricing.sharedImpact", { count: assignedCount })}</p></div>
+          <footer class="modal-footer">
+            <Button variant="ghost" disabled={saving} on:click={() => (view = "form")}>{$t("common.cancel")}</Button>
+            <Button variant="primary" disabled={saving} on:click={removeGroup}>{$t(deletingVersion !== undefined ? "pricing.deleteVersion" : "pricing.deleteGroup")}</Button>
+          </footer>
+        {:else if view === "confirm"}
           <div class="modal-body confirm-body">
             <h3 class="confirm-title">
               {hasVersions ? $t("pricing.confirmUpdateTitle") : $t("pricing.confirmFirstTitle")}
@@ -240,36 +265,44 @@
             <p class="confirm-desc">
               {hasVersions ? $t("pricing.confirmUpdateDesc") : $t("pricing.confirmFirstDesc")}
             </p>
+            <p class="confirm-desc">{$t("pricing.sharedImpact", { count: assignedCount })}</p>
           </div>
           <footer class="modal-footer">
             <Button variant="ghost" on:click={() => (view = "form")} disabled={saving}>
               {$t("common.cancel")}
             </Button>
-            <Button variant="secondary" on:click={() => confirmSave("from_now")} disabled={saving}>
+            <Button variant="primary" on:click={() => confirmSave("from_now")} disabled={saving}>
               {$t("pricing.fromNow")}
             </Button>
-            <Button variant="primary" on:click={() => confirmSave("all_history")} disabled={saving}>
+            <Button variant="secondary" on:click={() => confirmSave("all_history")} disabled={saving}>
               {$t("pricing.allHistory")}
             </Button>
           </footer>
         {:else}
           <div class="modal-body">
-            <label class="field">
+            <div class="group-overview">
+            <label class="field group-name">
               <span class="field-label">{$t("pricing.group")}</span>
               <input bind:value={nameDraft} placeholder={$t("pricing.newGroup")} spellcheck="false" />
             </label>
+            <span class="shared-count" title={$t("pricing.sharedImpact", { count: assignedCount })}>{$t("pricing.assignedKeys", { count: assignedCount })}</span>
+            </div>
 
             <section class="rules-section">
               <div class="rules-header">
-                <h3 class="section-title">{$t("pricing.modelRules")}</h3>
+                <div class="rules-title"><h3 class="section-title">{$t("pricing.modelRules")}</h3><span class="unit-tag">{$t("pricing.priceUnit")}</span></div>
                 <Button variant="secondary" size="sm" on:click={addRule}>
                   <Plus size={13} /> {$t("pricing.addRule")}
                 </Button>
               </div>
 
+              <div class="price-table">
+              <div class="price-columns" aria-hidden="true">
+                <span>{$t("pricing.modelPattern")}</span><span>{$t("pricing.inputPrice")}</span><span>{$t("pricing.outputPrice")}</span><span>{$t("pricing.cacheReadPrice")}</span><span>{$t("pricing.cacheCreationPrice")}</span><span></span>
+              </div>
               {#each rules as rule, index (index)}
                 <div class="rule-card">
-                  <div class="rule-row">
+                  <div class="rule-row rule-row-main">
                     <label class="field model-field">
                       <span class="field-label">{$t("pricing.modelPattern")}</span>
                       <input bind:value={rule.model} placeholder="claude-" spellcheck="false" />
@@ -334,11 +367,13 @@
                   {/if}
                 </div>
               {/each}
+              </div>
+              <p class="rule-help"><Info size={12} /><span>{$t("pricing.rulesHelp")}</span></p>
             </section>
 
             {#if group && versionsDesc.length > 0}
-              <section class="history-section">
-                <h3 class="section-title">{$t("pricing.history")}</h3>
+              <details class="history-section">
+                <summary><ChevronRight size={13} /><History size={13} /><span>{$t("pricing.history")}</span><span class="history-count">{versionsDesc.length}</span></summary>
                 <div class="version-list">
                   {#each versionsDesc as version (version.effectiveFrom)}
                     <div class="version-row">
@@ -355,20 +390,20 @@
                         class="rule-remove"
                         aria-label={$t("pricing.deleteVersion")}
                         title={$t("pricing.deleteVersion")}
-                        on:click={() => group && onDeleteVersion(group.id, version.effectiveFrom)}
+                        on:click={() => { deletingVersion = version.effectiveFrom; view = "delete"; }}
                       >
                         <Trash2 size={13} />
                       </button>
                     </div>
                   {/each}
                 </div>
-              </section>
+              </details>
             {/if}
           </div>
 
           <footer class="modal-footer">
             {#if group}
-              <Button variant="ghost" on:click={removeGroup} disabled={saving}>
+              <Button variant="ghost" on:click={() => { deletingVersion = undefined; view = "delete"; }} disabled={saving}>
                 <Trash2 size={13} /> {$t("pricing.deleteGroup")}
               </Button>
             {/if}
@@ -501,8 +536,8 @@
     padding: 20px;
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    background: var(--bg);
+    gap: 22px;
+    background: var(--surface);
   }
 
   .modal-footer {
@@ -544,7 +579,7 @@
     min-width: 0;
 
     input {
-      min-height: 30px;
+      min-height: 34px;
       padding: 0 9px;
       border: 1px solid var(--border);
       border-radius: var(--radius);
@@ -581,37 +616,23 @@
     gap: 12px;
   }
 
-  .section-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin: 0;
-    padding-left: 2px;
-  }
-
-  .rule-card {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px;
-    background: var(--surface);
-    border: 1px solid var(--divider);
-    border-radius: var(--radius);
-  }
-
-  .rule-row {
-    display: grid;
-    grid-template-columns: minmax(120px, 1.3fr) repeat(4, minmax(76px, 1fr)) auto;
-    gap: 8px;
-    align-items: end;
-  }
-
-  .offpeak-row {
-    grid-template-columns: repeat(2, minmax(72px, 0.7fr)) repeat(4, minmax(76px, 1fr));
-    padding-top: 2px;
-  }
+  .group-overview { display: flex; align-items: flex-end; gap: 16px; }
+  .group-name { flex: 1; max-width: 340px; }
+  .shared-count, .unit-tag, .history-count { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
+  .shared-count { margin-bottom: 6px; background: var(--surface-2); }
+  .rules-title { display: flex; align-items: center; gap: 9px; }
+  .section-title { font-size: 12px; font-weight: 600; color: var(--text); margin: 0; }
+  .unit-tag { color: var(--text-tertiary); font-weight: 400; }
+  .price-table { overflow: hidden; border: 1px solid var(--border); border-radius: 9px; }
+  .price-columns, .rule-row { display: grid; grid-template-columns: minmax(150px, 1.6fr) repeat(4, minmax(76px, 1fr)) 28px; gap: 8px; align-items: end; }
+  .price-columns { padding: 10px 12px; color: var(--text-tertiary); background: var(--surface-2); font-size: 11px; white-space: nowrap; }
+  .rule-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-top: 1px solid var(--divider); }
+  .rule-row-main .field-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+  .price-field input { font-variant-numeric: tabular-nums; }
+  .model-field input { font-family: var(--font-mono); }
+  .offpeak-row { grid-template-columns: repeat(2, minmax(72px, 0.7fr)) repeat(4, minmax(76px, 1fr)); padding: 12px; background: var(--surface-2); border-radius: 6px; }
+  .rule-help { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 11px; color: var(--text-tertiary); line-height: 1.5; }
+  .rule-help :global(svg) { flex-shrink: 0; }
 
   .rule-remove {
     display: inline-flex;
@@ -639,11 +660,12 @@
     cursor: pointer;
   }
 
-  .history-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
+  .history-section { border-top: 1px solid var(--divider); padding-top: 14px; }
+  .history-section summary { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: 12px; cursor: pointer; list-style: none; }
+  .history-section summary::-webkit-details-marker { display: none; }
+  .history-section[open] summary :global(svg:first-child) { transform: rotate(90deg); }
+  .history-count { margin-left: auto; min-width: 22px; justify-content: center; padding: 3px 6px; }
+  .history-section .version-list { margin-top: 12px; }
 
   .version-list {
     display: flex;

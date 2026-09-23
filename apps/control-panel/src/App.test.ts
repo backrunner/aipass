@@ -227,3 +227,25 @@ test("authorization loss removes the open editor and provider data", async () =>
   expect(document.body.textContent).not.toContain("Fixture provider");
   expect(document.body.textContent).not.toContain("Fixture route");
 });
+
+
+test("multiple keys require selection and preview uses the selected key format", async () => {
+  const mixed = structuredClone(snapshot);
+  mixed.providers[0].secrets.push({ id: "key-b", label: "Claude", masked: "••••5678", interfaceType: "anthropic_messages" } as typeof mixed.providers[0]['secrets'][number]);
+  request.mockImplementation(async (path: string) => path === '/api/state' ? mixed : { ok: true });
+  app = mount(App, { target: document.body });
+  await settle(() => expect(document.querySelectorAll('nav button')).toHaveLength(2));
+  document.querySelectorAll<HTMLButtonElement>('nav button')[1].click(); flushSync();
+  const select = document.querySelector<HTMLSelectElement>('.config-form > label select')!;
+  expect(select.value).toBe('');
+  expect(button('Preview changes').disabled).toBe(true);
+  select.value = 'key-b'; select.dispatchEvent(new Event('change', { bubbles: true })); flushSync();
+  expect(button('Preview changes').disabled).toBe(true);
+  const tool = document.querySelector<HTMLSelectElement>('.config-form .form-grid select')!;
+  tool.value = 'claude-code'; tool.dispatchEvent(new Event('change', { bubbles: true })); flushSync();
+  expect(button('Preview changes').disabled).toBe(false);
+  button('Preview changes').click();
+  await settle(() => expect(request).toHaveBeenCalledWith('/api/action', {
+    type: 'tool_preview', selection: {source: 'credential', request: {tool: 'claude-code', id: 'provider-a', secretId: 'key-b', mode: 'helper'}}
+  }, 'fixture-csrf'));
+});
