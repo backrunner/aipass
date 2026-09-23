@@ -531,6 +531,13 @@ Newest entries last within each section.
 - **Watch points**: desktop development, `scripts/build-desktop-sidecars.mjs`, Tauri release builds, and the local macOS validation shell.
 
 
+### Embedded styles must not depend on the checkout directory
+- **Symptom**: the Node CI job passed tests and build but failed the committed embedded-output comparison; local macOS rebuilding produced no diff.
+- **Root cause**: `apps/control-panel/vite.config.ts` used Svelte's default CSS hash for shared components outside the Vite root, including the absolute filename in their scope identifiers.
+- **Fix**: hash the repository-relative, separator-normalized filename together with the CSS. Rebuilt assets match byte-for-byte in two independent checkout directories.
+- **Guardrail**: keep the CI embedded-output comparison enabled and verify both JS and CSS when changing shared component compilation. Never patch only the generated scope identifiers or accept machine-specific output.
+- **Watch points**: control-panel Vite config, shared UI components, `scripts/stamp.mjs`, Agent `build.rs`, and the Node CI reproducibility step.
+
 ## LAN control panel
 
 ### Remote authorization must follow the current vault session
