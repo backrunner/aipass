@@ -516,6 +516,13 @@ Newest entries last within each section.
 
 ## Build toolchain
 
+### Every release job must stamp its own checkout
+- **Symptom**: the nightly CLI artifact reported `0.2.0-beta.1` from `--version`; the SBOM generation path also retained the repository version.
+- **Root cause**: `.github/workflows/release.yml` stamped the desktop job's checkout, but independent CLI and publication jobs checked out the tag without applying its version.
+- **Fix**: stamp the resolved release version before CLI compilation and SBOM generation. Execute each platform's finished CLI and require its reported version to match before packaging.
+- **Guardrail**: treat every job checkout as independent. Verify compiled CLI versions and SBOM metadata against the resolved tag; changing the archive name does not change the embedded version.
+- **Watch points**: desktop, CLI matrix, extension and publish jobs; `scripts/set-release-version.mjs`, `scripts/set-extension-release-version.mjs`, and `scripts/release-metadata.mjs`.
+
 ### CI silently omitted the DMG installation layout
 - **Symptom**: published DMGs opened without the configured background or icon positions; the original 1x PNG also looked soft on Retina displays.
 - **Root cause**: `.github/workflows/release.yml` set `CI=true`, which makes Tauri pass `--skip-jenkins` to create-dmg and skip saving Finder's layout. The background generator downsampled everything to 660×400 pixels.

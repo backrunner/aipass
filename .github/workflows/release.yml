@@ -412,9 +412,30 @@ jobs:
         with:
           ref: ${{ needs.resolve-release.outputs.tag }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Set release version
+        run: node scripts/set-release-version.mjs "${{ needs.resolve-release.outputs.version }}"
+
       - uses: dtolnay/rust-toolchain@stable
 
       - run: cargo build --release -p aipass-cli -p aipass-native-host
+
+      - name: Verify CLI release version
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          const executable = `target/release/aipass${process.platform === 'win32' ? '.exe' : ''}`;
+          const actual = execFileSync(executable, ['--version'], { encoding: 'utf8' }).trim();
+          assert.equal(actual, `aipass ${process.env.RELEASE_VERSION}`);
+          console.log(`Verified ${actual}`);
+          NODE
 
       - name: Package CLI artifacts
         if: runner.os != 'Windows'
@@ -520,7 +541,17 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Generate checksums and SBOM
-        run: node scripts/release-metadata.mjs release-artifacts
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
+        run: |
+          node scripts/set-release-version.mjs "${RELEASE_VERSION}"
+          node scripts/release-metadata.mjs release-artifacts
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const sbom = JSON.parse(readFileSync('release-artifacts/aipass-sbom.cdx.json', 'utf8'));
+          assert.equal(sbom.metadata.component.version, process.env.RELEASE_VERSION);
+          NODE
 
       - name: Create or update draft release
         env:
