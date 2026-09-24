@@ -1,5 +1,10 @@
 import {
   addProvider,
+  addCredential,
+  updateCredential,
+  removeCredential,
+  type CredentialWriteRequest,
+  type CredentialMutationResult,
   applyProviderUsage,
   backfillFavicons,
   deleteProvider,
@@ -134,7 +139,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     limit?: number;
     tabId?: number;
     password?: string;
-    request?: ProviderAddRequest | ProviderUpdateRequest;
+    request?: ProviderAddRequest | ProviderUpdateRequest | CredentialWriteRequest;
     secretId?: string;
     /** Page a dismissal applies to: origin + path. */
     scope?: string;
@@ -343,6 +348,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       sendResponse(response);
     });
+    return true;
+  }
+
+  if ((typed.type === "aipass.credentialAdd" || typed.type === "aipass.credentialUpdate") && typed.request) {
+    const request = typed.request as CredentialWriteRequest;
+    const mutate = typed.type === "aipass.credentialAdd" ? addCredential : updateCredential;
+    mutateCredentialAndRefreshCache(request.entryId, () => mutate(request)).then(sendResponse);
+    return true;
+  }
+  if (typed.type === "aipass.credentialRemove" && typed.entryId && typed.secretId) {
+    mutateCredentialAndRefreshCache(typed.entryId, () => removeCredential(typed.entryId!, typed.secretId!)).then(sendResponse);
     return true;
   }
 
@@ -622,6 +638,22 @@ function refreshUsageForDetectedDraft(draft: DetectedSecretDraft, entryId: strin
   }
 }
 
+async function mutateCredentialAndRefreshCache(entryId: string, mutate: () => Promise<NativeResponse<CredentialMutationResult>>) {
+  const namespace = activeVaultNamespace;
+  const response = await mutate();
+  if (response.ok) {
+    entryCacheMutationVersion += 1;
+    if (namespace === activeVaultNamespace && activeVaultUnlocked) {
+      // Only Rust's masked summary may enter the cache. Never derive a
+      // credential summary from a request carrying a plaintext key.
+      await mutateEntryCache(entries => entries.flatMap(entry => entry.id !== entryId ? [entry]
+        : response.data?.entry ? [response.data.entry] : []));
+      scheduleEntryCacheRefresh("credential.mutation");
+    }
+  }
+  return response;
+}
+
 async function updateProviderAndRefreshCache(request: ProviderUpdateRequest) {
   const response = await updateProvider(request);
   if (response.ok) {
@@ -698,6 +730,7 @@ async function patchCachedEntryFromUpdate(request: ProviderUpdateRequest) {
  * the primary key only — the entry's other groups keep their own values.
  */
 function patchedSecretRefs(entry: ProviderSummary, request: ProviderUpdateRequest): ProviderSummary["secretRefs"] {
+  if (request.providerOnly) return entry.secretRefs;
   const secretRefs = entry.secretRefs;
   if (!secretRefs?.length) return secretRefs;
   const [primary, ...rest] = secretRefs;

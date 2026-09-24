@@ -2785,8 +2785,69 @@ pub(crate) mod tests {
         let (entry, _, content) = build_tool_config_plan(vault, &request, true).unwrap();
         assert_eq!(entry.auth_scheme, AuthScheme::XApiKey);
         assert!(content.contains("fixture-anthropic-key"));
-        assert!(content.contains("https://claude.example.test/v1"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content).unwrap()["env"]
+                ["ANTHROPIC_BASE_URL"],
+            "https://claude.example.test"
+        );
         assert!(!content.contains("fixture-openai-key"));
+
+        // The detail pane's default Claude entry point is helper mode. Both
+        // preview views and the actual writer must use this exact key.
+        request.mode = ToolConfigMode::Helper;
+        let (_, preview_plan, preview_content) =
+            build_tool_config_plan(vault, &request, true).unwrap();
+        let files = tool_config_preview_files(&preview_plan, &preview_content);
+        let command = format!("aipass get {id} --secret-id '{second}' --reveal");
+        let config: serde_json::Value = serde_json::from_str(&files[0].content).unwrap();
+        assert_eq!(config["apiKeyHelper"], command);
+        assert_eq!(config["env"]["ANTHROPIC_MODEL"], "fixture-claude");
+        assert!(files[0].diff.contains(&second));
+        assert!(!files[0].content.contains("fixture-anthropic-key"));
+        assert!(!preview_plan.target_path.exists());
+        let (_, apply_plan, apply_content) =
+            build_tool_config_plan(vault, &request, false).unwrap();
+        assert_eq!(apply_plan.target_path, preview_plan.target_path);
+        assert_eq!(apply_content, files[0].content);
+        let applied =
+            apply_plan_encrypted(&apply_plan, &apply_content, &vault.config_backup_key()).unwrap();
+        assert_eq!(
+            fs::read_to_string(&applied.target_path).unwrap(),
+            files[0].content
+        );
+        rollback_encrypted(&applied.backup_path, &vault.config_backup_key()).unwrap();
+        assert!(!applied.target_path.exists());
+
+        // Editing metadata changes the generated base/model without rebinding
+        // the helper; clearing overrides inherits the provider's versioned base.
+        vault
+            .set_secret_metadata(
+                id,
+                &second,
+                &SecretMetadataInput {
+                    interface_type: Some(InterfaceType::AnthropicMessages),
+                    endpoint: Some(String::new()),
+                    default_model: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (_, _, inherited) = build_tool_config_plan(vault, &request, true).unwrap();
+        let inherited: serde_json::Value = serde_json::from_str(&inherited).unwrap();
+        assert_eq!(inherited["apiKeyHelper"], command);
+        assert_eq!(inherited["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:9");
+        assert!(inherited["env"].get("ANTHROPIC_MODEL").is_none());
+        vault
+            .set_secret_metadata(
+                id,
+                &second,
+                &SecretMetadataInput {
+                    interface_type: Some(InterfaceType::AnthropicMessages),
+                    default_model: Some("fixture-claude".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         request.tool = ToolConfigTool::Codex;
         assert!(
             build_tool_config_plan(vault, &request, true).is_err(),
@@ -2805,6 +2866,25 @@ pub(crate) mod tests {
             build_tool_config_plan(vault, &request, true).is_err(),
             "deleted key cannot fall back"
         );
+        request.tool = ToolConfigTool::ClaudeCode;
+        assert!(build_tool_config_plan(vault, &request, false).is_err());
+        request.secret_id = Some(
+            vault.get_provider_summary(id).unwrap().secret_refs[0]
+                .id
+                .clone(),
+        );
+        assert!(
+            build_tool_config_plan(vault, &request, true).is_err(),
+            "Claude rejects the OpenAI key"
+        );
+        request.tool = ToolConfigTool::Codex;
+        request.mode = ToolConfigMode::Plaintext;
+        let (_, plan, content) = build_tool_config_plan(vault, &request, true).unwrap();
+        assert!(content.contains("http://127.0.0.1:9/v1"));
+        assert!(plan
+            .extra_writes
+            .iter()
+            .any(|write| write.content.contains("fixture-openai-key")));
         TOOL_HOME_OVERRIDES
             .lock()
             .unwrap()

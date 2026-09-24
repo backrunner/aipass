@@ -116,6 +116,32 @@ pub enum NativeRequest {
         #[serde(default)]
         billing: Option<BillingRule>,
     },
+    #[serde(rename = "secret.add")]
+    SecretAdd {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+        label: String,
+        api_key: SensitiveString,
+        metadata: Option<aipass_vault::SecretMetadataInput>,
+    },
+    #[serde(rename = "secret.update")]
+    SecretUpdate {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+        secret_id: String,
+        label: String,
+        api_key: Option<SensitiveString>,
+        metadata: Option<aipass_vault::SecretMetadataInput>,
+    },
+    #[serde(rename = "secret.remove")]
+    SecretRemove {
+        id: Uuid,
+        extension_id: Option<String>,
+        entry_id: Uuid,
+        secret_id: String,
+    },
     /// Set a stored key's group, wire format and billing rule.
     #[serde(rename = "secret.metadataSet")]
     SecretMetadataSet {
@@ -171,6 +197,10 @@ pub enum NativeRequest {
         id: Uuid,
         extension_id: Option<String>,
         entry_id: Uuid,
+        /// New editors manage keys independently; legacy clients retain their
+        /// primary-key patch behavior until they adopt the explicit boundary.
+        #[serde(default)]
+        provider_only: bool,
         title: String,
         provider_id: Option<String>,
         #[serde(default)]

@@ -1743,10 +1743,13 @@
         id: selected.id,
         label: newSecretLabel.trim(),
         apiKey: newSecretKey,
-        metadata: metadata && (metadata.interfaceType || metadata.group?.trim())
+        metadata: metadata
           ? {
               interfaceType: metadata.interfaceType || undefined,
-              group: metadata.group?.trim() || undefined
+              group: metadata.group?.trim() || undefined,
+              endpoint: metadata.endpoint?.trim() || undefined,
+              defaultModel: metadata.defaultModel?.trim() || undefined,
+              billing: metadata.billing
             }
           : undefined
       });
@@ -1776,12 +1779,14 @@
         secretId,
         label: label.trim(),
         apiKey: apiKey?.trim() || undefined,
-        // Always send the current field state: a blanked group is an explicit
-        // clear, an interface pick is an explicit override.
+        // Blank overrides explicitly restore inheritance; omitted fields keep
+        // their existing values in Rust.
         metadata: metadata
           ? {
               interfaceType: metadata.interfaceType || undefined,
               group: metadata.group?.trim() ?? "",
+              endpoint: metadata.endpoint?.trim(),
+              defaultModel: metadata.defaultModel?.trim(),
               billing: metadata.billing
             }
           : undefined

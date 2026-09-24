@@ -250,6 +250,14 @@ fn plan_codex_plaintext_with_history(
     Ok((plan, content))
 }
 
+// Claude Code's Anthropic SDK appends `/v1/messages` to this base, unlike
+// clients that expect a versioned base. Preserve gateway prefixes and only
+// remove a terminal `/v1` shared with an OpenAI-compatible credential.
+fn claude_code_base_url(endpoint: &str) -> String {
+    let endpoint = endpoint.trim_end_matches('/');
+    endpoint.strip_suffix("/v1").unwrap_or(endpoint).to_string()
+}
+
 pub fn plan_claude_code(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, String)> {
     ensure_claude_code_entry(entry)?;
     let target = home.join(".claude").join("settings.json");
@@ -265,7 +273,7 @@ pub fn plan_claude_code(home: &Path, entry: &ToolEntry) -> Result<(ConfigPlan, S
     if let Some(endpoint) = &entry.endpoint {
         env.insert(
             "ANTHROPIC_BASE_URL".to_string(),
-            Value::String(endpoint.clone()),
+            Value::String(claude_code_base_url(endpoint)),
         );
     } else {
         env.remove("ANTHROPIC_BASE_URL");
@@ -336,7 +344,7 @@ pub fn plan_claude_code_plaintext(home: &Path, entry: &ToolEntry) -> Result<(Con
     if let Some(endpoint) = &entry.endpoint {
         env.insert(
             "ANTHROPIC_BASE_URL".to_string(),
-            Value::String(endpoint.clone()),
+            Value::String(claude_code_base_url(endpoint)),
         );
     } else {
         env.remove("ANTHROPIC_BASE_URL");

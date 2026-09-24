@@ -10,6 +10,7 @@ const nativePreviewResponses: unknown[] = [];
 const nativeUsageProbeResponses: unknown[] = [];
 const nativeUsageApplyResponses: unknown[] = [];
 const nativeProviderAddResponses: unknown[] = [];
+const nativeCredentialResponses: unknown[] = [];
 const nativeListResponses: unknown[] = [];
 const nativeMessages: Array<Record<string, unknown>> = [];
 const storageSessionData = new Map<string, unknown>();
@@ -123,6 +124,10 @@ function installChromeStub() {
               data: { entryId: "added-entry" }
             }
           );
+          return;
+        }
+        if (["secret.add", "secret.update", "secret.remove"].includes(type)) {
+          callback(nativeCredentialResponses.shift() ?? { id: "1", ok: false, error: "missing fixture" });
           return;
         }
         if (type === "provider.usageProbe") {
@@ -269,6 +274,7 @@ describe("service worker pending drafts", () => {
     nativeUsageProbeResponses.length = 0;
     nativeUsageApplyResponses.length = 0;
     nativeProviderAddResponses.length = 0;
+    nativeCredentialResponses.length = 0;
     nativeListResponses.length = 0;
     nativeMessages.length = 0;
     storageSessionData.clear();
@@ -594,6 +600,87 @@ describe("service worker pending drafts", () => {
       data?: { entries?: Array<{ id?: string; quota?: { remaining?: string } }> };
     };
     assert.equal(cached.data?.entries?.[0]?.quota?.remaining, "7.5");
+  });
+
+  it("routes credential edits by ID and caches only the native masked summary even if refresh fails", async () => {
+    await import("./service-worker");
+    await dispatchMessage({ type: "aipass.ping" });
+    const primary = { id: "key-openai", label: "OpenAI", masked: "•••• 1234", fingerprint: "fp-1234", interfaceType: "openai_compatible" };
+    const secondary = { id: "key-claude", label: "Claude", masked: "•••• 5678", fingerprint: "fp-5678", interfaceType: "anthropic_messages", endpoint: "https://relay.test/anthropic", defaultModel: "claude-fixture" };
+    nativeListResponses.push(listResponse([providerEntry({ secretRefs: [primary, secondary] })]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+
+    const updated = providerEntry({ secretRefs: [primary, { ...secondary, endpoint: undefined, defaultModel: undefined, label: "Claude new", masked: "•••• 9999", fingerprint: "fp-new" }] });
+    nativeCredentialResponses.push({ id: "1", ok: true, data: { entryId: "entry-1", secretId: secondary.id, entry: updated } });
+    nativeListResponses.push({ id: "1", ok: false, error: "refresh unavailable" });
+    const request = { entryId: "entry-1", secretId: secondary.id, label: "Claude new", apiKey: "synthetic-rotated-key-9999", metadata: { interfaceType: "anthropic_messages", endpoint: "", defaultModel: "", group: "production", billing: { rate: "2", currency: "USD", unitPrice: "" } } };
+    const response = await dispatchMessage({ type: "aipass.credentialUpdate", request }) as { ok: boolean };
+    assert.equal(response.ok, true);
+    await settleAsyncWork();
+    const wire = nativeMessages.find(message => message.type === "secret.update");
+    assert.equal(wire?.secret_id, secondary.id);
+    assert.equal(wire?.api_key, request.apiKey);
+    assert.deepEqual(wire?.metadata, request.metadata);
+    const cached = await dispatchMessage({ type: "aipass.cachedEntriesList" }) as { data: { entries: unknown[] } };
+    assert.deepEqual(cached.data.entries, [updated]);
+    assert.ok(!JSON.stringify([...storageSessionData.values()]).includes(request.apiKey));
+  });
+
+  it("refreshes additions and preserves an explicitly empty credential list after removing the last key", async () => {
+    await import("./service-worker");
+    await dispatchMessage({ type: "aipass.ping" });
+    nativeListResponses.push(listResponse([providerEntry({ secretRefs: [] })]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+    const secret = { id: "new-key", label: "Claude", masked: "•••• 1234", fingerprint: "fp", interfaceType: "anthropic_messages" };
+    const added = providerEntry({ secretRefs: [secret] });
+    nativeCredentialResponses.push({ id: "1", ok: true, data: { entryId: "entry-1", secretId: secret.id, entry: added } });
+    nativeListResponses.push(listResponse([added]));
+    await dispatchMessage({ type: "aipass.credentialAdd", request: { entryId: "entry-1", label: secret.label, apiKey: "synthetic-added-key", metadata: { interfaceType: "anthropic_messages" } } });
+    await settleAsyncWork();
+    assert.equal(nativeMessages.find(message => message.type === "secret.add")?.entry_id, "entry-1");
+
+    const removed = providerEntry({ secretRefs: [] });
+    nativeCredentialResponses.push({ id: "1", ok: true, data: { entryId: "entry-1", secretId: secret.id, entry: removed } });
+    nativeListResponses.push({ id: "1", ok: false, error: "refresh unavailable" });
+    await dispatchMessage({ type: "aipass.credentialRemove", entryId: "entry-1", secretId: secret.id });
+    await settleAsyncWork();
+    assert.equal(nativeMessages.find(message => message.type === "secret.remove")?.secret_id, secret.id);
+    const cached = await dispatchMessage({ type: "aipass.cachedEntriesList" }) as { data: { entries: unknown[] } };
+    assert.deepEqual(cached.data.entries, [removed]);
+  });
+
+  it("keeps the cache on a failed edit but invalidates an entry when a successful edit cannot return its summary", async () => {
+    await import("./service-worker");
+    await dispatchMessage({ type: "aipass.ping" });
+    const original = providerEntry();
+    nativeListResponses.push(listResponse([original]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+    const request = { entryId: "entry-1", secretId: "key-1", label: "Key", metadata: {} };
+    nativeCredentialResponses.push({ id: "1", ok: false, error: "selected credential no longer exists" });
+    const failed = await dispatchMessage({ type: "aipass.credentialUpdate", request }) as { ok: boolean };
+    assert.equal(failed.ok, false);
+    let cached = await dispatchMessage({ type: "aipass.cachedEntriesList" }) as { data: { entries: unknown[] } };
+    assert.deepEqual(cached.data.entries, [original]);
+    nativeCredentialResponses.push({ id: "1", ok: true, data: { entryId: "entry-1", secretId: "key-1" } });
+    nativeListResponses.push({ id: "1", ok: false, error: "refresh unavailable" });
+    await dispatchMessage({ type: "aipass.credentialUpdate", request });
+    await settleAsyncWork();
+    cached = await dispatchMessage({ type: "aipass.cachedEntriesList" }) as { data: { entries: unknown[] } };
+    assert.deepEqual(cached.data.entries, []);
+  });
+
+  it("does not patch any credential when a provider-only edit changes the site protocol", async () => {
+    await import("./service-worker");
+    await dispatchMessage({ type: "aipass.ping" });
+    const secretRefs = [{ id: "openai", interfaceType: "openai_compatible", group: "old" }, { id: "claude", interfaceType: "anthropic_messages" }];
+    nativeListResponses.push(listResponse([providerEntry({ secretRefs })]));
+    await dispatchMessage({ type: "aipass.entriesList" });
+    nativeListResponses.push({ id: "1", ok: false, error: "refresh unavailable" });
+    await dispatchMessage({ type: "aipass.providerUpdate", request: { id: "entry-1", providerOnly: true, title: "Edited", domain: [], endpoints: [], consoleEndpoints: [], interfaceType: "anthropic_messages", authScheme: "x_api_key", modelAliases: [], tags: [] } });
+    await settleAsyncWork();
+    const cached = await dispatchMessage({ type: "aipass.cachedEntriesList" }) as { data: { entries: Array<{ secretRefs: unknown }> } };
+    assert.deepEqual(cached.data.entries[0].secretRefs, secretRefs);
+    assert.equal(nativeMessages.find(message => message.type === "provider.update")?.provider_only, true);
   });
 
   it("does not consume the automatic usage refresh slot when the probe fails", async () => {

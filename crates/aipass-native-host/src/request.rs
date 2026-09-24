@@ -265,6 +265,67 @@ fn handle_request_inner(
             )?;
             Ok(serde_json::to_value(result)?)
         }
+        NativeRequest::SecretAdd {
+            entry_id,
+            label,
+            api_key,
+            metadata,
+            ..
+        } => {
+            let secret_id: String = request_agent(
+                config,
+                &AgentRequest::SecretAdd {
+                    id: entry_id,
+                    label,
+                    secret: api_key,
+                    metadata,
+                },
+            )?;
+            Ok(credential_mutation_response(config, entry_id, &secret_id))
+        }
+        NativeRequest::SecretUpdate {
+            entry_id,
+            secret_id,
+            label,
+            api_key,
+            metadata,
+            ..
+        } => {
+            let _: serde_json::Value = request_agent(
+                config,
+                &AgentRequest::SecretUpdate {
+                    id: entry_id,
+                    secret_id: secret_id.clone(),
+                    label,
+                    secret: api_key,
+                    metadata,
+                },
+            )?;
+            Ok(credential_mutation_response(config, entry_id, &secret_id))
+        }
+        NativeRequest::SecretRemove {
+            entry_id,
+            secret_id,
+            ..
+        } => {
+            let entry: aipass_vault::EntrySummary =
+                request_agent(config, &AgentRequest::ProviderGet { id: entry_id })?;
+            if !entry
+                .secret_refs
+                .iter()
+                .any(|secret| secret.id == secret_id)
+            {
+                bail!("selected credential no longer exists");
+            }
+            let _: serde_json::Value = request_agent(
+                config,
+                &AgentRequest::SecretRemove {
+                    id: entry_id,
+                    label: secret_id.clone(),
+                },
+            )?;
+            Ok(credential_mutation_response(config, entry_id, &secret_id))
+        }
         NativeRequest::SecretMetadataSet {
             entry_id,
             secret_id,
@@ -365,6 +426,7 @@ fn handle_request_inner(
         }
         NativeRequest::ProviderUpdate {
             entry_id,
+            provider_only,
             title,
             provider_id,
             domain,
@@ -399,14 +461,18 @@ fn handle_request_inner(
                     .filter_map(non_empty)
                     .map(ProviderEndpoint::console),
             );
-            let secret_metadata = aipass_vault::SecretMetadataInput {
-                endpoint: None,
-                default_model: None,
-                // `Some("")` is an explicit clear from a full edit form;
-                // `None` comes from older clients and preserves stored data.
-                group: group.map(|value| value.trim().to_string()),
-                interface_type: Some(interface_type.clone()),
-                billing,
+            let secret_metadata = if provider_only {
+                Default::default()
+            } else {
+                aipass_vault::SecretMetadataInput {
+                    endpoint: None,
+                    default_model: None,
+                    // `Some("")` is an explicit clear from a full edit form;
+                    // `None` comes from older clients and preserves stored data.
+                    group: group.map(|value| value.trim().to_string()),
+                    interface_type: Some(interface_type.clone()),
+                    billing,
+                }
             };
             let input = ProviderEntryUpdateInput {
                 max_concurrent_requests: None,
@@ -421,8 +487,12 @@ fn handle_request_inner(
                 endpoints: api_endpoints,
                 interface_type,
                 auth_scheme,
-                api_key: api_key.map(|value| value.into_inner()).and_then(non_empty),
-                secret_label,
+                api_key: if provider_only {
+                    None
+                } else {
+                    api_key.map(|value| value.into_inner()).and_then(non_empty)
+                },
+                secret_label: if provider_only { None } else { secret_label },
                 default_model: default_model.and_then(non_empty),
                 model_aliases: model_aliases
                     .into_iter()
@@ -509,6 +579,21 @@ fn handle_request_inner(
     }
 }
 
+fn credential_mutation_response(
+    config: &NativeHostConfig,
+    entry_id: Uuid,
+    secret_id: &str,
+) -> serde_json::Value {
+    // The mutation already succeeded. A subsequent refresh failure must not
+    // encourage replaying it; clients invalidate stale metadata and refresh.
+    let entry = request_agent::<aipass_vault::EntrySummary>(
+        config,
+        &AgentRequest::ProviderGet { id: entry_id },
+    )
+    .ok();
+    json!({ "entryId": entry_id, "secretId": secret_id, "entry": entry })
+}
+
 fn non_empty(value: String) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -526,6 +611,9 @@ fn request_id(request: &NativeRequest) -> Uuid {
         | NativeRequest::SaveDetected { id, .. }
         | NativeRequest::PreviewDetected { id, .. }
         | NativeRequest::SecretMetadataSet { id, .. }
+        | NativeRequest::SecretAdd { id, .. }
+        | NativeRequest::SecretUpdate { id, .. }
+        | NativeRequest::SecretRemove { id, .. }
         | NativeRequest::ProviderAdd { id, .. }
         | NativeRequest::ProviderUpdate { id, .. }
         | NativeRequest::ProviderUsageProbe { id, .. }
@@ -551,6 +639,9 @@ fn request_extension_id(request: &NativeRequest) -> Option<&str> {
         | NativeRequest::SaveDetected { extension_id, .. }
         | NativeRequest::PreviewDetected { extension_id, .. }
         | NativeRequest::SecretMetadataSet { extension_id, .. }
+        | NativeRequest::SecretAdd { extension_id, .. }
+        | NativeRequest::SecretUpdate { extension_id, .. }
+        | NativeRequest::SecretRemove { extension_id, .. }
         | NativeRequest::ProviderAdd { extension_id, .. }
         | NativeRequest::ProviderUpdate { extension_id, .. }
         | NativeRequest::ProviderUsageProbe { extension_id, .. }

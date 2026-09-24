@@ -23,3 +23,5 @@ export { default as ProviderIcon } from "./components/ProviderIcon.svelte";
 export { default as SecretField } from "./components/SecretField.svelte";
 export { default as SelectField } from "./components/SelectField.svelte";
 export { default as SwitchField } from "./components/SwitchField.svelte";
+
+export { default as CredentialBillingFields } from "./components/CredentialBillingFields.svelte";

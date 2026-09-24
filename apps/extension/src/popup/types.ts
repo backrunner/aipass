@@ -24,6 +24,8 @@ export type Entry = {
     fingerprint: string;
     group?: string;
     interfaceType?: InterfaceType;
+    endpoint?: string;
+    defaultModel?: string;
     billing?: BillingRule;
   }>;
   faviconUrl?: string;

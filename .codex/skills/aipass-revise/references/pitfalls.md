@@ -190,6 +190,27 @@ Newest entries last within each section.
 - **Guardrail**: bind confirmation to the request that produced its preview. Include provider/route identity and write mode in invalidation; ignore late success and failure. Cover provider changes, mode changes and repeated confirmation in integration tests.
 - **Watch points**: provider and proxy route integrations, Codex mode selection, direct configuration versus local proxy tokens, and English/Chinese security copy.
 
+### Claude Code must receive an unversioned Anthropic base
+- **Symptom**: a mixed OpenAI/Anthropic provider produced a Claude Code configuration whose requests used `/v1/v1/messages`.
+- **Root cause**: `crates/aipass-config-writers/src/plan.rs::plan_claude_code` and `plan_claude_code_plaintext` copied the selected or inherited versioned API base into `ANTHROPIC_BASE_URL`; Claude Code's SDK appends `/v1/messages` itself. Only the local-proxy path accounted for that difference.
+- **Fix**: both Claude writers share terminal `/v1` normalization, preserving gateway prefixes and other version paths. Preview and apply use the same writer.
+- **Guardrail**: test Claude helper and plaintext modes with per-key and inherited endpoints, both auth schemes, preserved unrelated settings, encrypted apply/rollback, and exact secret IDs. Keep OpenAI bases versioned. Cover mixed-format selection, read-only/full preview, confirmation and stale credential invalidation in `ProviderDetailPane.test.ts`.
+- **Watch points**: direct provider, local-proxy and CLI configuration plans; agent `tool_configuration_binds_the_selected_key_and_its_overrides`; writer `claude_writers_normalize_versioned_bases_and_preserve_other_settings`.
+
+### Credential overrides must survive the desktop request adapter
+- **Symptom**: a credential's endpoint and default model appeared editable but reverted after saving; integrations kept using provider defaults.
+- **Root cause**: `apps/desktop/src/App.svelte::addSecret` and `updateSecret` rebuilt metadata with only the older interface/group/billing fields, dropping the endpoint/model supplied by `ProviderDetailPane`.
+- **Fix**: forward endpoint/model on both operations, trimming input and preserving empty strings on edits so Rust can clear overrides and restore inheritance.
+- **Guardrail**: test the mounted App through its Tauri boundary, not only the detail component's callbacks. Cover add, edit, clear and reopen with mixed-format keys in `App.operations.test.ts`; keep omitted fields distinct from explicit clears.
+- **Watch points**: `SecretKeyMetadata`, `SecretMetadataInput`, desktop add/update adapters, per-key integration availability and Agent configuration plans.
+
+### Extension key editors must preserve the provider and credential boundary
+- **Symptom**: extension provider editing could patch only the first key, change its format on a site-only save, and omit endpoint/model overrides supported by desktop.
+- **Root cause**: `popup/Popup.svelte::draftFromEntry` hydrated first-key fields and native `ProviderUpdate` always patched that key; summary types and worker routing exposed no full per-key mutation.
+- **Fix**: edit/add/remove by credential ID through existing Agent requests, mark site-only updates explicitly, preserve empty key arrays and share `CredentialBillingFields` with desktop. Refresh caches only from Rust's masked summary; invalidate stale entries when a successful mutation cannot return its summary.
+- **Guardrail**: verify mixed-key edit/clear/rotation, provider-only saves, last-key deletion and lock rejection in native-host, worker and popup regressions. Never construct cached summaries from plaintext mutation requests. Keep credential sections from flex-shrinking inside popup scroll containers.
+- **Watch points**: `CredentialList.svelte`, `Popup.svelte`, `native-client.ts`, `service-worker.ts`, native-host protocol/request adapters, and desktop `ProviderDetailPane`.
+
 ## Proxy credential snapshot (proxy_service / handlers)
 
 ### Unified key editors must not resubmit a first-key snapshot

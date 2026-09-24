@@ -1,4 +1,4 @@
-import type { CredentialKind, SubscriptionSnapshot } from "@aipass/schemas";
+import type { CredentialKind, InterfaceType, SubscriptionSnapshot } from "@aipass/schemas";
 
 export const NATIVE_HOST = "dev.aipass.native";
 
@@ -97,6 +97,8 @@ export interface ProviderSummary {
     fingerprint: string;
     group?: string;
     interfaceType?: string;
+    endpoint?: string;
+    defaultModel?: string;
     billing?: BillingRule;
   }>;
   defaultModel?: string;
@@ -621,6 +623,7 @@ export interface ProviderAddRequest {
 }
 
 export interface ProviderUpdateRequest extends Omit<ProviderAddRequest, "apiKey" | "headers"> {
+  providerOnly?: boolean;
   id: string;
   apiKey?: string;
   headers?: Array<[string, string]>;
@@ -657,6 +660,7 @@ export function updateProvider(request: ProviderUpdateRequest): Promise<NativeRe
     id: crypto.randomUUID(),
     type: "provider.update",
     entry_id: request.id,
+    provider_only: request.providerOnly,
     title: request.title,
     provider_id: request.providerId,
     domain: request.domain,
@@ -782,4 +786,31 @@ export function setSecretMetadata(
     interface_type: metadata.interfaceType,
     billing: metadata.billing
   });
+}
+
+export type CredentialWriteRequest = {
+  entryId: string;
+  secretId?: string;
+  label: string;
+  apiKey?: string;
+  metadata: {
+    interfaceType?: InterfaceType;
+    group?: string;
+    endpoint?: string;
+    defaultModel?: string;
+    billing?: BillingRule;
+  };
+};
+export type CredentialMutationResult = { entryId: string; secretId: string; entry?: ProviderSummary };
+
+export function addCredential(request: CredentialWriteRequest): Promise<NativeResponse<CredentialMutationResult>> {
+  return nativeRequest({ id: crypto.randomUUID(), type: "secret.add", entry_id: request.entryId,
+    label: request.label, api_key: request.apiKey, metadata: request.metadata });
+}
+export function updateCredential(request: CredentialWriteRequest): Promise<NativeResponse<CredentialMutationResult>> {
+  return nativeRequest({ id: crypto.randomUUID(), type: "secret.update", entry_id: request.entryId,
+    secret_id: request.secretId, label: request.label, api_key: request.apiKey, metadata: request.metadata });
+}
+export function removeCredential(entryId: string, secretId: string): Promise<NativeResponse<CredentialMutationResult>> {
+  return nativeRequest({ id: crypto.randomUUID(), type: "secret.remove", entry_id: entryId, secret_id: secretId });
 }

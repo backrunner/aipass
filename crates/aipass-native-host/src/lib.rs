@@ -441,6 +441,105 @@ mod tests {
     }
 
     #[test]
+    fn credential_editing_round_trip_is_bound_to_the_selected_key() {
+        let agent = RunningAgent::start();
+        agent.unlock();
+        let config = agent.config();
+        let call = |mut value: serde_json::Value| {
+            value["id"] = serde_json::json!(Uuid::new_v4());
+            handle_request_with_config(serde_json::from_value(value).unwrap(), &config)
+        };
+        let added = call(serde_json::json!({
+            "type": "provider.add", "title": "Mixed relay", "interface_type": "openai_compatible",
+            "auth_scheme": "bearer", "api_key": "fixture-openai-key", "endpoint": "https://relay.test/v1"
+        }));
+        assert!(added.ok, "{added:?}");
+        let id = added.data["entryId"].clone();
+        let added_key = call(serde_json::json!({
+            "type": "secret.add", "entry_id": id, "label": "Claude", "api_key": "fixture-claude-key",
+            "metadata": { "interfaceType": "anthropic_messages", "endpoint": "https://relay.test/anthropic/v1",
+                "defaultModel": "claude-fixture", "group": "vip", "billing": { "rate": "1.5x", "currency": "USD" } }
+        }));
+        assert!(added_key.ok, "{added_key:?}");
+        let secret_id = added_key.data["secretId"].clone();
+        let first = added_key.data["entry"]["secretRefs"][0].clone();
+        let selected = &added_key.data["entry"]["secretRefs"][1];
+        assert_eq!(selected["endpoint"], "https://relay.test/anthropic/v1");
+        assert_eq!(selected["defaultModel"], "claude-fixture");
+        assert!(!added_key.data.to_string().contains("fixture-claude-key"));
+
+        let updated = call(serde_json::json!({ "type": "secret.update", "entry_id": id,
+            "secret_id": secret_id, "label": "Claude renamed", "api_key": "fixture-rotated-key",
+            "metadata": { "endpoint": "", "defaultModel": "", "group": "", "billing": { "rate": "2x" } } }));
+        assert!(updated.ok, "{updated:?}");
+        assert_eq!(updated.data["entry"]["secretRefs"][0], first);
+        let selected = &updated.data["entry"]["secretRefs"][1];
+        assert_eq!(selected["id"], secret_id);
+        assert_eq!(selected["interfaceType"], "anthropic_messages");
+        assert!(selected["endpoint"].is_null());
+        assert!(selected["defaultModel"].is_null());
+        assert!(selected["group"].is_null());
+        assert_eq!(selected["billing"]["currency"], "USD");
+        assert_eq!(selected["billing"]["rate"], "2x");
+        assert_ne!(
+            selected["fingerprint"],
+            added_key.data["entry"]["secretRefs"][1]["fingerprint"]
+        );
+        let retained = call(serde_json::json!({ "type": "secret.update", "entry_id": id,
+            "secret_id": secret_id, "label": "Claude renamed", "metadata": { "billing": { "currency": "" } } }));
+        assert!(retained.ok, "{retained:?}");
+        assert_eq!(
+            retained.data["entry"]["secretRefs"][1]["fingerprint"],
+            selected["fingerprint"]
+        );
+
+        let provider = call(
+            serde_json::json!({ "type": "provider.update", "entry_id": id, "provider_only": true,
+            "title": "Relay renamed", "interface_type": "anthropic_messages", "auth_scheme": "x_api_key",
+            "api_key": "must-not-replace-first-key", "group": "must-not-replace-group" }),
+        );
+        assert!(provider.ok, "{provider:?}");
+        let entries = call(serde_json::json!({ "type": "entries.list" }));
+        assert_eq!(
+            entries.data["entries"][0]["secretRefs"],
+            retained.data["entry"]["secretRefs"]
+        );
+        let invalid_id = call(
+            serde_json::json!({ "type": "secret.remove", "entry_id": id, "secret_id": "Claude renamed" }),
+        );
+        assert!(
+            !invalid_id.ok,
+            "key labels must not be accepted as stable IDs"
+        );
+        let removed = call(
+            serde_json::json!({ "type": "secret.remove", "entry_id": id, "secret_id": secret_id }),
+        );
+        assert!(removed.ok, "{removed:?}");
+        assert_eq!(
+            removed.data["entry"]["secretRefs"],
+            serde_json::json!([first])
+        );
+        let stale = call(serde_json::json!({ "type": "secret.update", "entry_id": id,
+            "secret_id": secret_id, "label": "Stale", "api_key": "must-not-replace-first-key" }));
+        assert!(!stale.ok);
+        let empty = call(
+            serde_json::json!({ "type": "secret.remove", "entry_id": id, "secret_id": first["id"] }),
+        );
+        assert!(empty.ok, "{empty:?}");
+        assert_eq!(empty.data["entry"]["secretRefs"], serde_json::json!([]));
+        let _: serde_json::Value = agent
+            .client
+            .request(&AgentRequest::SessionLock {
+                reason: aipass_agent_protocol::LockReason::Manual,
+            })
+            .unwrap();
+        let locked = call(
+            serde_json::json!({ "type": "secret.add", "entry_id": id, "label": "Locked", "api_key": "locked-key" }),
+        );
+        assert!(!locked.ok);
+    }
+
+    #[test]
     fn provider_update_and_delete_round_trip() {
         let agent = RunningAgent::start();
         agent.unlock();
@@ -480,6 +579,7 @@ mod tests {
 
         let update = handle_request_with_config(
             NativeRequest::ProviderUpdate {
+                provider_only: false,
                 id: Uuid::new_v4(),
                 extension_id: None,
                 entry_id,
@@ -533,6 +633,7 @@ mod tests {
         // primary key; these are per-key fields the entry itself cannot hold.
         let regrouped = handle_request_with_config(
             NativeRequest::ProviderUpdate {
+                provider_only: false,
                 id: Uuid::new_v4(),
                 extension_id: None,
                 entry_id,

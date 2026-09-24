@@ -69,6 +69,84 @@ mod tests {
     }
 
     #[test]
+    fn claude_writers_normalize_versioned_bases_and_preserve_other_settings() {
+        for (endpoint, expected) in [
+            ("https://relay.test", "https://relay.test"),
+            ("https://relay.test/", "https://relay.test"),
+            ("https://relay.test/v1", "https://relay.test"),
+            ("https://relay.test/v1/", "https://relay.test"),
+            (
+                "https://relay.test/anthropic/v1",
+                "https://relay.test/anthropic",
+            ),
+            (
+                "https://relay.test/anthropic",
+                "https://relay.test/anthropic",
+            ),
+            ("https://relay.test/v1beta", "https://relay.test/v1beta"),
+            (
+                "https://relay.test/v1/tenant",
+                "https://relay.test/v1/tenant",
+            ),
+        ] {
+            for auth in [AuthScheme::XApiKey, AuthScheme::Bearer] {
+                for plaintext in [false, true] {
+                    let dir = tempdir().unwrap();
+                    let target = dir.path().join(".claude/settings.json");
+                    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+                    let before = r#"{"theme":"dark","permissions":{"allow":["Read"]},"apiKeyHelper":"old-helper","anthropicBaseUrl":"https://old.test","env":{"KEEP":"yes","ANTHROPIC_API_KEY":"old-key","ANTHROPIC_AUTH_TOKEN":"old-token","ANTHROPIC_MODEL":"old-model"}}"#;
+                    std::fs::write(&target, before).unwrap();
+                    let mut entry = entry(InterfaceType::AnthropicMessages, auth.clone());
+                    entry.secret_id = Some("claude-key".into());
+                    entry.endpoint = Some(endpoint.into());
+                    entry.api_key = Some("fixture-claude-key".into());
+                    let (plan, content) = if plaintext {
+                        plan_claude_code_plaintext(dir.path(), &entry)
+                    } else {
+                        plan_claude_code(dir.path(), &entry)
+                    }
+                    .unwrap();
+                    let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+                    assert_eq!(json["env"]["ANTHROPIC_BASE_URL"], expected, "{endpoint}");
+                    assert_eq!(
+                        json["env"]["ANTHROPIC_MODEL"],
+                        entry.default_model.as_deref().unwrap()
+                    );
+                    assert_eq!(json["env"]["KEEP"], "yes");
+                    assert_eq!(json["theme"], "dark");
+                    assert_eq!(json["permissions"]["allow"][0], "Read");
+                    assert!(json.get("anthropicBaseUrl").is_none());
+                    if plaintext {
+                        let (active, other) = if auth == AuthScheme::Bearer {
+                            ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+                        } else {
+                            ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+                        };
+                        assert_eq!(json["env"][active], "fixture-claude-key");
+                        assert!(json["env"].get(other).is_none());
+                        assert!(json.get("apiKeyHelper").is_none());
+                    } else {
+                        assert_eq!(json["apiKeyHelper"], entry.credential_command());
+                        assert!(json["env"].get("ANTHROPIC_API_KEY").is_none());
+                        assert!(json["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
+                        assert!(!content.contains("fixture-claude-key"));
+                    }
+                    assert_eq!(
+                        std::fs::read_to_string(&target).unwrap(),
+                        before,
+                        "preview must not write"
+                    );
+                    let backup_key = [7; 32];
+                    let applied = apply_plan_encrypted(&plan, &content, &backup_key).unwrap();
+                    assert_eq!(std::fs::read_to_string(&target).unwrap(), content);
+                    rollback_encrypted(&applied.backup_path, &backup_key).unwrap();
+                    assert_eq!(std::fs::read_to_string(&target).unwrap(), before);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn codex_preview_never_reads_session_history_in_any_auth_mode() {
         let _guard = codex_env_lock().lock().unwrap();
         let dir = tempdir().unwrap();

@@ -56,6 +56,53 @@ async function render(overrides: Record<string, (args: any) => unknown> = {}) {
   await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
 }
 
+test.each(["add", "edit", "clear"] as const)("credential %s persists endpoint and model overrides through the desktop bridge", async (action) => {
+  const entry = structuredClone(fixtureEntry);
+  entry.defaultModel = "site-model";
+  entry.secretRefs!.push({ id: "claude", label: "Claude", masked: "••••", fingerprint: "claude", interfaceType: "anthropic_messages", endpoint: "https://old.test/v1", defaultModel: "old-model" });
+  const endpoint = action === "clear" ? "" : "https://relay.test/anthropic/v1";
+  const defaultModel = action === "clear" ? "" : "claude-fixture";
+  await render({
+    entries_list: ({ archived }) => archived ? [] : [structuredClone(entry)],
+    secret_add: ({ label, metadata }) => { entry.secretRefs!.push({ id: "added", label, masked: "••••", fingerprint: "added", ...metadata }); },
+    secret_update: ({ secretId, metadata }) => {
+      const secret = entry.secretRefs!.find(secret => secret.id === secretId)!;
+      Object.assign(secret, metadata);
+      if (secret.endpoint === "") delete secret.endpoint;
+      if (secret.defaultModel === "") delete secret.defaultModel;
+    }
+  });
+  const selector = action === "add" ? ".add-secret-row" : ".credential-inline-editor";
+  if (action === "add") {
+    document.querySelector<HTMLButtonElement>(".add-chip")!.click(); flushSync();
+    input(`${selector} > input`, "New Claude");
+    input(`${selector} input[type=password]`, "fixture-claude-key");
+  } else {
+    document.querySelectorAll<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")[1].click();
+    await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(`${selector} input[type=password]`)?.value).toBe("fixture-existing-key"); });
+  }
+  const format = document.querySelector<HTMLSelectElement>(`${selector} select`)!;
+  format.value = "anthropic_messages";
+  format.dispatchEvent(new Event("change", { bubbles: true })); flushSync();
+  input(`${selector} input[type=url]`, endpoint ? ` ${endpoint} ` : "");
+  input(`${selector} input[placeholder='site-model']`, defaultModel ? ` ${defaultModel} ` : "");
+  document.querySelector<HTMLButtonElement>(`${selector} .btn-secondary`)!.click();
+  const command = action === "add" ? "secret_add" : "secret_update";
+  await vi.waitFor(() => expect(invoke.mock.calls.filter(([cmd]) => cmd === command)).toHaveLength(1));
+  expect(invoke.mock.calls.find(([cmd]) => cmd === command)?.[1]).toEqual(expect.objectContaining({
+    id: "provider", ...(action === "add" ? {} : { secretId: "claude" }),
+    metadata: expect.objectContaining({ interfaceType: "anthropic_messages", endpoint, defaultModel })
+  }));
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(selector)).toBeNull(); });
+  const index = action === "add" ? 2 : 1;
+  document.querySelectorAll<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")[index].click();
+  await vi.waitFor(() => {
+    flushSync();
+    expect(document.querySelector<HTMLInputElement>(".credential-inline-editor input[type=url]")?.value).toBe(endpoint);
+    expect(document.querySelector<HTMLInputElement>(".credential-inline-editor input[placeholder='site-model']")?.value).toBe(defaultModel);
+  });
+});
+
 test.each([false, true])("correcting an invalid endpoint closes the saved editor, including refresh failure=%s", async (failRefresh) => {
   let saved = false;
   await render({

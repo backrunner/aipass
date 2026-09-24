@@ -8,6 +8,7 @@
     Badge,
     Banner,
     Button,
+    CredentialBillingFields,
     Field,
     IconButton,
     ProviderFormFields,
@@ -658,14 +659,7 @@
                   <Field label={$t("credential.modelOverride")}><input bind:value={editingSecretModel} placeholder={selected.defaultModel || $t("credential.inheritSite")} /></Field>
                   <span class="inherit-hint">{$t("credential.inheritDefaults")}</span>
                   </div>
-                  <details class="secret-billing">
-                    <summary>{$t("providerForm.billing")}</summary>
-                    <div class="secret-billing-fields">
-                      <Field label={$t("providerDetail.gatewayRate")}><input bind:value={editingSecretBilling.rate} disabled={editingSecretLoading} /></Field>
-                      <Field label={$t("providerForm.billingCurrency")}><input bind:value={editingSecretBilling.currency} disabled={editingSecretLoading} /></Field>
-                      <Field label={$t("providerForm.billingUnitPrice")}><input bind:value={editingSecretBilling.unitPrice} disabled={editingSecretLoading} /></Field>
-                    </div>
-                  </details>
+                  <CredentialBillingFields bind:value={editingSecretBilling} disabled={editingSecretLoading} />
                 </div>
               {:else}
                 <div class="key-row">
@@ -793,14 +787,7 @@
                   <Field label={$t("credential.modelOverride")}><input bind:value={editingSecretModel} placeholder={selected.defaultModel || $t("credential.inheritSite")} /></Field>
                   <span class="inherit-hint">{$t("credential.inheritDefaults")}</span>
                 </div>
-                <details class="secret-billing">
-                  <summary>{$t("providerForm.billing")}</summary>
-                  <div class="secret-billing-fields">
-                    <Field label={$t("providerDetail.gatewayRate")}><input bind:value={editingSecretBilling.rate} disabled={editingSecretLoading} /></Field>
-                    <Field label={$t("providerForm.billingCurrency")}><input bind:value={editingSecretBilling.currency} disabled={editingSecretLoading} /></Field>
-                    <Field label={$t("providerForm.billingUnitPrice")}><input bind:value={editingSecretBilling.unitPrice} disabled={editingSecretLoading} /></Field>
-                  </div>
-                </details>
+                <CredentialBillingFields bind:value={editingSecretBilling} disabled={editingSecretLoading} />
               </div>
             {:else}
               <div class="kv-row secret clickable" class:copied-flash={copied === `secret:${secret.id}`}>
@@ -1129,18 +1116,6 @@
   .kv-row > .kv-hint, .kv-row > .kv-actions, .kv-row > span:last-child:not(.kv-label):not(.kv-value):not(.kv-actions) {
     grid-column: 2;
     grid-row: 1 / 3;
-  }
-  .secret-billing {
-    grid-column: 1 / -1;
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
-  .secret-billing summary { cursor: pointer; }
-  .secret-billing-fields {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-    margin-top: 8px;
   }
   .secret-copy {
     position: absolute;

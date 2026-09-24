@@ -146,7 +146,7 @@ pub struct DeviceRecord {
 
 /// Per-key attributes that travel with a credential: which gateway group it
 /// belongs to, the wire format that group speaks, and how it bills.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SecretMetadataInput {
     #[serde(default)]

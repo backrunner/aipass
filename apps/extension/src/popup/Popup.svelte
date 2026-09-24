@@ -16,7 +16,6 @@
     Badge,
     Banner,
     billingFromDraft,
-    billingPatchFromDraft,
     Brand,
     Button,
     encodeListValues,
@@ -37,6 +36,8 @@
   import { siteUrlForEntry } from "../entry-site-url";
   import { desktopDeepLink, friendlyNativeError, isNativeLaunchFailure } from "../native-error";
   import { endpointForProvider, parseHttpEndpoint, providerForEndpoint } from "../provider-endpoint";
+  import CredentialList from "./CredentialList.svelte";
+  import type { CredentialWriteRequest } from "../native-client";
   import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
   import {
     fullyTouchedProtocol,
@@ -123,6 +124,8 @@
   let editingDraftId = "";
   let editingEntryId = "";
   let detailEditMode = false;
+  let credentialBusy = false;
+  let credentialList: { savePending: () => Promise<boolean> } | undefined;
   let entryMenu: EntryMenuState | null = null;
   let deletingEntryId = "";
   let selectedEntryId = "";
@@ -676,7 +679,7 @@
         .filter((url): url is string => Boolean(url))
     );
     next.apiKey = "";
-    next.secretLabel = entrySecrets(entry)[0]?.label ?? "";
+    next.secretLabel = "";
     next.endpoint = encodeListValues(
       entry.endpoints
         .filter((endpoint) => endpoint.kind === "api")
@@ -690,15 +693,6 @@
     next.defaultModel = entry.defaultModel ?? "";
     next.modelAlias = encodePairValues(entry.modelAliases ?? []);
     next.tag = encodeListValues(displayTags(entry));
-    // Group and billing live on the key; fall back to the entry's legacy
-    // gateway blob for records written before that move.
-    const primaryKey = entrySecrets(entry)[0];
-    next.interfaceType = primaryKey?.interfaceType ?? entry.interfaceType;
-    applyBillingToDraft(
-      next,
-      primaryKey?.group ?? entry.gateway?.group,
-      primaryKey?.billing ?? (entry.gateway?.rate ? { rate: entry.gateway.rate } : undefined)
-    );
     next.quotaLabel = entry.quota?.label ?? "";
     next.quotaLimit = entry.quota?.limit ?? "";
     next.quotaUsed = entry.quota?.used ?? "";
@@ -1099,31 +1093,6 @@
     ];
   }
 
-  /**
-   * Group, wire format and billing rule for one key. Falls back to the entry's
-   * values for records written before these moved onto the key.
-   */
-  function secretMeta(entry: Entry, secret: ReturnType<typeof entrySecrets>[number]) {
-    const chips: Array<{ label: string; value: string; mono?: boolean }> = [];
-    const group = secret.group ?? entry.gateway?.group;
-    if (group) chips.push({ label: $t("providerDetail.keyGroup"), value: group });
-    const format = secret.interfaceType ?? entry.interfaceType;
-    if (format) chips.push({ label: $t("providerDetail.keyFormat"), value: interfaceLabel(format) });
-    const rate = secret.billing?.rate ?? entry.gateway?.rate;
-    if (rate) chips.push({ label: $t("providerDetail.gatewayRate"), value: rate, mono: true });
-    if (secret.billing?.currency) {
-      chips.push({ label: $t("providerDetail.keyBilling"), value: secret.billing.currency });
-    }
-    if (secret.billing?.unitPrice) {
-      chips.push({
-        label: $t("providerDetail.billingUnitPrice"),
-        value: secret.billing.unitPrice,
-        mono: true
-      });
-    }
-    return chips;
-  }
-
   function mergeEntries(primary: Entry[], secondary: Entry[]): Entry[] {
     const byId = new Map<string, Entry>();
     for (const entry of primary) byId.set(entry.id, entry);
@@ -1291,6 +1260,26 @@
     return siteName || definition?.displayName || host || $t("ext.browserProvider");
   }
 
+  async function credentialMutation(entryId: string, message: Record<string, unknown>) {
+    const response = await sendToWorker<{ entry?: Entry }>(message);
+    if (!response?.ok) throw new Error(friendlyNativeError(response?.error, $t) || $t("ext.updateProviderFailed"));
+    if (connection !== "connected") return;
+    const entry = response.data?.entry;
+    if (entry) {
+      entries = mergeEntries(entries, [entry]);
+      siteEntries = siteEntries.map(item => item.id === entry.id ? entry : item);
+      searchResults = searchResults.map(item => item.id === entry.id ? entry : item);
+    } else {
+      entries = entries.filter(item => item.id !== entryId);
+      siteEntries = siteEntries.filter(item => item.id !== entryId);
+      searchResults = searchResults.filter(item => item.id !== entryId);
+      await refresh({ scanActiveTab: false });
+    }
+  }
+  async function saveCredential(request: CredentialWriteRequest) {
+    await credentialMutation(request.entryId, { type: request.secretId ? "aipass.credentialUpdate" : "aipass.credentialAdd", request });
+  }
+
   function openEditEntry(entry: Entry) {
     closeEntryMenu();
     addDraft = draftFromEntry(entry);
@@ -1314,7 +1303,8 @@
   }
 
   async function submitDetailEdit() {
-    if (addBusy || !editingEntryId) return;
+    if (addBusy || credentialBusy || !editingEntryId) return;
+    const entryId = editingEntryId;
     const endpointValues = splitEndpointValues(addDraft.endpoint);
     const consoleEndpointValues = splitEndpointValues(addDraft.consoleUrl);
     if ([...endpointValues, ...consoleEndpointValues].some((value) => !parseHttpEndpoint(value))) {
@@ -1322,6 +1312,8 @@
       statusError = true;
       return;
     }
+    if (credentialList && !(await credentialList.savePending())) return;
+    if (editingEntryId !== entryId) return;
     addBusy = true;
     statusText = "";
     statusError = false;
@@ -1362,13 +1354,12 @@
         consoleEndpoints: consoleEndpointValues,
         interfaceType: addDraft.interfaceType,
         authScheme: addDraft.authScheme,
-        apiKey: addDraft.apiKey.trim() || undefined,
+        providerOnly: true,
         defaultModel: addDraft.defaultModel || undefined,
         modelAliases: pairsFromCsv(addDraft.modelAlias),
         headers,
         quota: quotaFrom(addDraft),
-        group: addDraft.gatewayGroup.trim(),
-        billing: billingPatchFromDraft(addDraft),
+        gateway: entries.find(entry => entry.id === editingEntryId)?.gateway,
         tags: splitCsv(addDraft.tag),
         notes: addDraft.notes || undefined
       }
@@ -1736,6 +1727,13 @@
   {/if}
 {/snippet}
 
+{#snippet credentials(entry: Entry)}
+  {#key entry.id}
+    <CredentialList {entry} {copied} bind:this={credentialList} bind:busy={credentialBusy} using={Boolean(usingEntryId)} onUse={(secretId) => useEntry(entry, secretId)}
+      onSave={saveCredential} onRemove={(secretId) => credentialMutation(entry.id, { type: "aipass.credentialRemove", entryId: entry.id, secretId })} />
+  {/key}
+{/snippet}
+
 {#snippet selectedDetail(entry: Entry)}
   <section class="detail-pane">
     <header class="detail-head">
@@ -1750,7 +1748,7 @@
           <h1>{entry.title}</h1>
           <div class="meta-row">
             <Badge tone={compactKindTone(entryKind(entry))}>{providerKindLabel(entryKind(entry))}</Badge>
-            <Badge>{interfaceLabel(entry.interfaceType)}</Badge>
+            <Badge>{new Set(entrySecrets(entry).map(secret => secret.interfaceType ?? entry.interfaceType)).size > 1 ? $t("credential.multipleFormats") : interfaceLabel(entry.interfaceType)}</Badge>
             {#each displayTags(entry) as tag}
               <span class="meta-tag">{tag}</span>
             {/each}
@@ -1759,8 +1757,8 @@
       </div>
       <div class="detail-actions">
         {#if detailEditMode && editingEntryId === entry.id}
-          <Button variant="ghost" size="sm" on:click={cancelDetailEdit}>{$t("common.cancel")}</Button>
-          <Button variant="primary" size="sm" on:click={submitDetailEdit} disabled={addBusy}>
+          <Button variant="ghost" size="sm" disabled={addBusy || credentialBusy} on:click={cancelDetailEdit}>{$t("common.cancel")}</Button>
+          <Button variant="primary" size="sm" on:click={submitDetailEdit} disabled={addBusy || credentialBusy}>
             {addBusy ? $t("ext.adding") : $t("providerModal.saveChanges")}
           </Button>
         {:else}
@@ -1780,13 +1778,13 @@
           >
             <ExternalLink size={15} />
           </IconButton>
-          <IconButton label={$t("providerDetail.edit")} on:click={() => openEditEntry(entry)}>
+          <IconButton label={$t("providerDetail.edit")} disabled={credentialBusy} on:click={() => openEditEntry(entry)}>
             <Pencil size={15} />
           </IconButton>
           <IconButton
             label={$t("ext.deleteItem")}
             tone="danger"
-            disabled={deletingEntryId === entry.id}
+            disabled={deletingEntryId === entry.id || credentialBusy}
             on:click={() => deleteEntry(entry)}
           >
             <Trash2 size={15} />
@@ -1802,6 +1800,7 @@
           formMode="edit"
           bind:draft={addDraft}
           compactProviderSelect
+          showSecretFields={false}
           showSecretLabel={false}
           onInferDraftFromDomain={addInferFromDomain}
           onInferDraftFromEndpoint={addInferFromEndpoint}
@@ -1809,9 +1808,11 @@
           onInterfaceChanged={addInterfaceChanged}
           onAuthChanged={addAuthChanged}
         />
+        {@render credentials(entry)}
       </div>
       {/key}
     {:else}
+      {#if entrySecrets(entry).length}
       <Button
         variant="primary"
         block
@@ -1823,41 +1824,10 @@
         {$t("ext.use")}
       </Button>
 
+      {/if}
+      {@render credentials(entry)}
       <section class="card">
-        <header class="card-header"><span class="card-title">{$t("providerDetail.credentials")}</span></header>
         <div class="card-body">
-          {#each entrySecrets(entry) as secret (secret.id)}
-            <div class="kv-row secret">
-              <span class="kv-label">
-                <KeyRound size={13} />
-                {secret.label || $t("providerDetail.apiKey")}
-              </span>
-              <code class="kv-value mono">{secret.masked}</code>
-              <span class="kv-hint">
-                <IconButton
-                  label={`${$t("ext.use")} ${secret.label || $t("providerDetail.apiKey")}`}
-                  size="sm"
-                  disabled={Boolean(usingEntryId)}
-                  on:click={() => useEntry(entry, secret.id)}
-                >
-                  {#if copied === `${entry.id}:${secret.id}`}<Check size={13} />{:else}<KeyRound size={13} />{/if}
-                </IconButton>
-              </span>
-            </div>
-            <!-- Group, wire format and billing belong to this key: one relay
-                 entry can hold a differently-configured key per group. -->
-            {#if secretMeta(entry, secret).length}
-              <div class="kv-row">
-                <span class="kv-label"></span>
-                <span class="kv-value chips">
-                  {#each secretMeta(entry, secret) as chip}
-                    <span class="chip" class:mono={chip.mono}>{chip.label}: {chip.value}</span>
-                  {/each}
-                </span>
-                <span></span>
-              </div>
-            {/if}
-          {/each}
           {@render kvRow($t("providerDetail.endpoint"), entryEndpoint(entry), `endpoint:${entry.id}`)}
           {@render kvRow($t("providerDetail.console"), entryConsole(entry), `console:${entry.id}`)}
           {@render kvRow($t("providerDetail.defaultModel"), entry.defaultModel, `model:${entry.id}`)}
@@ -2604,10 +2574,6 @@
 
     &:last-child {
       border-bottom: 0;
-    }
-
-    &.secret {
-      background: var(--surface-2);
     }
 
     &:is(button) {

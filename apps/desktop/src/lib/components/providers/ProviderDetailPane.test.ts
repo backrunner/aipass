@@ -26,6 +26,89 @@ function render(props: Partial<ComponentProps<typeof ProviderDetailPane>> = {}) 
   flushSync();
 }
 
+async function chooseCredential(id: string) {
+  document.querySelector<HTMLButtonElement>(".credential-picker-trigger")!
+    .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+  flushSync();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(`.credential-picker-option[data-value="${id}"]`)).toBeTruthy(); });
+  document.querySelector<HTMLElement>(`.credential-picker-option[data-value="${id}"]`)!
+    .dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerType: "mouse" }));
+  flushSync();
+}
+
+function toolRow(name: string) {
+  return [...document.querySelectorAll<HTMLElement>(".tool-row")].find(row => row.querySelector(".tool-name")?.textContent === name);
+}
+
+const mixedEntry: ProviderEntry = {
+  ...selected, providerKind: "third_party", interfaceType: "openai_compatible",
+  secretRefs: [
+    { ...selected.secretRefs[0], interfaceType: "openai_compatible" },
+    { ...selected.secretRefs[0], id: "claude", label: "Claude", interfaceType: "anthropic_messages", endpoint: "https://relay.test/anthropic/v1", defaultModel: "claude-fixture" }
+  ]
+};
+
+test.each(["openai_compatible", "anthropic_messages"] as const)("mixed keys expose Claude preview and confirmed writes with a %s provider default", async (interfaceType) => {
+  const content = JSON.stringify({ apiKeyHelper: "aipass get provider --secret-id 'claude' --reveal", env: { ANTHROPIC_BASE_URL: "https://relay.test/anthropic", ANTHROPIC_MODEL: "claude-fixture" } }, null, 2);
+  const result: ToolConfigPreview = {
+    tool: "claude-code", mode: "helper", entryId: "provider", entryTitle: "Test provider · Claude",
+    targetPath: "/fixture/.claude/settings.json", summary: "fixture",
+    preview: "+ apiKeyHelper",
+    files: [{ path: "/fixture/.claude/settings.json", content, diff: "+ apiKeyHelper" }]
+  };
+  const preview = vi.fn(async () => result);
+  const apply = vi.fn(async () => ({ ...result, operationId: "fixture", backupPath: "/fixture/backup" }));
+  render({ selected: { ...mixedEntry, interfaceType, authScheme: interfaceType === "anthropic_messages" ? "x_api_key" : "bearer" }, onPreviewToolConfig: preview, onApplyToolConfig: apply });
+  expect(toolRow("Claude Code")).toBeTruthy();
+  expect(toolRow("Codex")).toBeTruthy();
+  expect(toolRow("Claude Code")!.querySelector<HTMLButtonElement>(".btn-secondary")!.disabled).toBe(true);
+  await chooseCredential("key");
+  expect(toolRow("Claude Code")).toBeUndefined();
+  expect(toolRow("Codex")!.querySelector<HTMLButtonElement>(".btn-secondary")!.disabled).toBe(false);
+  await chooseCredential("claude");
+  expect(toolRow("Codex")).toBeUndefined();
+  toolRow("Claude Code")!.querySelector<HTMLButtonElement>(".btn-ghost")!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeTruthy(); });
+  const request = { tool: "claude-code", mode: "helper", id: "provider", secretId: "claude" };
+  expect(preview).toHaveBeenLastCalledWith(request);
+  expect(document.querySelector(".dialog-subtitle")?.textContent).toContain("Test provider · Claude");
+  expect(document.querySelector(".active-path")?.textContent).toBe(result.targetPath);
+  expect(document.querySelector(".dialog-actions .btn-primary")).toBeNull();
+  [...document.querySelectorAll<HTMLButtonElement>(".preview-dialog-content button")].find(button => button.textContent?.trim() === "Full file")!.click();
+  flushSync();
+  expect(document.querySelector(".code-block")?.textContent).toBe(content);
+  document.querySelector<HTMLButtonElement>(".dialog-actions .btn-ghost")!.click(); flushSync();
+  expect(apply).not.toHaveBeenCalled();
+  toolRow("Claude Code")!.querySelector<HTMLButtonElement>(".btn-secondary")!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".dialog-actions .btn-primary")).toBeTruthy(); });
+  expect(apply).not.toHaveBeenCalled();
+  document.querySelector<HTMLButtonElement>(".dialog-actions .btn-primary")!.click();
+  await vi.waitFor(() => expect(apply).toHaveBeenCalledExactlyOnceWith(request));
+});
+
+test.each(["endpoint", "defaultModel", "interfaceType", "fingerprint", "deleted"] as const)("Claude credential %s changes invalidate its pending preview", async (change) => {
+  setLocale("en");
+  const selection = writable(mixedEntry);
+  const state = fromStore(selection);
+  let finish!: (value: ToolConfigPreview) => void;
+  const apply = vi.fn();
+  app = mount(ProviderDetailPane, { target: document.body, props: {
+    get selected() { return state.current; }, draft: emptyDraft(), probeResult: undefined, usageProbeResult: undefined,
+    onPreviewToolConfig: () => new Promise(resolve => { finish = resolve; }), onApplyToolConfig: apply
+  } });
+  flushSync();
+  await chooseCredential("claude");
+  toolRow("Claude Code")!.querySelector<HTMLButtonElement>(".btn-secondary")!.click(); flushSync();
+  selection.update(entry => ({ ...entry, secretRefs: change === "deleted" ? entry.secretRefs.filter(secret => secret.id !== "claude") : entry.secretRefs.map(secret => secret.id === "claude" ? {
+    ...secret, ...({ endpoint: { endpoint: "https://new.test/v1" }, defaultModel: { defaultModel: "new-model" }, interfaceType: { interfaceType: "openai_compatible" as const }, fingerprint: { fingerprint: "new-key" } }[change])
+  } : secret) }));
+  flushSync();
+  finish({ tool: "claude-code", mode: "helper", entryId: "provider", entryTitle: "Old Claude", targetPath: "/fixture/.claude/settings.json", summary: "fixture", preview: "+ old" });
+  await Promise.resolve(); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  expect(apply).not.toHaveBeenCalled();
+});
+
 test.each([undefined, "   ", "fixture-model"])("shows Grok Build and explains missing default model %s", (defaultModel) => {
   setLocale("en");
   render({ selected: { ...selected, interfaceType: "openai_compatible", defaultModel } });
@@ -221,7 +304,7 @@ test("a cancelled key read cannot repopulate a later editor", async () => {
   document.querySelector<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")!.click();
   flushSync();
   expect(document.querySelector<HTMLButtonElement>(".credential-inline-editor .btn")!.disabled).toBe(true);
-  [...document.querySelectorAll<HTMLButtonElement>(".credential-inline-editor button")].at(-1)!.click();
+  document.querySelector<HTMLButtonElement>(".credential-inline-editor button[aria-label='Cancel']")!.click();
   finish("late-fixture-key");
   await Promise.resolve();
   flushSync();
