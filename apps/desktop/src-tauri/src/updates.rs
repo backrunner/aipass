@@ -154,6 +154,46 @@ fn try_clear_cached_update(app: &AppHandle) -> Result<(), String> {
     result
 }
 
+fn cleanup_old_update_artifacts(app: &AppHandle) -> Result<(), String> {
+    let cache_dir = if let Some(dir) = crate::runtime_check::path("cache/updates") {
+        dir
+    } else {
+        app.path()
+            .app_cache_dir()
+            .map_err(|err| err.to_string())?
+            .join("updates")
+    };
+
+    if !cache_dir.exists() {
+        return Ok(());
+    }
+
+    let (current_package, current_metadata) = update_cache_paths(app)?;
+    let current_package_name = current_package.file_name();
+    let current_metadata_name = current_metadata.file_name();
+
+    // Remove any files in the updates directory that aren't the current package/metadata
+    if let Ok(entries) = fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let file_name = path.file_name();
+            // Keep the current package and metadata files
+            if file_name == current_package_name || file_name == current_metadata_name {
+                continue;
+            }
+
+            // Remove any other files (old packages, temp files, etc.)
+            let _ = fs::remove_file(&path);
+        }
+    }
+
+    Ok(())
+}
+
 fn remove_cache_files(paths: &[PathBuf]) -> std::io::Result<()> {
     let mut result = Ok(());
     for path in paths {
@@ -270,6 +310,9 @@ async fn check_for_updates_inner(
 ) -> Result<UpdateCheckResult, String> {
     let current_version = app.package_info().version.to_string();
 
+    // Clean up old update artifacts before checking for new updates
+    let _ = cleanup_old_update_artifacts(&app);
+
     let updater = match updater_for_channel(&app, &channel) {
         Ok(updater) => updater,
         Err(err) => {
@@ -360,6 +403,8 @@ fn install_verified_update(
         return Err(err.to_string());
     }
     clear_cached_update(app);
+    // Clean up any remaining old artifacts after successful installation
+    let _ = cleanup_old_update_artifacts(app);
     crate::runtime_check::installed()?;
     // The updater only swaps the bundle on disk; relaunch so the new
     // version actually runs ("Install & restart" in the UI promises this).

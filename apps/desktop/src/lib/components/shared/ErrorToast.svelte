@@ -53,7 +53,11 @@
     border-radius: var(--radius-lg);
     background: var(--surface);
     color: var(--danger);
-    box-shadow: var(--shadow-modal);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.04),
+      var(--shadow-modal);
+    opacity: 1;
+    backdrop-filter: blur(8px);
   }
 
   .error-toast :global(> svg) {
