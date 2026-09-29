@@ -2503,6 +2503,43 @@
     void Promise.allSettled([loadSyncSettings({ preserveDraft: true }), loadDevices(), loadSyncConflicts(), loadBrowserExtensionStatus()]);
   }
 
+  async function resetProviderToBlank() {
+    if (!selected) return;
+    if (!confirm($t("confirm.resetProvider", { title: selected.title }))) return;
+
+    clearError();
+    const entryId = selected.id;
+    const isOAuth = selected.credentialKind === "oauth";
+
+    try {
+      // 移除所有secrets
+      for (const secret of selected.secretRefs) {
+        await invokeTauri("secret_remove", { id: entryId, label: secret.id });
+      }
+
+      // 重新加载entries
+      await loadEntries();
+      await loadServer();
+
+      notice = localizedMessage("notice.providerReset");
+      setTimeout(() => (notice = ""), 1800);
+
+      // 根据凭证类型引导用户重新配置
+      if (isOAuth) {
+        // OAuth类型：打开OAuth连接对话框
+        openOAuthConnect();
+      } else {
+        // API类型：进入编辑模式让用户添加新的key
+        const entry = filtered.find((e) => e.id === entryId);
+        if (entry) {
+          await openEdit(entry);
+        }
+      }
+    } catch (err) {
+      reportError(String(err));
+    }
+  }
+
   async function closeSettings() {
     // Only persist explicit user changes; an untouched close must not write
     // the placeholder defaults over the agent's platform default sync mode.
@@ -3256,8 +3293,10 @@
 <div class="app-shell">
   <AppTitleBar
     showAppMenu={statusReady && status.exists && !status.locked}
+    showResetProvider={Boolean(selected) && !showArchived && !showTrash && !showServer && !showSettings}
     onOpenSettings={() => openSettings("general")}
     onLock={lockVault}
+    onResetProvider={resetProviderToBlank}
   />
 
   {#if !statusReady || status.initialSyncPending}

@@ -4,7 +4,7 @@
   import { Logo } from "@aipass/ui";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { DropdownMenu } from "bits-ui";
-  import { Lock, Menu, Minus, Settings, Square, X } from "lucide-svelte";
+  import { Lock, Menu, Minus, Settings, Square, X, RotateCcw } from "lucide-svelte";
   import { onDestroy, onMount, tick } from "svelte";
 
   import { t } from "../../stores/i18n";
@@ -14,6 +14,8 @@
   export let showAppMenu = true;
   export let onOpenSettings: () => MaybePromise = () => {};
   export let onLock: () => MaybePromise = () => {};
+  export let onResetProvider: () => MaybePromise = () => {};
+  export let showResetProvider = false;
 
   let isMac = false;
   let isMaximized = false;
@@ -147,6 +149,12 @@
                 <Settings size={14} />
                 <span>{$t("titlebar.settings")}</span>
               </DropdownMenu.Item>
+              {#if showResetProvider}
+                <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onResetProvider()}>
+                  <RotateCcw size={14} />
+                  <span>{$t("titlebar.resetProvider")}</span>
+                </DropdownMenu.Item>
+              {/if}
               <DropdownMenu.Item class="titlebar-menu-item" onSelect={() => onLock()}>
                 <Lock size={14} />
                 <span>{$t("titlebar.lock")}</span>
