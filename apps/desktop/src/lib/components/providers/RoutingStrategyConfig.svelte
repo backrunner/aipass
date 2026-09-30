@@ -170,8 +170,14 @@
 
   .strategy-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 12px;
+  }
+
+  @media (max-width: 1000px) {
+    .strategy-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
   }
 
   .strategy-card {
@@ -328,9 +334,4 @@
     }
   }
 
-  @media (max-width: 720px) {
-    .strategy-grid {
-      grid-template-columns: 1fr;
-    }
-  }
 </style>

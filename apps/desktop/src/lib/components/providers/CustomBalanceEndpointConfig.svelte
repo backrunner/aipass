@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Field, IconButton, TextField } from "@aipass/ui";
+  import { Button, Field, IconButton } from "@aipass/ui";
   import { Plus, Trash2, TestTube } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -23,8 +23,14 @@
   export let onUpdateEndpoint: (id: string, updates: Partial<CustomBalanceEndpoint>) => MaybePromise = () => {};
   export let onTestEndpoint: (id: string) => MaybePromise<{ success: boolean; value?: string; error?: string }> = async () => ({ success: false });
 
+  interface EndpointTestResult {
+    success: boolean;
+    value?: string;
+    error?: string;
+  }
+
   let testingId: string | null = null;
-  let testResults: Record<string, { success: boolean; value?: string; error?: string }> = {};
+  let testResults: Record<string, EndpointTestResult> = {};
 
   async function handleTest(id: string) {
     testingId = id;
@@ -56,7 +62,8 @@
       {#each endpoints as endpoint (endpoint.id)}
         <div class="endpoint-card">
           <div class="endpoint-header">
-            <TextField
+            <input
+              type="text"
               bind:value={endpoint.label}
               placeholder={$t("balanceEndpoint.labelPlaceholder")}
               on:change={() => onUpdateEndpoint(endpoint.id, { label: endpoint.label })}
@@ -73,7 +80,8 @@
 
           <div class="endpoint-fields">
             <Field label={$t("balanceEndpoint.url")}>
-              <TextField
+              <input
+                type="text"
                 bind:value={endpoint.url}
                 placeholder="https://api.example.com/usage"
                 on:change={() => onUpdateEndpoint(endpoint.id, { url: endpoint.url })}
@@ -101,7 +109,8 @@
             </div>
 
             <Field label={$t("balanceEndpoint.jsonPath")}>
-              <TextField
+              <input
+                type="text"
                 bind:value={endpoint.jsonPath}
                 placeholder="$.data.quota.remaining"
                 on:change={() => onUpdateEndpoint(endpoint.id, { jsonPath: endpoint.jsonPath })}
@@ -345,7 +354,7 @@
     }
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 1000px) {
     .field-row {
       grid-template-columns: 1fr;
     }

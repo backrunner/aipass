@@ -12,7 +12,7 @@
   $: statusTone = hasError ? "danger" : isExpiring ? "warning" : "success";
 </script>
 
-{#if hasData}
+{#if hasData && subscription}
   <div class="subscription-display" class:compact>
     {#if subscription.plan || subscription.status}
       <div class="sub-header">
@@ -61,7 +61,7 @@
                   <div
                     class="window-bar-fill"
                     class:warning={window.usedPercent > 80}
-                    style:width="{window.usedPercent}%"
+                    style:width="{Math.min(window.usedPercent, 100)}%"
                   ></div>
                 </div>
                 <span class="window-percent">{window.usedPercent.toFixed(0)}%</span>

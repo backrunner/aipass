@@ -4,7 +4,7 @@
 
   import { t } from "../../stores/i18n";
 
-  export interface ClaudeQuotaWindow {
+  interface ClaudeQuotaWindow {
     windowStart: string;
     windowEnd: string;
     requestsUsed: number;
@@ -38,7 +38,7 @@
       <Activity size={14} />
       <span class="tracker-title">{$t("claudeQuota.quotaWindow")}</span>
       {#if isInWarmup}
-        <Badge tone="info" size="sm">
+        <Badge tone="neutral" size="sm">
           <TrendingUp size={10} /> {$t("claudeQuota.warmup")}
         </Badge>
       {/if}

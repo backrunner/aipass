@@ -46,7 +46,7 @@
 
       {#if !compact && percentage !== null}
         <div class="quota-bar">
-          <div class="quota-bar-fill tone-{statusTone}" style:width="{percentage}%"></div>
+          <div class="quota-bar-fill tone-{statusTone}" style:width="{Math.min(percentage, 100)}%"></div>
         </div>
       {/if}
 

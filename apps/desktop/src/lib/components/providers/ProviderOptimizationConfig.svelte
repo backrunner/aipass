@@ -5,17 +5,17 @@
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
 
-  export interface OptimizationConfig {
+  interface OptimizationConfig {
     enableHealthMonitoring: boolean;
-    healthCheckInterval?: number; // seconds
+    healthCheckInterval?: string; // seconds as string
     enableRateLimitDetection: boolean;
     autoSwitchOnRateLimit: boolean;
     enableQuotaTracking: boolean;
-    quotaRefreshInterval?: number; // seconds
+    quotaRefreshInterval?: string; // seconds as string
     enableClaudeWarmup: boolean;
-    claudeWarmupThreshold?: number; // percentage
+    claudeWarmupThreshold?: string; // percentage as string
     enableAutoFailover: boolean;
-    maxConsecutiveFailures?: number;
+    maxConsecutiveFailures?: string; // as string
   }
 
   export let config: OptimizationConfig;
@@ -24,17 +24,17 @@
 
   $: isClaudeProvider = providerId === "anthropic" || providerId === "claude";
   $: healthIntervalOptions = [
-    { value: 30, label: $t("optimization.interval30s") },
-    { value: 60, label: $t("optimization.interval1m") },
-    { value: 300, label: $t("optimization.interval5m") },
-    { value: 600, label: $t("optimization.interval10m") }
+    { value: "30", label: $t("optimization.interval30s") },
+    { value: "60", label: $t("optimization.interval1m") },
+    { value: "300", label: $t("optimization.interval5m") },
+    { value: "600", label: $t("optimization.interval10m") }
   ];
 
   $: quotaIntervalOptions = [
-    { value: 60, label: $t("optimization.interval1m") },
-    { value: 300, label: $t("optimization.interval5m") },
-    { value: 900, label: $t("optimization.interval15m") },
-    { value: 3600, label: $t("optimization.interval1h") }
+    { value: "60", label: $t("optimization.interval1m") },
+    { value: "300", label: $t("optimization.interval5m") },
+    { value: "900", label: $t("optimization.interval15m") },
+    { value: "3600", label: $t("optimization.interval1h") }
   ];
 
   function handleChange(updates: Partial<OptimizationConfig>) {
@@ -126,10 +126,10 @@
           <SelectField
             bind:value={config.claudeWarmupThreshold}
             options={[
-              { value: 50, label: "50%" },
-              { value: 70, label: "70%" },
-              { value: 80, label: "80%" },
-              { value: 90, label: "90%" }
+              { value: "50", label: "50%" },
+              { value: "70", label: "70%" },
+              { value: "80", label: "80%" },
+              { value: "90", label: "90%" }
             ]}
             onValueChange={(value) => handleChange({ claudeWarmupThreshold: value })}
           />
@@ -158,10 +158,10 @@
         <SelectField
           bind:value={config.maxConsecutiveFailures}
           options={[
-            { value: 1, label: "1" },
-            { value: 2, label: "2" },
-            { value: 3, label: "3" },
-            { value: 5, label: "5" }
+            { value: "1", label: "1" },
+            { value: "2", label: "2" },
+            { value: "3", label: "3" },
+            { value: "5", label: "5" }
           ]}
           onValueChange={(value) => handleChange({ maxConsecutiveFailures: value })}
         />

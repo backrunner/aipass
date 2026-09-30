@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Field, IconButton, TextField } from "@aipass/ui";
+  import { Button, Field, IconButton } from "@aipass/ui";
   import { Plus, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -56,7 +56,8 @@
 
           <Field label={$t("customHeaders.key")}>
             <div class="key-field">
-              <TextField
+              <input
+                type="text"
                 bind:value={header.key}
                 placeholder="X-Custom-Header"
                 list="common-headers-{header.id}"
@@ -72,7 +73,8 @@
           </Field>
 
           <Field label={$t("customHeaders.value")}>
-            <TextField
+            <input
+              type="text"
               bind:value={header.value}
               placeholder={$t("customHeaders.valuePlaceholder")}
               disabled={!header.enabled}
@@ -250,12 +252,17 @@
     color: var(--text-tertiary);
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 1000px) {
     .header-row {
       grid-template-columns: auto 1fr;
 
-      :nth-child(4) {
+      :global(.field:nth-child(3)) {
         grid-column: 2;
+      }
+
+      :global(button) {
+        grid-column: 2;
+        justify-self: end;
       }
     }
   }

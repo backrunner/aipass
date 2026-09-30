@@ -203,8 +203,14 @@
 
   .metrics-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 10px;
+  }
+
+  @media (max-width: 1000px) {
+    .metrics-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
   }
 
   .metric-item {
@@ -283,9 +289,4 @@
     color: var(--warning);
   }
 
-  @media (max-width: 720px) {
-    .metrics-grid {
-      grid-template-columns: 1fr;
-    }
-  }
 </style>

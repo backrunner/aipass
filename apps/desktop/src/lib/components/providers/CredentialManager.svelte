@@ -312,7 +312,7 @@
     }
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 1000px) {
     .credential-actions {
       flex-wrap: wrap;
     }

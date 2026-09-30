@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Field, SwitchField, TextField } from "@aipass/ui";
+  import { Field, SwitchField } from "@aipass/ui";
   import { AlertCircle, Globe } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -18,6 +18,11 @@
 
   export let config: ProxyConfig;
   export let onConfigChange: (config: ProxyConfig) => MaybePromise = () => {};
+
+  // Initialize proxyAuth if undefined to prevent undefined access bugs
+  $: if (config.enabled && !config.useSystemProxy && !config.proxyAuth) {
+    config.proxyAuth = { username: "", password: "" };
+  }
 
   let bypassDomainsText = config.bypassDomains?.join(", ") || "";
 
@@ -59,7 +64,8 @@
 
       {#if !config.useSystemProxy}
         <Field label={$t("proxy.proxyUrl")}>
-          <TextField
+          <input
+            type="text"
             bind:value={config.proxyUrl}
             placeholder="http://proxy.example.com:8080"
             on:change={() => handleChange({ proxyUrl: config.proxyUrl })}
@@ -73,17 +79,18 @@
 
           <div class="auth-fields">
             <Field label={$t("proxy.username")}>
-              <TextField
-                bind:value={config.proxyAuth.username}
+              <input
+                type="text"
+                bind:value={config.proxyAuth!.username}
                 placeholder={$t("proxy.usernamePlaceholder")}
                 on:change={() => handleChange({ proxyAuth: config.proxyAuth })}
               />
             </Field>
 
             <Field label={$t("proxy.password")}>
-              <TextField
+              <input
                 type="password"
-                bind:value={config.proxyAuth.password}
+                bind:value={config.proxyAuth!.password}
                 placeholder={$t("proxy.passwordPlaceholder")}
                 on:change={() => handleChange({ proxyAuth: config.proxyAuth })}
               />
@@ -92,7 +99,8 @@
         </div>
 
         <Field label={$t("proxy.bypassDomains")}>
-          <TextField
+          <input
+            type="text"
             bind:value={bypassDomainsText}
             placeholder="localhost, 127.0.0.1, *.internal.com"
             on:blur={handleBypassDomainsChange}
@@ -210,7 +218,7 @@
     }
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 1000px) {
     .auth-fields {
       grid-template-columns: 1fr;
     }

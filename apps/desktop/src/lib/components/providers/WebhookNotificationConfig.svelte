@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Field, IconButton, SelectField, SwitchField, TextField } from "@aipass/ui";
+  import { Button, Field, IconButton, SelectField, SwitchField } from "@aipass/ui";
   import { Bell, Plus, TestTube, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -102,7 +102,8 @@
           </div>
 
           <Field label={$t("webhook.url")}>
-            <TextField
+            <input
+              type="url"
               bind:value={webhook.url}
               placeholder="https://hooks.example.com/webhook"
               disabled={!webhook.enabled}
@@ -111,7 +112,7 @@
           </Field>
 
           <Field label={$t("webhook.secret")}>
-            <TextField
+            <input
               type="password"
               bind:value={webhook.secret}
               placeholder={$t("webhook.secretPlaceholder")}
@@ -292,8 +293,14 @@
 
   .events-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 8px;
+  }
+
+  @media (max-width: 1000px) {
+    .events-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
   }
 
   .event-checkbox {
@@ -416,9 +423,4 @@
     }
   }
 
-  @media (max-width: 720px) {
-    .events-grid {
-      grid-template-columns: 1fr;
-    }
-  }
 </style>
