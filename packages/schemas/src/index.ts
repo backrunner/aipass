@@ -1,5 +1,7 @@
 export type ProviderKind = "official" | "third_party" | "self_hosted" | "unknown";
 
+export * from "./provider-icons";
+
 export type InterfaceType =
   | "openai_compatible"
   | "anthropic_messages"

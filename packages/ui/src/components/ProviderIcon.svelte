@@ -1,11 +1,14 @@
 <script lang="ts">
   import type { ProviderKind } from "@aipass/schemas";
+  import { getProviderIcon } from "@aipass/schemas";
 
   import { initials, providerKindTone } from "../helpers";
 
   export let title: string;
   export let kind: ProviderKind = "unknown";
   export let faviconUrl: string | undefined = undefined;
+  export let providerId: string | undefined = undefined;
+  export let domain: string | undefined = undefined;
   export let size: "sm" | "md" | "lg" = "md";
 
   let faviconBroken = false;
@@ -15,13 +18,18 @@
     lastFaviconUrl = faviconUrl;
     faviconBroken = false;
   }
+
+  // Try built-in icon first, then cached favicon, then fallback to initials
+  $: builtInIcon = providerId || domain ? getProviderIcon(providerId || "", domain) : undefined;
+  $: builtInIconUrl = builtInIcon ? `/src/assets/provider-icons/${builtInIcon}.svg` : undefined;
   $: cachedFaviconUrl = faviconUrl?.startsWith("data:image/") ? faviconUrl : undefined;
-  $: showFavicon = Boolean(cachedFaviconUrl) && !faviconBroken;
+  $: iconUrl = builtInIconUrl || cachedFaviconUrl;
+  $: showIcon = Boolean(iconUrl) && !faviconBroken;
 </script>
 
 <span class={`provider-icon tone-${tone} size-${size}`} aria-hidden="true">
-  {#if showFavicon}
-    <img src={cachedFaviconUrl} alt="" on:error={() => (faviconBroken = true)} />
+  {#if showIcon}
+    <img src={iconUrl} alt="" on:error={() => (faviconBroken = true)} />
   {:else}
     <span class="initials">{initials(title || "?")}</span>
   {/if}

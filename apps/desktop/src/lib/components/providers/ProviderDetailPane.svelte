@@ -505,7 +505,7 @@
   <section class="detail" class:editing={editMode}>
     <header class="detail-header">
       <div class="identity">
-        <ProviderIcon title={selected.title} kind={selected.providerKind} faviconUrl={selected.faviconUrl} size="lg" />
+        <ProviderIcon title={selected.title} kind={selected.providerKind} providerId={selected.providerId} domain={selected.domains[0]} faviconUrl={selected.faviconUrl} size="lg" />
         <div class="identity-text">
           <h1>{selected.title}</h1>
           <div class="meta">
