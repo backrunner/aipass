@@ -24,6 +24,7 @@
 - Claude 现在比较完整 native grant，避免 access token 不变时漏存 refresh token 的轮换。保存核对完整旧 grant 的哈希；旧进程不能覆盖其他进程已提交的轮换，完全相同的更新可以幂等重放并补齐镜像。进程容量淘汰也保留未保存的 grant，macOS 同有效期时优先读取 CLI 的 Keychain 结果。
 - Kiro 原生导入不再要求新 grant 的有效期严格大于旧值：账号一致、原生 grant 已变且仍有效时，采用完整 pair；仍拒绝已知旧原生版本和过期版本，避免相同有效期的 refresh-only 轮换被忽略。
 - 回归覆盖完整加密 grant 保存、丢失 ACK 后重放、旧 writer 冲突、access 不变时的 pending 判断，以及 Kiro 相同/较短有效期的原生轮换。
+- 官方 device 登录在交换成功时固定 access token 的绝对有效期，保存重试不会延长它。已交换的完整 grant 不再随 device code 到期被淘汰；只在保存成功、取消或锁库时清除。首次登录及重新登录先保存完整托管凭据，CLI 镜像和代理重载失败不会重放已经保存的旧登录 grant。回归同时验证真实 vault 的磁盘读回、重新登录去重和代理重载失败。
 
 ## Provider 刷新契约
 
@@ -44,7 +45,7 @@
 | Zed | 按请求从账号凭据取得短期 LLM token；不把其持久账号凭据当作标准 OAuth refresh token |
 | Devin、Command Code Plan | 持久账号/API grant；不对这些 key 发起不存在的 OAuth refresh 请求 |
 
-## 验证
+## 初次 OAuth 专项验证
 
 - macOS 原生 Rust：Agent 263 项通过、1 项忽略；Proxy 210 项通过；Vault 51 项通过，共 524 项通过。
 - 最后补充的 OAuth/订阅测试再次运行；OAuth 专项覆盖过期判断、省略令牌、stale refresh、新登录、保存顺序、原始有效期和镜像幂等修复。
@@ -56,6 +57,6 @@
 
 ## 验证边界
 
-未使用真实账号完成线上登录、refresh token 轮换或付费生成；未发布新桌面 artifact，也没有远程 CI 结果。以上是源码对照、模拟上游、加密持久化故障和 macOS 自动化测试证据。
+未使用真实账号完成线上登录、refresh token 轮换或付费生成；未发布生产桌面 artifact。以上是源码对照、模拟上游、加密持久化故障和 macOS 自动化测试证据。提交前另行执行完整 workspace、Node 与 macOS bundle/runtime gate，远程 CI 结果以对应提交的 GitHub Actions 为准。
 
 服务商撤销授权、刷新响应在网络中丢失，以及锁库/退出跨越上游轮换时，可能需要重新登录。恢复缓存只在授权的解锁会话内有效，不绕过锁库保存秘密。独立运行的官方 CLI 没有与 AIPass 共享全程跨进程 OAuth 锁；原生重新读取、CLI 优先刷新和 CAS 写回缩小竞态并拒绝错误身份，不能据此承诺服务商或外部进程永远无故障。

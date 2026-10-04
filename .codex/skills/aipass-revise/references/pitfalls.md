@@ -517,6 +517,13 @@ Newest entries last within each section.
 - **Guardrail**: Test refresh-only changes, equal/shorter live expiry, stale writers, durable replay and pending credential retention. Bind rotation detection and CAS to the complete grant rather than access alone.
 - **Watch points**: `claude_bridge::persist_native`, `persist_native_account`, `handlers::ClaudeNativeWrite`, typed IPC, Kiro `live_native_rotation` and native readers.
 
+### Exchanged device logins outlive the authorization challenge
+- **Symptom**: delayed login saves extended access expiry or discarded an already exchanged refresh grant at the device-code deadline; optional mirrors could trigger replay of a login already saved.
+- **Root cause**: `oauth/mod.rs` retained only relative token lifetime and expired exchanged bundles with their challenge; `handlers::complete_oauth_login` wrote CLI files before managed authority and propagated later mirror failures.
+- **Fix**: capture absolute access expiry once, retain exchanged bundles until durable save/cancel/lock, store complete managed grants before optional CLI mirrors, and treat mirror failures as repairable after login succeeds.
+- **Guardrail**: test failed saves past both deadlines, successful exchanges at the challenge deadline, exact expiry on retry, fresh/reauthorized grants durable before mirrors, and proxy reload failure without login replay.
+- **Watch points**: `OAuthManager::poll_with`, `register`, `complete`, `handlers::complete_oauth_login_with`, refresh recovery and native mirror repair.
+
 ### OAuth management hid destructive effects and recovery states
 - **Symptom**: account removal silently retired linked provider routes; loading looked empty, failed login returned to provider selection, and failed browser/clipboard actions gave no feedback.
 - **Root cause**: `OAuthConnectDialog.svelte` used a single busy flag and icon-only account actions, mixed loading with empty lists, and used WebView `window.open` for an external browser.

@@ -1106,9 +1106,9 @@ fn dispatch_request(
                         interval_secs: Some(outcome.interval_secs),
                     })),
                     Some(bundle) => {
-                        let Some(result) = crate::oauth::oauth_manager()
-                            .complete(&device_code, || {
-                                complete_oauth_login(state, provider, bundle)
+                        let Some(result) =
+                            crate::oauth::oauth_manager().complete(&device_code, |expires_at_ms| {
+                                complete_oauth_login(state, provider, bundle, expires_at_ms)
                             })
                         else {
                             return Ok(AgentResponse::success(OAuthLoginPoll {
@@ -1839,11 +1839,52 @@ fn complete_oauth_login(
     state: &Arc<AgentState>,
     provider: OAuthProvider,
     bundle: crate::oauth::OAuthTokenBundle,
+    expires_at_ms: i64,
+) -> ServiceResult<OAuthAccountSummary> {
+    use crate::oauth::native_write::{self, NativeSyncOutcome};
+    complete_oauth_login_with(state, provider, bundle, expires_at_ms, |vault, account| {
+        match provider {
+            OAuthProvider::Codex => native_write::sync_codex_auth_json(
+                &vault.config_backup_key(),
+                &account.access_token,
+                &account.refresh_token,
+                account.id_token.as_deref(),
+                account.chatgpt_account_id.as_deref().unwrap_or_default(),
+                None,
+                account.last_refresh_ms,
+            ),
+            OAuthProvider::Grok => native_write::sync_grok_auth_json(
+                &vault.config_backup_key(),
+                &account.access_token,
+                &account.refresh_token,
+                None,
+                account.expires_at_ms,
+                account.account_identity.as_deref(),
+            ),
+        }
+        .unwrap_or_else(|err| {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                &format!("oauth native write-back failed: {err}"),
+            );
+            NativeSyncOutcome::Skipped("native credential file could not be updated".into())
+        })
+    })
+}
+
+fn complete_oauth_login_with(
+    state: &Arc<AgentState>,
+    provider: OAuthProvider,
+    bundle: crate::oauth::OAuthTokenBundle,
+    expires_at_ms: i64,
+    sync_native: impl FnOnce(
+        &Vault,
+        &ManagedOAuthAccount,
+    ) -> crate::oauth::native_write::NativeSyncOutcome,
 ) -> ServiceResult<OAuthAccountSummary> {
     use crate::oauth::native_write::{self, NativeSyncOutcome};
     let now = crate::oauth::now_ms();
-    let expires_at_ms =
-        now.saturating_add(crate::oauth::clamp_expires_in(bundle.expires_in).saturating_mul(1000));
     let credential_expires_at = native_write::ms_to_rfc3339(expires_at_ms);
     with_vault(state, true, |vault| {
         let entry_id = crate::official_accounts::persist_login_account(
@@ -1886,33 +1927,18 @@ fn complete_oauth_login(
             requires_reauth: false,
             authenticated_at: OffsetDateTime::now_utc(),
         };
-        let outcome = match provider {
-            OAuthProvider::Codex => native_write::sync_codex_auth_json(
-                &vault.config_backup_key(),
-                &bundle.access_token,
-                &bundle.refresh_token,
-                bundle.id_token.as_deref(),
-                bundle.chatgpt_account_id.as_deref().unwrap_or_default(),
-                None,
-                now,
-            ),
-            OAuthProvider::Grok => native_write::sync_grok_auth_json(
-                &vault.config_backup_key(),
-                &bundle.access_token,
-                &bundle.refresh_token,
-                None,
-                expires_at_ms,
-                bundle.account_identity.as_deref(),
-            ),
+        // Store the complete one-use grant before optional native files. A
+        // mirror failure must leave a durable refreshable account in the vault.
+        if is_update {
+            vault
+                .update_oauth_account(account.clone())
+                .map_err(map_vault_error)?;
+        } else {
+            vault
+                .add_oauth_account(account.clone())
+                .map_err(map_vault_error)?;
         }
-        .unwrap_or_else(|err| {
-            write_component_log(
-                AGENT_LOG,
-                "WARN",
-                &format!("oauth native write-back failed: {err}"),
-            );
-            NativeSyncOutcome::Skipped("native credential file could not be updated".into())
-        });
+        let outcome = sync_native(vault, &account);
         match outcome {
             NativeSyncOutcome::Adopted {
                 access_token,
@@ -1923,6 +1949,7 @@ fn complete_oauth_login(
             } => {
                 // The CLI already had a newer generation; keep it and mirror the
                 // adopted access token into the entry secret the proxy reads.
+                let durable_account = account.clone();
                 account.refresh_token = refresh_token;
                 if id_token.is_some() {
                     account.id_token = id_token;
@@ -1932,20 +1959,16 @@ fn complete_oauth_login(
                 if let Some(adopted_expires_at_ms) = adopted_expires_at_ms {
                     account.expires_at_ms = adopted_expires_at_ms;
                 }
-                if access_token != account.access_token {
-                    if let Ok(summary) = vault.get_provider_summary(entry_id) {
-                        if let Some(secret) = primary_secret_ref(&summary.secret_refs) {
-                            vault
-                                .update_secret(
-                                    entry_id,
-                                    &secret.id,
-                                    &secret.label,
-                                    Some(access_token.clone()),
-                                )
-                                .map_err(map_vault_error)?;
-                        }
-                    }
-                    account.access_token = access_token;
+                account.access_token = access_token;
+                if vault.update_oauth_account(account.clone()).is_err() {
+                    // The login is already durable. Do not replay its original
+                    // grant over a later refresh merely to repair a CLI mirror.
+                    account = durable_account;
+                    write_component_log(
+                        AGENT_LOG,
+                        "WARN",
+                        "oauth native adoption could not be saved",
+                    );
                 }
             }
             NativeSyncOutcome::Skipped(reason) => {
@@ -1957,16 +1980,32 @@ fn complete_oauth_login(
             }
             NativeSyncOutcome::Written => {}
         }
-        if is_update {
-            vault
-                .update_oauth_account(account.clone())
-                .map_err(map_vault_error)?;
-        } else {
-            vault
-                .add_oauth_account(account.clone())
-                .map_err(map_vault_error)?;
+        if let Ok(summary) = vault.get_provider_summary(entry_id) {
+            if let Some(secret) = primary_secret_ref(&summary.secret_refs) {
+                if vault
+                    .update_secret(
+                        entry_id,
+                        &secret.id,
+                        &secret.label,
+                        Some(account.access_token.clone()),
+                    )
+                    .is_err()
+                {
+                    write_component_log(
+                        AGENT_LOG,
+                        "WARN",
+                        "oauth access-token mirror could not be saved",
+                    );
+                }
+            }
         }
-        refresh_proxy_provider_credentials(state, vault, entry_id)?;
+        if refresh_proxy_provider_credentials(state, vault, entry_id).is_err() {
+            write_component_log(
+                AGENT_LOG,
+                "WARN",
+                "oauth proxy credentials could not be reloaded",
+            );
+        }
         Ok(oauth_account_summary(&account))
     })
 }
@@ -2000,4 +2039,69 @@ fn create_browser_fill_grants(
         grants.extend(issued);
     }
     Ok(grants)
+}
+
+#[cfg(test)]
+mod oauth_login_tests {
+    use super::*;
+
+    #[test]
+    fn login_grant_is_durable_before_native_mirrors_and_keeps_received_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault_dir = dir.path().join("vault");
+        let password = aipass_crypto::SecretString::new("login test password");
+        let creation = Vault::create(&vault_dir, &password).unwrap();
+        let state = crate::server::tests::sync_test_state(vault_dir.clone());
+        crate::session::set_session_vault(&state, creation.vault);
+        let received_expiry = crate::oauth::now_ms() - 1000;
+        let mut prior_id = None;
+        for refresh in ["first-refresh", "reauthorized-refresh"] {
+            let bundle = crate::oauth::OAuthTokenBundle {
+                access_token: "login-access".into(),
+                refresh_token: refresh.into(),
+                id_token: None,
+                chatgpt_account_id: Some("workspace".into()),
+                account_identity: Some("alice".into()),
+                expires_in: 3600,
+            };
+            let summary = complete_oauth_login_with(
+                &state,
+                OAuthProvider::Codex,
+                bundle,
+                received_expiry,
+                |vault, account| {
+                    let saved = vault.get_oauth_account(account.id).unwrap();
+                    assert_eq!(saved.refresh_token, refresh);
+                    assert_eq!(saved.expires_at_ms, received_expiry);
+                    let disk = Vault::open(&vault_dir, &password).unwrap();
+                    assert_eq!(
+                        disk.get_oauth_account(account.id).unwrap().refresh_token,
+                        refresh
+                    );
+                    if refresh == "reauthorized-refresh" {
+                        let state = state.clone();
+                        assert!(std::thread::spawn(move || {
+                            let _guard = state.proxy.lock().unwrap();
+                            panic!("fixture proxy reload failure");
+                        })
+                        .join()
+                        .is_err());
+                    }
+                    crate::oauth::native_write::NativeSyncOutcome::Skipped(
+                        "fixture mirror failure".into(),
+                    )
+                },
+            )
+            .unwrap();
+            if let Some(id) = prior_id {
+                assert_eq!(summary.id, id);
+            }
+            prior_id = Some(summary.id);
+            let disk = Vault::open(&vault_dir, &password).unwrap();
+            let saved = disk.get_oauth_account(summary.id).unwrap();
+            assert_eq!(saved.refresh_token, refresh);
+            assert_eq!(saved.expires_at_ms, received_expiry);
+            assert_eq!(disk.list_oauth_accounts(None).unwrap().len(), 1);
+        }
+    }
 }

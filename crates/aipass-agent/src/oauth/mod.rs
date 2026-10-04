@@ -218,6 +218,7 @@ struct PendingDeviceCode {
     next_poll_at_ms: i64,
     polling: bool,
     bundle: Option<OAuthTokenBundle>,
+    bundle_expires_at_ms: Option<i64>,
 }
 
 /// The result of one poll attempt: an optional token bundle plus the current
@@ -256,7 +257,7 @@ impl OAuthManager {
     fn register(&self, device_code: &str, entry: PendingDeviceCode) {
         let mut pending = self.pending.write().unwrap();
         let now = now_ms();
-        pending.retain(|_, value| value.expires_at_ms > now);
+        pending.retain(|_, value| value.bundle.is_some() || value.expires_at_ms > now);
         pending.insert(device_code.to_string(), entry);
     }
 
@@ -362,14 +363,12 @@ impl OAuthManager {
     pub(crate) fn complete<T, E>(
         &self,
         device_code: &str,
-        persist: impl FnOnce() -> Result<T, E>,
+        persist: impl FnOnce(i64) -> Result<T, E>,
     ) -> Option<Result<T, E>> {
         let mut pending = self.pending.write().unwrap();
         let entry = pending.get(device_code)?;
-        if entry.bundle.is_none() || entry.expires_at_ms <= now_ms() {
-            return None;
-        }
-        let result = persist();
+        entry.bundle.as_ref()?;
+        let result = persist(entry.bundle_expires_at_ms?);
         if result.is_ok() {
             pending.remove(device_code);
         }
@@ -401,6 +400,7 @@ impl OAuthManager {
                 next_poll_at_ms: 0,
                 polling: false,
                 bundle: None,
+                bundle_expires_at_ms: None,
             },
         );
         Ok(challenge)
@@ -434,7 +434,7 @@ impl OAuthManager {
             if entry.provider != provider {
                 return Err(OAuthError::Parse("device code/provider mismatch".into()));
             }
-            if entry.expires_at_ms <= now_ms() {
+            if entry.bundle.is_none() && entry.expires_at_ms <= now_ms() {
                 pending.remove(device_code);
                 return Err(OAuthError::ExpiredDeviceCode);
             }
@@ -452,7 +452,7 @@ impl OAuthManager {
         let entry = pending
             .get_mut(device_code)
             .ok_or(OAuthError::ExpiredDeviceCode)?;
-        if entry.expires_at_ms <= now_ms() {
+        if entry.expires_at_ms <= now_ms() && result.is_err() {
             pending.remove(device_code);
             return Err(OAuthError::ExpiredDeviceCode);
         }
@@ -463,6 +463,15 @@ impl OAuthManager {
         entry.next_poll_at_ms = now_ms().saturating_add(entry.interval_secs as i64 * 1000);
         match result {
             Ok(bundle) => {
+                let expires_at_ms = now_ms()
+                    .saturating_add(clamp_expires_in(bundle.expires_in).saturating_mul(1000));
+                entry.bundle_expires_at_ms = Some(
+                    jwt_claims(&bundle.access_token)
+                        .and_then(|claims| claims["exp"].as_i64())
+                        .filter(|exp| *exp > 0)
+                        .map(|exp| expires_at_ms.min(exp.saturating_mul(1000)))
+                        .unwrap_or(expires_at_ms),
+                );
                 entry.bundle = Some(bundle.clone());
                 Ok(PollOutcome {
                     bundle: Some(bundle),
@@ -671,6 +680,7 @@ mod tests {
                 next_poll_at_ms: 0,
                 polling: false,
                 bundle: None,
+                bundle_expires_at_ms: None,
             },
         );
         assert_eq!(manager.bump_interval("code"), Some(10));
@@ -691,6 +701,7 @@ mod tests {
                 next_poll_at_ms: 0,
                 polling: false,
                 bundle: None,
+                bundle_expires_at_ms: None,
             },
         );
         manager
@@ -716,7 +727,7 @@ mod tests {
             .bundle
             .is_some());
         assert_eq!(
-            manager.complete("code", || Err::<(), _>("disk full")),
+            manager.complete("code", |_| Err::<(), _>("disk full")),
             Some(Err("disk full"))
         );
         let cached = manager
@@ -725,13 +736,65 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cached.bundle.unwrap().access_token, "fake-access-secret");
-        assert_eq!(manager.complete("code", || Ok::<_, ()>(())), Some(Ok(())));
+        assert_eq!(manager.complete("code", |_| Ok::<_, ()>(())), Some(Ok(())));
         assert_eq!(
-            manager.complete("code", || -> Result<(), ()> {
+            manager.complete("code", |_| -> Result<(), ()> {
                 panic!("must not persist twice")
             }),
             None
         );
+    }
+
+    #[test]
+    fn exchanged_login_survives_challenge_expiry_without_extending_token_expiry() {
+        let manager = pending_manager();
+        manager
+            .poll_with(OAuthProvider::Codex, "code", |_| Ok(tokens()))
+            .unwrap();
+        let original_expiry = now_ms() - 1000;
+        {
+            let mut pending = manager.pending.write().unwrap();
+            let entry = pending.get_mut("code").unwrap();
+            // Simulate delayed storage recovery after both lifetimes elapsed.
+            entry.expires_at_ms = original_expiry;
+            entry.bundle_expires_at_ms = Some(original_expiry);
+        }
+        assert_eq!(
+            manager.complete("code", |expiry| {
+                assert_eq!(expiry, original_expiry);
+                Err::<(), _>("disk full")
+            }),
+            Some(Err("disk full"))
+        );
+        manager.register("another", pending_manager().get("code").unwrap());
+        let cached = manager
+            .poll_with(OAuthProvider::Codex, "code", |_| {
+                panic!("exchanged authorization code must not be spent twice")
+            })
+            .unwrap();
+        assert_eq!(cached.bundle.unwrap().refresh_token, "fake-refresh-secret");
+        assert_eq!(
+            manager.complete("code", Ok::<_, ()>),
+            Some(Ok(original_expiry))
+        );
+    }
+
+    #[test]
+    fn successful_exchange_at_challenge_deadline_preserves_the_refresh_grant() {
+        let manager = pending_manager();
+        manager
+            .poll_with(OAuthProvider::Codex, "code", |_| {
+                manager
+                    .pending
+                    .write()
+                    .unwrap()
+                    .get_mut("code")
+                    .unwrap()
+                    .expires_at_ms = 0;
+                Ok(tokens())
+            })
+            .unwrap();
+        assert!(manager.complete("code", |_| Ok::<_, ()>(())).is_some());
     }
 
     #[test]
@@ -742,7 +805,7 @@ mod tests {
             Ok(tokens())
         });
         assert!(matches!(result, Err(OAuthError::ExpiredDeviceCode)));
-        assert!(manager.complete("code", || Ok::<_, ()>(())).is_none());
+        assert!(manager.complete("code", |_| Ok::<_, ()>(())).is_none());
     }
 
     #[test]
