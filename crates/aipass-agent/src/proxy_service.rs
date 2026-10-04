@@ -1710,8 +1710,12 @@ mod tests {
             let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = upstream.local_addr().unwrap();
             let server = std::thread::spawn(move || {
-                // Two WS refusals and one successful Responses HTTP generation.
-                for index in 0..3 {
+                // Refuse WS and serve the HTTP fallback. Safe GET transport
+                // retries may open extra sockets; assert protocol evidence,
+                // not a fixed number of accepted TCP connections.
+                let mut refusals = 0;
+                let mut completed_http = false;
+                for index in 0..8 {
                     let (mut socket, _) = upstream.accept().unwrap();
                     socket
                         .set_read_timeout(Some(Duration::from_secs(3)))
@@ -1723,11 +1727,18 @@ mod tests {
                         request.push(byte[0]);
                     }
                     let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
-                    if index < 2 {
-                        assert!(request.contains("upgrade: websocket"));
+                    if request.contains("upgrade: websocket") {
+                        refusals += 1;
                         socket.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                     } else {
-                        assert!(request.starts_with("post /v1/responses"));
+                        assert!(
+                            refusals >= 2,
+                            "HTTP fallback arrived without repeated WS refusal"
+                        );
+                        assert!(
+                            request.starts_with("post /v1/responses"),
+                            "unexpected upstream request in {index}: {request}"
+                        );
                         let length: usize = request
                             .lines()
                             .find_map(|line| line.strip_prefix("content-length: "))
@@ -1738,8 +1749,11 @@ mod tests {
                         socket.read_exact(&mut vec![0; length]).unwrap();
                         let body = r#"{"id":"response-test","status":"completed","output":[]}"#;
                         write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                        completed_http = true;
+                        break;
                     }
                 }
+                assert!(completed_http, "HTTP fallback did not complete");
             });
             let mut input =
                 provider_input("test-key", format!("http://{address}/v1"), "test-header");
