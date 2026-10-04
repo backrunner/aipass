@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+mod openai;
+mod reasoning;
 mod request;
 mod response;
 mod stream;
@@ -85,8 +87,7 @@ pub trait ConversionPlugin: Send + Sync {
 }
 
 /// Same-protocol forwarding is lossless. Cross-protocol conversion covers
-/// Anthropic Messages ↔ OpenAI Chat Completions and Anthropic Messages ↔
-/// OpenAI Responses for requests and non-streaming responses; streaming
+/// all three wire formats for requests and non-streaming responses; streaming
 /// conversion for those pairs is provided by [`StreamConverter`]. Use
 /// [`supports`] to check a pair before routing.
 #[derive(Clone, Default)]
@@ -98,13 +99,9 @@ impl BuiltinConversionPlugin {
     }
 }
 
-/// True for same-protocol pairs and every implemented cross-protocol pair
-/// (Anthropic Messages ↔ either OpenAI wire format).
-pub fn supports(from: ProxyProtocol, to: ProxyProtocol) -> bool {
-    use ProxyProtocol::{
-        AnthropicMessages as AM, OpenAiChatCompletions as CC, OpenAiResponses as RS,
-    };
-    from == to || matches!((from, to), (AM, CC) | (CC, AM) | (AM, RS) | (RS, AM))
+/// All currently exposed protocols have direct request, response and SSE adapters.
+pub fn supports(_from: ProxyProtocol, _to: ProxyProtocol) -> bool {
+    true
 }
 
 impl ConversionPlugin for BuiltinConversionPlugin {
@@ -233,15 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_pairs_are_explicitly_unavailable() {
-        assert!(matches!(
-            BuiltinConversionPlugin.convert_request(
-                ProxyProtocol::OpenAiChatCompletions,
-                ProxyProtocol::OpenAiResponses,
-                serde_json::json!({})
-            ),
-            Err(ConversionError::Unsupported(_, _))
-        ));
+    fn cross_protocol_streaming_requires_state() {
         assert!(matches!(
             BuiltinConversionPlugin.convert_stream_event(
                 ProxyProtocol::AnthropicMessages,
@@ -261,11 +250,8 @@ mod tests {
             assert!(supports(protocol, protocol));
             assert!(BuiltinConversionPlugin::supports(protocol, protocol));
         }
-        for (from, to) in [(AM, CC), (CC, AM), (AM, RS), (RS, AM)] {
+        for (from, to) in [(AM, CC), (CC, AM), (AM, RS), (RS, AM), (CC, RS), (RS, CC)] {
             assert!(supports(from, to), "{from:?} -> {to:?}");
-        }
-        for (from, to) in [(CC, RS), (RS, CC)] {
-            assert!(!supports(from, to), "{from:?} -> {to:?}");
         }
     }
 
@@ -285,3 +271,5 @@ mod tests {
         assert_eq!(anthropic.cache_read_tokens, 60);
     }
 }
+
+pub mod providers;

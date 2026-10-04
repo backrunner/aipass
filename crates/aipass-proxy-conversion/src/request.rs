@@ -1,7 +1,6 @@
 //! Request conversion between Anthropic Messages (AM) and the OpenAI wire
-//! formats (CC = Chat Completions, RS = Responses). AM-only fields
-//! (`thinking`, `cache_control`, `metadata`) are dropped; OpenAI-only
-//! fields are dropped in reverse.
+//! formats (CC = Chat Completions, RS = Responses). Provider-owned signed
+//! reasoning cannot cross protocols; plain reasoning and tool images survive.
 
 use serde_json::{json, Map, Value};
 
@@ -17,12 +16,92 @@ pub(crate) fn convert(
     to: ProxyProtocol,
     payload: Value,
 ) -> Result<Value, ConversionError> {
+    validate_reasoning_origin(from, &payload)?;
     match (from, to) {
         (AM, CC) => am_to_cc(payload),
         (AM, RS) => am_to_rs(payload),
         (CC, AM) => cc_to_am(payload),
         (RS, AM) => rs_to_am(payload),
+        (CC, RS) | (RS, CC) => crate::openai::request(from, payload),
         _ => Err(ConversionError::Unsupported(from, to)),
+    }
+}
+
+// Signatures and encrypted items authenticate provider-local state. A protocol
+// translator cannot authenticate or transplant them to another provider.
+fn validate_reasoning_origin(
+    protocol: ProxyProtocol,
+    value: &Value,
+) -> Result<(), ConversionError> {
+    let messages = value
+        .get("messages")
+        .or_else(|| value.get("input"))
+        .and_then(Value::as_array);
+    for message in messages.into_iter().flatten() {
+        let blocks =
+            std::iter::once(message).chain(message["content"].as_array().into_iter().flatten());
+        for block in blocks {
+            let kind = block["type"].as_str().unwrap_or("");
+            if kind == "redacted_thinking"
+                || kind == "thinking"
+                    && block
+                        .get("signature")
+                        .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+                || kind == "reasoning"
+                    && block
+                        .get("encrypted_content")
+                        .is_some_and(|v| !v.is_null() && v.as_str() != Some(""))
+            {
+                return Err(invalid(
+                    protocol,
+                    "provider-signed reasoning requires its original native protocol and account",
+                ));
+            }
+        }
+    }
+    if protocol == RS
+        && ["previous_response_id", "conversation"]
+            .iter()
+            .any(|k| value.get(k).is_some_and(|v| !v.is_null()))
+    {
+        return Err(invalid(
+            protocol,
+            "cross-protocol requests require full conversation history",
+        ));
+    }
+    Ok(())
+}
+
+fn am_thinking(src: &Map<String, Value>, out: &mut Map<String, Value>, to: ProxyProtocol) {
+    if let Some(thinking) = src.get("thinking") {
+        let effort = match thinking["type"].as_str() {
+            Some("disabled") => "none",
+            _ => src
+                .get("output_config")
+                .and_then(|c| c.get("effort"))
+                .and_then(Value::as_str)
+                .unwrap_or("high"),
+        };
+        if to == CC {
+            out.insert("reasoning_effort".into(), json!(effort));
+        } else {
+            out.insert("reasoning".into(), json!({"effort":effort}));
+        }
+    }
+}
+
+fn openai_thinking(src: &Map<String, Value>, out: &mut Map<String, Value>) {
+    if let Some(effort) = src
+        .get("reasoning_effort")
+        .or_else(|| src.get("reasoning").and_then(|r| r.get("effort")))
+        .and_then(Value::as_str)
+    {
+        if effort == "none" {
+            out.insert("thinking".into(), json!({"type":"disabled"}));
+        } else {
+            out.insert("thinking".into(), json!({"type":"adaptive"}));
+            out.insert("output_config".into(), json!({"effort":effort}));
+        }
     }
 }
 
@@ -148,6 +227,7 @@ fn am_tool_choice_to_rs(choice: &Value) -> Value {
 fn am_to_cc(payload: Value) -> Result<Value, ConversionError> {
     let src = object(&payload, AM)?;
     let mut out = Map::new();
+    am_thinking(src, &mut out, CC);
     pass(src, &mut out, &["model", "stream", "temperature", "top_p"]);
     if let Some(value) = src.get("max_tokens") {
         out.insert("max_tokens".into(), value.clone());
@@ -207,6 +287,8 @@ fn am_message_to_cc(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u
             let mut parts: Vec<Value> = Vec::new();
             let mut tool_calls: Vec<Value> = Vec::new();
             let mut tool_results: Vec<Value> = Vec::new();
+            let mut tool_images: Vec<Value> = Vec::new();
+            let mut reasoning = String::new();
             for block in blocks {
                 match block_type(block) {
                     "text" => {
@@ -231,20 +313,37 @@ fn am_message_to_cc(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u
                             "arguments": json_string(block.get("input").unwrap_or(&Value::Null)),
                         }
                     })),
-                    "tool_result" => tool_results.push(json!({
+                    "thinking" => {
+                        reasoning
+                            .push_str(block.get("thinking").and_then(Value::as_str).unwrap_or(""));
+                    }
+                    "tool_result" => {
+                        if let Some(results) = block.get("content").and_then(Value::as_array) {
+                            for image in results.iter().filter(|b| block_type(b) == "image") {
+                                if let Some(url) = am_image_url(image) {
+                                    tool_images
+                                        .push(json!({"type":"image_url","image_url":{"url":url}}));
+                                }
+                            }
+                        }
+                        tool_results.push(json!({
                         "role": "tool",
                         "tool_call_id": block.get("tool_use_id").cloned().unwrap_or(Value::Null),
                         "content": am_tool_result_text(block.get("content").unwrap_or(&Value::Null)),
-                    })),
+                    }));
+                    }
                     _ => {}
                 }
             }
             if role == "assistant" {
-                if parts.is_empty() && tool_calls.is_empty() {
+                if parts.is_empty() && tool_calls.is_empty() && reasoning.is_empty() {
                     return;
                 }
                 let mut msg = Map::new();
                 msg.insert("role".into(), json!("assistant"));
+                if !reasoning.is_empty() {
+                    msg.insert("reasoning_content".into(), json!(reasoning));
+                }
                 msg.insert(
                     "content".into(),
                     if parts.is_empty() {
@@ -266,6 +365,9 @@ fn am_message_to_cc(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u
                 }
             }
             out.extend(tool_results);
+            if !tool_images.is_empty() {
+                out.push(json!({"role":"user","content":tool_images}));
+            }
         }
         _ => {}
     }
@@ -276,6 +378,7 @@ fn am_message_to_cc(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u
 fn am_to_rs(payload: Value) -> Result<Value, ConversionError> {
     let src = object(&payload, AM)?;
     let mut out = Map::new();
+    am_thinking(src, &mut out, RS);
     pass(src, &mut out, &["model", "stream", "temperature", "top_p"]);
     if let Some(system) = am_system_text(src.get("system")) {
         out.insert("instructions".into(), json!(system));
@@ -359,10 +462,18 @@ fn am_message_to_rs(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u
                         "name": block.get("name").cloned().unwrap_or(Value::Null),
                         "arguments": json_string(block.get("input").unwrap_or(&Value::Null)),
                     })),
+                    "thinking" => calls.push(json!({"type":"reasoning", "summary":[{"type":"summary_text", "text":block["thinking"]}]})),
                     "tool_result" => calls.push(json!({
                         "type": "function_call_output",
                         "call_id": block.get("tool_use_id").cloned().unwrap_or(Value::Null),
-                        "output": am_tool_result_text(block.get("content").unwrap_or(&Value::Null)),
+                        "output": match block.get("content") {
+                            Some(Value::Array(blocks)) if blocks.iter().any(|b| block_type(b) == "image") => Value::Array(blocks.iter().filter_map(|b| match block_type(b) {
+                                "text" => Some(json!({"type":"input_text","text":b["text"]})),
+                                "image" => am_image_url(b).map(|url| json!({"type":"input_image","image_url":url})),
+                                _ => None,
+                            }).collect()),
+                            other => json!(am_tool_result_text(other.unwrap_or(&Value::Null))),
+                        },
                     })),
                     _ => {}
                 }
@@ -381,6 +492,7 @@ fn am_message_to_rs(message: &Value, out: &mut Vec<Value>, generated_ids: &mut u
 fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
     let src = object(&payload, CC)?;
     let mut out = Map::new();
+    openai_thinking(src, &mut out);
     pass(src, &mut out, &["model", "stream", "temperature", "top_p"]);
     let max_tokens = src
         .get("max_tokens")
@@ -418,6 +530,14 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
             }
             "assistant" => {
                 let mut blocks = Vec::new();
+                let reasoning = crate::reasoning::chat_reasoning(message);
+                if !reasoning.is_empty() {
+                    // Foreign plain reasoning is history text, never fabricated
+                    // Anthropic signed thinking.
+                    blocks.push(
+                        json!({"type":"text","text":format!("<reasoning>{reasoning}</reasoning>")}),
+                    );
+                }
                 if let Some(text) = cc_content_text(message.get("content")) {
                     if !text.is_empty() {
                         blocks.push(json!({"type": "text", "text": text}));
@@ -467,7 +587,7 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
                     vec![json!({
                         "type": "tool_result",
                         "tool_use_id": message.get("tool_call_id").cloned().unwrap_or(Value::Null),
-                        "content": cc_content_text(message.get("content")).unwrap_or_default(),
+                        "content": match message.get("content") { Some(Value::Array(_)) => json!(cc_parts_to_am_blocks(message.get("content"))), _ => json!(cc_content_text(message.get("content")).unwrap_or_default()) },
                     })],
                 ));
             }
@@ -622,6 +742,7 @@ fn merge_consecutive(messages: Vec<(String, Vec<Value>)>) -> Vec<Value> {
 fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
     let src = object(&payload, RS)?;
     let mut out = Map::new();
+    openai_thinking(src, &mut out);
     pass(src, &mut out, &["model", "stream", "temperature", "top_p"]);
     let mut system_parts = Vec::new();
     if let Some(instructions) = src.get("instructions").and_then(Value::as_str) {
@@ -726,9 +847,10 @@ fn rs_item_to_am(
         }
         Some("function_call_output") => {
             let content = match item.get("output") {
-                Some(Value::String(text)) => text.clone(),
-                Some(other) => json_string(other),
-                None => String::new(),
+                Some(Value::String(text)) => json!(text),
+                Some(Value::Array(_)) => json!(rs_message_content_to_am(item.get("output"))),
+                Some(other) => json!(json_string(other)),
+                None => json!(""),
             };
             messages.push((
                 "user".to_string(),
@@ -738,6 +860,32 @@ fn rs_item_to_am(
                     "content": content,
                 })],
             ));
+        }
+        Some("reasoning") => {
+            let reasoning = item
+                .get("summary")
+                .and_then(Value::as_array)
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|p| p.get("text").and_then(Value::as_str))
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
+            if !reasoning.is_empty() {
+                messages.push((
+                    "assistant".into(),
+                    vec![
+                        json!({"type":"text","text":format!("<reasoning>{reasoning}</reasoning>")}),
+                    ],
+                ));
+            }
+        }
+        Some("item_reference") => {
+            return Err(invalid(
+                RS,
+                "stored item references require a native Responses upstream",
+            ))
         }
         Some(kind) if kind.ends_with("_call") || kind.ends_with("_call_output") => {
             return Err(invalid(RS, "Responses to Anthropic conversion cannot preserve this tool call or result; use a native Responses upstream"));
@@ -809,6 +957,44 @@ mod tests {
             "thinking": {"type": "enabled", "budget_tokens": 1000},
             "metadata": {"user_id": "u1"}
         })
+    }
+
+    #[test]
+    fn reasoning_and_tool_images_survive_conversion_without_foreign_signatures() {
+        let input = json!({"model":"m","thinking":{"type":"adaptive"},"messages":[
+            {"role":"assistant","content":[{"type":"thinking","thinking":"prior reasoning"},{"type":"tool_use","id":"call1","name":"look","input":{}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":[{"type":"text","text":"see image"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YWJj"}}]}]}
+        ]});
+        let chat = convert(AM, CC, input.clone()).unwrap();
+        assert_eq!(chat["messages"][0]["reasoning_content"], "prior reasoning");
+        assert_eq!(chat["messages"][1]["role"], "tool");
+        assert_eq!(
+            chat["messages"][2]["content"][0]["image_url"]["url"],
+            "data:image/png;base64,YWJj"
+        );
+        assert_eq!(chat["reasoning_effort"], "high");
+        let responses = convert(AM, RS, input).unwrap();
+        assert_eq!(responses["input"][0]["type"], "reasoning");
+        let back = convert(RS, AM, responses).unwrap();
+        assert!(back.to_string().contains("YWJj"));
+        assert!(back.to_string().contains("prior reasoning"));
+        for signed in [
+            json!({"type":"thinking","thinking":"x","signature":"native-proof"}),
+            json!({"type":"redacted_thinking","data":"opaque"}),
+        ] {
+            assert!(convert(
+                AM,
+                CC,
+                json!({"messages":[{"role":"assistant","content":[signed]}]})
+            )
+            .is_err());
+        }
+        assert!(convert(
+            RS,
+            AM,
+            json!({"input":[{"type":"reasoning","encrypted_content":"opaque"}]})
+        )
+        .is_err());
     }
 
     #[test]

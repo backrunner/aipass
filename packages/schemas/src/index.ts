@@ -204,6 +204,12 @@ export const providerDefinitions: ProviderDefinition[] = [
     envKeys: ["OPENAI_API_KEY"]
   },
   {
+    id: "copilot", displayName: "GitHub Copilot", kind: "official",
+    domains: ["api.githubcopilot.com"], interfaces: ["openai_compatible"], authSchemes: ["bearer"],
+    endpoints: [{ id: "api", kind: "api", url: "https://api.githubcopilot.com" }, { id: "console", kind: "console", url: "https://github.com/settings/copilot" }],
+    envKeys: ["COPILOT_GITHUB_TOKEN"]
+  },
+  {
     id: "anthropic",
     displayName: "Anthropic",
     kind: "official",

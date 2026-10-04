@@ -1,5 +1,10 @@
 pub use aipass_config_writers::ToolId;
+mod community;
 mod control_panel;
+mod provider_runtime;
+pub use community::*;
+pub use provider_runtime::*;
+
 use aipass_provider_registry::{
     AuthScheme, BillingRule, CredentialKind, GatewayMetadata, InterfaceType, OAuthProvider,
     ProviderEndpoint, QuotaInfo, SubscriptionSnapshot,
@@ -32,7 +37,21 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 10 adds the opt-in HTTP/HTTPS control panel and its local management API.
 // Version 11 adds explicitly granted remote unlock and local grant revocation.
 // Version 12 binds tool configurations and helper reads to an exact credential.
-pub const AGENT_PROTOCOL_VERSION: u32 = 12;
+// Version 13 adds subscription bridges and encrypted provider runtime management.
+pub const AGENT_PROTOCOL_VERSION: u32 = 13;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum ClaudeBridgeRequest {
+    ListTools,
+    Call {
+        name: String,
+        arguments: serde_json::Value,
+    },
+    Poll {
+        call_id: String,
+    },
+}
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -580,6 +599,23 @@ pub struct AuthenticatedAgentRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum AgentRequest {
+    #[serde(rename = "claude_native.read")]
+    ClaudeNativeRead {
+        entry_id: Uuid,
+        access_token: SensitiveString,
+    },
+    #[serde(rename = "claude_native.write")]
+    ClaudeNativeWrite {
+        entry_id: Uuid,
+        previous_token: SensitiveString,
+        previous_grant_hash: [u8; 32],
+        credentials: SensitiveString,
+    },
+    #[serde(rename = "claude_bridge.mcp")]
+    ClaudeBridgeMcp {
+        capability: SensitiveString,
+        request: ClaudeBridgeRequest,
+    },
     #[serde(rename = "control_panel.status")]
     ControlPanelStatus,
     #[serde(rename = "control_panel.configure")]
@@ -719,6 +755,17 @@ pub enum AgentRequest {
     EntriesSearch { query: String },
     #[serde(rename = "provider.get")]
     ProviderGet { id: Uuid },
+    #[serde(rename = "provider.runtime.get")]
+    ProviderRuntimeGet { id: Uuid },
+    #[serde(rename = "provider.runtime.set")]
+    ProviderRuntimeSet {
+        id: Uuid,
+        options: ProviderRuntimeOptions,
+    },
+    #[serde(rename = "provider.runtime.probe")]
+    ProviderRuntimeProbe { id: Uuid },
+    #[serde(rename = "provider.webhook.test")]
+    ProviderWebhookTest { id: Uuid, webhook_id: Uuid },
     #[serde(rename = "provider.add")]
     ProviderAdd { input: ProviderEntryInput },
     #[serde(rename = "provider.update")]
@@ -812,8 +859,31 @@ pub enum AgentRequest {
         #[serde(default)]
         subscription: Option<aipass_provider_registry::SubscriptionSnapshot>,
     },
-    /// Discover locally authenticated official accounts and refresh their
-    /// provider-owned subscription snapshots. No credential values are returned.
+    #[serde(rename = "community.catalog")]
+    CommunityCatalog,
+    #[serde(rename = "community.login.start")]
+    CommunityLoginStart { input: CommunityLoginInput },
+    #[serde(rename = "community.login.poll")]
+    CommunityLoginPoll { ticket: Uuid },
+    #[serde(rename = "community.login.code")]
+    CommunityLoginCode { ticket: Uuid, code: SensitiveString },
+    #[serde(rename = "community.login.cancel")]
+    CommunityLoginCancel { ticket: Uuid },
+    #[serde(rename = "community.refresh")]
+    CommunityRefresh { entry_id: Uuid },
+    /// Internal adapter boundary. The entry's opaque generation marker binds reads and CAS writes.
+    #[serde(rename = "community.account.read")]
+    CommunityAccountRead {
+        entry_id: Uuid,
+        marker: SensitiveString,
+    },
+    #[serde(rename = "community.account.write")]
+    CommunityAccountWrite {
+        entry_id: Uuid,
+        marker: SensitiveString,
+        revision: u64,
+        bundle: SensitiveString,
+    },
     #[serde(rename = "official_accounts.refresh")]
     OfficialAccountsRefresh {
         #[serde(default)]
@@ -1023,6 +1093,9 @@ impl AgentRequest {
     /// Stable diagnostics name. Never serialize a request just to identify it.
     pub fn event_name(&self) -> &'static str {
         match self {
+            Self::ClaudeNativeRead { .. } => "claude_native.read",
+            Self::ClaudeNativeWrite { .. } => "claude_native.write",
+            Self::ClaudeBridgeMcp { .. } => "claude_bridge.mcp",
             Self::ControlPanelStatus => "control_panel.status",
             Self::ControlPanelConfigure { .. } => "control_panel.configure",
             Self::ControlPanelStop => "control_panel.stop",
@@ -1067,6 +1140,10 @@ impl AgentRequest {
             Self::EntriesTrash => "entries.trash",
             Self::EntriesFavorites => "entries.favorites",
             Self::EntriesSearch { .. } => "entries.search",
+            Self::ProviderRuntimeGet { .. } => "provider.runtime.get",
+            Self::ProviderRuntimeSet { .. } => "provider.runtime.set",
+            Self::ProviderRuntimeProbe { .. } => "provider.runtime.probe",
+            Self::ProviderWebhookTest { .. } => "provider.webhook.test",
             Self::ProviderGet { .. } => "provider.get",
             Self::ProviderAdd { .. } => "provider.add",
             Self::ProviderUpdate { .. } => "provider.update",
@@ -1089,6 +1166,14 @@ impl AgentRequest {
             Self::ProviderProbe { .. } => "provider.probe",
             Self::ProviderUsageProbe { .. } => "provider.usage_probe",
             Self::ProviderUsageApply { .. } => "provider.usage_apply",
+            Self::CommunityCatalog => "community.catalog",
+            Self::CommunityLoginStart { .. } => "community.login.start",
+            Self::CommunityLoginPoll { .. } => "community.login.poll",
+            Self::CommunityLoginCode { .. } => "community.login.code",
+            Self::CommunityLoginCancel { .. } => "community.login.cancel",
+            Self::CommunityRefresh { .. } => "community.refresh",
+            Self::CommunityAccountRead { .. } => "community.account.read",
+            Self::CommunityAccountWrite { .. } => "community.account.write",
             Self::OfficialAccountsRefresh { .. } => "official_accounts.refresh",
             Self::CcSwitchDetect => "ccswitch.detect",
             Self::CcSwitchImport => "ccswitch.import",
@@ -1132,7 +1217,13 @@ impl AgentRequest {
     pub fn is_background_poll(&self) -> bool {
         matches!(
             self,
-            Self::CloudKitExchange { .. }
+            Self::CommunityAccountRead { .. }
+                | Self::CommunityAccountWrite { .. }
+                | Self::CommunityLoginPoll { .. }
+                | Self::ClaudeNativeRead { .. }
+                | Self::ClaudeNativeWrite { .. }
+                | Self::ClaudeBridgeMcp { .. }
+                | Self::CloudKitExchange { .. }
                 | Self::SessionStatus
                 | Self::ControlPanelStatus
                 | Self::VaultStatus
@@ -1183,6 +1274,12 @@ impl AgentRequest {
             | Self::SyncConflicts { .. }
             | Self::ProviderFaviconBackfill { .. }
             | Self::OfficialAccountsRefresh { .. }
+            | Self::CommunityCatalog
+            | Self::CommunityLoginStart { .. }
+            | Self::CommunityRefresh { .. }
+            | Self::ProviderRuntimeProbe { .. }
+            | Self::ProviderWebhookTest { .. }
+            | Self::ProviderRuntimeSet { .. }
             | Self::OAuthLoginStart { .. }
             | Self::OAuthLoginPoll { .. }
             | Self::TrashPurgeExpired
@@ -1478,6 +1575,77 @@ pub fn endpoint_url(endpoints: &[ProviderEndpoint]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn subscription_wire_tags_match_their_operations_and_preserve_existing_dispatch() {
+        let id = Uuid::nil();
+        let secret = || SensitiveString::new("synthetic");
+        let requests = [
+            AgentRequest::OfficialAccountsRefresh {
+                provider_ids: vec![],
+            },
+            AgentRequest::CommunityCatalog,
+            AgentRequest::CommunityLoginStart {
+                input: CommunityLoginInput {
+                    provider: "factory".into(),
+                    method: 0,
+                    inputs: Default::default(),
+                    api_key: None,
+                },
+            },
+            AgentRequest::CommunityLoginPoll { ticket: id },
+            AgentRequest::CommunityLoginCode {
+                ticket: id,
+                code: secret(),
+            },
+            AgentRequest::CommunityLoginCancel { ticket: id },
+            AgentRequest::CommunityRefresh { entry_id: id },
+            AgentRequest::CommunityAccountRead {
+                entry_id: id,
+                marker: secret(),
+            },
+            AgentRequest::CommunityAccountWrite {
+                entry_id: id,
+                marker: secret(),
+                revision: 0,
+                bundle: secret(),
+            },
+            AgentRequest::ClaudeNativeRead {
+                entry_id: id,
+                access_token: secret(),
+            },
+            AgentRequest::ClaudeNativeWrite {
+                entry_id: id,
+                previous_token: secret(),
+                previous_grant_hash: [0; 32],
+                credentials: secret(),
+            },
+            AgentRequest::ClaudeBridgeMcp {
+                capability: secret(),
+                request: ClaudeBridgeRequest::ListTools,
+            },
+            AgentRequest::ProviderRuntimeGet { id },
+            AgentRequest::ProviderRuntimeSet {
+                id,
+                options: Default::default(),
+            },
+            AgentRequest::ProviderRuntimeProbe { id },
+            AgentRequest::ProviderWebhookTest { id, webhook_id: id },
+        ];
+        for request in requests {
+            let value = serde_json::to_value(&request).unwrap();
+            assert_eq!(value["type"], request.event_name());
+            let decoded: AgentRequest = serde_json::from_value(value).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&decoded),
+                std::mem::discriminant(&request)
+            );
+        }
+        assert!(matches!(
+            serde_json::from_str::<AgentRequest>(r#"{"type":"official_accounts.refresh"}"#)
+                .unwrap(),
+            AgentRequest::OfficialAccountsRefresh { .. }
+        ));
+    }
 
     #[test]
     fn read_frame_rejects_oversized_lengths_before_allocating_body() {

@@ -1,0 +1,6685 @@
+[
+  {
+    "id": "zcode",
+    "name": "ZCode",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "ZCode: Z.ai GLM Coding Plan",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "ZCode: BigModel (智谱) GLM Coding Plan",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 2,
+        "type": "oauth",
+        "label": "ZCode app's sign-in",
+        "prompts": [],
+        "native": true
+      },
+      {
+        "index": 3,
+        "type": "api",
+        "label": "GLM Coding Plan API key",
+        "prompts": [
+          {
+            "type": "select",
+            "key": "site",
+            "message": "Where is the key from?",
+            "options": [
+              {
+                "label": "Z.ai",
+                "value": "zai",
+                "hint": "api.z.ai"
+              },
+              {
+                "label": "BigModel (智谱)",
+                "value": "bigmodel",
+                "hint": "open.bigmodel.cn"
+              }
+            ]
+          }
+        ],
+        "native": false
+      }
+    ],
+    "models": {
+      "GLM-5.3": {
+        "id": "GLM-5.3",
+        "name": "GLM-5.3",
+        "reasoning": true,
+        "tool_call": true,
+        "attachment": false,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "variants": {
+          "low": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 4096
+            }
+          },
+          "high": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 16000
+            }
+          },
+          "max": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 31999
+            }
+          }
+        },
+        "providerID": "zcode",
+        "api": {
+          "id": "GLM-5.3",
+          "url": "https://api.z.ai/api/anthropic/v1"
+        },
+        "wire": "anthropic"
+      },
+      "GLM-5.3-Flash": {
+        "id": "GLM-5.3-Flash",
+        "name": "GLM-5.3-Flash",
+        "reasoning": true,
+        "tool_call": true,
+        "attachment": false,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "variants": {
+          "low": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 4096
+            }
+          },
+          "high": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 16000
+            }
+          },
+          "max": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 31999
+            }
+          }
+        },
+        "providerID": "zcode",
+        "api": {
+          "id": "GLM-5.3-Flash",
+          "url": "https://api.z.ai/api/anthropic/v1"
+        },
+        "wire": "anthropic"
+      },
+      "GLM-5.2": {
+        "id": "GLM-5.2",
+        "name": "GLM-5.2",
+        "reasoning": true,
+        "tool_call": true,
+        "attachment": false,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "variants": {
+          "none": {
+            "thinking": {
+              "type": "disabled"
+            }
+          },
+          "high": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 16000
+            }
+          },
+          "max": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 31999
+            }
+          }
+        },
+        "providerID": "zcode",
+        "api": {
+          "id": "GLM-5.2",
+          "url": "https://api.z.ai/api/anthropic/v1"
+        },
+        "wire": "anthropic"
+      },
+      "GLM-5-Turbo": {
+        "id": "GLM-5-Turbo",
+        "name": "GLM-5-Turbo",
+        "reasoning": true,
+        "tool_call": true,
+        "attachment": false,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cache_read": 0,
+          "cache_write": 0
+        },
+        "variants": {
+          "none": {
+            "thinking": {
+              "type": "disabled"
+            }
+          },
+          "high": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 16000
+            }
+          }
+        },
+        "providerID": "zcode",
+        "api": {
+          "id": "GLM-5-Turbo",
+          "url": "https://api.z.ai/api/anthropic/v1"
+        },
+        "wire": "anthropic"
+      }
+    }
+  },
+  {
+    "id": "qoder",
+    "name": "Qoder",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with Qoder",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "ultimate": {
+        "name": "Ultimate",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "ultimate",
+        "providerID": "qoder",
+        "api": {
+          "id": "ultimate",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "performance": {
+        "name": "Performance",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "performance",
+        "providerID": "qoder",
+        "api": {
+          "id": "performance",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "efficient": {
+        "name": "Efficient",
+        "limit": {
+          "context": 200000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "tool_call": true,
+        "id": "efficient",
+        "providerID": "qoder",
+        "api": {
+          "id": "efficient",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "smodel": {
+        "name": "Sonus",
+        "limit": {
+          "context": 180000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "smodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "smodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "cmodel": {
+        "name": "Cantus",
+        "limit": {
+          "context": 180000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "cmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "cmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "qmodel_38max": {
+        "name": "Qwen3.8-Max",
+        "limit": {
+          "context": 180000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "tool_call": true,
+        "id": "qmodel_38max",
+        "providerID": "qoder",
+        "api": {
+          "id": "qmodel_38max",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "qfmodel": {
+        "name": "Qwen3.8-Flash",
+        "limit": {
+          "context": 180000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "tool_call": true,
+        "id": "qfmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "qfmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "qmodel_latest": {
+        "name": "Qwen3.7-Max",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "tool_call": true,
+        "id": "qmodel_latest",
+        "providerID": "qoder",
+        "api": {
+          "id": "qmodel_latest",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "qmodel": {
+        "name": "Qwen3.7-Plus",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "tool_call": true,
+        "id": "qmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "qmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "kmodel_latest": {
+        "name": "Kimi-K3",
+        "limit": {
+          "context": 180000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "kmodel_latest",
+        "providerID": "qoder",
+        "api": {
+          "id": "kmodel_latest",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "kmodel": {
+        "name": "Kimi-K2.8-Preview",
+        "limit": {
+          "context": 0,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "kmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "kmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "gmodel": {
+        "name": "GLM-5.3",
+        "limit": {
+          "context": 180000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "gmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "gmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "gfmodel": {
+        "name": "GLM-5.3-Flash",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "gfmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "gfmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "dmodel": {
+        "name": "DeepSeek-V4-Pro",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "dmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "dmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "dfmodel": {
+        "name": "DeepSeek-Flash",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "dfmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "dfmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      },
+      "mmodel": {
+        "name": "MiniMax-M3",
+        "limit": {
+          "context": 180000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "tool_call": true,
+        "id": "mmodel",
+        "providerID": "qoder",
+        "api": {
+          "id": "mmodel",
+          "url": "https://api3.qoder.sh"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "qoder-cn",
+    "name": "Qoder CN",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with Qoder CN",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "ultimate": {
+        "name": "Ultimate",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "ultimate",
+        "providerID": "qoder-cn",
+        "api": {
+          "id": "ultimate",
+          "url": "https://gateway.qoder.com.cn"
+        },
+        "wire": "chat"
+      },
+      "performance": {
+        "name": "Performance",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "tool_call": true,
+        "id": "performance",
+        "providerID": "qoder-cn",
+        "api": {
+          "id": "performance",
+          "url": "https://gateway.qoder.com.cn"
+        },
+        "wire": "chat"
+      },
+      "efficient": {
+        "name": "Efficient",
+        "limit": {
+          "context": 200000,
+          "output": 0
+        },
+        "attachment": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "tool_call": true,
+        "id": "efficient",
+        "providerID": "qoder-cn",
+        "api": {
+          "id": "efficient",
+          "url": "https://gateway.qoder.com.cn"
+        },
+        "wire": "chat"
+      },
+      "lite": {
+        "name": "Lite",
+        "limit": {
+          "context": 0,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "lite",
+        "providerID": "qoder-cn",
+        "api": {
+          "id": "lite",
+          "url": "https://gateway.qoder.com.cn"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "devin",
+    "name": "Devin",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Devin (browser)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "Devin CLI's sign-in",
+        "prompts": [],
+        "native": true
+      }
+    ],
+    "models": {
+      "swe-2": {
+        "id": "swe-2",
+        "name": "SWE-2",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 262000,
+          "output": 128000
+        },
+        "variants": {
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "swe-2",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "swe-1.7-lightning": {
+        "id": "swe-1.7-lightning",
+        "name": "SWE-1.7 Lightning",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 202752,
+          "output": 96000
+        },
+        "variants": {
+          "medium": {
+            "reasoningEffort": "medium"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "swe-1.7-lightning",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "swe-1-7-lightning": {
+        "id": "swe-1-7-lightning",
+        "name": "SWE-1.7 Lightning Max",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 202752,
+          "output": 96000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "swe-1-7-lightning",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-fable-5-1": {
+        "id": "claude-fable-5-1",
+        "name": "Claude Fable 5.1",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-fable-5-1",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-5-5": {
+        "id": "claude-opus-5-5",
+        "name": "Claude Opus 5.5",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-5-5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-5-5-fast": {
+        "id": "claude-opus-5-5-fast",
+        "name": "Claude Opus 5.5 Fast",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-5-5-fast",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-astra": {
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-astra",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-astra-priority": {
+        "id": "gpt-6-astra-priority",
+        "name": "GPT-6 Astra Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-astra-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-sol": {
+        "id": "gpt-6-sol",
+        "name": "GPT-6 Sol",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-sol",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-sol-priority": {
+        "id": "gpt-6-sol-priority",
+        "name": "GPT-6 Sol Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-sol-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-luna": {
+        "id": "gpt-6-luna",
+        "name": "GPT-6 Luna",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-luna",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-luna-priority": {
+        "id": "gpt-6-luna-priority",
+        "name": "GPT-6 Luna Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-luna-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "kimi-k3": {
+        "id": "kimi-k3",
+        "name": "Kimi K3",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "kimi-k3",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5.2": {
+        "id": "glm-5.2",
+        "name": "GLM-5.2",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "glm-5.2",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5-2": {
+        "id": "glm-5-2",
+        "name": "GLM-5.2 High",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "glm-5-2",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5-2-1m": {
+        "id": "glm-5-2-1m",
+        "name": "GLM-5.2 High 1M",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "glm-5-2-1m",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5-2-max-1m": {
+        "id": "glm-5-2-max-1m",
+        "name": "GLM-5.2 Max 1M",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "glm-5-2-max-1m",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5-2-none-1m": {
+        "id": "glm-5-2-none-1m",
+        "name": "GLM-5.2 No Thinking 1M",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "glm-5-2-none-1m",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5-3": {
+        "id": "glm-5-3",
+        "name": "GLM-5.3",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "glm-5-3",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-5-5": {
+        "id": "claude-sonnet-5-5",
+        "name": "Claude Sonnet 5.5",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-5-5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gemini-3-8-flash": {
+        "id": "gemini-3-8-flash",
+        "name": "Gemini 3.8 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65535
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gemini-3-8-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4.7": {
+        "id": "claude-opus-4.7",
+        "name": "Claude Opus 4.7",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4.7",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4.8": {
+        "id": "claude-opus-4.8",
+        "name": "Claude Opus 4.8",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4.8",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4.8-fast": {
+        "id": "claude-opus-4.8-fast",
+        "name": "Claude Opus 4.8 Fast",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4.8-fast",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-5": {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-5-fast": {
+        "id": "claude-opus-5-fast",
+        "name": "Claude Opus 5 Fast",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-5-fast",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-5-fable": {
+        "id": "claude-5-fable",
+        "name": "Claude Fable 5",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-5-fable",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-5": {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gemini-3.5-flash": {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65535
+        },
+        "variants": {
+          "minimal": {
+            "reasoningEffort": "minimal"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gemini-3.5-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gemini-3.6-flash": {
+        "id": "gemini-3.6-flash",
+        "name": "Gemini 3.6 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65535
+        },
+        "variants": {
+          "minimal": {
+            "reasoningEffort": "minimal"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gemini-3.6-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gemini-3-7-flash": {
+        "id": "gemini-3-7-flash",
+        "name": "Gemini 3.7 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65535
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gemini-3-7-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.6-sol": {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.6-sol",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.6-sol-priority": {
+        "id": "gpt-5.6-sol-priority",
+        "name": "GPT-5.6 Sol Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.6-sol-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.6-terra": {
+        "id": "gpt-5.6-terra",
+        "name": "GPT-5.6 Terra",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.6-terra",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.6-terra-priority": {
+        "id": "gpt-5.6-terra-priority",
+        "name": "GPT-5.6 Terra Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.6-terra-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.6-luna": {
+        "id": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.6-luna",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.6-luna-priority": {
+        "id": "gpt-5.6-luna-priority",
+        "name": "GPT-5.6 Luna Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.6-luna-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-1-sol": {
+        "id": "gpt-6-1-sol",
+        "name": "GPT-6.1 Sol",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-1-sol",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-6-1-sol-priority": {
+        "id": "gpt-6-1-sol-priority",
+        "name": "GPT-6.1 Sol Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-6-1-sol-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "grok-4.5": {
+        "id": "grok-4.5",
+        "name": "Grok 4.5",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 500000,
+          "output": 100000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "grok-4.5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "grok-4-6": {
+        "id": "grok-4-6",
+        "name": "Grok 4.6",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 500000,
+          "output": 100000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "grok-4-6",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "grok-4-7": {
+        "id": "grok-4-7",
+        "name": "Grok 4.7",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 500000,
+          "output": 100000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "grok-4-7",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "inkling": {
+        "id": "inkling",
+        "name": "Inkling",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "inkling",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5-3-flash": {
+        "id": "glm-5-3-flash",
+        "name": "GLM-5.3 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "glm-5-3-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "deepseek-v4-flash": {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 384000
+        },
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "deepseek-v4-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "deepseek-v4-1-flash": {
+        "id": "deepseek-v4-1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 384000
+        },
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "deepseek-v4-1-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "swe-1.7": {
+        "id": "swe-1.7",
+        "name": "SWE-1.7",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 262000,
+          "output": 128000
+        },
+        "variants": {
+          "medium": {
+            "reasoningEffort": "medium"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "swe-1.7",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "swe-1-7": {
+        "id": "swe-1-7",
+        "name": "SWE-1.7 Max",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 262000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "swe-1-7",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4.6": {
+        "id": "claude-opus-4.6",
+        "name": "Claude Opus 4.6",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4.6",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4-6": {
+        "id": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4-6",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4-6-thinking": {
+        "id": "claude-opus-4-6-thinking",
+        "name": "Claude Opus 4.6 Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4-6-thinking",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4-6-1m": {
+        "id": "claude-opus-4-6-1m",
+        "name": "Claude Opus 4.6 1M",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4-6-1m",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4-6-thinking-1m": {
+        "id": "claude-opus-4-6-thinking-1m",
+        "name": "Claude Opus 4.6 Thinking 1M",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4-6-thinking-1m",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.4": {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.4",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.4-priority": {
+        "id": "gpt-5.4-priority",
+        "name": "GPT-5.4 Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.4-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.5": {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.5-priority": {
+        "id": "gpt-5.5-priority",
+        "name": "GPT-5.5 Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.5-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.4-mini": {
+        "id": "gpt-5.4-mini",
+        "name": "GPT-5.4 Mini",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 400000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.4-mini",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-4.6": {
+        "id": "claude-sonnet-4.6",
+        "name": "Claude Sonnet 4.6",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-4.6",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-4-6",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-4-6-thinking": {
+        "id": "claude-sonnet-4-6-thinking",
+        "name": "Claude Sonnet 4.6 Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-4-6-thinking",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-4-6-1m": {
+        "id": "claude-sonnet-4-6-1m",
+        "name": "Claude Sonnet 4.6 1M",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-4-6-1m",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-4-6-thinking-1m": {
+        "id": "claude-sonnet-4-6-thinking-1m",
+        "name": "Claude Sonnet 4.6 Thinking 1M",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-4-6-thinking-1m",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.2": {
+        "id": "gpt-5.2",
+        "name": "GPT-5.2",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 384000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.2",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-opus-4.5": {
+        "id": "claude-opus-4.5",
+        "name": "Claude Opus 4.5",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-opus-4.5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_CLAUDE_4_5_OPUS": {
+        "id": "MODEL_CLAUDE_4_5_OPUS",
+        "name": "Claude Opus 4.5",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_CLAUDE_4_5_OPUS",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_CLAUDE_4_5_OPUS_THINKING": {
+        "id": "MODEL_CLAUDE_4_5_OPUS_THINKING",
+        "name": "Claude Opus 4.5 Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_CLAUDE_4_5_OPUS_THINKING",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "Claude Haiku 4.5": {
+        "id": "Claude Haiku 4.5",
+        "name": "Claude Haiku 4.5",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "Claude Haiku 4.5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-4.5": {
+        "id": "claude-sonnet-4.5",
+        "name": "Claude Sonnet 4.5",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "claude-sonnet-4.5",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_PRIVATE_2": {
+        "id": "MODEL_PRIVATE_2",
+        "name": "Claude Sonnet 4.5",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_PRIVATE_2",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_PRIVATE_3": {
+        "id": "MODEL_PRIVATE_3",
+        "name": "Claude Sonnet 4.5 Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_PRIVATE_3",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "GPT-4.1": {
+        "id": "GPT-4.1",
+        "name": "GPT-4.1",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1047576,
+          "output": 32768
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "GPT-4.1",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.1": {
+        "id": "gpt-5.1",
+        "name": "GPT-5.1",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.1",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_PRIVATE_12": {
+        "id": "MODEL_PRIVATE_12",
+        "name": "GPT-5.1 No Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_PRIVATE_12",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_PRIVATE_13": {
+        "id": "MODEL_PRIVATE_13",
+        "name": "GPT-5.1 Low Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_PRIVATE_13",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_PRIVATE_14": {
+        "id": "MODEL_PRIVATE_14",
+        "name": "GPT-5.1 Medium Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_PRIVATE_14",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "MODEL_PRIVATE_15": {
+        "id": "MODEL_PRIVATE_15",
+        "name": "GPT-5.1 High Thinking",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 272000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "MODEL_PRIVATE_15",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.3-codex": {
+        "id": "gpt-5.3-codex",
+        "name": "GPT-5.3-Codex",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 400000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.3-codex",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.3-codex-priority": {
+        "id": "gpt-5.3-codex-priority",
+        "name": "GPT-5.3-Codex Priority",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 400000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gpt-5.3-codex-priority",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "kimi-k2.6": {
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 262144,
+          "output": 8192
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "kimi-k2.6",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "kimi-k2.7": {
+        "id": "kimi-k2.7",
+        "name": "Kimi K2.7",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 262144,
+          "output": 16000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "kimi-k2.7",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "nemotron-3-ultra": {
+        "id": "nemotron-3-ultra",
+        "name": "Nemotron 3 Ultra",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 32768
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "nemotron-3-ultra",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "swe-1.6": {
+        "id": "swe-1.6",
+        "name": "SWE-1.6",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "swe-1.6",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "swe-1.6-fast": {
+        "id": "swe-1.6-fast",
+        "name": "SWE-1.6 Fast",
+        "tool_call": true,
+        "reasoning": false,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 200000,
+          "output": 128000
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "swe-1.6-fast",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gemini-3.1-pro": {
+        "id": "gemini-3.1-pro",
+        "name": "Gemini 3.1 Pro",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65535
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gemini-3.1-pro",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "gemini-3.0-flash": {
+        "id": "gemini-3.0-flash",
+        "name": "Gemini 3 Flash",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65535
+        },
+        "variants": {
+          "minimal": {
+            "reasoningEffort": "minimal"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "gemini-3.0-flash",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      },
+      "deepseek-v4-pro": {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "tool_call": true,
+        "reasoning": true,
+        "attachment": false,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 384000
+        },
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "devin",
+        "api": {
+          "id": "deepseek-v4-pro",
+          "url": "https://server.codeium.com/devin/v1"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "zed",
+    "name": "Zed",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with Zed (browser)",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "claude-sonnet-5": {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 64000
+        },
+        "variants": {},
+        "providerID": "zed",
+        "api": {
+          "id": "claude-sonnet-5",
+          "url": "https://cloud.zed.dev/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-opus-5-5": {
+        "id": "claude-opus-5-5",
+        "name": "Claude Opus 5.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "variants": {},
+        "providerID": "zed",
+        "api": {
+          "id": "claude-opus-5-5",
+          "url": "https://cloud.zed.dev/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-haiku-4-5": {
+        "id": "claude-haiku-4-5",
+        "name": "Claude Haiku 4.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "variants": {},
+        "providerID": "zed",
+        "api": {
+          "id": "claude-haiku-4-5",
+          "url": "https://cloud.zed.dev/v1"
+        },
+        "wire": "anthropic"
+      },
+      "gpt-5.5": {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 400000,
+          "output": 128000
+        },
+        "variants": {},
+        "providerID": "zed",
+        "api": {
+          "id": "gpt-5.5",
+          "url": "https://cloud.zed.dev/v1"
+        },
+        "wire": "responses"
+      },
+      "gemini-3.5-flash": {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "variants": {},
+        "providerID": "zed",
+        "api": {
+          "id": "gemini-3.5-flash",
+          "url": "https://cloud.zed.dev/v1"
+        },
+        "wire": "gemini"
+      },
+      "grok-4.7": {
+        "id": "grok-4.7",
+        "name": "Grok 4.7",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 500000,
+          "output": 64000
+        },
+        "variants": {},
+        "providerID": "zed",
+        "api": {
+          "id": "grok-4.7",
+          "url": "https://cloud.zed.dev/v1"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "factory",
+    "name": "Factory",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with Factory (device code)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "api",
+        "label": "Factory API key (fk-…)",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "claude-fable-5.1": {
+        "id": "claude-fable-5.1",
+        "name": "Fable 5.1",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 867000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "xhigh": {
+            "effort": "xhigh"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-fable-5.1",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-fable-5": {
+        "id": "claude-fable-5",
+        "name": "Fable 5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 867000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "xhigh": {
+            "effort": "xhigh"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-fable-5",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-opus-5-5": {
+        "id": "claude-opus-5-5",
+        "name": "Opus 5.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 872000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "xhigh": {
+            "effort": "xhigh"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-opus-5-5",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-opus-5": {
+        "id": "claude-opus-5",
+        "name": "Opus 5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 867000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "xhigh": {
+            "effort": "xhigh"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-opus-5",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-opus-4-8": {
+        "id": "claude-opus-4-8",
+        "name": "Opus 4.8",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 867000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "xhigh": {
+            "effort": "xhigh"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-opus-4-8",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-sonnet-5-5": {
+        "id": "claude-sonnet-5-5",
+        "name": "Sonnet 5.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 872000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "xhigh": {
+            "effort": "xhigh"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-sonnet-5-5",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-sonnet-5": {
+        "id": "claude-sonnet-5",
+        "name": "Sonnet 5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 872000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "xhigh": {
+            "effort": "xhigh"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-sonnet-5",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Sonnet 4.6",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 931000,
+          "output": 64000
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          },
+          "max": {
+            "effort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-sonnet-4-6",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-haiku-4-5-20251001": {
+        "id": "claude-haiku-4-5-20251001",
+        "name": "Haiku 4.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 0,
+          "output": 0
+        },
+        "variants": {
+          "low": {
+            "effort": "low"
+          },
+          "medium": {
+            "effort": "medium"
+          },
+          "high": {
+            "effort": "high"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "claude-haiku-4-5-20251001",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "gpt-6-sol": {
+        "id": "gpt-6-sol",
+        "name": "GPT-6 Sol",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-6-sol",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-6-astra": {
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-6-astra",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-6-luna": {
+        "id": "gpt-6-luna",
+        "name": "GPT-6 Luna",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-6-luna",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-5.6-sol": {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-5.6-sol",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-5.6-terra": {
+        "id": "gpt-5.6-terra",
+        "name": "GPT-5.6 Terra",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-5.6-terra",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-5.6-luna": {
+        "id": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-5.6-luna",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-5.5": {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-5.5",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-5.4": {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1050000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-5.4",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "gpt-5.3-codex": {
+        "id": "gpt-5.3-codex",
+        "name": "GPT-5.3-Codex",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 400000,
+          "output": 128000
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "gpt-5.3-codex",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "grok-4.7": {
+        "id": "grok-4.7",
+        "name": "Grok 4.7",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 500000,
+          "output": 63356
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "grok-4.7",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "grok-4.6": {
+        "id": "grok-4.6",
+        "name": "Grok 4.6",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 200000,
+          "output": 63356
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "grok-4.6",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "responses"
+      },
+      "glm-5.3": {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "reasoning": true,
+        "attachment": false,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1040000,
+          "output": 131072
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "glm-5.3",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5.3-flash": {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1048576,
+          "output": 131072
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "glm-5.3-flash",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "glm-5.2": {
+        "id": "glm-5.2",
+        "name": "GLM-5.2",
+        "reasoning": true,
+        "attachment": false,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1040000,
+          "output": 131072
+        },
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "glm-5.2",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "kimi-k3": {
+        "id": "kimi-k3",
+        "name": "Kimi K3",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 262144,
+          "output": 65536
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "kimi-k3",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "deepseek-v4.1-flash": {
+        "id": "deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 1040000,
+          "output": 131072
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "deepseek-v4.1-flash",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "qwen3.8-max": {
+        "id": "qwen3.8-max",
+        "name": "Qwen3.8 Max",
+        "reasoning": true,
+        "attachment": false,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 262144,
+          "output": 131072
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "qwen3.8-max",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "minimax-m3": {
+        "id": "minimax-m3",
+        "name": "MiniMax M3",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 512000,
+          "output": 64000
+        },
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "minimax-m3",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "minimax-m2.7": {
+        "id": "minimax-m2.7",
+        "name": "MiniMax M2.7",
+        "reasoning": true,
+        "attachment": false,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 196600,
+          "output": 64000
+        },
+        "variants": {
+          "high": {
+            "effort": "high"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "minimax-m2.7",
+          "url": "https://api.factory.ai/api/llm/a/v1"
+        },
+        "wire": "anthropic"
+      },
+      "mistral-medium-3.5": {
+        "id": "mistral-medium-3.5",
+        "name": "Mistral Medium 3.5",
+        "reasoning": true,
+        "attachment": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 256000,
+          "output": 64000
+        },
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "mistral-medium-3.5",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      },
+      "nemotron-3-ultra": {
+        "id": "nemotron-3-ultra",
+        "name": "Nemotron 3 Ultra",
+        "reasoning": true,
+        "attachment": false,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "limit": {
+          "context": 202000,
+          "output": 65536
+        },
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "providerID": "factory",
+        "api": {
+          "id": "nemotron-3-ultra",
+          "url": "https://api.factory.ai/api/llm/o/v1"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "grok",
+    "name": "Grok (SuperGrok)",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with Grok Build (device code)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "Use Grok Build's current sign-in",
+        "prompts": [],
+        "native": true
+      }
+    ],
+    "models": {
+      "grok-4.7": {
+        "name": "Grok 4.7",
+        "attachment": true,
+        "reasoning": true,
+        "tool_call": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "medium": {
+            "reasoningEffort": "medium"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "id": "grok-4.7",
+        "providerID": "grok",
+        "api": {
+          "id": "grok-4.7",
+          "url": "https://cli-chat-proxy.grok.com/v1"
+        },
+        "wire": "responses"
+      }
+    }
+  },
+  {
+    "id": "commandcode-plan",
+    "name": "Command Code Plan",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Command Code (browser)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "Command Code CLI's sign-in",
+        "prompts": [],
+        "native": true
+      },
+      {
+        "index": 2,
+        "type": "api",
+        "label": "API key (commandcode.ai/settings/keys)",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "claude-sonnet-5": {
+        "name": "Claude Sonnet 5",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "claude-sonnet-5",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "claude-sonnet-5",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "anthropic"
+      },
+      "claude-opus-5-5": {
+        "name": "Claude Opus 5.5",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "claude-opus-5-5",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "claude-opus-5-5",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "anthropic"
+      },
+      "gpt-6-sol": {
+        "name": "GPT-6 Sol",
+        "limit": {
+          "context": 1050000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "gpt-6-sol",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "gpt-6-sol",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "chat"
+      },
+      "deepseek/deepseek-v4-pro": {
+        "name": "DeepSeek V4 Pro",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "deepseek/deepseek-v4-pro",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "deepseek/deepseek-v4-pro",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "chat"
+      },
+      "deepseek/deepseek-v4-flash": {
+        "name": "DeepSeek V4 Flash",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "deepseek/deepseek-v4-flash",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "deepseek/deepseek-v4-flash",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "chat"
+      },
+      "moonshotai/Kimi-K3": {
+        "name": "Kimi K3",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "moonshotai/Kimi-K3",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "moonshotai/Kimi-K3",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "chat"
+      },
+      "zai-org/GLM-5.3": {
+        "name": "GLM-5.3",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "zai-org/GLM-5.3",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "zai-org/GLM-5.3",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "chat"
+      },
+      "MiniMaxAI/MiniMax-M3": {
+        "name": "MiniMax M3",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "MiniMaxAI/MiniMax-M3",
+        "providerID": "commandcode-plan",
+        "api": {
+          "id": "MiniMaxAI/MiniMax-M3",
+          "url": "https://api.commandcode.ai/provider/v1"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "mimo-app",
+    "name": "Xiaomi MiMo",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Xiaomi account",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "mimo-pro": {
+        "name": "MiMo Pro",
+        "release_date": "2026-07-01",
+        "attachment": true,
+        "tool_call": true,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "id": "mimo-pro",
+        "providerID": "mimo-app",
+        "api": {
+          "id": "mimo-pro",
+          "url": "https://mimo-server-sgp.xiaomimimo.com/api/route"
+        },
+        "wire": "chat"
+      },
+      "mimo-flash": {
+        "name": "MiMo Flash",
+        "release_date": "2026-07-01",
+        "attachment": true,
+        "tool_call": true,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "id": "mimo-flash",
+        "providerID": "mimo-app",
+        "api": {
+          "id": "mimo-flash",
+          "url": "https://mimo-server-sgp.xiaomimimo.com/api/route"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "cursor",
+    "name": "Cursor",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Cursor (browser)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "cursor-agent's sign-in",
+        "prompts": [],
+        "native": true
+      },
+      {
+        "index": 2,
+        "type": "api",
+        "label": "Cursor API key (cursor.com/dashboard → Integrations)",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "auto": {
+        "name": "Auto",
+        "limit": {
+          "context": 200000,
+          "output": 0
+        },
+        "attachment": true,
+        "tool_call": true,
+        "id": "auto",
+        "providerID": "cursor",
+        "api": {
+          "id": "auto",
+          "url": "https://agentn.global.api5.cursor.sh"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "kiro",
+    "name": "Kiro",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Kiro (Google, GitHub, AWS Builder ID, IAM Identity Center)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "Kiro CLI's or Kiro IDE's sign-in",
+        "prompts": [],
+        "native": true
+      },
+      {
+        "index": 2,
+        "type": "api",
+        "label": "Kiro API key (ksk_…)",
+        "prompts": [],
+        "native": false
+      }
+    ],
+    "models": {
+      "auto": {
+        "name": "Auto",
+        "limit": {
+          "context": 0,
+          "output": 0
+        },
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 10000
+            }
+          },
+          "medium": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 20000
+            }
+          },
+          "high": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 30000
+            }
+          },
+          "max": {
+            "thinking": {
+              "type": "enabled",
+              "budgetTokens": 50000
+            }
+          }
+        },
+        "tool_call": true,
+        "id": "auto",
+        "providerID": "kiro",
+        "api": {
+          "id": "auto",
+          "url": "https://runtime.us-east-1.kiro.dev"
+        },
+        "wire": "anthropic"
+      }
+    }
+  },
+  {
+    "id": "workbuddy",
+    "name": "WorkBuddy",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "WorkBuddy account (browser)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "WorkBuddy desktop's sign-in",
+        "prompts": [],
+        "native": true
+      }
+    ],
+    "models": {
+      "auto": {
+        "name": "Auto",
+        "limit": {
+          "context": 168000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "auto",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "auto",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "hy4-preview-f": {
+        "name": "Hy4 preview",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "id": "hy4-preview-f",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "hy4-preview-f",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "hy3": {
+        "name": "Hy3",
+        "limit": {
+          "context": 192000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "id": "hy3",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "hy3",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "hy3-x": {
+        "name": "Hy3-X",
+        "limit": {
+          "context": 192000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "id": "hy3-x",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "hy3-x",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "deepseek-v4.1-flash": {
+        "name": "Deepseek-V4.1-Flash",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "deepseek-v4.1-flash",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "deepseek-v4.1-flash",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "glm-5.3": {
+        "name": "GLM-5.3",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "id": "glm-5.3",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "glm-5.3",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "glm-5.3-flash": {
+        "name": "GLM-5.3-Flash",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "id": "glm-5.3-flash",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "glm-5.3-flash",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "glm-5.2": {
+        "name": "GLM-5.2",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "id": "glm-5.2",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "glm-5.2",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "glm-5.1": {
+        "name": "GLM-5.1",
+        "limit": {
+          "context": 200000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "glm-5.1",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "glm-5.1",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "glm-5v-turbo": {
+        "name": "GLM-5v-Turbo",
+        "limit": {
+          "context": 200000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "glm-5v-turbo",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "glm-5v-turbo",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "minimax-m3": {
+        "name": "MiniMax-M3",
+        "limit": {
+          "context": 512000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "minimax-m3",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "minimax-m3",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "kimi-k3-1": {
+        "name": "Kimi-K3",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "id": "kimi-k3-1",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "kimi-k3-1",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "kimi-k2.7": {
+        "name": "Kimi-K2.7-Code",
+        "limit": {
+          "context": 256000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "kimi-k2.7",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "kimi-k2.7",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "kimi-k2.6": {
+        "name": "Kimi-K2.6",
+        "limit": {
+          "context": 256000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "kimi-k2.6",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "kimi-k2.6",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      },
+      "deepseek-v4-pro": {
+        "name": "Deepseek-V4-Pro",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "none": {
+            "reasoningEffort": "none"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "id": "deepseek-v4-pro",
+        "providerID": "workbuddy",
+        "api": {
+          "id": "deepseek-v4-pro",
+          "url": "https://copilot.tencent.com/v2"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "workbuddy-ai",
+    "name": "WorkBuddy AI",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "WorkBuddy AI account (browser)",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "WorkBuddy AI desktop's sign-in",
+        "prompts": [],
+        "native": true
+      }
+    ],
+    "models": {
+      "default-model": {
+        "name": "Default",
+        "limit": {
+          "context": 176000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "default-model",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "default-model",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "fast-model": {
+        "name": "Fast",
+        "limit": {
+          "context": 200000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "fast-model",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "fast-model",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "balanced-model": {
+        "name": "Balanced",
+        "limit": {
+          "context": 256000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "balanced-model",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "balanced-model",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "primary-model": {
+        "name": "Primary",
+        "limit": {
+          "context": 272000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "primary-model",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "primary-model",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "deep-model": {
+        "name": "Deep",
+        "limit": {
+          "context": 176000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "deep-model",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "deep-model",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.5": {
+        "name": "GPT-5.5",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "gpt-5.5",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "gpt-5.5",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.4": {
+        "name": "GPT-5.4",
+        "limit": {
+          "context": 272000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "gpt-5.4",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "gpt-5.4",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "gpt-5.3-codex": {
+        "name": "GPT-5.3-Codex",
+        "limit": {
+          "context": 272000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "gpt-5.3-codex",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "gpt-5.3-codex",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "gemini-3.1-pro": {
+        "name": "Gemini-3.1-Pro",
+        "limit": {
+          "context": 400000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "gemini-3.1-pro",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "gemini-3.1-pro",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "gemini-3.5-flash": {
+        "name": "Gemini-3.5-Flash",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "gemini-3.5-flash",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "gemini-3.5-flash",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "glm-5.3": {
+        "name": "GLM-5.3",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "max": {
+            "reasoningEffort": "max"
+          }
+        },
+        "id": "glm-5.3",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "glm-5.3",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "glm-5.2": {
+        "name": "GLM-5.2",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "high": {
+            "reasoningEffort": "high"
+          },
+          "xhigh": {
+            "reasoningEffort": "xhigh"
+          }
+        },
+        "id": "glm-5.2",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "glm-5.2",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "hy3": {
+        "name": "Hy3",
+        "limit": {
+          "context": 192000,
+          "output": 0
+        },
+        "tool_call": true,
+        "reasoning": true,
+        "variants": {
+          "low": {
+            "reasoningEffort": "low"
+          },
+          "high": {
+            "reasoningEffort": "high"
+          }
+        },
+        "id": "hy3",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "hy3",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "kimi-k3": {
+        "name": "Kimi-K3",
+        "limit": {
+          "context": 1000000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "kimi-k3",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "kimi-k3",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "kimi-k2.6": {
+        "name": "Kimi-K2.6",
+        "limit": {
+          "context": 256000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "kimi-k2.6",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "kimi-k2.6",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      },
+      "minimax-m3": {
+        "name": "MiniMax-M3",
+        "limit": {
+          "context": 512000,
+          "output": 0
+        },
+        "tool_call": true,
+        "id": "minimax-m3",
+        "providerID": "workbuddy-ai",
+        "api": {
+          "id": "minimax-m3",
+          "url": "https://www.workbuddy.ai/v2"
+        },
+        "wire": "chat"
+      }
+    }
+  }
+]

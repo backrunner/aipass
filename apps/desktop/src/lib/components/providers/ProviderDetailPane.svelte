@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import ProviderRuntimePanel from "./ProviderRuntimePanel.svelte";
   import ProviderEmptyState from "./ProviderEmptyState.svelte";
   import CredentialPicker from "./CredentialPicker.svelte";
   import CredentialTags from "./CredentialTags.svelte";
@@ -67,6 +68,7 @@
   import PricingGroupDialog from "../pricing/PricingGroupDialog.svelte";
   import ProviderUsageProbeDialog from "./ProviderUsageProbeDialog.svelte";
 
+  export let invokeTauri: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   export let selected: ProviderEntry | undefined;
   export let showArchived = false;
   export let showTrash = false;
@@ -333,6 +335,15 @@
     selected?.quota &&
       (selected.quota.label || selected.quota.limit || selected.quota.used || selected.quota.remaining || selected.quota.resetAt)
   );
+  let communityRefreshing = false;
+  let communityError = "";
+  async function refreshCommunity() {
+    if (!selected || communityRefreshing) return;
+    const id = selected.id; communityRefreshing = true; communityError = "";
+    try { const subscription = await invokeTauri<NonNullable<typeof selected>["subscription"]>("community_refresh", { id }); if (selected?.id === id) selected = { ...selected, subscription }; }
+    catch (error) { if (selected?.id === id) communityError = String(error); }
+    finally { communityRefreshing = false; }
+  }
   $: hasSubscription = Boolean(selected?.subscription);
   function integrationEntry(entry: ProviderEntry, secret: SecretRef) {
     return { ...entry, defaultModel: secret.defaultModel ?? entry.defaultModel, interfaceType: secretInterfaceType(secret, entry.interfaceType),
@@ -523,7 +534,7 @@
             label={selected.favorite ? $t("providerDetail.removeFavorite") : $t("providerDetail.addFavorite")}
             pressed={selected.favorite}
             tone={selected.favorite ? "primary" : "neutral"}
-            on:click={() => onFavorite(!selected.favorite)}
+            on:click={() => onFavorite(!selected?.favorite)}
           >
             <Star size={16} fill={selected.favorite ? "currentColor" : "none"} />
           </IconButton>
@@ -738,7 +749,7 @@
               type="button"
               class="kv-row clickable"
               class:copied-flash={copied === "endpoint"}
-              on:click={() => onCopyValue("endpoint", endpointDisplay(selected))}
+              on:click={() => onCopyValue("endpoint", endpointDisplay(selected!))}
             >
               <span class="kv-label">{$t("providerDetail.endpoint")}</span>
               <code class="kv-value mono">{endpointDisplay(selected)}</code>
@@ -901,7 +912,7 @@
               type="button"
               class="kv-row clickable"
               class:copied-flash={copied === "model"}
-              on:click={() => onCopyValue("model", selected.defaultModel ?? "")}
+              on:click={() => onCopyValue("model", selected?.defaultModel ?? "")}
             >
               <span class="kv-label">{$t("providerDetail.defaultModel")}</span>
               <code class="kv-value mono">{selected.defaultModel}</code>
@@ -922,7 +933,7 @@
               type="button"
               class="kv-row clickable"
               class:copied-flash={copied === "console"}
-              on:click={() => onCopyValue("console", consoleDisplay(selected))}
+              on:click={() => onCopyValue("console", consoleDisplay(selected!))}
             >
               <span class="kv-label">{$t("providerDetail.console")}</span>
               <code class="kv-value mono">{consoleDisplay(selected)}</code>
@@ -1036,11 +1047,16 @@
               <div class="kv-row"><span class="kv-label">{$t("providerDetail.credits")}</span><strong class="kv-value">{selected.subscription.creditsRemaining}{selected.subscription.creditsCurrency ? ` ${selected.subscription.creditsCurrency}` : ""}</strong><span></span></div>
             {/if}
             {#each selected.subscription?.windows ?? [] as window (window.id)}
-              <div class="kv-row"><span class="kv-label">{window.label}</span><span class="kv-value"><strong>{window.usedPercent !== undefined ? `${window.usedPercent.toFixed(1)}%` : "—"}</strong>{#if window.resetsAt}<span class="text-tertiary"> · {formatDateTime(window.resetsAt)}</span>{/if}</span><span></span></div>
+              <div class="kv-row"><span class="kv-label">{window.label}</span><span class="kv-value"><strong>{typeof window.usedPercent === "number" ? `${window.usedPercent.toFixed(1)}%` : "—"}</strong>{#if window.resetsAt}<span class="text-tertiary"> · {formatDateTime(window.resetsAt)}</span>{/if}</span><span></span></div>
             {/each}
             <div class="snapshot-source">{$t("providerDetail.snapshotSource", { source: selected.subscription?.source ?? "" })} · {formatDateTime(selected.subscription?.observedAt)}{#if selected.subscription?.stale} · <span class="probe-error">{$t("providerDetail.snapshotStale")}</span>{/if}</div>
+            {#if selected.subscription?.source.startsWith("community:")}<Button variant="secondary" size="sm" disabled={communityRefreshing} on:click={refreshCommunity}>{communityRefreshing ? $t("common.loading") : $t("communityConnect.refresh")}</Button>{#if communityError}<div class="probe-error">{communityError}</div>{/if}{/if}
             {#if selected.subscription?.error}<div class="probe-error">{selected.subscription.error}</div>{/if}
           </Card>
+        {/if}
+
+        {#if !showTrash && !showArchived}
+          {#key selected.id}<ProviderRuntimePanel id={selected.id} providerTitle={selected.title} {invokeTauri} />{/key}
         {/if}
 
         {#if selected.notes}

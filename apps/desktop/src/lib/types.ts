@@ -124,7 +124,7 @@ export type ProxyTargetConfig = {
   protocol?: ProxyProtocol;
 };
 
-export type ProxyRouteStrategy = "fallback" | "round_robin";
+export type ProxyRouteStrategy = "fallback" | "round_robin" | "quota_aware";
 
 export type ProxyRouteConfig = {
   id: string;

@@ -19,7 +19,10 @@ pub(crate) use refresh_loop::spawn_token_refresh;
 
 use aipass_provider_registry::OAuthProvider;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    OnceLock, RwLock,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::ZeroizeOnDrop;
 
@@ -27,7 +30,7 @@ use zeroize::ZeroizeOnDrop;
 /// default is far longer; a wedged auth endpoint must not stall a handler.
 pub(crate) const OAUTH_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Refresh the access token this long before it actually expires. Must exceed
-/// the refresh loop's sweep interval (120s) so a token is never served expired
+/// the refresh loop's sweep interval (30s) so a token is never served expired
 /// between sweeps.
 pub(crate) const TOKEN_REFRESH_BUFFER_MS: i64 = 300_000;
 /// Default device-code lifetime when the provider omits `expires_in`.
@@ -113,6 +116,35 @@ impl OAuthError {
 /// neither overflow the expiry math nor cause perpetual refresh churn.
 pub(crate) fn clamp_expires_in(expires_in: i64) -> i64 {
     expires_in.clamp(1, 30 * 24 * 60 * 60)
+}
+
+/// A proxy/bot-check 403 is not evidence that a refresh grant is gone.
+/// Explicit grant errors are authoritative, but never take them from a rate
+/// limit or server failure (which may be a gateway-generated response).
+fn refresh_grant_rejected(status: reqwest::StatusCode, code: Option<&str>) -> bool {
+    status == reqwest::StatusCode::UNAUTHORIZED
+        || ((status.is_success() || (status.is_client_error() && status.as_u16() != 429))
+            && matches!(
+                code,
+                Some(
+                    "invalid_grant"
+                        | "invalid_token"
+                        | "refresh_token_expired"
+                        | "refresh_token_reused"
+                        | "refresh_token_invalidated"
+                )
+            ))
+}
+
+/// Use the access token's actual expiry when it is earlier than expires_in.
+/// JWT claims here are scheduling hints, never authentication authority.
+fn token_lifetime(access: &str, expires_in: Option<i64>) -> i64 {
+    let announced = clamp_expires_in(expires_in.unwrap_or(3600));
+    jwt_claims(access)
+        .and_then(|c| c.get("exp").and_then(serde_json::Value::as_i64))
+        .filter(|exp| *exp > 0)
+        .map(|exp| announced.min(exp.saturating_sub(now_ms() / 1000).max(1)))
+        .unwrap_or(announced)
 }
 
 fn truncate(value: &str, max: usize) -> &str {
@@ -201,12 +233,23 @@ pub(crate) struct PollOutcome {
 /// restart simply forces the user to start a new login.
 pub(crate) struct OAuthManager {
     pending: RwLock<HashMap<String, PendingDeviceCode>>,
+    refresh_recovery: RwLock<HashMap<uuid::Uuid, RefreshRecovery>>,
+    epoch: AtomicU64,
+}
+
+struct RefreshRecovery {
+    last_refresh_ms: i64,
+    refresh_token: aipass_agent_protocol::SensitiveString,
+    bundle: OAuthTokenBundle,
+    expires_at_ms: i64,
 }
 
 impl OAuthManager {
     fn new() -> Self {
         Self {
             pending: RwLock::new(HashMap::new()),
+            refresh_recovery: RwLock::new(HashMap::new()),
+            epoch: AtomicU64::new(0),
         }
     }
 
@@ -233,6 +276,81 @@ impl OAuthManager {
 
     pub(crate) fn clear(&self) {
         self.pending.write().unwrap().clear();
+        let mut recovery = self.refresh_recovery.write().unwrap();
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        recovery.clear();
+    }
+
+    pub(super) fn refresh_epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
+    }
+
+    pub(super) fn recovered_refresh(
+        &self,
+        id: uuid::Uuid,
+        generation: i64,
+        refresh: &str,
+    ) -> Option<OAuthTokenBundle> {
+        let mut recovery = self.refresh_recovery.write().unwrap();
+        let saved = recovery.get(&id)?;
+        if saved.last_refresh_ms != generation || saved.refresh_token.expose() != refresh {
+            recovery.remove(&id);
+            return None;
+        }
+        let mut bundle = saved.bundle.clone();
+        bundle.expires_in = saved.expires_at_ms.saturating_sub(now_ms()).max(1000) / 1000;
+        Some(bundle)
+    }
+
+    pub(super) fn remember_refresh(
+        &self,
+        epoch: u64,
+        id: uuid::Uuid,
+        generation: i64,
+        refresh: &str,
+        bundle: &OAuthTokenBundle,
+    ) -> bool {
+        let mut recovery = self.refresh_recovery.write().unwrap();
+        if self.refresh_epoch() != epoch {
+            return false;
+        }
+        recovery.entry(id).or_insert_with(|| RefreshRecovery {
+            last_refresh_ms: generation,
+            refresh_token: aipass_agent_protocol::SensitiveString::new(refresh),
+            expires_at_ms: now_ms()
+                .saturating_add(clamp_expires_in(bundle.expires_in).saturating_mul(1000)),
+            bundle: bundle.clone(),
+        });
+        true
+    }
+
+    pub(super) fn forget_refresh(&self, id: uuid::Uuid) {
+        self.refresh_recovery.write().unwrap().remove(&id);
+    }
+
+    pub(super) fn refresh_expiry(
+        &self,
+        id: uuid::Uuid,
+        generation: i64,
+        refresh: &str,
+    ) -> Option<i64> {
+        self.refresh_recovery
+            .read()
+            .unwrap()
+            .get(&id)
+            .filter(|s| s.last_refresh_ms == generation && s.refresh_token.expose() == refresh)
+            .map(|s| s.expires_at_ms)
+    }
+
+    pub(super) fn retain_refreshes(&self, accounts: &[aipass_vault::ManagedOAuthAccount]) {
+        self.refresh_recovery.write().unwrap().retain(|id, saved| {
+            accounts.iter().any(|a| {
+                a.id == *id
+                    && !a.requires_reauth
+                    && a.last_refresh_ms == saved.last_refresh_ms
+                    && a.refresh_token == saved.refresh_token.expose()
+            })
+        });
     }
 
     pub(crate) fn cancel(&self, device_code: &str) -> bool {
@@ -432,6 +550,73 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_persistence_reuses_the_rotated_grant_and_lock_revokes_recovery() {
+        let manager = OAuthManager::new();
+        let id = uuid::Uuid::new_v4();
+        let epoch = manager.refresh_epoch();
+        let bundle = tokens();
+        assert!(manager.remember_refresh(epoch, id, 42, "old-refresh", &bundle));
+        let expiry = manager.refresh_recovery.read().unwrap()[&id].expires_at_ms;
+        for _ in 0..2 {
+            let recovered = manager.recovered_refresh(id, 42, "old-refresh").unwrap();
+            assert_eq!(recovered.refresh_token, bundle.refresh_token);
+            assert_eq!(
+                manager.refresh_recovery.read().unwrap()[&id].expires_at_ms,
+                expiry
+            );
+        }
+        assert!(manager
+            .recovered_refresh(id, 42, "new-login-refresh")
+            .is_none());
+        assert!(manager.remember_refresh(epoch, id, 42, "old-refresh", &bundle));
+        manager.clear();
+        assert!(manager.recovered_refresh(id, 42, "old-refresh").is_none());
+        assert!(!manager.remember_refresh(epoch, id, 42, "old-refresh", &bundle));
+    }
+
+    #[test]
+    fn grant_rejection_distinguishes_gateway_failures_from_reauthentication() {
+        use reqwest::StatusCode;
+        for status in [
+            StatusCode::FORBIDDEN,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::BAD_GATEWAY,
+        ] {
+            assert!(!refresh_grant_rejected(status, None));
+        }
+        assert!(refresh_grant_rejected(StatusCode::UNAUTHORIZED, None));
+        for code in [
+            "invalid_grant",
+            "invalid_token",
+            "refresh_token_expired",
+            "refresh_token_reused",
+            "refresh_token_invalidated",
+        ] {
+            assert!(refresh_grant_rejected(StatusCode::BAD_REQUEST, Some(code)));
+            assert!(refresh_grant_rejected(StatusCode::FORBIDDEN, Some(code)));
+            assert!(!refresh_grant_rejected(
+                StatusCode::TOO_MANY_REQUESTS,
+                Some(code)
+            ));
+            assert!(!refresh_grant_rejected(StatusCode::BAD_GATEWAY, Some(code)));
+        }
+    }
+
+    #[test]
+    fn access_token_expiry_limits_the_announced_lifetime() {
+        use base64::Engine;
+        let token = format!(
+            "header.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::json!({"exp": now_ms() / 1000 + 120}).to_string())
+        );
+        assert!((119..=120).contains(&token_lifetime(&token, Some(3600))));
+        assert_eq!(token_lifetime(&token, Some(60)), 60);
+        assert_eq!(token_lifetime("opaque-token", None), 3600);
+        assert_eq!(token_lifetime("opaque-token", Some(i64::MAX)), 30 * 86400);
+    }
 
     #[test]
     fn network_and_5xx_failures_are_retryable() {

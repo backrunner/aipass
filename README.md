@@ -66,7 +66,13 @@ Transport fallback is safe before submitting a WS generation (including rejected
 
 See [the WS session review](docs/websocket-session-review.md) for protocol constraints, source comparisons and regression coverage.
 
-Credential/configuration refreshes close existing connections; clients must reconnect and recover their conversation state. The response idle timeout applies while responses are pending, allowing idle connections between tool calls. OpenAI Chat Completions WebSocket conversion, browser subprotocol authentication, and the separate Realtime audio API are not supported.
+Credential/configuration refreshes close affected connections; clients must reconnect and recover their conversation state. Responses WebSocket clients can use Chat Completions targets through the HTTP/SSE bridge. Browser subprotocol authentication and the separate Realtime audio API are not supported.
+
+Chat Completions and Responses now have direct request, response and SSE conversion, including tool calls, reasoning summaries, structured output and cache usage. Unsupported hosted tools and server-owned history are rejected explicitly. Official Codex OAuth targets use a subscription-specific stream-only adapter and reconstruct JSON for non-streaming callers; downstream WS uses the HTTP/SSE bridge. The Agent also handles genuine Claude Code tool sessions, Copilot editor sessions, native Gemini, provider request differences and model-scoped quota routing.
+
+**Connect subscription → More providers** offers native Rust adapters for all 13 referenced community provider IDs: ZCode, Qoder/Qoder CN, Devin, Zed, Factory, Grok, Command Code, Xiaomi MiMo, Cursor, Kiro and WorkBuddy China/international. These adapters run inside the Rust Agent and need an unlocked vault; CLI-backed login methods need their actual vendor CLI. No community packages or Node converter runtime are loaded. Models, usage and token rotation stay under Agent control. See the [subscription and proxy review](docs/subscription-proxy-review.md) for the pinned sources, supported protocols, prerequisites and live-validation limits.
+
+**连接订阅 → 更多服务商** 已接入社区注册表的全部 13 个 provider ID，支持登录、模型发现、额度刷新及各家特殊协议。转换和传输均在 Rust Agent 内运行，需要已解锁的 vault；CLI 登录方式还需要对应官方 CLI，无社区包或 Node 转换器运行依赖。供应商详情的运行时设置支持额度策略、独立出站代理、余额查询和 webhook。详见[订阅与本地代理审查](docs/subscription-proxy-review.md)；本地测试不代表真实订阅资格或扣费已验收。
 
 Responses-to-Anthropic conversion supports function tools. Requests containing custom tools, shell tools, namespaces, or unsupported tool-call history are rejected explicitly instead of silently losing those capabilities. Use a native Responses upstream for these requests.
 

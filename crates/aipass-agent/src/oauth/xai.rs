@@ -213,16 +213,11 @@ pub(crate) fn refresh_with_token(refresh_token: &str) -> Result<OAuthTokenBundle
         ]))
         .send()?;
     let status = response.status();
-    // An unreadable/empty body on a 4xx still means the grant is gone.
+    // A bare 403 can come from an intermediary, not the token issuer.
     let value: serde_json::Value =
         super::read_json_response(response).unwrap_or(serde_json::Value::Null);
     let code = oauth_error_code(&value);
-    if matches!(
-        code.as_deref(),
-        Some("invalid_grant" | "invalid_token" | "refresh_token_expired")
-    ) || status == reqwest::StatusCode::UNAUTHORIZED
-        || status == reqwest::StatusCode::FORBIDDEN
-    {
+    if super::refresh_grant_rejected(status, code.as_deref()) {
         return Err(OAuthError::RefreshTokenInvalid);
     }
     if !status.is_success() || code.is_some() {
@@ -241,7 +236,10 @@ fn bundle_from_tokens(
     tokens: OAuthTokenResponse,
     require_refresh: bool,
 ) -> Result<OAuthTokenBundle, OAuthError> {
-    let refresh_token = tokens.refresh_token.unwrap_or_default();
+    let refresh_token = tokens
+        .refresh_token
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_default();
     if require_refresh && refresh_token.trim().is_empty() {
         return Err(OAuthError::token_fetch_failed_plain(
             "xAI response missing refresh_token",
@@ -268,13 +266,14 @@ fn bundle_from_tokens(
             "xAI token missing a stable identity claim".into(),
         ));
     }
+    let expires_in = super::token_lifetime(&tokens.access_token, tokens.expires_in);
     Ok(OAuthTokenBundle {
         access_token: tokens.access_token,
         refresh_token,
         id_token: tokens.id_token.filter(|v| !v.trim().is_empty()),
         chatgpt_account_id: None,
         account_identity,
-        expires_in: tokens.expires_in.unwrap_or(3600),
+        expires_in,
     })
 }
 
@@ -308,6 +307,23 @@ fn bounded_text(response: reqwest::blocking::Response) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_accepts_omitted_refresh_and_id_tokens() {
+        let bundle = bundle_from_tokens(
+            OAuthTokenResponse {
+                access_token: "access".into(),
+                refresh_token: None,
+                id_token: None,
+                expires_in: Some(60),
+            },
+            false,
+        )
+        .unwrap();
+        assert!(bundle.refresh_token.is_empty());
+        assert!(bundle.id_token.is_none());
+        assert_eq!(bundle.expires_in, 60);
+    }
 
     #[test]
     fn validate_endpoint_pins_the_xai_host() {

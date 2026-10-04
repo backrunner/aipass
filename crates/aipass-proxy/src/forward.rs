@@ -504,7 +504,7 @@ async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> AttemptDispositio
     let state = ctx.state;
     let route = ctx.route;
     let target = ctx.target;
-    let client = match upstream_client(state, route.config.retry.connect_timeout_ms) {
+    let client = match target_client(state, target, route.config.retry.connect_timeout_ms) {
         Ok(client) => client,
         Err(err) => return ctx.fail(None, None, false, err),
     };
@@ -517,7 +517,22 @@ async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> AttemptDispositio
         "event=proxy.request.forwarding request_id={} target_id={} provider_id={} attempt={} transport=http inbound={:?} upstream={target_protocol:?} converted={conversion}",
         ctx.request_id, target.config.id, target.config.provider_entry_id, ctx.attempts, route.config.inbound_protocol,
     ));
-    let mut rewritten_payload = None;
+    let mut rewritten_payload = if (target.profile != ProviderProfile::Generic
+        || target.upstream_kind != UpstreamKind::Standard)
+        && ctx.body.bytes().is_none()
+    {
+        match ctx.request_json {
+            Some(value) => Some(Bytes::from(value.to_string())),
+            None => {
+                return AttemptDisposition::Abort(error_response(
+                    StatusCode::BAD_REQUEST,
+                    "provider adaptation requires a JSON request",
+                ))
+            }
+        }
+    } else {
+        None
+    };
     if conversion {
         let Some(json_payload) = ctx.request_json.cloned() else {
             return AttemptDisposition::Abort(error_response(
@@ -564,6 +579,42 @@ async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> AttemptDispositio
             rewritten_payload = Some(payload);
         }
     }
+    if let Some(model) = &target.model_override {
+        if let Some(source) = rewritten_payload
+            .take()
+            .or_else(|| ctx.body.bytes().cloned())
+        {
+            let mut body: serde_json::Value = match serde_json::from_slice(&source) {
+                Ok(body) => body,
+                Err(_) => {
+                    return AttemptDisposition::Abort(error_response(
+                        StatusCode::BAD_REQUEST,
+                        "model adaptation requires JSON",
+                    ))
+                }
+            };
+            body["model"] = serde_json::json!(model);
+            rewritten_payload = Some(Bytes::from(body.to_string()));
+        }
+    }
+    if target.profile != ProviderProfile::Generic {
+        if let Some(source) = rewritten_payload
+            .take()
+            .or_else(|| ctx.body.bytes().cloned())
+        {
+            rewritten_payload = Some(
+                match provider::prepare(target.profile, target_protocol, source) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return AttemptDisposition::Abort(error_response(
+                            StatusCode::BAD_REQUEST,
+                            &error,
+                        ))
+                    }
+                },
+            );
+        }
+    }
     let upstream_path = if target.config.auth_scheme == "azure_api_key" {
         target_protocol
             .path()
@@ -572,16 +623,63 @@ async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> AttemptDispositio
     } else {
         target_protocol.path()
     };
-    let url =
+    let mut url =
         match upstream_url_with_query(&target.config.base_url, upstream_path, ctx.request_query) {
             Ok(url) => url,
             Err(err) => return ctx.fail(None, None, false, err.to_string()),
         };
-    let upstream_headers =
+    let mut upstream_headers =
         match build_upstream_headers(ctx.incoming_headers, target, target_protocol) {
             Ok(headers) => headers,
             Err(err) => return ctx.fail(None, None, false, err),
         };
+    if target.upstream_kind == UpstreamKind::CodexSubscription {
+        // Use the same normalized body for HTTP and adapted downstream WS.
+        let Some(source) = rewritten_payload
+            .take()
+            .or_else(|| ctx.body.bytes().cloned())
+        else {
+            return AttemptDisposition::Abort(error_response(
+                StatusCode::BAD_REQUEST,
+                "Codex subscription requires a buffered JSON request",
+            ));
+        };
+        let body = match codex::prepare(source) {
+            Ok(body) => body,
+            Err(error) => {
+                return AttemptDisposition::Abort(error_response(StatusCode::BAD_REQUEST, &error))
+            }
+        };
+        codex::headers(&mut upstream_headers, &body);
+        rewritten_payload = Some(body);
+    }
+    if target.upstream_kind == UpstreamKind::GeminiNative {
+        let Some(source) = rewritten_payload
+            .take()
+            .or_else(|| ctx.body.bytes().cloned())
+        else {
+            return AttemptDisposition::Abort(error_response(
+                StatusCode::BAD_REQUEST,
+                "Gemini requires a buffered JSON request",
+            ));
+        };
+        let prepared = state
+            .gemini_signatures
+            .lock()
+            .map_err(|_| "Gemini session unavailable".to_string())
+            .and_then(|ledger| {
+                gemini::prepare(&target.config.base_url, source, target.config.id, &ledger)
+            });
+        match prepared {
+            Ok((endpoint, body)) => {
+                url = endpoint;
+                rewritten_payload = Some(body);
+            }
+            Err(error) => {
+                return AttemptDisposition::Abort(error_response(StatusCode::BAD_REQUEST, &error))
+            }
+        }
+    }
     let payload_len = rewritten_payload
         .as_ref()
         .map_or_else(|| ctx.body.len(), |payload| payload.len() as u64);
@@ -592,7 +690,6 @@ async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> AttemptDispositio
             Err(err) => return ctx.fail(None, None, false, err.to_string()),
         },
     };
-    let mut upstream_headers = upstream_headers;
     match HeaderValue::from_str(&payload_len.to_string()) {
         Ok(value) => {
             upstream_headers.insert(header::CONTENT_LENGTH, value);
@@ -612,6 +709,73 @@ async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> AttemptDispositio
 /// track usage. Retry dispositions carry whether generation may already have
 /// been submitted upstream.
 async fn run_http_attempt(ctx: &AttemptContext<'_>) -> AttemptDisposition {
+    if matches!(
+        ctx.target.upstream_kind,
+        UpstreamKind::ClaudeSubscription | UpstreamKind::CommunitySubscription
+    ) {
+        let backend = ctx
+            .state
+            .subscription_backend
+            .read()
+            .ok()
+            .and_then(|b| b.clone());
+        let Some(backend) = backend else {
+            return ctx.fail(None, None, false, "subscription bridge is unavailable");
+        };
+        let Some(payload) = ctx.request_json.cloned() else {
+            return AttemptDisposition::Abort(error_response(
+                StatusCode::BAD_REQUEST,
+                "subscription bridge requires JSON",
+            ));
+        };
+        let mut payload = if ctx.target.upstream_kind == UpstreamKind::CommunitySubscription {
+            payload
+        } else {
+            match BuiltinConversionPlugin.convert_request(
+                ctx.route.config.inbound_protocol,
+                if ctx.target.upstream_kind == UpstreamKind::ClaudeSubscription {
+                    ProxyProtocol::AnthropicMessages
+                } else {
+                    ProxyProtocol::OpenAiChatCompletions
+                },
+                payload,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    return AttemptDisposition::Abort(error_response(
+                        StatusCode::BAD_REQUEST,
+                        &error.to_string(),
+                    ))
+                }
+            }
+        };
+        if let Some(model) = &ctx.target.model_override {
+            payload["model"] = serde_json::json!(model);
+        }
+        let mut target = ctx.target.clone();
+        if target.upstream_proxy.is_none() {
+            target.upstream_proxy = ctx
+                .state
+                .config
+                .read()
+                .ok()
+                .map(|c| c.upstream_proxy.clone());
+        }
+        return match backend
+            .request_protocol(
+                target,
+                payload,
+                ctx.route.config.inbound_protocol,
+                ctx.session_key.map(str::to_owned),
+            )
+            .await
+        {
+            Ok(response) => deliver_upstream_response(ctx, response).await,
+            // A child may already have started generation. Never retry an
+            // ambiguous CLI failure on another billable account.
+            Err(error) => ctx.fail(None, None, true, error),
+        };
+    }
     let upstream = match prepare_upstream_request(ctx).await {
         AttemptDisposition::Dispatch(upstream) => upstream,
         disposition => return disposition,
@@ -622,23 +786,26 @@ async fn run_http_attempt(ctx: &AttemptContext<'_>) -> AttemptDisposition {
         // response or partial write does not: never replay it.
         Err(err) => return ctx.fail(None, None, !err.is_connect(), err.to_string()),
     };
-    deliver_upstream_response(ctx, response).await
+    deliver_upstream_response(ctx, response.into()).await
 }
 
 /// Process the upstream response body of an attempt and produce the final
 /// client-facing response, or a retry disposition.
 async fn deliver_upstream_response(
     ctx: &AttemptContext<'_>,
-    response: reqwest::Response,
+    response: SubscriptionResponse,
 ) -> AttemptDisposition {
     let state = ctx.state;
     let route = ctx.route;
     let target = ctx.target;
-    let status = response.status();
+    let status = response.status;
+    if let Ok(mut health) = state.health.lock() {
+        health.entry(target.config.id).or_default().last_status = Some(status.as_u16());
+    }
     if is_retryable_status(status) {
         // Explicit rejection before generation; the request never ran.
-        let detail = diagnostics::upstream::read_error(
-            response,
+        let detail = diagnostics::upstream::read_error_stream(
+            response.body,
             target,
             &local_token_redactions(ctx.incoming_headers),
         )
@@ -651,7 +818,14 @@ async fn deliver_upstream_response(
             "http",
             &detail,
         );
-        if status_affects_circuit(status) {
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            mark_rate_limited(
+                state,
+                target.config.id,
+                &response.headers,
+                &route.config.retry,
+            );
+        } else if status_affects_circuit(status) {
             mark_failure(state, target.config.id, &route.config.retry);
         } else {
             clear_rejected_session(state, route.config.id, ctx.session_key, target.config.id);
@@ -670,23 +844,37 @@ async fn deliver_upstream_response(
             generation_submitted: false,
         };
     }
-    let response_headers = response.headers().clone();
+    let response_headers = response.headers;
     let content_type = response_headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let target_protocol = target
-        .config
-        .effective_protocol(route.config.upstream_protocol);
+    let target_protocol = if target.upstream_kind == UpstreamKind::CommunitySubscription {
+        route.config.inbound_protocol
+    } else {
+        target
+            .config
+            .effective_protocol(route.config.upstream_protocol)
+    };
     let conversion =
         route.config.conversion_enabled && route.config.inbound_protocol != target_protocol;
-    let streaming_response = ctx.streaming_request && is_event_stream(&content_type);
+    let codex_response =
+        status.is_success() && target.upstream_kind == UpstreamKind::CodexSubscription;
+    let streaming_response =
+        ctx.streaming_request && (is_event_stream(&content_type) || codex_response);
     // A silent retry must not commit a response before the upstream stream
     // has completed. Only an explicit upstream error can permit a retry; an
     // incomplete stream must never replay generation.
     let buffer_streaming = streaming_response && route.config.retry.silent_retry && !ctx.websocket;
-    let mut upstream_stream: UpstreamBodyStream = Box::pin(response.bytes_stream());
+    let mut upstream_stream: UpstreamBodyStream = response.body;
+    if target.upstream_kind == UpstreamKind::GeminiNative && streaming_response {
+        upstream_stream = gemini::stream(
+            upstream_stream,
+            target.config.id,
+            state.gemini_signatures.clone(),
+        );
+    }
     if is_event_stream(&content_type) {
         let diagnostic_state = state.clone();
         let request_id = ctx.request_id;
@@ -777,7 +965,7 @@ async fn deliver_upstream_response(
             Box::pin(stream::empty())
         }
     } else {
-        let buffered = match collect_upstream_body(first_chunk, &mut upstream_stream).await {
+        let mut buffered = match collect_upstream_body(first_chunk, &mut upstream_stream).await {
             Ok(buffered) => buffered,
             Err(err) => return ctx.fail(Some(status), first_token_ms, true, err),
         };
@@ -788,7 +976,9 @@ async fn deliver_upstream_response(
             return ctx.fail(
                 Some(status),
                 first_token_ms,
-                !stream_reports_error(&buffered),
+                !stream_reports_error(&buffered)
+                    || stream_reports_output(target_protocol, &buffered)
+                    || stream_reports_completion(target_protocol, &buffered),
                 "upstream stream ended before protocol completion",
             );
         }
@@ -821,6 +1011,32 @@ async fn deliver_upstream_response(
                 "upstream returned an empty response",
             );
         }
+        if codex_response && !ctx.streaming_request {
+            buffered = match codex::collect_response(&buffered) {
+                Ok(payload) => payload,
+                Err((confirmed, message)) => {
+                    return ctx.fail(Some(status), first_token_ms, !confirmed, message)
+                }
+            };
+        }
+        if target.upstream_kind == UpstreamKind::GeminiNative && !streaming_response {
+            let normalized = serde_json::from_slice(&buffered)
+                .map_err(|_| "invalid Gemini response".to_string())
+                .and_then(|value| {
+                    state
+                        .gemini_signatures
+                        .lock()
+                        .map_err(|_| "Gemini session unavailable".to_string())
+                        .and_then(|mut ledger| {
+                            gemini::response(value, target.config.id, &mut ledger, false, &mut 0)
+                        })
+                })
+                .and_then(|value| serde_json::to_vec(&value).map_err(|e| e.to_string()));
+            buffered = match normalized {
+                Ok(value) => Bytes::from(value),
+                Err(error) => return ctx.fail(Some(status), first_token_ms, true, error),
+            };
+        }
         if !streaming_response && inbound_protocol == ProxyProtocol::OpenAiResponses {
             #[derive(Deserialize)]
             struct ResponseId {
@@ -850,9 +1066,7 @@ async fn deliver_upstream_response(
                 );
             }
         }
-        Box::pin(stream::once(async move {
-            Ok::<Bytes, reqwest::Error>(buffered)
-        }))
+        Box::pin(stream::once(async move { Ok::<Bytes, BoxError>(buffered) }))
     };
     let streaming_attempt = streaming_response.then(|| {
         (
@@ -930,10 +1144,22 @@ async fn deliver_upstream_response(
         if !(is_hop_header(name)
             || response_hop_headers.contains(name)
             || name == header::CONTENT_LENGTH
-            || conversion && name == header::CONTENT_ENCODING)
+            || (conversion || target.upstream_kind != UpstreamKind::Standard)
+                && name == header::CONTENT_ENCODING
+            || codex_response && name == header::CONTENT_TYPE)
         {
             builder = builder.header(name, value);
         }
+    }
+    if codex_response {
+        builder = builder.header(
+            header::CONTENT_TYPE,
+            if ctx.streaming_request {
+                "text/event-stream"
+            } else {
+                "application/json"
+            },
+        );
     }
     let mut response = builder.body(stream_body).unwrap_or_else(|_| {
         error_response(StatusCode::BAD_GATEWAY, "failed to build proxy response")
@@ -975,12 +1201,9 @@ pub(crate) async fn forward_request_inner(
         ),
     );
     let request_json = if route.config.conversion_enabled
-        && route.targets.iter().any(|target| {
-            target.config.enabled
-                && route.config.inbound_protocol
-                    != target
-                        .config
-                        .effective_protocol(route.config.upstream_protocol)
+        || route.targets.iter().any(|target| {
+            target.upstream_kind != UpstreamKind::Standard
+                || target.profile != ProviderProfile::Generic
         }) {
         body.json().await
     } else {
@@ -1019,6 +1242,33 @@ pub(crate) async fn forward_request_inner(
                 target.config.secret_id.clone(),
             )
         });
+    let history_owner = if let Some(payload) = request_json.as_ref() {
+        let owner = (|| -> Result<Option<Uuid>, String> {
+            let gemini = state
+                .gemini_signatures
+                .lock()
+                .map_err(|_| "Gemini session unavailable")?
+                .history_owner(payload)?;
+            let claude = state
+                .subscription_backend
+                .read()
+                .map_err(|_| "Claude session unavailable")?
+                .as_ref()
+                .map(|backend| backend.history_owner(payload))
+                .transpose()?
+                .flatten();
+            if gemini.is_some() && claude.is_some() {
+                return Err("history mixes provider-bound tool sessions".into());
+            }
+            Ok(gemini.or(claude))
+        })();
+        match owner {
+            Ok(owner) => owner,
+            Err(error) => return Ok(error_response(StatusCode::BAD_REQUEST, &error)),
+        }
+    } else {
+        None
+    };
     let mut target_attempts = 0u8;
     let mut generation_submitted = false;
     let mut capacity_skipped = false;
@@ -1029,9 +1279,17 @@ pub(crate) async fn forward_request_inner(
             break;
         }
         for _round in 0..silent_retry_rounds(&route.config.retry) {
-            let targets = ordered_route_targets(&state, &route, session_key.as_deref());
+            let targets = ordered_route_targets_for_model(
+                &state,
+                &route,
+                session_key.as_deref(),
+                model.as_deref(),
+            );
             let mut round_attempts = 0u8;
-            for target in targets {
+            for mut target in targets {
+                if history_owner.is_some_and(|owner| owner != target.config.id) {
+                    continue;
+                }
                 if round_attempts >= route.config.retry.max_attempts.max(1) {
                     break;
                 }
@@ -1040,6 +1298,32 @@ pub(crate) async fn forward_request_inner(
                 }
                 if hold_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                     break 'hold;
+                }
+                if target.upstream_kind.is_copilot() {
+                    if let Err(error) = copilot::resolve(
+                        &state,
+                        &mut target,
+                        model.as_deref(),
+                        route.config.inbound_protocol,
+                        request_json.as_ref(),
+                        route.config.retry.connect_timeout_ms,
+                    )
+                    .await
+                    {
+                        last_error = Some(error);
+                        continue;
+                    }
+                    if target
+                        .config
+                        .effective_protocol(route.config.upstream_protocol)
+                        != route.config.inbound_protocol
+                        && !route.config.conversion_enabled
+                    {
+                        return Ok(error_response(
+                            StatusCode::BAD_REQUEST,
+                            "Copilot model requires another protocol; enable route conversion",
+                        ));
+                    }
                 }
                 let Some(recovery) = RecoveryPermit::acquire(&state, target.config.id) else {
                     continue;
@@ -1086,6 +1370,7 @@ pub(crate) async fn forward_request_inner(
                 if method == http::Method::POST
                     && route.config.inbound_protocol == ProxyProtocol::OpenAiResponses
                     && target.supports_websockets
+                    && target.upstream_kind == UpstreamKind::Standard
                     && target
                         .config
                         .effective_protocol(route.config.upstream_protocol)

@@ -17,6 +17,7 @@ pub(crate) fn convert(
         (AM, RS) => am_to_rs(payload),
         (CC, AM) => cc_to_am(payload),
         (RS, AM) => rs_to_am(payload),
+        (CC, RS) | (RS, CC) => crate::openai::response(from, payload),
         _ => Err(ConversionError::Unsupported(from, to)),
     }
 }
@@ -150,6 +151,10 @@ fn am_to_cc(payload: Value) -> Result<Value, ConversionError> {
 
     let mut message = Map::new();
     message.insert("role".into(), json!("assistant"));
+    let reasoning = crate::reasoning::anthropic_reasoning(src.get("content"));
+    if !reasoning.is_empty() {
+        message.insert("reasoning_content".into(), json!(reasoning));
+    }
     message.insert(
         "content".into(),
         if text.is_empty() && !tool_calls.is_empty() {
@@ -183,6 +188,11 @@ fn am_to_rs(payload: Value) -> Result<Value, ConversionError> {
     let src = object(&payload, AM)?;
     let (text, tool_uses) = am_content_parts(src.get("content"));
     let mut output: Vec<Value> = Vec::new();
+    let reasoning = crate::reasoning::anthropic_reasoning(src.get("content"));
+    if !reasoning.is_empty() {
+        output
+            .push(json!({"type":"reasoning","summary":[{"type":"summary_text","text":reasoning}]}));
+    }
     if !text.is_empty() {
         output.push(json!({
             "type": "message",
@@ -249,6 +259,10 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
     let message = choice.get("message").cloned().unwrap_or(Value::Null);
 
     let mut content: Vec<Value> = Vec::new();
+    let reasoning = crate::reasoning::chat_reasoning(&message);
+    if !reasoning.is_empty() {
+        content.push(json!({"type":"thinking","thinking":reasoning}));
+    }
     match message.get("content") {
         Some(Value::String(text)) if !text.is_empty() => {
             content.push(json!({"type": "text", "text": text}));
@@ -316,6 +330,21 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
     let mut saw_tool = false;
     for (index, item) in output.iter().enumerate() {
         match item.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {
+                let text = item
+                    .get("summary")
+                    .and_then(Value::as_array)
+                    .map(|parts| {
+                        parts
+                            .iter()
+                            .filter_map(|p| p.get("text").and_then(Value::as_str))
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    content.push(json!({"type":"thinking","thinking":text}));
+                }
+            }
             Some("message") => {
                 if let Some(parts) = item.get("content").and_then(Value::as_array) {
                     for part in parts {

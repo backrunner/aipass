@@ -8,6 +8,7 @@
     Copy,
     ExternalLink,
     KeyRound,
+    Layers3,
     Plus,
     RefreshCw,
     ShieldCheck,
@@ -32,6 +33,7 @@
   export let invokeTauri: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   export let onClose: () => MaybePromise = () => {};
   export let onConnected: (account: OAuthAccountSummary) => MaybePromise = () => {};
+  export let onCommunity: () => MaybePromise = () => {};
   export let onImportCli: () => MaybePromise = () => {};
   export let onAccountsChanged: () => MaybePromise = () => {};
 
@@ -390,6 +392,11 @@
                 </button>
               {/each}
             </div>
+            <button type="button" class="more-providers" on:click={() => { void onCommunity(); }}>
+              <span class="more-providers-icon"><Layers3 size={18} /></span>
+              <span class="more-providers-copy"><strong>{$t("communityConnect.title")}</strong><span>{$t("communityConnect.catalogHint")}</span></span>
+              <ArrowRight size={15} />
+            </button>
             <p class="native-note">{$t("oauthConnect.nativeNote")}</p>
             <div class="cli-option">
               <Terminal size={17} />
@@ -809,6 +816,13 @@
     font-weight: 500;
     color: var(--accent);
   }
+  .more-providers { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); text-align: left; color: var(--text-tertiary); }
+  .more-providers:hover { border-color: var(--border-strong); background: var(--surface-2); }
+  .more-providers:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+  .more-providers-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent); }
+  .more-providers-copy { flex: 1; display: grid; gap: 4px; }
+  .more-providers-copy strong { color: var(--text); font-size: 13px; font-weight: 600; }
+  .more-providers-copy > span { font-size: 11px; }
   .native-note {
     color: var(--text-tertiary);
     margin-top: -8px;

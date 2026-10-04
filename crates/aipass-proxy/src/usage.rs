@@ -149,6 +149,8 @@ pub struct ProxyStatus {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelStatus {
+    #[serde(default)]
+    pub last_status: Option<u16>,
     pub route_id: Uuid,
     pub target_id: Uuid,
     pub provider_entry_id: Uuid,

@@ -5,7 +5,7 @@
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
 
-  export interface CustomHeader {
+  interface CustomHeader {
     id: string;
     key: string;
     value: string;

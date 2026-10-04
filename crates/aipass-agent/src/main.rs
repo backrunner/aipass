@@ -10,6 +10,8 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(version, about = "AIPass local background agent")]
 struct Cli {
+    #[arg(long, default_value_t = false, hide = true)]
+    claude_mcp_helper: bool,
     #[arg(long)]
     vault: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
@@ -23,6 +25,12 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+    if cli.claude_mcp_helper {
+        return aipass_agent::claude_bridge::run_mcp_helper(
+            cli.vault.unwrap_or(default_vault_dir()?),
+        );
+    }
     let log_path = init_component_logging(AGENT_LOG).ok();
     install_panic_logger(AGENT_LOG);
     write_component_log(
@@ -37,7 +45,6 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| "unavailable".to_string())
         ),
     );
-    let cli = Cli::parse();
     let vault_dir = cli.vault.unwrap_or(default_vault_dir()?);
     let service_name = cli.service_name.unwrap_or(agent_service_name(&vault_dir)?);
     if cli.install_autostart {

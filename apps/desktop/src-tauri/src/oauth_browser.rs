@@ -6,6 +6,38 @@ use std::time::{Duration, Instant};
 #[tauri::command]
 pub(crate) async fn oauth_open_verification(uri: String) -> Result<(), String> {
     let url = verification_url(&uri)?;
+    open_url(url).await
+}
+
+/// The URL comes from an active Agent-owned login, never a frontend argument.
+#[tauri::command]
+pub(crate) async fn community_open_verification(
+    app: tauri::AppHandle,
+    ticket: uuid::Uuid,
+) -> Result<(), String> {
+    let status: aipass_agent_protocol::CommunityLoginStatus =
+        crate::commands::agent_request_no_unlock_async(
+            app,
+            aipass_agent_protocol::AgentRequest::CommunityLoginPoll { ticket },
+        )
+        .await?;
+    if status.status != "pending" {
+        return Err("sign-in is no longer pending".into());
+    }
+    let url = url::Url::parse(status.url.as_deref().ok_or("sign-in has no browser link")?)
+        .map_err(|_| "invalid authorization URL")?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || !(url.scheme() == "https"
+            || (url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))))
+    {
+        return Err("unsupported authorization URL".into());
+    }
+    open_url(url).await
+}
+
+async fn open_url(url: url::Url) -> Result<(), String> {
     crate::run_blocking(move || {
         let mut command = browser_command();
         let mut child = command

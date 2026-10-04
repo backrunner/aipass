@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+httpdate = "1"
 aipass-proxy-conversion = { path = "../aipass-proxy-conversion" }
 bytes.workspace = true
 futures-util.workspace = true

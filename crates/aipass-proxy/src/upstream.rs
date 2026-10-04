@@ -1,24 +1,34 @@
 use super::*;
 
-pub(crate) fn upstream_client(
+pub(crate) fn target_client(
     state: &RuntimeState,
-    connect_timeout_ms: u64,
+    target: &ResolvedTarget,
+    timeout: u64,
 ) -> Result<reqwest::Client, String> {
-    upstream_client_for_transport(state, connect_timeout_ms, false)
+    upstream_client_with_proxy(state, timeout, false, target.upstream_proxy.as_ref())
 }
-
 pub(crate) fn upstream_client_for_transport(
     state: &RuntimeState,
     connect_timeout_ms: u64,
     http1_only: bool,
 ) -> Result<reqwest::Client, String> {
+    upstream_client_with_proxy(state, connect_timeout_ms, http1_only, None)
+}
+fn upstream_client_with_proxy(
+    state: &RuntimeState,
+    connect_timeout_ms: u64,
+    http1_only: bool,
+    override_proxy: Option<&UpstreamProxyConfig>,
+) -> Result<reqwest::Client, String> {
     let connect_timeout_ms = connect_timeout_ms.max(1);
-    let upstream_proxy = state
-        .config
-        .read()
-        .map_err(|_| "proxy config lock poisoned".to_string())?
-        .upstream_proxy
-        .clone();
+    let upstream_proxy = override_proxy.cloned().unwrap_or(
+        state
+            .config
+            .read()
+            .map_err(|_| "proxy config lock poisoned".to_string())?
+            .upstream_proxy
+            .clone(),
+    );
     let cache_key = (connect_timeout_ms, upstream_proxy.clone(), http1_only);
     let mut clients = state
         .clients
@@ -39,8 +49,32 @@ pub(crate) fn upstream_client_for_transport(
     let client = apply_upstream_proxy(builder, &upstream_proxy)?
         .build()
         .map_err(|err| err.to_string())?;
+    if clients.len() >= 64 {
+        clients.clear();
+    }
     clients.insert(cache_key, client.clone());
     Ok(client)
+}
+
+/// Environment understood by native CLI processes. System mode preserves the
+/// parent environment; environment mode also includes the login-shell capture.
+pub fn cli_proxy_environment(config: &UpstreamProxyConfig) -> Option<HashMap<String, String>> {
+    match config.mode {
+        UpstreamProxyMode::System => None,
+        UpstreamProxyMode::Environment => Some(shell_env::proxy_env()),
+        UpstreamProxyMode::Direct => Some(HashMap::from([("NO_PROXY".into(), "*".into())])),
+        UpstreamProxyMode::Custom => Some(
+            ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]
+                .into_iter()
+                .filter_map(|key| {
+                    config
+                        .custom_url
+                        .as_ref()
+                        .map(|url| (key.to_owned(), url.clone()))
+                })
+                .collect(),
+        ),
+    }
 }
 
 /// Resolve outbound proxy selection once for async forwarding and blocking probes.
@@ -99,7 +133,7 @@ pub fn upstream_proxy_rules(
 pub(crate) type BoxError = Box<dyn StdError + Send + Sync>;
 pub(crate) type BoxBody = http_body_util::combinators::UnsyncBoxBody<Bytes, BoxError>;
 pub(crate) type UpstreamBodyStream =
-    Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send + 'static>>;
 
 pub(crate) const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024 * 1024;
 pub(crate) const REQUEST_BODY_MEMORY_THRESHOLD: usize = 8 * 1024 * 1024;
@@ -139,7 +173,7 @@ pub(crate) const SESSION_AFFINITY_FIELDS: [&str; 10] = [
     "previousResponseId",
 ];
 
-pub(crate) fn apply_upstream_proxy(
+pub fn apply_upstream_proxy(
     mut builder: reqwest::ClientBuilder,
     config: &UpstreamProxyConfig,
 ) -> Result<reqwest::ClientBuilder, String> {
@@ -264,6 +298,11 @@ pub(crate) fn build_upstream_headers(
             header::HeaderName::from_static("x-api-key"),
             HeaderValue::from_str(&target.api_key)
                 .map_err(|_| "invalid x-api-key credential".to_string())?,
+        ),
+        "google_api_key" => (
+            header::HeaderName::from_static("x-goog-api-key"),
+            HeaderValue::from_str(&target.api_key)
+                .map_err(|_| "invalid Google API credential".to_string())?,
         ),
         "azure_api_key" => (
             header::HeaderName::from_static("api-key"),

@@ -22,7 +22,7 @@ afterEach(async () => {
 
 function render(props: Partial<ComponentProps<typeof ProviderDetailPane>> = {}) {
   setLocale("en");
-  app = mount(ProviderDetailPane, { target: document.body, props: { selected, draft: emptyDraft(), probeResult: undefined, usageProbeResult: undefined, ...props } });
+  app = mount(ProviderDetailPane, { target: document.body, props: { invokeTauri: async () => { throw new Error("Unexpected runtime request"); }, selected, draft: emptyDraft(), probeResult: undefined, usageProbeResult: undefined, ...props } });
   flushSync();
 }
 
@@ -92,7 +92,7 @@ test.each(["endpoint", "defaultModel", "interfaceType", "fingerprint", "deleted"
   const state = fromStore(selection);
   let finish!: (value: ToolConfigPreview) => void;
   const apply = vi.fn();
-  app = mount(ProviderDetailPane, { target: document.body, props: {
+  app = mount(ProviderDetailPane, { target: document.body, props: { invokeTauri: async () => { throw new Error("Unexpected runtime request"); },
     get selected() { return state.current; }, draft: emptyDraft(), probeResult: undefined, usageProbeResult: undefined,
     onPreviewToolConfig: () => new Promise(resolve => { finish = resolve; }), onApplyToolConfig: apply
   } });
@@ -156,7 +156,7 @@ test("provider selection invalidates previews and confirmation retains the previ
     tool: request.tool, mode: request.mode, entryId: request.id, entryTitle: request.id,
     targetPath: "/fixture/config.toml", summary: "fixture", operationId: "fixture", backupPath: "/fixture/backup"
   }));
-  app = mount(ProviderDetailPane, { target: document.body, props: {
+  app = mount(ProviderDetailPane, { target: document.body, props: { invokeTauri: async () => { throw new Error("Unexpected runtime request"); },
     get selected() { return state.current; }, draft: emptyDraft(), probeResult: undefined,
     usageProbeResult: undefined, onPreviewToolConfig: preview, onApplyToolConfig: apply
   } });
@@ -181,7 +181,7 @@ test.each([
   const selection = writable<ProviderEntry>({ ...selected, interfaceType: "openai_compatible" });
   const state = fromStore(selection);
   const apply = vi.fn();
-  app = mount(ProviderDetailPane, { target: document.body, props: {
+  app = mount(ProviderDetailPane, { target: document.body, props: { invokeTauri: async () => { throw new Error("Unexpected runtime request"); },
     get selected() { return state.current; }, draft: emptyDraft(), probeResult: undefined,
     usageProbeResult: undefined, onApplyToolConfig: apply,
     onPreviewToolConfig: async () => ({ tool: "codex", mode: "plaintext", entryId: selected.id,

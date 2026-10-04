@@ -17,6 +17,7 @@ path = "src/main.rs"
 aipass-agent-protocol = { path = "../aipass-agent-protocol" }
 aipass-config-writers = { path = "../aipass-config-writers" }
 aipass-crypto = { path = "../aipass-crypto" }
+aipass-proxy-conversion = { path = "../aipass-proxy-conversion" }
 aipass-proxy = { path = "../aipass-proxy" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
 aipass-storage = { path = "../aipass-storage" }
@@ -28,9 +29,10 @@ clap.workspace = true
 directories.workspace = true
 interprocess.workspace = true
 notify.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["cookies", "form", "query", "http2"] }
 serde.workspace = true
 serde_json.workspace = true
+json5.workspace = true
 sha2.workspace = true
 sys-locale = "0.3"
 time.workspace = true
@@ -40,16 +42,24 @@ uuid.workspace = true
 zeroize.workspace = true
 tempfile.workspace = true
 bytes.workspace = true
+futures-util.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
 tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-pemfile = "2"
 rcgen = "0.14"
 if-addrs = "0.15"
 rand_core.workspace = true
+aes-gcm = "0.10"
+rsa = "0.9"
+aes = "0.8"
+cbc = "0.1"
+md5 = "0.8"
+rusqlite.workspace = true
+regex = "1"
 
 [build-dependencies]
 sha2.workspace = true
@@ -58,7 +68,7 @@ sha2.workspace = true
 windows-service.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["event"] }
+rustix = { version = "1", features = ["event", "process", "system"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", default-features = false, features = ["std"] }

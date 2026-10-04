@@ -26,23 +26,30 @@ pub struct StreamConverter {
 }
 
 enum StreamState {
-    Passthrough,
+    Passthrough { protocol: ProxyProtocol, done: bool },
     CcToAm(CcToAm),
     AmToCc(AmToCc),
     RsToAm(RsToAm),
     AmToRs(AmToRs),
+    CcToRs(crate::openai::ChatToResponses),
+    RsToCc(crate::openai::ResponsesToChat),
 }
 
 impl StreamConverter {
     pub fn new(from: ProxyProtocol, to: ProxyProtocol) -> Result<Self, ConversionError> {
         let state = if from == to {
-            StreamState::Passthrough
+            StreamState::Passthrough {
+                protocol: from,
+                done: false,
+            }
         } else {
             match (from, to) {
                 (CC, AM) => StreamState::CcToAm(CcToAm::default()),
                 (AM, CC) => StreamState::AmToCc(AmToCc::default()),
                 (RS, AM) => StreamState::RsToAm(RsToAm::default()),
                 (AM, RS) => StreamState::AmToRs(AmToRs::default()),
+                (CC, RS) => StreamState::CcToRs(crate::openai::ChatToResponses::default()),
+                (RS, CC) => StreamState::RsToCc(crate::openai::ResponsesToChat::default()),
                 _ => return Err(ConversionError::Unsupported(from, to)),
             }
         };
@@ -51,11 +58,60 @@ impl StreamConverter {
 
     pub fn push_event(&mut self, event: &str) -> Result<Vec<String>, ConversionError> {
         match &mut self.state {
-            StreamState::Passthrough => Ok(vec![event.to_string()]),
+            StreamState::Passthrough { protocol, done } => {
+                let parsed = parse_sse(event)?;
+                if !parsed.data.is_empty() && parsed.data != "[DONE]" {
+                    let value: Value = serde_json::from_str(&parsed.data)
+                        .map_err(|_| invalid(*protocol, "invalid native stream event"))?;
+                    if value.get("error").is_some()
+                        || matches!(value["type"].as_str(), Some("error" | "response.failed"))
+                    {
+                        return Err(invalid(*protocol, "upstream generation failed"));
+                    }
+                    *done |= match protocol {
+                        AM => value["type"] == "message_stop",
+                        RS => matches!(
+                            value["type"].as_str(),
+                            Some("response.completed" | "response.incomplete")
+                        ),
+                        CC => value["choices"].as_array().is_some_and(|choices| {
+                            !choices.is_empty()
+                                && choices
+                                    .iter()
+                                    .all(|c| c.get("finish_reason").is_some_and(|v| !v.is_null()))
+                        }),
+                    };
+                }
+                Ok(vec![event.to_string()])
+            }
             StreamState::CcToAm(state) => state.push(event),
             StreamState::AmToCc(state) => state.push(event),
             StreamState::RsToAm(state) => state.push(event),
             StreamState::AmToRs(state) => state.push(event),
+            StreamState::CcToRs(state) => state.push(event),
+            StreamState::RsToCc(state) => state.push(event),
+        }
+    }
+
+    /// Flush a confirmed completion after trailing usage chunks. EOF without
+    /// a protocol terminal is an error, never a fabricated successful result.
+    pub fn finish(&mut self) -> Result<Vec<String>, ConversionError> {
+        match &mut self.state {
+            StreamState::Passthrough {
+                protocol,
+                done: false,
+            } => Err(invalid(*protocol, "native stream ended before completion")),
+            StreamState::CcToRs(state) => state.finish(),
+            StreamState::RsToCc(state) => state.finish(),
+            StreamState::CcToAm(state) => state.finish(),
+            StreamState::RsToAm(state) => state.finish(),
+            StreamState::AmToCc(state) if !state.done => {
+                Err(invalid(AM, "stream ended before message_stop"))
+            }
+            StreamState::AmToRs(state) if !state.terminated => {
+                Err(invalid(AM, "stream ended before message_stop"))
+            }
+            _ => Ok(Vec::new()),
         }
     }
 }
@@ -135,7 +191,7 @@ fn parse_payload(
 #[derive(Clone, Copy, PartialEq)]
 enum AmBlock {
     Text(u64),
-    Tool(u64, u64),
+    Thinking(u64),
 }
 
 #[derive(Default)]
@@ -145,15 +201,20 @@ struct CcToAm {
     model: Option<String>,
     next_block: u64,
     open: Option<AmBlock>,
-    /// CC tool index -> AM block index, for fragments of already-seen calls.
-    tool_blocks: HashMap<u64, u64>,
-    /// AM block index -> buffered freeform text of a `custom` tool call. The
-    /// input is wrapped as `{"input": ...}` and emitted when the block closes
-    /// so accumulated partial_json always parses.
-    custom_buffers: HashMap<u64, String>,
+    tools: std::collections::BTreeMap<u64, BufferedTool>,
+    finish_reason: Option<String>,
+    cached_tokens: u64,
     input_tokens: u64,
     output_tokens: u64,
     terminated: bool,
+}
+
+#[derive(Default)]
+struct BufferedTool {
+    id: String,
+    name: String,
+    arguments: String,
+    custom: bool,
 }
 
 impl CcToAm {
@@ -161,8 +222,7 @@ impl CcToAm {
         let parsed = parse_sse(raw)?;
         let mut out = Vec::new();
         if parsed.data.trim() == "[DONE]" {
-            self.finish(&mut out);
-            return Ok(out);
+            return self.finish();
         }
         if self.terminated {
             return Ok(out);
@@ -193,6 +253,8 @@ impl CcToAm {
         if let Some(usage) = chunk.get("usage") {
             self.input_tokens = crate::number(usage.get("prompt_tokens"));
             self.output_tokens = crate::number(usage.get("completion_tokens"));
+            self.cached_tokens =
+                crate::number(usage.pointer("/prompt_tokens_details/cached_tokens"));
         }
         let choices = chunk.get("choices").and_then(Value::as_array);
         let Some(choice) = choices.and_then(|choices| choices.first()) else {
@@ -201,6 +263,22 @@ impl CcToAm {
         self.ensure_started(&mut out);
 
         let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+        let reasoning = crate::reasoning::chat_reasoning(&delta);
+        if !reasoning.is_empty() {
+            let index = match self.open {
+                Some(AmBlock::Thinking(index)) => index,
+                _ => {
+                    self.close_open(&mut out);
+                    let index = self.next_block;
+                    self.next_block += 1;
+                    out.push(emit_typed("content_block_start", &json!({"type":"content_block_start","index":index,"content_block":{"type":"thinking","thinking":""}})));
+                    self.open = Some(AmBlock::Thinking(index));
+                    index
+                }
+            };
+            out.push(emit_typed("content_block_delta", &json!({"type":"content_block_delta","index":index,"delta":{"type":"thinking_delta","thinking":reasoning}})));
+        }
+
         // A few providers stream structured content parts instead of a plain
         // string; fold the text parts so the content is not dropped.
         let content = match delta.get("content") {
@@ -224,46 +302,39 @@ impl CcToAm {
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for call in tool_calls {
-                let cc_index = call.get("index").and_then(Value::as_u64).unwrap_or(0);
-                let am_index = self.open_tool(cc_index, call, &mut out);
-                // Freeform ("custom") calls stream plain text under
-                // custom.input, which is not JSON; buffer it and emit a
-                // wrapped {"input": ...} object at block close.
-                let is_custom = call.get("type").and_then(Value::as_str) == Some("custom")
-                    || call.pointer("/custom/input").is_some()
-                    || self.custom_buffers.contains_key(&am_index);
-                if is_custom {
-                    if let Some(text) = call.pointer("/custom/input").and_then(Value::as_str) {
-                        self.custom_buffers
-                            .entry(am_index)
-                            .or_default()
-                            .push_str(text);
-                    }
-                    continue;
+                let index = call["index"].as_u64().unwrap_or(0);
+                if self.tools.len() >= 1024 && !self.tools.contains_key(&index) {
+                    return Err(invalid(CC, "too many tool calls"));
                 }
-                // Some providers emit the arguments object inline instead of
-                // a JSON string.
-                let arguments = match call.pointer("/function/arguments") {
-                    Some(Value::String(text)) => (!text.is_empty()).then(|| text.clone()),
-                    Some(value) if !value.is_null() => Some(value.to_string()),
-                    _ => None,
-                };
-                if let Some(arguments) = arguments {
-                    out.push(emit_typed(
-                        "content_block_delta",
-                        &json!({"type": "content_block_delta", "index": am_index, "delta": {"type": "input_json_delta", "partial_json": arguments}}),
-                    ));
+                let tool = self.tools.entry(index).or_default();
+                if let Some(id) = call["id"].as_str() {
+                    tool.id.push_str(id);
+                }
+                if let Some(name) = call
+                    .pointer("/function/name")
+                    .or_else(|| call.pointer("/custom/name"))
+                    .and_then(Value::as_str)
+                {
+                    tool.name.push_str(name);
+                }
+                tool.custom |= call["type"] == "custom" || call.get("custom").is_some();
+                if let Some(value) = call
+                    .pointer("/function/arguments")
+                    .or_else(|| call.pointer("/custom/input"))
+                {
+                    if let Some(text) = value.as_str() {
+                        tool.arguments.push_str(text);
+                    } else if !value.is_null() {
+                        tool.arguments.push_str(&value.to_string());
+                    }
+                }
+                if tool.arguments.len() > 4 * 1024 * 1024 {
+                    return Err(invalid(CC, "tool arguments exceed conversion limit"));
                 }
             }
         }
         if let Some(finish) = choice.get("finish_reason").and_then(Value::as_str) {
-            self.close_open(&mut out);
-            out.push(emit_typed(
-                "message_delta",
-                &json!({"type": "message_delta", "delta": {"stop_reason": cc_finish_to_am_stop(Some(finish)), "stop_sequence": null}, "usage": {"output_tokens": self.output_tokens}}),
-            ));
-            out.push(emit_typed("message_stop", &json!({"type": "message_stop"})));
-            self.terminated = true;
+            self.finish_reason = Some(finish.to_owned());
         }
         Ok(out)
     }
@@ -282,7 +353,7 @@ impl CcToAm {
             &json!({
                 "type": "message_start",
                 "message": {
-                    "id": swap_id_prefix(&id, "chatcmpl_", "msg_"),
+                    "id": swap_id_prefix(&id.replace("chatcmpl-", "chatcmpl_"), "chatcmpl_", "msg_"),
                     "type": "message",
                     "role": "assistant",
                     "model": self.model.clone().unwrap_or_default(),
@@ -311,71 +382,57 @@ impl CcToAm {
         index
     }
 
-    /// Open (or switch to) the tool block for CC tool_calls `cc_index`.
-    fn open_tool(&mut self, cc_index: u64, call: &Value, out: &mut Vec<String>) -> u64 {
-        if let Some(AmBlock::Tool(open_cc, am_index)) = self.open {
-            if open_cc == cc_index {
-                return am_index;
-            }
-        }
-        self.close_open(out);
-        if let Some(am_index) = self.tool_blocks.get(&cc_index) {
-            // Fragments for an already-started call; reopen its block index.
-            self.open = Some(AmBlock::Tool(cc_index, *am_index));
-            return *am_index;
-        }
-        let am_index = self.next_block;
-        self.next_block += 1;
-        let id = call
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("toolu_conv_{cc_index}"));
-        let name = call
-            .pointer("/function/name")
-            .or_else(|| call.pointer("/custom/name"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        out.push(emit_typed(
-            "content_block_start",
-            &json!({"type": "content_block_start", "index": am_index, "content_block": {"type": "tool_use", "id": id, "name": name}}),
-        ));
-        self.tool_blocks.insert(cc_index, am_index);
-        self.open = Some(AmBlock::Tool(cc_index, am_index));
-        am_index
-    }
-
     fn close_open(&mut self, out: &mut Vec<String>) {
         let index = match self.open.take() {
-            Some(AmBlock::Text(index)) | Some(AmBlock::Tool(_, index)) => index,
+            Some(AmBlock::Text(index)) | Some(AmBlock::Thinking(index)) => index,
             None => return,
         };
-        if let Some(input) = self.custom_buffers.remove(&index) {
-            let wrapped = json!({"input": input}).to_string();
-            out.push(emit_typed(
-                "content_block_delta",
-                &json!({"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": wrapped}}),
-            ));
-        }
         out.push(emit_typed(
             "content_block_stop",
-            &json!({"type": "content_block_stop", "index": index}),
+            &json!({"type":"content_block_stop","index":index}),
         ));
     }
 
-    /// Terminal fallback for `[DONE]` arriving without a finish_reason.
-    fn finish(&mut self, out: &mut Vec<String>) {
+    fn finish(&mut self) -> Result<Vec<String>, ConversionError> {
         if self.terminated {
-            return;
+            return Ok(Vec::new());
         }
-        self.ensure_started(out);
-        self.close_open(out);
-        out.push(emit_typed(
-            "message_delta",
-            &json!({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"output_tokens": self.output_tokens}}),
-        ));
-        out.push(emit_typed("message_stop", &json!({"type": "message_stop"})));
+        let reason = self
+            .finish_reason
+            .clone()
+            .ok_or_else(|| invalid(CC, "stream ended without finish_reason"))?;
+        let mut out = Vec::new();
+        self.ensure_started(&mut out);
+        self.close_open(&mut out);
+        for (cc_index, mut tool) in std::mem::take(&mut self.tools) {
+            if tool.id.is_empty() {
+                tool.id = format!("toolu_conv_{cc_index}");
+            }
+            if tool.name.is_empty() {
+                return Err(invalid(CC, "incomplete tool identity"));
+            }
+            let arguments = if tool.custom {
+                json!({"input":tool.arguments}).to_string()
+            } else if tool.arguments.is_empty() {
+                "{}".to_owned()
+            } else {
+                tool.arguments
+            };
+            serde_json::from_str::<Value>(&arguments)
+                .map_err(|_| invalid(CC, "incomplete tool arguments"))?;
+            let index = self.next_block;
+            self.next_block += 1;
+            out.push(emit_typed("content_block_start",&json!({"type":"content_block_start","index":index,"content_block":{"type":"tool_use","id":tool.id,"name":tool.name,"input":{}}})));
+            out.push(emit_typed("content_block_delta",&json!({"type":"content_block_delta","index":index,"delta":{"type":"input_json_delta","partial_json":arguments}})));
+            out.push(emit_typed(
+                "content_block_stop",
+                &json!({"type":"content_block_stop","index":index}),
+            ));
+        }
+        out.push(emit_typed("message_delta",&json!({"type":"message_delta","delta":{"stop_reason":cc_finish_to_am_stop(Some(&reason)),"stop_sequence":null},"usage":{"input_tokens":self.input_tokens.saturating_sub(self.cached_tokens),"cache_read_input_tokens":self.cached_tokens,"output_tokens":self.output_tokens}})));
+        out.push(emit_typed("message_stop", &json!({"type":"message_stop"})));
         self.terminated = true;
+        Ok(out)
     }
 }
 
@@ -448,6 +505,19 @@ impl AmToCc {
                 let index = crate::number(payload.get("index"));
                 let delta = payload.get("delta").cloned().unwrap_or(Value::Null);
                 match delta.get("type").and_then(Value::as_str) {
+                    Some("thinking_delta") => {
+                        if let Some(text) = delta
+                            .get("thinking")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
+                            out.push(self.chunk(
+                                json!({"reasoning_content":text}),
+                                Value::Null,
+                                None,
+                            ));
+                        }
+                    }
                     Some("text_delta") => {
                         let text = delta.get("text").and_then(Value::as_str).unwrap_or("");
                         out.push(self.chunk(json!({"content": text}), Value::Null, None));
@@ -531,228 +601,28 @@ impl AmToCc {
 
 // --- RS SSE -> AM SSE ------------------------------------------------------
 
+/// Share Responses identity/parallel-fragment handling with the direct OpenAI
+/// converter, then emit Anthropic blocks once each tool's arguments are complete.
 #[derive(Default)]
 struct RsToAm {
-    started: bool,
-    id: Option<String>,
-    model: Option<String>,
-    next_block: u64,
-    open: Option<AmBlock>,
-    saw_tool: bool,
-    input_tokens: u64,
-    output_tokens: u64,
-    terminated: bool,
+    chat: crate::openai::ResponsesToChat,
+    anthropic: CcToAm,
 }
-
 impl RsToAm {
     fn push(&mut self, raw: &str) -> Result<Vec<String>, ConversionError> {
-        let parsed = parse_sse(raw)?;
         let mut out = Vec::new();
-        let Some(payload) = parse_payload(&parsed, RS)? else {
-            return Ok(out);
-        };
-        if self.terminated {
-            return Ok(out);
-        }
-        let Some(kind) = event_kind(&parsed, &payload) else {
-            return Ok(out);
-        };
-        match kind.as_str() {
-            "response.failed" | "response.cancelled" => {
-                // Surface upstream failure as an AM error event instead of
-                // ending the stream with no terminal message events.
-                self.close_open(&mut out);
-                let response = payload.get("response").cloned().unwrap_or(Value::Null);
-                let error = response
-                    .get("error")
-                    .filter(|error| !error.is_null())
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        json!({"type": "api_error", "message": "upstream response did not complete"})
-                    });
-                out.push(emit_typed(
-                    "error",
-                    &json!({"type": "error", "error": error}),
-                ));
-                self.terminated = true;
-            }
-            "response.created" | "response.in_progress" => {
-                let response = payload.get("response").cloned().unwrap_or(Value::Null);
-                if self.id.is_none() {
-                    self.id = response
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                }
-                if self.model.is_none() {
-                    self.model = response
-                        .get("model")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                }
-                self.ensure_started(&mut out);
-            }
-            "response.output_item.added" => {
-                self.ensure_started(&mut out);
-                let item = payload.get("item").cloned().unwrap_or(Value::Null);
-                if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                    self.close_open(&mut out);
-                    let index = self.next_block;
-                    self.next_block += 1;
-                    let id = item
-                        .get("call_id")
-                        .or_else(|| item.get("id"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("toolu_conv_{index}"));
-                    out.push(emit_typed(
-                        "content_block_start",
-                        &json!({"type": "content_block_start", "index": index, "content_block": {
-                            "type": "tool_use",
-                            "id": id,
-                            "name": item.get("name").cloned().unwrap_or(Value::Null),
-                        }}),
-                    ));
-                    self.open = Some(AmBlock::Tool(0, index));
-                    self.saw_tool = true;
-                }
-            }
-            "response.output_text.delta" => {
-                self.ensure_started(&mut out);
-                let index = self.open_text(&mut out);
-                let text = payload.get("delta").and_then(Value::as_str).unwrap_or("");
-                out.push(emit_typed(
-                    "content_block_delta",
-                    &json!({"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}}),
-                ));
-            }
-            "response.function_call_arguments.delta" => {
-                self.ensure_started(&mut out);
-                // Arguments without a preceding output_item.added: open a
-                // placeholder tool block rather than dropping the fragment.
-                let index = match self.open {
-                    Some(AmBlock::Tool(_, index)) => index,
-                    _ => {
-                        self.close_open(&mut out);
-                        let index = self.next_block;
-                        self.next_block += 1;
-                        out.push(emit_typed(
-                            "content_block_start",
-                            &json!({"type": "content_block_start", "index": index, "content_block": {"type": "tool_use", "id": format!("toolu_conv_{index}"), "name": ""}}),
-                        ));
-                        self.open = Some(AmBlock::Tool(0, index));
-                        self.saw_tool = true;
-                        index
-                    }
-                };
-                let partial = match payload.get("delta") {
-                    Some(Value::String(text)) => text.clone(),
-                    Some(value) if !value.is_null() => value.to_string(),
-                    _ => String::new(),
-                };
-                out.push(emit_typed(
-                    "content_block_delta",
-                    &json!({"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": partial}}),
-                ));
-            }
-            "response.output_item.done" => {
-                let item = payload.get("item").cloned().unwrap_or(Value::Null);
-                match item.get("type").and_then(Value::as_str) {
-                    Some("function_call") => {
-                        if matches!(self.open, Some(AmBlock::Tool(_, _))) {
-                            self.close_open(&mut out);
-                        }
-                    }
-                    Some("message") => {
-                        if matches!(self.open, Some(AmBlock::Text(_))) {
-                            self.close_open(&mut out);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            "response.output_text.done" => {
-                if matches!(self.open, Some(AmBlock::Text(_))) {
-                    self.close_open(&mut out);
-                }
-            }
-            "response.completed" | "response.incomplete" => {
-                self.ensure_started(&mut out);
-                self.close_open(&mut out);
-                let response = payload.get("response").cloned().unwrap_or(Value::Null);
-                if let Some(usage) = response.get("usage") {
-                    self.input_tokens = crate::number(usage.get("input_tokens"));
-                    self.output_tokens = crate::number(usage.get("output_tokens"));
-                }
-                let incomplete = kind == "response.incomplete"
-                    || response.get("status").and_then(Value::as_str) == Some("incomplete");
-                let stop_reason = if incomplete {
-                    "max_tokens"
-                } else if self.saw_tool {
-                    "tool_use"
-                } else {
-                    "end_turn"
-                };
-                out.push(emit_typed(
-                    "message_delta",
-                    &json!({"type": "message_delta", "delta": {"stop_reason": stop_reason, "stop_sequence": null}, "usage": {"output_tokens": self.output_tokens}}),
-                ));
-                out.push(emit_typed("message_stop", &json!({"type": "message_stop"})));
-                self.terminated = true;
-            }
-            _ => {}
+        for event in self.chat.push(raw)? {
+            out.extend(self.anthropic.push(&event)?);
         }
         Ok(out)
     }
-
-    fn ensure_started(&mut self, out: &mut Vec<String>) {
-        if self.started {
-            return;
+    fn finish(&mut self) -> Result<Vec<String>, ConversionError> {
+        let mut out = Vec::new();
+        for event in self.chat.finish()? {
+            out.extend(self.anthropic.push(&event)?);
         }
-        self.started = true;
-        let id = self.id.take().unwrap_or_else(|| "resp_conv".to_string());
-        out.push(emit_typed(
-            "message_start",
-            &json!({
-                "type": "message_start",
-                "message": {
-                    "id": swap_id_prefix(&id, "resp_", "msg_"),
-                    "type": "message",
-                    "role": "assistant",
-                    "model": self.model.clone().unwrap_or_default(),
-                    "content": [],
-                    "stop_reason": null,
-                    "stop_sequence": null,
-                    "usage": {"input_tokens": self.input_tokens, "output_tokens": 0},
-                }
-            }),
-        ));
-    }
-
-    fn open_text(&mut self, out: &mut Vec<String>) -> u64 {
-        if let Some(AmBlock::Text(index)) = self.open {
-            return index;
-        }
-        self.close_open(out);
-        let index = self.next_block;
-        self.next_block += 1;
-        out.push(emit_typed(
-            "content_block_start",
-            &json!({"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}}),
-        ));
-        self.open = Some(AmBlock::Text(index));
-        index
-    }
-
-    fn close_open(&mut self, out: &mut Vec<String>) {
-        let index = match self.open.take() {
-            Some(AmBlock::Text(index)) | Some(AmBlock::Tool(_, index)) => index,
-            None => return,
-        };
-        out.push(emit_typed(
-            "content_block_stop",
-            &json!({"type": "content_block_stop", "index": index}),
-        ));
+        out.extend(self.anthropic.finish()?);
+        Ok(out)
     }
 }
 
@@ -767,6 +637,7 @@ struct AmToRs {
     next_output: u64,
     /// Open text item: (output_index, item_id, accumulated text).
     text_item: Option<(u64, String, String)>,
+    reasoning_item: Option<(u64, String, String)>,
     /// Open function_call item: (output_index, item, accumulated arguments).
     tool_item: Option<(u64, Value, String)>,
     input_tokens: u64,
@@ -878,6 +749,24 @@ impl AmToRs {
             "content_block_delta" => {
                 let delta = payload.get("delta").cloned().unwrap_or(Value::Null);
                 match delta.get("type").and_then(Value::as_str) {
+                    Some("thinking_delta") => {
+                        let text = delta.get("thinking").and_then(Value::as_str).unwrap_or("");
+                        if !text.is_empty() {
+                            if self.reasoning_item.is_none() {
+                                self.finalize_open(&mut out);
+                                let index = self.next_output;
+                                self.next_output += 1;
+                                let id = format!("{}_rs_{index}", self.id);
+                                out.push(emit_typed("response.output_item.added", &json!({"type":"response.output_item.added","output_index":index,"item":{"type":"reasoning","id":id,"summary":[]}})));
+                                out.push(emit_typed("response.reasoning_summary_part.added", &json!({"type":"response.reasoning_summary_part.added","output_index":index,"item_id":id,"summary_index":0,"part":{"type":"summary_text","text":""}})));
+                                self.reasoning_item = Some((index, id, String::new()));
+                            }
+                            if let Some((index, id, acc)) = &mut self.reasoning_item {
+                                acc.push_str(text);
+                                out.push(emit_typed("response.reasoning_summary_text.delta", &json!({"type":"response.reasoning_summary_text.delta","output_index":index,"item_id":id,"summary_index":0,"delta":text})));
+                            }
+                        }
+                    }
                     Some("text_delta") => {
                         let text = delta.get("text").and_then(Value::as_str).unwrap_or("");
                         if self.text_item.is_none() {
@@ -981,6 +870,17 @@ impl AmToRs {
 
     /// Close the open text or function_call item, if any.
     fn finalize_open(&mut self, out: &mut Vec<String>) {
+        if let Some((index, id, text)) = self.reasoning_item.take() {
+            let part = json!({"type":"summary_text","text":text});
+            let item = json!({"type":"reasoning","id":id,"summary":[part]});
+            out.push(emit_typed("response.reasoning_summary_text.done", &json!({"type":"response.reasoning_summary_text.done","output_index":index,"item_id":id,"summary_index":0,"text":text})));
+            out.push(emit_typed("response.reasoning_summary_part.done", &json!({"type":"response.reasoning_summary_part.done","output_index":index,"item_id":id,"summary_index":0,"part":part})));
+            out.push(emit_typed(
+                "response.output_item.done",
+                &json!({"type":"response.output_item.done","output_index":index,"item":item}),
+            ));
+            self.output.push(item);
+        }
         if let Some((index, item_id, text)) = self.text_item.take() {
             out.push(emit_typed(
                 "response.output_text.done",
@@ -1105,7 +1005,6 @@ mod tests {
                 "message_start",
                 "content_block_start",
                 "content_block_delta",
-                "content_block_delta",
                 "content_block_stop",
                 "message_delta",
                 "message_stop",
@@ -1114,42 +1013,22 @@ mod tests {
         let events = parsed(&out);
         assert_eq!(
             events[1].1["content_block"],
-            json!({"type": "tool_use", "id": "call_1", "name": "f"})
+            json!({"type": "tool_use", "id": "call_1", "name": "f", "input": {}})
         );
         assert_eq!(
             events[2].1["delta"],
-            json!({"type": "input_json_delta", "partial_json": "{"})
+            json!({"type":"input_json_delta","partial_json":"{\"a\":1}"})
         );
-        assert_eq!(
-            events[3].1["delta"],
-            json!({"type": "input_json_delta", "partial_json": "\"a\":1}"})
-        );
-        assert_eq!(events[5].1["delta"]["stop_reason"], "tool_use");
+        assert_eq!(events[4].1["delta"]["stop_reason"], "tool_use");
     }
 
     #[test]
-    fn cc_done_without_finish_reason_emits_terminal_events() {
+    fn cc_done_without_finish_reason_is_not_success() {
         let mut c = StreamConverter::new(CC, AM).unwrap();
-        let out = convert_all(
-            &mut c,
-            &[
-                "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
-                "data: [DONE]\n\n",
-            ],
-        );
-        assert_eq!(
-            kinds(&out),
-            vec![
-                "message_start",
-                "content_block_start",
-                "content_block_delta",
-                "content_block_stop",
-                "message_delta",
-                "message_stop",
-            ]
-        );
-        let events = parsed(&out);
-        assert_eq!(events[4].1["delta"]["stop_reason"], "end_turn");
+        c.push_event("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+            .unwrap();
+        assert!(c.push_event("data: [DONE]\n\n").is_err());
+        assert!(c.finish().is_err());
     }
 
     #[test]
@@ -1295,7 +1174,6 @@ mod tests {
                 "message_start",
                 "content_block_start",
                 "content_block_delta",
-                "content_block_delta",
                 "content_block_stop",
                 "message_delta",
                 "message_stop",
@@ -1305,14 +1183,14 @@ mod tests {
         assert_eq!(events[0].1["message"]["id"], "msg_1");
         assert_eq!(
             events[1].1["content_block"],
-            json!({"type": "tool_use", "id": "call_1", "name": "f"})
+            json!({"type": "tool_use", "id": "call_1", "name": "f", "input": {}})
         );
         assert_eq!(
             events[2].1["delta"],
-            json!({"type": "input_json_delta", "partial_json": "{\"a\""})
+            json!({"type":"input_json_delta","partial_json":"{\"a\":1}"})
         );
-        assert_eq!(events[5].1["delta"]["stop_reason"], "tool_use");
-        assert_eq!(events[5].1["usage"]["output_tokens"], 6);
+        assert_eq!(events[4].1["delta"]["stop_reason"], "tool_use");
+        assert_eq!(events[4].1["usage"]["output_tokens"], 6);
     }
 
     #[test]
@@ -1552,7 +1430,7 @@ mod tests {
         );
         assert_eq!(
             events[4].1["content_block"],
-            json!({"type": "tool_use", "id": "call_1", "name": "apply_patch"})
+            json!({"type": "tool_use", "id": "call_1", "name": "apply_patch", "input": {}})
         );
         // freeform input is wrapped so accumulated partial_json parses
         assert_eq!(
@@ -1561,12 +1439,64 @@ mod tests {
         );
         assert_eq!(
             events[7].1["content_block"],
-            json!({"type": "tool_use", "id": "call_2", "name": "f"})
+            json!({"type": "tool_use", "id": "call_2", "name": "f", "input": {}})
         );
         assert_eq!(
             events[8].1["delta"],
             json!({"type": "input_json_delta", "partial_json": "{\"a\":1}"})
         );
+    }
+
+    #[test]
+    fn parallel_tools_have_disjoint_block_lifetimes_and_trailing_usage() {
+        let mut converter = StreamConverter::new(CC, AM).unwrap();
+        let mut out = Vec::new();
+        for value in [
+            json!({"id":"chatcmpl-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"one","arguments":"{"}},{"index":1,"id":"b","function":{"name":"two","arguments":"{"}}]}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"b\":2}"}},{"index":0,"function":{"arguments":"\"a\":1}"}}]},"finish_reason":"tool_calls"}]}),
+            json!({"choices":[],"usage":{"prompt_tokens":30,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":20}}}),
+        ] {
+            out.extend(converter.push_event(&format!("data: {value}\n\n")).unwrap());
+        }
+        out.extend(converter.finish().unwrap());
+        let mut open = None;
+        let mut args = HashMap::new();
+        for (_, event) in parsed(&out) {
+            match event["type"].as_str() {
+                Some("content_block_start") => {
+                    assert!(open.is_none());
+                    open = event["index"].as_u64();
+                }
+                Some("content_block_delta") => {
+                    assert_eq!(event["index"].as_u64(), open);
+                    args.insert(
+                        open.unwrap(),
+                        event["delta"]["partial_json"].as_str().unwrap().to_owned(),
+                    );
+                }
+                Some("content_block_stop") => {
+                    assert_eq!(event["index"].as_u64(), open);
+                    open = None;
+                }
+                Some("message_delta") => {
+                    assert_eq!(event["usage"]["input_tokens"], 10);
+                    assert_eq!(event["usage"]["cache_read_input_tokens"], 20);
+                    assert_eq!(event["usage"]["output_tokens"], 5);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(&args[&0]).unwrap(),
+            json!({"a":1})
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&args[&1]).unwrap(),
+            json!({"b":2})
+        );
+        for (from, to) in [(AM, CC), (AM, RS), (RS, AM)] {
+            assert!(StreamConverter::new(from, to).unwrap().finish().is_err());
+        }
     }
 
     // --- framing & passthrough ----------------------------------------------
@@ -1579,11 +1509,9 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_stream_pairs_error_at_construction() {
-        assert!(matches!(
-            StreamConverter::new(CC, RS),
-            Err(ConversionError::Unsupported(_, _))
-        ));
+    fn openai_stream_pairs_are_supported() {
+        assert!(StreamConverter::new(CC, RS).is_ok());
+        assert!(StreamConverter::new(RS, CC).is_ok());
     }
 
     #[test]

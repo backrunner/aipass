@@ -24,6 +24,7 @@ export function nativeProtocolForEntry(
   secret?: SecretRef
 ): ProxyProtocol | null {
   const interfaceType = secretInterfaceType(secret, entry.interfaceType);
+  if (interfaceType === "gemini") return "open_ai_chat_completions";
   if (interfaceType === "anthropic_messages") return "anthropic_messages";
   if (interfaceType !== "openai_compatible" && interfaceType !== "azure_openai") return null;
   return entry.providerId === "openai" ||

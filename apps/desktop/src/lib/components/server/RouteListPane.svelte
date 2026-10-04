@@ -103,7 +103,7 @@
                   {/if}
                 </span>
                 <span class="subtitle">
-                  {route.strategy === "round_robin" ? $t("server.strategyRoundRobin") : $t("server.strategyFallback")}
+                  {route.strategy === "quota_aware" ? $t("server.strategyQuotaAware") : route.strategy === "round_robin" ? $t("server.strategyRoundRobin") : $t("server.strategyFallback")}
                   <span aria-hidden="true"> · </span>
                   {$t("server.memberCount", { count: route.targets.length })}
                 </span>

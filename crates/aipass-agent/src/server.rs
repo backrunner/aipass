@@ -1132,6 +1132,12 @@ fn build_tool_config_plan(
     let mut entry = vault
         .get_provider_summary(request.id)
         .map_err(map_vault_error)?;
+    if crate::community::is_account(vault, entry.id) {
+        return Err(ServiceError::new(
+            AgentErrorCode::ValidationFailed,
+            "community subscriptions must be used through a local proxy route",
+        ));
+    }
     let secret = match request.secret_id.as_deref() {
         Some(id) => entry
             .secret_refs
@@ -2097,6 +2103,11 @@ fn probe_entry(
     .map(str::to_owned)
     .unwrap_or(endpoint);
     let target = ws_interface.then(|| aipass_proxy::ResolvedTarget {
+        upstream_proxy: None,
+        quota: Vec::new(),
+        model_override: None,
+        profile: aipass_proxy::ProviderProfile::Generic,
+        upstream_kind: crate::proxy_service::upstream_kind(&entry),
         max_concurrent_requests: None,
         supports_websockets: true,
         api_key: secret.to_string(),

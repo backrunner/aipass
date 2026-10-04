@@ -20,8 +20,34 @@ pub enum ProxyError {
     Poisoned,
 }
 
+/// Resolved by the trusted agent, never inferred from an editable URL or a
+/// token prefix. Subscription backends have contracts beyond their wire API.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UpstreamKind {
+    #[default]
+    Standard,
+    CodexSubscription,
+    GeminiNative,
+    Copilot,
+    CopilotCli,
+    ClaudeSubscription,
+    CommunitySubscription,
+}
+
+impl UpstreamKind {
+    pub(crate) fn is_copilot(self) -> bool {
+        matches!(self, Self::Copilot | Self::CopilotCli)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedTarget {
+    pub upstream_proxy: Option<UpstreamProxyConfig>,
+    pub model_override: Option<String>,
+    pub profile: ProviderProfile,
+    pub upstream_kind: UpstreamKind,
+    /// Verified account-wide or model-scoped quota windows, supplied only by the agent.
+    pub quota: Vec<QuotaWindow>,
     /// Provider-owned concurrency limit; missing/zero is unlimited.
     pub max_concurrent_requests: Option<u32>,
     /// Provider-owned capability, resolved from the vault on every refresh.
@@ -30,9 +56,48 @@ pub struct ResolvedTarget {
     pub api_key: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuotaWindow {
+    pub models: Option<Vec<String>>,
+    pub not_models: Vec<String>,
+    pub used_basis_points: u16,
+    pub observed_at: u64,
+    pub resets_at: Option<u64>,
+}
+
+impl QuotaWindow {
+    pub fn current_usage(&self, now: u64) -> Option<u16> {
+        (now >= self.observed_at
+            && now - self.observed_at <= 300
+            && self.resets_at.is_none_or(|reset| reset > now))
+        .then_some(self.used_basis_points)
+    }
+}
+
+impl ResolvedTarget {
+    pub(crate) fn quota_usage(&self, now: u64, model: Option<&str>) -> Option<u16> {
+        self.quota
+            .iter()
+            .filter(|w| {
+                let Some(model) = self.model_override.as_deref().or(model) else {
+                    return w.models.is_none() && w.not_models.is_empty();
+                };
+                w.models
+                    .as_ref()
+                    .is_none_or(|models| models.iter().any(|id| id.eq_ignore_ascii_case(model)))
+                    && !w.not_models.iter().any(|id| id.eq_ignore_ascii_case(model))
+            })
+            .filter_map(|w| w.current_usage(now))
+            .max()
+    }
+}
+
 impl Drop for ResolvedTarget {
     fn drop(&mut self) {
         self.api_key.zeroize();
+        if let Some(proxy) = self.upstream_proxy.as_mut() {
+            proxy.custom_url.zeroize();
+        }
         for (_, value) in &mut self.config.headers {
             value.zeroize();
         }
@@ -124,6 +189,9 @@ pub(crate) type UpstreamClientCache = HashMap<(u64, UpstreamProxyConfig, bool), 
 
 #[derive(Clone)]
 pub(crate) struct RuntimeState {
+    pub(crate) subscription_backend: Arc<RwLock<Option<Arc<dyn SubscriptionBackend>>>>,
+    pub(crate) copilot_sessions: Arc<tokio::sync::Mutex<copilot::Sessions>>,
+    pub(crate) gemini_signatures: Arc<Mutex<gemini::SignatureLedger>>,
     pub(crate) config: Arc<RwLock<RuntimeConfig>>,
     pub(crate) stats: Arc<Mutex<RuntimeStats>>,
     pub(crate) usage: Arc<UsageStore>,
@@ -200,6 +268,7 @@ impl Drop for TargetActivityGuard {
 
 #[derive(Default)]
 pub(crate) struct TargetHealth {
+    pub(crate) last_status: Option<u16>,
     pub(crate) consecutive_failures: u8,
     pub(crate) consecutive_successes: u8,
     pub(crate) open_until: Option<Instant>,
@@ -275,5 +344,25 @@ pub(crate) fn record_recent_tokens(state: &RuntimeState, tokens: u64) {
         {
             stats.recent_token_totals.pop_front();
         }
+    }
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+    #[test]
+    fn stale_unknown_and_reset_quota_never_remain_exhausted() {
+        let mut quota = QuotaWindow {
+            models: None,
+            not_models: Vec::new(),
+            used_basis_points: 10_000,
+            observed_at: 1000,
+            resets_at: Some(1200),
+        };
+        assert_eq!(quota.current_usage(1100), Some(10_000));
+        assert_eq!(quota.current_usage(1200), None);
+        assert_eq!(quota.current_usage(999), None);
+        quota.resets_at = None;
+        assert_eq!(quota.current_usage(1301), None);
     }
 }

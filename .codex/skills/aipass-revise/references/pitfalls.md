@@ -383,6 +383,13 @@ Newest entries last within each section.
 - **Watch points**: `concurrency.rs`, HTTP/model dispatch, `images.rs`, native WS and bridge, Agent runtime snapshots, Vault update omission semantics, Tauri/provider form mappings. Never bypass provider-bound continuation or no-replay protections to find a free slot.
 - **Form guardrail**: update a numeric draft value and its touched flag in one input handler. A separate `bind:value` plus touched mutation can let a parent reactive refresh restore the old value before the binding reads it. Verify changing a nonempty limit in a real 960×640 browser as well as the App regression.
 
+### Subscription backends are not ordinary wire-compatible endpoints
+- **Symptom**: Codex OAuth had a pinned URL/token but ordinary request bodies and JSON response expectations; CC/Responses routes were rejected despite the UI allowing both formats.
+- **Root cause**: `proxy_service.rs::runtime_config_inner` resolved only credentials/protocol, while `forward.rs::prepare_upstream_request` and the converter lacked subscription semantics and a direct OpenAI pair.
+- **Fix**: trusted runtime `UpstreamKind`, Codex stream-only normalization/collection, direct OpenAI request/response/SSE adapters, and account-bound usage requests. See `docs/subscription-proxy-review.md` for remaining gaps.
+- **Guardrail**: resolve subscription kind from official credential metadata, never editable URLs or token prefixes. Keep native HTTP, downstream WS bridges, buffered responses and startup validation aligned; preserve call IDs, late usage and incomplete status. Never replay an unconfirmed/truncated generation or erase missing history to make a request pass.
+- **Watch points**: Agent runtime resolution, `codex.rs`, `forward.rs`, `websocket.rs`, `openai/stream.rs`, `official_accounts.rs`; regressions `codex_subscription_restores_nonstream_response_and_keeps_token_scope`, `chat_stream_preserves_parallel_tools_reasoning_and_usage_after_finish`, `codex_usage_is_bound_to_the_requested_workspace`.
+
 ## Public model pricing (aipass-agent pricing)
 
 ### Startup-only refresh and encrypted metadata left prices stale
@@ -496,6 +503,20 @@ Newest entries last within each section.
 - **Watch points**: native backup tests, login completion, background refresh persistence, OAuth response parsing tests. Existing legacy backup files are not migrated by this change.
 
 
+### Refresh cancellation and IO recovery must not spend a grant twice
+- **Symptom**: cancellation could drop a rotated token before durable ACK; bare 403s invalidated good sign-ins; mirror failures left proxy snapshots stale or retried an already-spent refresh grant.
+- **Root cause**: native adapter cancellation covered credential rotation; official refresh wrote a CLI mirror before vault authority; persistence failures had no generation-bound recovery and proxy reads trusted the secondary secret.
+- **Fix**: shield bounded refresh/ACK, preserve failed saves in Agent recovery caches with lock revocation, read managed OAuth authority for the linked primary key, reconcile mirrors idempotently, classify explicit grant rejection and keep original token expiry. Prefer Kiro CLI-owned rotation and bind its previous native generation to both tokens; retry unsaved Claude native grants before session expiry.
+- **Guardrail**: test canceled upstream rotation, failed/ambiguous ACK, read-only vault IO, new-login/revision conflicts, omitted tokens, unchanged cached access with a rotated refresh token, expiry after delayed persistence, and concurrent Copilot exchange. Do not fallback after a rotated grant's save fails or extend its lifetime on retry.
+- **Watch points**: `oauth/mod.rs`, `oauth/refresh_loop.rs`, `community.rs`, native subscription fresh/organization repair paths, `claude_bridge.rs`, `proxy_service.rs`, proxy `copilot.rs`. See `docs/oauth-refresh-magpie-review.md`.
+
+### Native rotation may change only the refresh token
+- **Symptom**: Claude skipped saving a refreshed native grant when access was unchanged; Kiro ignored a valid native rotation with equal expiry. A stale Claude process could overwrite another process's refresh-only rotation.
+- **Root cause**: Native refresh detection compared access tokens or required a strictly later expiry; the Claude write CAS bound only the access mirror.
+- **Fix**: Compare Claude's complete native grant and CAS its canonical hash, allow exact durable replays, protect pending grants from capacity eviction, and adopt Kiro's changed live pair except known previous native generations.
+- **Guardrail**: Test refresh-only changes, equal/shorter live expiry, stale writers, durable replay and pending credential retention. Bind rotation detection and CAS to the complete grant rather than access alone.
+- **Watch points**: `claude_bridge::persist_native`, `persist_native_account`, `handlers::ClaudeNativeWrite`, typed IPC, Kiro `live_native_rotation` and native readers.
+
 ### OAuth management hid destructive effects and recovery states
 - **Symptom**: account removal silently retired linked provider routes; loading looked empty, failed login returned to provider selection, and failed browser/clipboard actions gave no feedback.
 - **Root cause**: `OAuthConnectDialog.svelte` used a single busy flag and icon-only account actions, mixed loading with empty lists, and used WebView `window.open` for an external browser.
@@ -595,3 +616,46 @@ Newest entries last within each section.
 - **Fix**: retain and join the listener thread after revocation and stop signaling; keep Tokio's blocking-task shutdown bounded. The regression repeatedly restarts while a client holds incomplete HTTP headers.
 - **Guardrail**: require stop to release its listening socket and close incomplete connections before reporting success. Run `cargo test --workspace` with the listener restart regression enabled.
 - **Watch points**: `transport::Listener::drop`, `Prepared::launch`, `ControlPanel::{configure,stop,shutdown,restore}`.
+
+### Community credential rotation, native history and model-scoped quota
+- **Symptom**: A caught auth-write failure could let a plugin continue with an uncommitted rotated refresh token; native Messages converted through Chat lost signatures; a model-only quota could exhaust the whole account.
+- **Root cause**: The former plugin catch boundaries, `aipass-proxy/src/subscription.rs` protocol round trips, and quota selection without an effective model represented different ownership scopes as account-wide state.
+- **Fix**: Stop the native Rust adapter on rejected durable ACK, retain native Messages/Responses, bind Gemini signature history to account generations, and filter quota windows by effective model/exclusions. Preserve the previous quota snapshot while an account is busy.
+- **Guardrail**: Run `cargo test -p aipass-agent subscriptions` and `cargo test -p aipass-proxy-conversion`, native subscription codec tests, and `quota_scope_follows_the_effective_model_and_preserves_unrelated_models`; never use a rotated credential before a successful Agent CAS ACK.
+- **Watch points**: Native-file rereads/writeback, login cancellation versus account commit, credential refresh and target retention, model overrides, advisory quota windows, HTTP/WS conversion.
+
+### Subscription converters belong in Rust
+- **Symptom**: Referencing Magpie community implementations introduced an unnecessary Node runtime and embedded plugin loader in the desktop distribution.
+- **Root cause**: Confusing reference protocol implementations with production dependencies.
+- **Fix**: Port provider auth/transport to `aipass-agent/src/subscriptions`, and pure request/SSE/Connect/AWS codecs to `aipass-proxy-conversion/src/providers`; remove the Node worker, loader and vendored JavaScript.
+- **Guardrail**: Community is a source of protocol contracts, not a runtime extension point. Verify HTTP/2 duplex, early quota failures, incomplete streams, bounded buffers, cancellation and durable credential acknowledgements in Rust. Vendor authentication CLIs are distinct from converter runtimes.
+- **Watch points**: Model-specific wire selection, API/region headers, one-use refresh grants, signed reasoning, native-file ownership and model-scoped quota.
+
+### Stream retry safety must not depend on network chunk boundaries
+- **Symptom**: Content and a quota error in one network chunk could discard the content and turn an already submitted generation into a retryable HTTP rejection. Malformed HTTP 200 bodies were also incorrectly treated as explicit upstream 502 refusals.
+- **Root cause**: `aipass-agent/src/subscriptions/mod.rs` and `subscriptions/cursor.rs` checked only delivered bytes, while a decoder can consume content before returning an error for a later event in the same chunk.
+- **Fix**: Provider decoders retain generation progress; only explicit upstream refusals supply a retryable status. Unknown, truncated and already producing attempts propagate an error without replay. Shared proxy silent-retry buffers also detect content, reasoning, tool declarations and completed generations before allowing failover.
+- **Guardrail**: Test coalesced content-plus-error and malformed/empty successful HTTP responses, alongside early quota rejection. Validate complete tool argument objects in native decoders before sending completion; same-protocol SSE deliberately preserves upstream events.
+- **Watch points**: Connect, AWS, JSON-lines and Qoder codecs; Cursor duplex; `ProviderStream::has_output`, `failure_status`, and proxy submitted-attempt handling.
+
+### New IPC variants must preserve existing wire discriminators
+- **Symptom**: Inserting community variants below the `official_accounts.refresh` serde attribute attached that existing operation to the catalog request; other new subscription operations lacked stable wire tags.
+- **Root cause**: Enum insertion in `aipass-agent-protocol/src/lib.rs` separated serde attributes from the variants they described.
+- **Fix**: Assign explicit tags to every subscription/runtime variant and restore the official refresh tag. Test wire tags against operation names, round trips, and existing raw JSON dispatch.
+- **Guardrail**: Keep attributes with their variants and test existing wire JSON whenever adding IPC operations. Typed Rust round trips alone cannot catch a coordinated but incompatible rename.
+- **Watch points**: Agent request enum, event names, desktop/CLI/native-host and management API clients.
+
+### Subscription records and credential ownership must be committed together
+- **Symptom**: Initial login used two vault writes, leaving an incomplete provider if interrupted. Cached account metadata could mask a changed JWT subject, while adding legitimate profile metadata could falsely look like an account switch.
+- **Root cause**: `community::persist` wrote the account bundle after creating its provider; `ensure_owner` compared only the first available identity, mixing profile IDs, email and JWT subject namespaces.
+- **Fix**: Create the provider and bundle in one encrypted record. Compare established metadata fields and token claims independently; require a remaining identity anchor when a token loses its claims.
+- **Guardrail**: Preserve first-write credential completeness; test metadata enrichment, JWT subject changes with unchanged cached metadata, and identity removal before granting a durable ACK.
+- **Watch points**: `Vault::add_provider_with_runtime_extension`, provider edits, native credential imports and all refresh paths.
+
+
+### Desktop setting dialogs must clear drafts without resetting destroyed UI state
+- **Symptom**: The subscription settings dialog failed to open again after cancellation; Svelte reported `derived_inert` during teardown.
+- **Root cause**: Resetting the reactive `options` object in the dialog's `onDestroy` invalidated bindings while its effects were being destroyed.
+- **Fix**: Isolate the editor in `ProviderRuntimeDialog.svelte`, clear draft secret fields through a plain helper during teardown, and keep summary requests guarded by a generation counter.
+- **Guardrail**: Clear sensitive draft fields on teardown without assigning reactive editor state; verify cancel-and-reopen and preserve failed-save drafts. Let portalled select focus handlers settle between synthetic pointer actions.
+- **Watch points**: `ProviderRuntimeDialog.svelte`, `ProviderRuntimePanel.svelte`, shared `SelectField`, `Card`, and `ProviderRuntimePanel.test.ts`.

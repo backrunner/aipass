@@ -5,6 +5,7 @@ mod concurrency;
 mod image_api;
 mod runtime_status;
 mod stability;
+mod subscriptions;
 mod transparency;
 
 #[test]
@@ -207,14 +208,18 @@ async fn custom_upstream_proxy_routes_http_traffic_through_proxy() {
     );
 }
 
-fn available_addr() -> SocketAddr {
+pub(crate) fn available_addr() -> SocketAddr {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
     addr
 }
 
-fn single_target_route(token: &str, base_url: String, retry: RetryPolicy) -> ResolvedRoute {
+pub(crate) fn single_target_route(
+    token: &str,
+    base_url: String,
+    retry: RetryPolicy,
+) -> ResolvedRoute {
     ResolvedRoute {
         config: ProxyRouteConfig {
             id: Uuid::new_v4(),
@@ -235,6 +240,11 @@ fn single_target_route(token: &str, base_url: String, retry: RetryPolicy) -> Res
 
 pub(crate) fn test_target(base_url: String, priority: u16) -> ResolvedTarget {
     ResolvedTarget {
+        upstream_proxy: None,
+        upstream_kind: UpstreamKind::Standard,
+        quota: Vec::new(),
+        model_override: None,
+        profile: ProviderProfile::Generic,
         // These fixtures exercise the HTTP retry/streaming pipeline.
         // WS preference and fallback have dedicated adaptive WS tests.
         max_concurrent_requests: None,
@@ -1875,12 +1885,55 @@ fn hold_on_failure_waits_for_circuit_cooldown() {
 
 #[test]
 fn silent_retry_does_not_replay_an_incomplete_stream() {
+    assert_silent_retry_does_not_replay_output("");
+}
+
+#[test]
+fn silent_retry_does_not_replay_output_followed_by_an_explicit_error() {
+    assert_silent_retry_does_not_replay_output(
+        "event: error\ndata: {\"error\":{\"message\":\"quota exhausted\"}}\n\n",
+    );
+}
+
+#[tokio::test]
+async fn reasoning_and_tool_declarations_prevent_prefetch_failover() {
+    for (protocol, event) in [
+        (
+            ProxyProtocol::OpenAiChatCompletions,
+            serde_json::json!({"choices":[{"delta":{"reasoning_content":"thinking"}}]}),
+        ),
+        (
+            ProxyProtocol::AnthropicMessages,
+            serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call","name":"calc","input":{}}}),
+        ),
+        (
+            ProxyProtocol::OpenAiResponses,
+            serde_json::json!({"type":"response.output_item.added","item":{"type":"function_call","call_id":"call","name":"calc","arguments":""}}),
+        ),
+    ] {
+        let body = Bytes::from(format!(
+            "data: {event}\n\nevent: error\ndata: {{\"error\":{{\"message\":\"quota\"}}}}\n\n"
+        ));
+        assert!(stream_reports_output(protocol, &body));
+        let mut source: UpstreamBodyStream = Box::pin(stream::empty());
+        let first = prefetch_sse_event(protocol, Some(body), &mut source).await;
+        assert!(first.is_ok_and(|v| v.is_some_and(|p| p.first_token_observed)));
+        assert!(!stream_reports_output(
+            protocol,
+            b"event: error\ndata: {\"error\":\"quota\"}\n\n"
+        ));
+    }
+}
+
+fn assert_silent_retry_does_not_replay_output(tail: &'static str) {
     let primary = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let primary_addr = primary.local_addr().unwrap();
     let primary_thread = std::thread::spawn(move || {
         let (mut stream, _) = primary.accept().unwrap();
         let _ = read_http_request(&mut stream);
-        let partial = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n";
+        let partial = format!(
+            "data: {{\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}}\n\n{tail}"
+        );
         write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -2841,6 +2894,11 @@ fn proxy_authenticates_fails_over_and_records_usage() {
     let route_id = Uuid::new_v4();
     let provider_id = Uuid::new_v4();
     let target = |id, base_url, priority| ResolvedTarget {
+        upstream_proxy: None,
+        upstream_kind: UpstreamKind::Standard,
+        quota: Vec::new(),
+        model_override: None,
+        profile: ProviderProfile::Generic,
         max_concurrent_requests: None,
         supports_websockets: false,
         config: ProxyTargetConfig {
@@ -3604,6 +3662,119 @@ fn request_stats_use_request_denominator_and_last_100_first_tokens() {
 
 // --- cross-protocol conversion end-to-end ------------------------------
 
+#[test]
+fn codex_subscription_restores_nonstream_response_and_keeps_token_scope() {
+    let sse = [
+        serde_json::json!({"type":"response.output_item.done", "output_index":0, "item":{"id":"msg_answer", "type":"message", "role":"assistant", "content":[{"type":"output_text","text":"answer"}]}}),
+        serde_json::json!({"type":"response.completed", "response":{"id":"resp_answer", "object":"response", "model":"model", "status":"completed", "output":[], "usage":{"input_tokens":20,"output_tokens":3,"input_tokens_details":{"cached_tokens":12}}}})
+    ].iter().map(|value| format!("data: {value}\n\n")).collect::<String>();
+    // The Codex backend can omit a useful content type.
+    let (address, upstream) = mock_upstream("200 OK", "application/octet-stream", sse);
+    let mut target = conversion_target(
+        format!("http://{address}/backend-api/codex"),
+        0,
+        ProxyProtocol::OpenAiResponses,
+    );
+    target.upstream_kind = UpstreamKind::CodexSubscription;
+    // Even if general WS support is enabled, subscription adaptation must run.
+    target.supports_websockets = true;
+    target
+        .config
+        .headers
+        .push(("chatgpt-account-id".into(), "workspace-1".into()));
+    let token = "aipass_codex_subscription_test";
+    let route = conversion_route(
+        token,
+        ProxyProtocol::OpenAiChatCompletions,
+        ProxyProtocol::OpenAiResponses,
+        vec![target],
+        1,
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
+    let bind = available_addr();
+    let _proxy = ProxyHandle::start(
+        RuntimeConfig::from_routes(bind.to_string(), vec![route]),
+        usage.clone(),
+    )
+    .unwrap();
+    let response = reqwest::blocking::Client::builder().no_proxy().build().unwrap()
+        .post(format!("http://{bind}/v1/chat/completions"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({"model":"model","stream":false,"temperature":0.2,"max_tokens":100,"prompt_cache_key":"conversation-1","messages":[{"role":"user","content":"hello"}]}))
+        .send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    let value: serde_json::Value = response.json().unwrap();
+    assert_eq!(value["choices"][0]["message"]["content"], "answer");
+    assert_eq!(value["usage"]["prompt_tokens"], 20);
+    let (headers, body) = upstream.join().unwrap();
+    let headers = headers.to_ascii_lowercase();
+    assert!(headers.starts_with("post /backend-api/codex/responses "));
+    assert!(headers.contains("authorization: bearer upstream-secret"));
+    assert!(headers.contains("chatgpt-account-id: workspace-1"));
+    assert!(headers.contains("session_id: conversation-1"));
+    assert!(!headers.contains(token));
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["store"], false);
+    assert!(body.get("temperature").is_none());
+    assert!(body.get("max_output_tokens").is_none());
+    assert_eq!(body["input"][0]["content"], "hello");
+}
+
+#[test]
+fn responses_client_to_chat_upstream_stream_preserves_reasoning_and_late_usage() {
+    let sse = concat!(
+        "data: {\"id\":\"chatcmpl-answer\",\"model\":\"model\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":4}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (address, upstream) = mock_upstream("200 OK", "text/event-stream", sse.into());
+    let bind = available_addr();
+    let token = "aipass_openai_conversion_test";
+    let _proxy = start_proxy(
+        bind,
+        conversion_route(
+            token,
+            ProxyProtocol::OpenAiResponses,
+            ProxyProtocol::OpenAiChatCompletions,
+            vec![conversion_target(
+                format!("http://{address}/v1"),
+                0,
+                ProxyProtocol::OpenAiChatCompletions,
+            )],
+            1,
+        ),
+    );
+    let response = reqwest::blocking::Client::builder().no_proxy().build().unwrap()
+        .post(format!("http://{bind}/v1/responses")).bearer_auth(token)
+        .json(&serde_json::json!({"model":"model", "stream":true, "instructions":"policy", "input":"hello"})).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.text().unwrap();
+    let completed = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["type"] == "response.completed")
+        .unwrap();
+    assert_eq!(completed["response"]["usage"]["input_tokens"], 20);
+    assert_eq!(
+        completed["response"]["output"][0]["summary"][0]["text"],
+        "think"
+    );
+    assert_eq!(
+        completed["response"]["output"][1]["content"][0]["text"],
+        "answer"
+    );
+    let (headers, request) = upstream.join().unwrap();
+    assert!(headers.starts_with("POST /v1/chat/completions "));
+    let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+    assert_eq!(request["messages"][0]["role"], "developer");
+    assert_eq!(request["stream_options"]["include_usage"], true);
+}
+
 fn conversion_target(base_url: String, priority: u16, protocol: ProxyProtocol) -> ResolvedTarget {
     let mut target = test_target(base_url, priority);
     target.config.protocol = Some(protocol);
@@ -3663,7 +3834,7 @@ fn mock_upstream(
     (addr, handle)
 }
 
-fn start_proxy(bind_addr: SocketAddr, route: ResolvedRoute) -> ProxyHandle {
+pub(crate) fn start_proxy(bind_addr: SocketAddr, route: ResolvedRoute) -> ProxyHandle {
     let temp = tempfile::tempdir().unwrap();
     let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
     ProxyHandle::start(
@@ -3805,15 +3976,11 @@ fn anthropic_client_to_chat_completions_upstream_streaming_tool_call() {
         "{body}"
     );
     assert!(
-        body.contains("\"id\":\"call_1\",\"name\":\"lookup\",\"type\":\"tool_use\""),
+        body.contains("\"id\":\"call_1\",\"input\":{},\"name\":\"lookup\",\"type\":\"tool_use\""),
         "{body}"
     );
     assert!(
-        body.contains("\"partial_json\":\"{\\\"city\\\"\""),
-        "{body}"
-    );
-    assert!(
-        body.contains("\"partial_json\":\":\\\"Paris\\\"}\""),
+        body.contains("\"partial_json\":\"{\\\"city\\\":\\\"Paris\\\"}\""),
         "{body}"
     );
     assert!(body.contains("\"stop_reason\":\"tool_use\""), "{body}");
@@ -4102,11 +4269,11 @@ fn mixed_protocol_route_passes_native_through_and_converts_on_failover() {
 }
 
 #[test]
-fn start_gate_rejects_unsupported_pairs_and_accepts_supported_conversion() {
+fn start_gate_accepts_openai_conversion_and_rejects_disabled_conversion() {
     let temp = tempfile::tempdir().unwrap();
     let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
 
-    // Chat Completions <-> Responses conversion is not implemented.
+    // Chat Completions <-> Responses uses a direct adapter.
     let mut unsupported = conversion_route(
         "aipass_gate_unsupported",
         ProxyProtocol::OpenAiChatCompletions,
@@ -4118,13 +4285,11 @@ fn start_gate_rejects_unsupported_pairs_and_accepts_supported_conversion() {
         )],
         1,
     );
-    assert!(matches!(
-        ProxyHandle::start(
-            RuntimeConfig::from_routes(available_addr().to_string(), vec![unsupported.clone()]),
-            usage.clone(),
-        ),
-        Err(ProxyError::InvalidConfig(_))
-    ));
+    assert!(ProxyHandle::start(
+        RuntimeConfig::from_routes(available_addr().to_string(), vec![unsupported.clone()]),
+        usage.clone(),
+    )
+    .is_ok());
 
     // A protocol mismatch without conversion enabled is a misconfiguration.
     unsupported.config.conversion_enabled = false;

@@ -625,7 +625,11 @@ pub(super) async fn forward(
             // Keep only the last failed attempt for request-level accounting.
             drop(final_attempt.take());
             let setup = async {
-                let client = upstream_client(&state, route.config.retry.connect_timeout_ms)?;
+                let client = target_client(
+                    &state,
+                    &attempt.target,
+                    route.config.retry.connect_timeout_ms,
+                )?;
                 let path = if attempt.target.config.auth_scheme == "azure_api_key" {
                     operation.path().trim_start_matches("/v1")
                 } else {
@@ -723,7 +727,11 @@ pub(super) async fn forward(
             } else {
                 // Validate the complete JSON result before returning success. Lost or
                 // truncated responses remain ambiguous and must not be replayed.
-                let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
+                let mut source: UpstreamBodyStream = Box::pin(
+                    response
+                        .bytes_stream()
+                        .map(|chunk| chunk.map_err(|error| -> BoxError { Box::new(error) })),
+                );
                 let buffered = match collect_upstream_body(None, &mut source).await {
                     Ok(bytes) => bytes,
                     Err(_) => {

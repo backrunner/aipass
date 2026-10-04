@@ -172,18 +172,7 @@ pub(crate) fn refresh_with_token(refresh_token: &str) -> Result<OAuthTokenBundle
     let status = response.status();
     if !status.is_success() {
         let text = bounded_text(response);
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-            || matches!(
-                extract_error_code(&text).as_deref(),
-                Some(
-                    "invalid_grant"
-                        | "refresh_token_expired"
-                        | "refresh_token_reused"
-                        | "refresh_token_invalidated"
-                )
-            )
-        {
+        if super::refresh_grant_rejected(status, extract_error_code(&text).as_deref()) {
             return Err(OAuthError::RefreshTokenInvalid);
         }
         return Err(OAuthError::token_fetch_failed(
@@ -204,7 +193,10 @@ fn bundle_from_tokens(
     tokens: OAuthTokenResponse,
     require_id_token: bool,
 ) -> Result<OAuthTokenBundle, OAuthError> {
-    let refresh_token = tokens.refresh_token.unwrap_or_default();
+    let refresh_token = tokens
+        .refresh_token
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_default();
     if require_id_token && refresh_token.trim().is_empty() {
         return Err(OAuthError::token_fetch_failed_plain(
             "login response missing refresh_token",
@@ -253,13 +245,14 @@ fn bundle_from_tokens(
             "login response missing id_token or chatgpt_account_id",
         ));
     }
+    let expires_in = super::token_lifetime(&tokens.access_token, tokens.expires_in);
     Ok(OAuthTokenBundle {
         access_token: tokens.access_token,
         refresh_token,
         id_token,
         chatgpt_account_id,
         account_identity,
-        expires_in: tokens.expires_in.unwrap_or(3600),
+        expires_in,
     })
 }
 
@@ -342,6 +335,19 @@ mod tests {
         tokens.access_token = "   ".to_string();
         let err = bundle_from_tokens(tokens, false).unwrap_err();
         assert!(matches!(err, OAuthError::TokenFetchFailed { .. }));
+    }
+    #[test]
+    fn refresh_accepts_omitted_tokens_but_login_requires_a_refresh_grant() {
+        for refresh in [None, Some("   ".into())] {
+            let mut tokens = response(None, Some(60));
+            tokens.refresh_token = refresh.clone();
+            let bundle = bundle_from_tokens(tokens, false).unwrap();
+            assert!(bundle.refresh_token.is_empty());
+            assert!(bundle.id_token.is_none());
+            let mut tokens = response(None, Some(60));
+            tokens.refresh_token = refresh;
+            assert!(bundle_from_tokens(tokens, true).is_err());
+        }
     }
     #[test]
     fn refresh_errors_accept_nested_and_flat_codes_without_descriptions() {

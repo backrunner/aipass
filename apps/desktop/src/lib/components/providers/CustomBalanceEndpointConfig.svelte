@@ -5,7 +5,7 @@
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
 
-  export interface CustomBalanceEndpoint {
+  interface CustomBalanceEndpoint {
     id: string;
     label: string;
     url: string;
@@ -100,7 +100,7 @@
               </Field>
 
               <Field label={$t("balanceEndpoint.unit")}>
-                <TextField
+                <input
                   bind:value={endpoint.unit}
                   placeholder="requests"
                   on:change={() => onUpdateEndpoint(endpoint.id, { unit: endpoint.unit })}
@@ -122,7 +122,7 @@
               <Field label={$t("balanceEndpoint.requestBody")}>
                 <textarea
                   bind:value={endpoint.body}
-                  placeholder='{{"query": "balance"}}'
+                  placeholder={'{"query": "balance"}'}
                   rows="3"
                   on:change={() => onUpdateEndpoint(endpoint.id, { body: endpoint.body })}
                 ></textarea>

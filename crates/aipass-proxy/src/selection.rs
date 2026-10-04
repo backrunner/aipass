@@ -253,9 +253,31 @@ pub(crate) fn ordered_route_targets(
     route: &ResolvedRoute,
     session_key: Option<&str>,
 ) -> Vec<ResolvedTarget> {
+    ordered_route_targets_for_model(state, route, session_key, None)
+}
+
+pub(crate) fn ordered_route_targets_for_model(
+    state: &RuntimeState,
+    route: &ResolvedRoute,
+    session_key: Option<&str>,
+    model: Option<&str>,
+) -> Vec<ResolvedTarget> {
     let mut targets = route.targets.clone();
-    targets.retain(|target| target.config.enabled);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    targets.retain(|target| {
+        target.config.enabled
+            && target
+                .quota_usage(now, model)
+                .is_none_or(|used| used < 10_000)
+    });
     targets.sort_by_key(|target| target.config.priority);
+    if route.config.strategy == RouteStrategy::QuotaAware {
+        // Unknown/expired observations stay eligible, with a neutral rank.
+        targets.sort_by_key(|target| target.quota_usage(now, model).unwrap_or(5_000));
+    }
     targets.retain(|target| !circuit_open(state, target.config.id));
     // Weight only eligible peers in the best stability tier, so an unavailable
     // or degraded high-weight provider cannot donate traffic to another peer.
@@ -299,7 +321,7 @@ pub(crate) fn ordered_route_targets(
         );
         targets[..peer_count].rotate_left(start);
     }
-    if let Some(target_id) = affinity_target(state, route.config.id, session_key, &route.targets) {
+    if let Some(target_id) = affinity_target(state, route.config.id, session_key, &targets) {
         if let Some(index) = targets
             .iter()
             .position(|target| target.config.id == target_id)
@@ -372,6 +394,44 @@ pub(crate) fn mark_failure(state: &RuntimeState, target_id: Uuid, policy: &Retry
         }
         clear_affinity_for_target(state, target_id);
     }
+}
+
+/// HTTP 429 is a temporary throttle, not evidence of an exhausted account.
+/// Honor Retry-After without turning it into a persistent quota snapshot.
+pub(crate) fn mark_rate_limited(
+    state: &RuntimeState,
+    id: Uuid,
+    headers: &HeaderMap,
+    policy: &RetryPolicy,
+) {
+    let duration = headers
+        .get(header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.parse::<u64>().ok().map(Duration::from_secs).or_else(|| {
+                httpdate::parse_http_date(v)
+                    .ok()
+                    .and_then(|at| at.duration_since(std::time::SystemTime::now()).ok())
+            })
+        })
+        .unwrap_or_else(|| Duration::from_secs(policy.circuit_open_seconds.max(1)))
+        .clamp(Duration::from_secs(1), Duration::from_secs(24 * 3600));
+    if let Ok(mut health) = state.health.lock() {
+        let target = health.entry(id).or_default();
+        let now = Instant::now();
+        target.last_failure_at = Some(now);
+        target.consecutive_successes = 0;
+        target.recovering = true;
+        target.open_until = Some(target.open_until.unwrap_or(now).max(now + duration));
+    }
+    clear_affinity_for_target(state, id);
+    state.usage.log_diagnostic(
+        "warn",
+        format!(
+            "event=proxy.target.rate_limited target_id={id} retry_after_ms={}",
+            duration.as_millis()
+        ),
+    );
 }
 
 #[cfg(test)]

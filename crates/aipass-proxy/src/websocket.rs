@@ -131,6 +131,7 @@ pub(super) async fn handle_request(
                     break 'hold;
                 }
                 if !target.supports_websockets
+                    || target.upstream_kind != UpstreamKind::Standard
                     || target
                         .config
                         .effective_protocol(route.config.upstream_protocol)

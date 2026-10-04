@@ -466,6 +466,10 @@ struct VaultExportFile {
 struct ProviderRecordPlaintext {
     entry: ProviderEntry,
     secrets: BTreeMap<String, String>,
+    /// Agent-only extension data stays inside the encrypted sync record and is
+    /// deliberately absent from ProviderEntry/EntrySummary and secret pickers.
+    #[serde(default)]
+    runtime_extensions: BTreeMap<String, String>,
 }
 
 /// Short-lived input to the trusted agent's runtime credential snapshot.
@@ -926,6 +930,28 @@ impl Vault {
     }
 
     pub fn add_provider(&self, input: ProviderEntryInput) -> Result<Uuid, VaultError> {
+        self.add_provider_record(input, BTreeMap::new())
+    }
+
+    /// Create the provider and its credential bundle in one encrypted record.
+    /// A crash must not leave a routable subscription without its credentials.
+    pub fn add_provider_with_runtime_extension(
+        &self,
+        input: ProviderEntryInput,
+        key: &str,
+        value: &SecretString,
+    ) -> Result<Uuid, VaultError> {
+        self.add_provider_record(
+            input,
+            BTreeMap::from([(key.to_owned(), value.expose().to_owned())]),
+        )
+    }
+
+    fn add_provider_record(
+        &self,
+        input: ProviderEntryInput,
+        runtime_extensions: BTreeMap<String, String>,
+    ) -> Result<Uuid, VaultError> {
         let now = OffsetDateTime::now_utc();
         let id = Uuid::new_v4();
         let secret_id = Uuid::new_v4().to_string();
@@ -974,7 +1000,14 @@ impl Vault {
         };
         let mut secrets = BTreeMap::new();
         secrets.insert(secret_id, input.api_key);
-        self.write_provider_record(id, &ProviderRecordPlaintext { entry, secrets })?;
+        self.write_provider_record(
+            id,
+            &ProviderRecordPlaintext {
+                entry,
+                secrets,
+                runtime_extensions,
+            },
+        )?;
         self.audit("provider.create", Some(id), None)?;
         Ok(id)
     }
@@ -1250,7 +1283,14 @@ impl Vault {
         if let Some(api_key) = api_key {
             secrets.insert(secret_id, api_key);
         }
-        self.write_provider_record(id, &ProviderRecordPlaintext { entry, secrets })?;
+        self.write_provider_record(
+            id,
+            &ProviderRecordPlaintext {
+                entry,
+                secrets,
+                runtime_extensions: old.runtime_extensions,
+            },
+        )?;
         self.audit("provider.update", Some(id), None)?;
         Ok(())
     }
@@ -1307,6 +1347,35 @@ impl Vault {
         plaintext.entry.updated_at = OffsetDateTime::now_utc();
         self.write_provider_record(id, &plaintext)?;
         self.audit("provider.usage.update", Some(id), None)?;
+        Ok(())
+    }
+
+    pub fn provider_runtime_extension(
+        &self,
+        id: Uuid,
+        key: &str,
+    ) -> Result<Option<SecretString>, VaultError> {
+        let mut record = self.decrypt_provider_path(&self.record_path(id))?;
+        Ok(record.runtime_extensions.remove(key).map(SecretString::new))
+    }
+    pub fn set_provider_runtime_extension(
+        &self,
+        id: Uuid,
+        key: &str,
+        value: Option<&SecretString>,
+    ) -> Result<(), VaultError> {
+        let mut record = self.decrypt_provider_path(&self.record_path(id))?;
+        if let Some(mut old) = record.runtime_extensions.remove(key) {
+            old.zeroize();
+        }
+        if let Some(value) = value {
+            record
+                .runtime_extensions
+                .insert(key.to_owned(), value.expose().to_owned());
+        }
+        record.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &record)?;
+        self.audit("provider.runtime.update", Some(id), None)?;
         Ok(())
     }
 
@@ -2766,6 +2835,71 @@ mod tests {
             .get_provider_summary(manual_id)
             .unwrap()
             .websocket_warning
+            .is_none());
+    }
+
+    #[test]
+    fn subscription_bundle_is_in_the_initial_encrypted_provider_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::create(temp.path(), &SecretString::new("test password"))
+            .unwrap()
+            .vault;
+        let id = vault
+            .add_provider_with_runtime_extension(
+                input("subscription-marker"),
+                "account",
+                &SecretString::new("private-subscription-grant"),
+            )
+            .unwrap();
+        let record = vault.decrypt_provider_path(&vault.record_path(id)).unwrap();
+        assert_eq!(record.entry.created_at, record.entry.updated_at);
+        assert_eq!(
+            record.runtime_extensions["account"],
+            "private-subscription-grant"
+        );
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(vault.record_path(id)).unwrap())
+                .contains("private-subscription-grant")
+        );
+    }
+
+    #[test]
+    fn runtime_extensions_survive_provider_edits_and_never_enter_summaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .unwrap()
+        .vault;
+        let id = vault.add_provider(input("api-key")).unwrap();
+        vault
+            .set_provider_runtime_extension(
+                id,
+                "runtime",
+                Some(&SecretString::new("private-runtime-grant")),
+            )
+            .unwrap();
+        assert!(
+            !serde_json::to_string(&vault.get_provider_summary(id).unwrap())
+                .unwrap()
+                .contains("private-runtime-grant")
+        );
+        vault.update_provider(id, update_input(None)).unwrap();
+        assert_eq!(
+            vault
+                .provider_runtime_extension(id, "runtime")
+                .unwrap()
+                .unwrap()
+                .expose(),
+            "private-runtime-grant"
+        );
+        vault
+            .set_provider_runtime_extension(id, "runtime", None)
+            .unwrap();
+        assert!(vault
+            .provider_runtime_extension(id, "runtime")
+            .unwrap()
             .is_none());
     }
 

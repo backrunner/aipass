@@ -23,6 +23,7 @@
   import ProviderDetailPane from "./lib/components/providers/ProviderDetailPane.svelte";
   import ProviderListPane from "./lib/components/providers/ProviderListPane.svelte";
   import ProviderModal from "./lib/components/providers/ProviderModal.svelte";
+  import CommunityConnectDialog from "./lib/components/providers/CommunityConnectDialog.svelte";
   import OAuthConnectDialog from "./lib/components/providers/OAuthConnectDialog.svelte";
   import RouteListPane from "./lib/components/server/RouteListPane.svelte";
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
@@ -265,6 +266,7 @@
   let selectedId = "";
   let showForm = false;
   let providerSaving = false;
+  let showCommunityConnect = false;
   let showOAuthConnect = false;
   let formMode: FormMode = "add";
   let detailEditMode = false;
@@ -1335,7 +1337,7 @@
     officialAccountsBusy = true;
     clearError();
     try {
-      const results = await invokeTauri<OfficialAccountRefreshResult[]>("official_accounts_refresh", { providerIds: ["openai", "anthropic", "xai"] });
+      const results = await invokeTauri<OfficialAccountRefreshResult[]>("official_accounts_refresh", { providerIds: ["openai", "anthropic", "xai", "copilot"] });
       const importResults = await invokeTauri<OfficialAccountRefreshResult[]>("ccswitch_import");
       await loadEntries();
       const combined = [...(results ?? []), ...(importResults ?? [])];
@@ -3422,6 +3424,7 @@
       />
 
       <ProviderDetailPane
+        {invokeTauri}
         {selected}
         {showArchived}
         {showTrash}
@@ -3619,9 +3622,14 @@
     {invokeTauri}
     onClose={() => { showOAuthConnect = false; }}
     onConnected={onOAuthConnected}
+    onCommunity={() => { showOAuthConnect = false; showCommunityConnect = true; }}
     onAccountsChanged={onOAuthAccountsChanged}
     onImportCli={refreshOfficialAccounts}
   />
+{/if}
+
+{#if showCommunityConnect && showWorkspace && !showAuthScreen && !lockTransitioning}
+  <CommunityConnectDialog {invokeTauri} onClose={() => { showCommunityConnect = false; }} onConnected={async () => { await onOAuthAccountsChanged(); }} />
 {/if}
 
 {#if unlockTransitioning}

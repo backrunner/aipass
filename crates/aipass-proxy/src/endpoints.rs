@@ -37,9 +37,25 @@ pub(crate) async fn handle_models_request(
     for _round in 0..silent_retry_rounds(&route.config.retry) {
         let targets = ordered_route_targets(&state, &route, session_key.as_deref());
         let mut attempts = 0;
-        for target in targets {
+        for mut target in targets {
             if attempts >= route.config.retry.max_attempts.max(1) {
                 break;
+            }
+            if target.upstream_kind.is_copilot() {
+                if let Err(error) = copilot::resolve(
+                    &state,
+                    &mut target,
+                    None,
+                    route.config.inbound_protocol,
+                    None,
+                    route.config.retry.connect_timeout_ms,
+                )
+                .await
+                {
+                    last_error = Some(error);
+                    saw_other_failure = true;
+                    continue;
+                }
             }
             let Some(_recovery) = RecoveryPermit::acquire(&state, target.config.id) else {
                 continue;
@@ -49,7 +65,47 @@ pub(crate) async fn handle_models_request(
                 continue;
             };
             attempts += 1;
-            let client = match upstream_client(&state, route.config.retry.connect_timeout_ms) {
+            if target.upstream_kind == UpstreamKind::CommunitySubscription {
+                let backend = state
+                    .subscription_backend
+                    .read()
+                    .ok()
+                    .and_then(|v| v.clone());
+                let Some(backend) = backend else {
+                    last_error = Some("community runtime unavailable".into());
+                    saw_other_failure = true;
+                    continue;
+                };
+                match backend.models(target.clone()).await {
+                    Ok(mut response) => match collect_upstream_body(None, &mut response.body).await
+                    {
+                        Ok(payload) => {
+                            let payload =
+                                enrich_models_payload(payload, route.config.inbound_protocol);
+                            return Response::builder()
+                                .status(response.status)
+                                .header(header::CONTENT_TYPE, "application/json")
+                                .body(BodyExt::boxed_unsync(
+                                    Full::new(payload)
+                                        .map_err(|never| -> BoxError { match never {} }),
+                                ))
+                                .unwrap();
+                        }
+                        Err(error) => {
+                            last_error = Some(error);
+                            saw_other_failure = true;
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        last_error = Some(error);
+                        saw_other_failure = true;
+                        continue;
+                    }
+                }
+            }
+            let client = match target_client(&state, &target, route.config.retry.connect_timeout_ms)
+            {
                 Ok(client) => client,
                 Err(err) => {
                     last_error = Some(err);
@@ -57,16 +113,25 @@ pub(crate) async fn handle_models_request(
                     continue;
                 }
             };
-            let upstream_path = if target.config.auth_scheme == "azure_api_key" {
+            let upstream_path = if target.config.auth_scheme == "azure_api_key"
+                || target.upstream_kind.is_copilot()
+            {
                 "/models"
             } else {
                 "/v1/models"
             };
-            let url = match upstream_url_with_query(
-                &target.config.base_url,
-                upstream_path,
-                request_query.as_deref(),
-            ) {
+            let url = match if target.upstream_kind == UpstreamKind::CodexSubscription {
+                codex::models_url(&target.config.base_url, &incoming_headers)
+            } else if target.upstream_kind == UpstreamKind::GeminiNative {
+                gemini::models_url(&target.config.base_url, request_query.as_deref())
+            } else {
+                upstream_url_with_query(
+                    &target.config.base_url,
+                    upstream_path,
+                    request_query.as_deref(),
+                )
+                .map_err(|e| e.to_string())
+            } {
                 Ok(url) => url,
                 Err(err) => {
                     last_error = Some(err.to_string());
@@ -75,7 +140,7 @@ pub(crate) async fn handle_models_request(
                     continue;
                 }
             };
-            let headers = match build_upstream_headers(
+            let mut headers = match build_upstream_headers(
                 &incoming_headers,
                 &target,
                 target
@@ -90,6 +155,10 @@ pub(crate) async fn handle_models_request(
                     continue;
                 }
             };
+            if target.upstream_kind == UpstreamKind::CodexSubscription {
+                codex::headers(&mut headers, b"{}");
+                headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+            }
             let response = match client.get(url).headers(headers).send().await {
                 Ok(response) => response,
                 Err(err) => {
@@ -127,7 +196,11 @@ pub(crate) async fn handle_models_request(
                 continue;
             }
             let response_headers = response.headers().clone();
-            let mut source: UpstreamBodyStream = Box::pin(response.bytes_stream());
+            let mut source: UpstreamBodyStream = Box::pin(
+                response
+                    .bytes_stream()
+                    .map(|chunk| chunk.map_err(|error| -> BoxError { Box::new(error) })),
+            );
             let payload = match collect_upstream_body(None, &mut source).await {
                 Ok(payload) => payload,
                 Err(err) => {
@@ -143,6 +216,36 @@ pub(crate) async fn handle_models_request(
                 mark_failure(&state, target.config.id, &route.config.retry);
                 continue;
             }
+            let payload = if target.upstream_kind == UpstreamKind::CodexSubscription {
+                match codex::normalize_models(payload) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        last_error = Some(error);
+                        saw_other_failure = true;
+                        continue;
+                    }
+                }
+            } else if target.upstream_kind.is_copilot() {
+                match copilot::models(payload) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        last_error = Some(error);
+                        saw_other_failure = true;
+                        continue;
+                    }
+                }
+            } else if target.upstream_kind == UpstreamKind::GeminiNative {
+                match gemini::models(payload) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        last_error = Some(error);
+                        saw_other_failure = true;
+                        continue;
+                    }
+                }
+            } else {
+                payload
+            };
             let payload = enrich_models_payload(payload, route.config.inbound_protocol);
             let body = BodyExt::boxed_unsync(
                 Full::new(payload).map_err(|never| -> BoxError { match never {} }),

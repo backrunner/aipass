@@ -13,6 +13,16 @@
 //! - `usage`: SQLite usage store and record types
 //! - `util`: small shared helpers
 
+mod codex;
+mod copilot;
+mod gemini;
+mod provider;
+mod subscription;
+pub use provider::ProviderProfile;
+pub use subscription::{
+    subscription_history_call_ids, SubscriptionBackend, SubscriptionCodec, SubscriptionFuture,
+    SubscriptionResponse, SubscriptionStream,
+};
 mod concurrency;
 mod config;
 mod diagnostics;

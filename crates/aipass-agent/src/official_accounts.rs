@@ -13,13 +13,11 @@ use aipass_vault::{ProviderEntryInput, Vault};
 use base64::Engine as _;
 use serde_json::Value;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::process::Command;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-const CODEX_APP_SERVER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const USAGE_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const GROK_BILLING_ENDPOINT: &str =
     "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 /// ChatGPT/Codex OAuth access tokens are rejected by api.openai.com; they
@@ -37,7 +35,7 @@ type ClaudeUsage = (
     Option<String>,
 );
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct DiscoveredAccount {
     provider_id: &'static str,
     identity: Option<String>,
@@ -45,8 +43,23 @@ struct DiscoveredAccount {
     /// header required by the Codex OAuth backend.
     account_id: Option<String>,
     token: String,
+    native_credentials: Option<String>,
+    refresh_bundle: Option<crate::oauth::OAuthTokenBundle>,
     credential_expires_at: Option<String>,
     plan: Option<String>,
+}
+
+impl std::fmt::Debug for DiscoveredAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DiscoveredAccount([REDACTED])")
+    }
+}
+impl Drop for DiscoveredAccount {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.token.zeroize();
+        self.native_credentials.zeroize();
+    }
 }
 
 /// A discovered account plus its freshly fetched usage snapshot.
@@ -56,6 +69,157 @@ struct DiscoveredAccount {
 pub(crate) struct CollectedAccount {
     account: DiscoveredAccount,
     snapshot: Option<SubscriptionSnapshot>,
+}
+
+/// Refresh only accounts already admitted to the vault. A background sweep
+/// never imports a newly selected CLI identity or overwrites a concurrent login.
+pub(crate) fn refresh_registered_accounts(
+    state: &std::sync::Arc<crate::session::AgentState>,
+) -> crate::session::ServiceResult<()> {
+    use crate::session::{map_vault_error, with_vault, ServiceError};
+    let accounts = with_vault(state, false, |vault| {
+        let mut accounts = Vec::new();
+        for entry in vault.list_provider_summaries().map_err(map_vault_error)? {
+            if entry.provider_kind != ProviderKind::Official
+                || entry.credential_kind != CredentialKind::OAuth
+            {
+                continue;
+            }
+            let preferences = crate::provider_runtime::load(vault, entry.id)?;
+            if !preferences.quota_tracking {
+                continue;
+            }
+            if entry
+                .subscription
+                .as_ref()
+                .and_then(|s| OffsetDateTime::parse(&s.observed_at, &Rfc3339).ok())
+                .is_some_and(|at| {
+                    let age = (OffsetDateTime::now_utc() - at).whole_seconds();
+                    age >= 0 && age < i64::from(preferences.quota_refresh_seconds)
+                })
+            {
+                continue;
+            }
+            let provider_id = match entry.provider_id.as_deref() {
+                Some("openai" | "codex") => "openai",
+                Some("anthropic") => "anthropic",
+                Some("xai") => "xai",
+                Some("copilot") => "copilot",
+                _ => continue,
+            };
+            let Some(secret) = aipass_provider_registry::primary_secret_ref(&entry.secret_refs)
+            else {
+                continue;
+            };
+            let credentials = vault
+                .runtime_provider_credentials(entry.id, &secret.id)
+                .map_err(map_vault_error)?;
+            if credentials.secret.expose().starts_with("aipass:") {
+                continue;
+            }
+            let account_id = credentials
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("chatgpt-account-id"))
+                .map(|(_, v)| v.clone());
+            let native_expiry = if provider_id == "anthropic" {
+                vault
+                    .provider_runtime_extension(entry.id, "claude_native")
+                    .map_err(map_vault_error)?
+                    .and_then(|v| serde_json::from_str::<Value>(v.expose()).ok())
+                    .and_then(|v| find_timestamp(&v["claudeAiOauth"], &["expiresAt"]))
+            } else {
+                None
+            };
+            accounts.push((
+                entry.id,
+                vault.fingerprint_secret(credentials.secret.expose()),
+                DiscoveredAccount {
+                    native_credentials: None,
+                    provider_id,
+                    identity: entry.account_identity,
+                    account_id,
+                    token: credentials.secret.expose().to_owned(),
+                    refresh_bundle: None,
+                    credential_expires_at: native_expiry.or_else(|| {
+                        entry
+                            .subscription
+                            .as_ref()
+                            .and_then(|s| s.credential_expires_at.clone())
+                    }),
+                    plan: entry.subscription.as_ref().and_then(|s| s.plan.clone()),
+                },
+            ));
+        }
+        Ok(accounts)
+    })?;
+    let native_claude = if accounts
+        .iter()
+        .any(|(_, _, a)| a.provider_id == "anthropic")
+    {
+        discover_claude_accounts()
+    } else {
+        Vec::new()
+    };
+    for (id, generation, mut account) in accounts {
+        // Claude Code owns its rotating grant. Reconcile only a proven identity;
+        // a native account switch must never change a saved account's owner.
+        if account.provider_id == "anthropic" {
+            if let Some(native) = native_claude.iter().find(|native| {
+                native.token == account.token
+                    || account.identity.as_ref().is_some_and(|identity| {
+                        !identity.starts_with("account:")
+                            && native.identity.as_ref() == Some(identity)
+                            && native
+                                .credential_expires_at
+                                .as_deref()
+                                .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+                                > account
+                                    .credential_expires_at
+                                    .as_deref()
+                                    .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+                    })
+            }) {
+                account = native.clone();
+            }
+        }
+        let snapshot = refresh_snapshot(&account);
+        with_vault(state, false, |vault| {
+            let Ok(current) = vault.get_provider_summary(id) else {
+                return Ok(());
+            };
+            let secret = primary_secret_ref(&current).map_err(ServiceError::internal)?;
+            let credentials = vault
+                .runtime_provider_credentials(id, &secret.id)
+                .map_err(map_vault_error)?;
+            if vault.fingerprint_secret(credentials.secret.expose()) != generation {
+                return Ok(());
+            }
+            if credentials.secret.expose() != account.token {
+                refresh_account_secret(vault, id, &account.token)
+                    .map_err(ServiceError::internal)?;
+            }
+            if let Some(value) = account.native_credentials.as_ref() {
+                vault
+                    .set_provider_runtime_extension(
+                        id,
+                        "claude_native",
+                        Some(&aipass_crypto::SecretString::new(value)),
+                    )
+                    .map_err(map_vault_error)?;
+            }
+            vault
+                .update_provider_subscription(id, merge_snapshot(current.subscription, snapshot))
+                .map_err(map_vault_error)?;
+            state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy lock poisoned")))?
+                .refresh_provider_credentials(vault, id)?;
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 
 /// Discover local official CLI credentials and fetch their provider-owned
@@ -70,6 +234,9 @@ pub(crate) fn collect_official_accounts(provider_ids: &[String]) -> Vec<Collecte
     }
     if requested("anthropic") {
         discovered.extend(discover_claude_accounts());
+    }
+    if requested("copilot") {
+        discovered.extend(discover_copilot_accounts());
     }
     if requested("xai") {
         discovered.extend(discover_grok_accounts());
@@ -135,6 +302,8 @@ pub(crate) fn persist_login_account(
     credential_expires_at: Option<String>,
 ) -> anyhow::Result<uuid::Uuid> {
     let account = DiscoveredAccount {
+        native_credentials: None,
+        refresh_bundle: None,
         provider_id,
         identity,
         account_id,
@@ -240,6 +409,11 @@ fn persist_account(
                 AuthScheme::Bearer,
                 "https://api.anthropic.com",
             ),
+            "copilot" => (
+                InterfaceType::OpenAiCompatible,
+                AuthScheme::Bearer,
+                "https://api.githubcopilot.com",
+            ),
             "xai" => (
                 InterfaceType::OpenAiCompatible,
                 AuthScheme::Bearer,
@@ -299,6 +473,20 @@ fn persist_account(
         }
         new_id
     };
+    if account.provider_id == "copilot" {
+        vault.set_provider_runtime_extension(
+            entry_id,
+            "copilot_auth_v1",
+            account
+                .native_credentials
+                .as_ref()
+                .map(aipass_crypto::SecretString::new)
+                .as_ref(),
+        )?;
+    }
+    if let Some(bundle) = &account.refresh_bundle {
+        persist_imported_bundle(vault, entry_id, &account, bundle)?;
+    }
     let refresh_error = snapshot.as_ref().and_then(|item| item.error.clone());
     Ok((
         OfficialAccountRefreshResult {
@@ -311,6 +499,95 @@ fn persist_account(
         },
         Some(entry_id),
     ))
+}
+
+fn persist_imported_bundle(
+    vault: &Vault,
+    entry_id: uuid::Uuid,
+    account: &DiscoveredAccount,
+    bundle: &crate::oauth::OAuthTokenBundle,
+) -> anyhow::Result<()> {
+    if account.provider_id == "anthropic" {
+        if let Some(previous) = vault.provider_runtime_extension(entry_id, "claude_native")? {
+            if let Ok(previous) = serde_json::from_str::<Value>(previous.expose()) {
+                let expires = previous["claudeAiOauth"]["expiresAt"].as_i64().unwrap_or(0);
+                let incoming = account
+                    .credential_expires_at
+                    .as_deref()
+                    .and_then(|v| OffsetDateTime::parse(v, &Rfc3339).ok())
+                    .map(|t| t.unix_timestamp() * 1000)
+                    .unwrap_or(0);
+                if expires > incoming {
+                    if let Some(token) = previous["claudeAiOauth"]["accessToken"].as_str() {
+                        refresh_account_secret(vault, entry_id, token)?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        if let Some(value) = account.native_credentials.as_ref() {
+            vault.set_provider_runtime_extension(
+                entry_id,
+                "claude_native",
+                Some(&aipass_crypto::SecretString::new(value)),
+            )?;
+        }
+        return Ok(());
+    }
+    use aipass_provider_registry::OAuthProvider;
+    let provider = match account.provider_id {
+        "openai" => OAuthProvider::Codex,
+        "xai" => OAuthProvider::Grok,
+        _ => return Ok(()),
+    };
+    let now = crate::oauth::now_ms();
+    let existing = vault
+        .list_oauth_accounts(Some(provider))?
+        .into_iter()
+        .find(|a| a.entry_id == Some(entry_id));
+    let expires_at_ms = account
+        .credential_expires_at
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .map(|t| t.unix_timestamp().saturating_mul(1000))
+        .unwrap_or(now);
+    if let Some(current) = existing.as_ref() {
+        if current.expires_at_ms > expires_at_ms && current.access_token != account.token {
+            // Collection raced with a managed refresh. Restore the newer mirror.
+            refresh_account_secret(vault, entry_id, &current.access_token)?;
+            return Ok(());
+        }
+        if current.access_token == account.token && current.refresh_token == bundle.refresh_token {
+            return Ok(());
+        }
+    }
+    let record = aipass_vault::ManagedOAuthAccount {
+        id: existing
+            .as_ref()
+            .map(|a| a.id)
+            .unwrap_or_else(uuid::Uuid::new_v4),
+        provider,
+        account_identity: account.identity.clone(),
+        chatgpt_account_id: account.account_id.clone(),
+        access_token: bundle.access_token.clone(),
+        refresh_token: bundle.refresh_token.clone(),
+        id_token: bundle.id_token.clone(),
+        expires_at_ms,
+        last_refresh_ms: now,
+        entry_id: Some(entry_id),
+        is_default: existing.as_ref().is_some_and(|a| a.is_default),
+        requires_reauth: false,
+        authenticated_at: existing
+            .as_ref()
+            .map(|a| a.authenticated_at)
+            .unwrap_or_else(OffsetDateTime::now_utc),
+    };
+    if existing.is_some() {
+        vault.update_oauth_account(record)?;
+    } else {
+        vault.add_oauth_account(record)?;
+    }
+    Ok(())
 }
 
 /// Find the single vault entry an identity-less rotated token must belong to.
@@ -381,7 +658,7 @@ fn refresh_snapshot(account: &DiscoveredAccount) -> Option<SubscriptionSnapshot>
     };
 
     match account.provider_id {
-        "openai" => match codex_usage() {
+        "openai" => match codex_usage(&account.token, account.account_id.as_deref()) {
             Ok((windows, credits, plan)) => {
                 snapshot.windows = windows;
                 snapshot.credits_remaining = credits;
@@ -397,6 +674,14 @@ fn refresh_snapshot(account: &DiscoveredAccount) -> Option<SubscriptionSnapshot>
                 snapshot.credits_currency = currency;
                 snapshot.plan = plan.or(snapshot.plan);
                 snapshot.status = Some("active".to_string());
+            }
+            Err(error) => snapshot.error = Some(error.to_string()),
+        },
+        "copilot" => match copilot_usage(&account.token) {
+            Ok((windows, plan)) => {
+                snapshot.windows = windows;
+                snapshot.plan = plan;
+                snapshot.status = Some("active".into());
             }
             Err(error) => snapshot.error = Some(error.to_string()),
         },
@@ -446,104 +731,155 @@ fn merge_snapshot(
     Some(current)
 }
 
-fn codex_usage() -> anyhow::Result<(Vec<SubscriptionWindow>, Option<String>, Option<String>)> {
-    let mut child = Command::new("codex")
-        .args(["app-server", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    // Always reap the app-server, including on timeout and parse errors.
-    let result = read_codex_usage(&mut child);
-    let _ = child.kill();
-    let _ = child.wait();
-    result
+fn copilot_usage(token: &str) -> anyhow::Result<(Vec<SubscriptionWindow>, Option<String>)> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(USAGE_HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let response = client
+        .get("https://api.github.com/copilot_internal/user")
+        .header("authorization", format!("token {token}"))
+        .header("accept", "application/json")
+        .header("user-agent", "AIPass")
+        .send()?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "Copilot usage endpoint returned HTTP {}",
+        response.status()
+    );
+    let value = crate::oauth::read_json_response(response)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(parse_copilot_usage(&value))
+}
+fn parse_copilot_usage(value: &Value) -> (Vec<SubscriptionWindow>, Option<String>) {
+    let resets = value["quota_reset_date_utc"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            value["quota_reset_date"]
+                .as_str()
+                .map(|v| format!("{v}T00:00:00Z"))
+        });
+    let mut windows = Vec::new();
+    for (id, label) in [
+        ("chat", "Chat requests"),
+        ("completions", "Completions"),
+        ("premium_interactions", "Premium requests"),
+    ] {
+        let w = &value["quota_snapshots"][id];
+        if w["unlimited"] == true {
+            windows.push(SubscriptionWindow {
+                id: format!("copilot_{id}"),
+                label: format!("{label} (unlimited)"),
+                used_percent: None,
+                resets_at: resets.clone(),
+                window_minutes: None,
+                source: Some("copilot-account-usage".into()),
+            });
+            continue;
+        }
+        if w["has_quota"] != true {
+            continue;
+        }
+        let Some(total) = w["entitlement"]
+            .as_f64()
+            .filter(|n| n.is_finite() && *n > 0.)
+        else {
+            continue;
+        };
+        let Some(remaining) = w["quota_remaining"].as_f64().filter(|n| n.is_finite()) else {
+            continue;
+        };
+        windows.push(SubscriptionWindow {
+            id: format!("copilot_{id}"),
+            label: label.into(),
+            used_percent: Some((100. * (total - remaining) / total).clamp(0., 100.)),
+            resets_at: resets.clone(),
+            window_minutes: Some(30 * 24 * 60),
+            source: Some("copilot-account-usage".into()),
+        });
+    }
+    (windows, value["copilot_plan"].as_str().map(str::to_owned))
 }
 
-fn read_codex_usage(
-    child: &mut std::process::Child,
+/// Query the exact token/workspace being imported. Asking the ambient Codex
+/// process would use whichever account its native credential file holds now.
+fn codex_usage(
+    token: &str,
+    account_id: Option<&str>,
 ) -> anyhow::Result<(Vec<SubscriptionWindow>, Option<String>, Option<String>)> {
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("codex app-server stdin unavailable"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("codex app-server stdout unavailable"))?;
-    for request in [
-        serde_json::json!({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "aipass", "version": env!("CARGO_PKG_VERSION")}}}),
-        serde_json::json!({"method": "initialized", "params": {}}),
-        serde_json::json!({"id": 2, "method": "account/read", "params": {"refreshToken": false}}),
-        serde_json::json!({"id": 3, "method": "account/rateLimits/read", "params": null}),
-    ] {
-        writeln!(stdin, "{request}")?;
-    }
-    stdin.flush()?;
-    drop(stdin);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(USAGE_HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    codex_usage_at(
+        &client,
+        "https://chatgpt.com/backend-api/wham/usage",
+        token,
+        account_id,
+    )
+}
 
-    let (lines_tx, lines_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if lines_tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    let mut account_response = None;
-    let mut limits_response = None;
-    while account_response.is_none() || limits_response.is_none() {
-        let line = lines_rx
-            .recv_timeout(CODEX_APP_SERVER_TIMEOUT)
-            .map_err(|error| anyhow::anyhow!("Codex app-server timed out: {error}"))??;
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        match value.get("id").and_then(Value::as_i64) {
-            Some(2) => account_response = Some(value),
-            Some(3) => limits_response = Some(value),
-            _ => {}
-        }
+fn codex_usage_at(
+    client: &reqwest::blocking::Client,
+    endpoint: &str,
+    token: &str,
+    account_id: Option<&str>,
+) -> anyhow::Result<(Vec<SubscriptionWindow>, Option<String>, Option<String>)> {
+    let mut request = client.get(endpoint).bearer_auth(token);
+    if let Some(account_id) = account_id {
+        request = request.header("chatgpt-account-id", account_id);
     }
-    let account = account_response
-        .and_then(|value| value.get("result").cloned())
-        .unwrap_or_default();
-    let limits = limits_response
-        .and_then(|value| value.get("result").cloned())
-        .unwrap_or_default();
-    let account_data = account.get("account").unwrap_or(&account);
-    let plan = find_string(account_data, &["planType", "plan_type"]);
-    let limit_data = limits.get("rateLimits").unwrap_or(&limits);
+    let response = request.send()?;
+    if !response.status().is_success() {
+        anyhow::bail!("Codex usage endpoint returned HTTP {}", response.status());
+    }
+    let value: Value = crate::oauth::read_json_response(response)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    parse_codex_usage(&value)
+}
+
+fn parse_codex_usage(
+    value: &Value,
+) -> anyhow::Result<(Vec<SubscriptionWindow>, Option<String>, Option<String>)> {
     let mut windows = Vec::new();
-    for (key, label) in [("primary", "primary"), ("secondary", "secondary")] {
-        let Some(window) = limit_data.get(key).and_then(Value::as_object) else {
+    for (key, id) in [
+        ("primary_window", "primary"),
+        ("secondary_window", "secondary"),
+    ] {
+        let Some(window) = value.get("rate_limit").and_then(|limit| limit.get(key)) else {
             continue;
         };
-        let used_percent = window.get("usedPercent").and_then(Value::as_f64);
+        let used_percent = window.get("used_percent").and_then(number_value);
         let resets_at = window
-            .get("resetsAt")
+            .get("reset_at")
             .and_then(Value::as_i64)
             .and_then(unix_timestamp);
-        let window_minutes = window.get("windowDurationMins").and_then(Value::as_u64);
+        let window_minutes = window
+            .get("limit_window_seconds")
+            .and_then(Value::as_u64)
+            .map(|seconds| seconds / 60);
         if used_percent.is_some() || resets_at.is_some() {
             windows.push(SubscriptionWindow {
-                id: key.to_string(),
-                label: label.to_string(),
+                id: id.into(),
+                label: id.into(),
                 used_percent,
                 resets_at,
                 window_minutes,
-                source: Some("codex-app-server".to_string()),
+                source: Some("codex-account-usage".into()),
             });
         }
     }
-    let credits = limit_data
-        .get("credits")
-        .and_then(|value| value.get("balance"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let credits = value
+        .pointer("/credits/balance")
+        .and_then(|value| match value {
+            Value::String(value) => Some(value.clone()),
+            Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        });
+    let plan = find_string(value, &["plan_type"]);
     if windows.is_empty() && credits.is_none() && plan.is_none() {
-        anyhow::bail!("Codex app-server did not return account usage")
+        anyhow::bail!("Codex usage endpoint did not return account usage");
     }
     Ok((windows, credits, plan))
 }
@@ -585,7 +921,16 @@ fn discover_codex_accounts() -> Vec<DiscoveredAccount> {
     if !oauth {
         return Vec::new();
     }
+    let refresh_bundle = discovered_bundle(
+        &value,
+        &token,
+        identity.clone(),
+        account_id.clone(),
+        expiry.as_deref(),
+    );
     vec![DiscoveredAccount {
+        native_credentials: None,
+        refresh_bundle,
         provider_id: "openai",
         identity,
         account_id,
@@ -593,6 +938,27 @@ fn discover_codex_accounts() -> Vec<DiscoveredAccount> {
         credential_expires_at: expiry,
         plan: None,
     }]
+}
+
+fn discovered_bundle(
+    value: &Value,
+    access_token: &str,
+    identity: Option<String>,
+    account_id: Option<String>,
+    expiry: Option<&str>,
+) -> Option<crate::oauth::OAuthTokenBundle> {
+    let refresh_token = find_string(value, &["refresh_token", "refreshToken"])?;
+    let expires = expiry
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())?
+        .unix_timestamp();
+    Some(crate::oauth::OAuthTokenBundle {
+        access_token: access_token.to_owned(),
+        refresh_token,
+        id_token: find_string(value, &["id_token", "idToken"]),
+        chatgpt_account_id: account_id,
+        account_identity: identity,
+        expires_in: (expires - OffsetDateTime::now_utc().unix_timestamp()).max(1),
+    })
 }
 
 /// Read the `exp` claim from a JWT without verifying the signature. Used only
@@ -620,11 +986,29 @@ fn discover_claude_accounts() -> Vec<DiscoveredAccount> {
     let Some(token) = find_string(oauth, &["accessToken", "access_token"]) else {
         return Vec::new();
     };
+    let profile = read_json(&home().join(".claude.json")).ok();
     let identity = find_string(&value, &["email", "emailAddress", "email_address"])
-        .or_else(|| find_string(oauth, &["email", "emailAddress", "email_address"]));
+        .or_else(|| find_string(oauth, &["email", "emailAddress", "email_address"]))
+        .or_else(|| {
+            profile
+                .as_ref()
+                .and_then(|p| p.get("oauthAccount"))
+                .and_then(|p| find_string(p, &["emailAddress", "accountUuid"]))
+        });
     let expiry = find_timestamp(oauth, &["expiresAt", "expires_at"]);
     let plan = find_string(oauth, &["subscriptionType", "rateLimitTier"]);
     vec![DiscoveredAccount {
+        native_credentials: Some(value.to_string()),
+        refresh_bundle: find_string(oauth, &["refreshToken", "refresh_token"]).map(
+            |refresh_token| crate::oauth::OAuthTokenBundle {
+                access_token: token.clone(),
+                refresh_token,
+                id_token: None,
+                expires_in: 0,
+                account_identity: identity.clone(),
+                chatgpt_account_id: None,
+            },
+        ),
         provider_id: "anthropic",
         identity,
         account_id: None,
@@ -634,26 +1018,155 @@ fn discover_claude_accounts() -> Vec<DiscoveredAccount> {
     }]
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn read_keychain(service: &str) -> anyhow::Result<Value> {
+    let bytes = read_keychain_bytes(service, None)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+#[cfg(target_os = "macos")]
+fn read_keychain_bytes(
+    service: &str,
+    account: Option<&str>,
+) -> anyhow::Result<zeroize::Zeroizing<Vec<u8>>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut command = Command::new("security");
+    command.args(["find-generic-password", "-s", service, "-w"]);
+    if let Some(account) = account {
+        command.args(["-a", account]);
+    }
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("missing credential pipe"))?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = zeroize::Zeroizing::new(Vec::new());
+        stdout
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let bytes = reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("credential read failed"))??;
+    anyhow::ensure!(
+        status.is_some_and(|s| s.success()) && bytes.len() <= 1024 * 1024,
+        "credential unavailable"
+    );
+    Ok(bytes)
+}
 fn read_claude_credentials() -> anyhow::Result<Value> {
     #[cfg(target_os = "macos")]
-    {
-        let output = Command::new("security")
-            .args([
-                "find-generic-password",
-                "-s",
-                "Claude Code-credentials",
-                "-w",
-            ])
-            .output();
-        if let Ok(output) = output {
-            if output.status.success() {
-                if let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) {
-                    return Ok(value);
-                }
-            }
-        }
+    if let Ok(value) = read_keychain("Claude Code-credentials") {
+        return Ok(value);
     }
     read_json(&home().join(".claude").join(".credentials.json"))
+}
+
+fn discover_copilot_accounts() -> Vec<DiscoveredAccount> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".config"));
+    let mut accounts = Vec::new();
+    for name in ["apps.json", "hosts.json"] {
+        let Ok(value) = read_json(&config.join("github-copilot").join(name)) else {
+            continue;
+        };
+        for (host, entry) in value.as_object().into_iter().flatten() {
+            if host != "github.com" && !host.starts_with("github.com:") {
+                continue;
+            }
+            let Some(token) = entry
+                .get("oauth_token")
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+            else {
+                continue;
+            };
+            accounts.push(DiscoveredAccount {
+                native_credentials: None,
+                provider_id: "copilot",
+                identity: entry.get("user").and_then(Value::as_str).map(str::to_owned),
+                account_id: None,
+                token: token.to_owned(),
+                refresh_bundle: None,
+                credential_expires_at: None,
+                plan: None,
+            });
+        }
+    }
+    let cli_home = std::env::var_os("COPILOT_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".copilot"));
+    if let Ok(raw) = std::fs::read_to_string(cli_home.join("config.json")) {
+        let raw = zeroize::Zeroizing::new(raw);
+        if let Ok(config) = json5::from_str::<Value>(&raw) {
+            accounts.extend(copilot_cli_accounts_from(&config, |key| {
+                #[cfg(target_os = "macos")]
+                if let Ok(bytes) = read_keychain_bytes("copilot-cli", Some(key)) {
+                    return String::from_utf8(bytes.to_vec())
+                        .ok()
+                        .map(|v| v.trim().to_owned());
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = key;
+                None
+            }));
+        }
+    }
+    accounts
+}
+
+fn copilot_cli_accounts_from(
+    config: &Value,
+    mut secret: impl FnMut(&str) -> Option<String>,
+) -> Vec<DiscoveredAccount> {
+    let mut seen = HashSet::new();
+    config
+        .get("lastLoggedInUser")
+        .into_iter()
+        .chain(config["loggedInUsers"].as_array().into_iter().flatten())
+        .filter_map(|user| {
+            let login = user["login"].as_str().filter(|v| !v.is_empty())?;
+            let host = user["host"].as_str().unwrap_or("");
+            if (!host.is_empty() && host != "https://github.com") || !seen.insert(login.to_owned())
+            {
+                return None;
+            }
+            let key = format!("https://github.com:{login}");
+            let token = config["copilotTokens"][&key]
+                .as_str()
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .or_else(|| secret(&key))?;
+            Some(DiscoveredAccount {
+                provider_id: "copilot",
+                identity: Some(login.to_owned()),
+                account_id: None,
+                token,
+                native_credentials: Some(r#"{"client":"cli"}"#.into()),
+                refresh_bundle: None,
+                credential_expires_at: None,
+                plan: None,
+            })
+        })
+        .collect()
 }
 
 fn discover_grok_accounts() -> Vec<DiscoveredAccount> {
@@ -674,7 +1187,11 @@ fn grok_accounts_from(value: &Value) -> Vec<DiscoveredAccount> {
             let token = find_string(entry, &["key", "access_token", "accessToken"])?;
             let identity = find_string(entry, &["email", "user_id", "userId", "principal_id"]);
             let expiry = find_timestamp(entry, &["expires_at", "expiresAt"]);
+            let refresh_bundle =
+                discovered_bundle(entry, &token, identity.clone(), None, expiry.as_deref());
             Some(DiscoveredAccount {
+                native_credentials: None,
+                refresh_bundle,
                 provider_id: "xai",
                 identity,
                 account_id: None,
@@ -772,7 +1289,7 @@ fn number_value(value: &Value) -> Option<f64> {
 
 fn grok_usage(token: &str) -> anyhow::Result<Vec<SubscriptionWindow>> {
     let response = reqwest::blocking::Client::builder()
-        .timeout(CODEX_APP_SERVER_TIMEOUT)
+        .timeout(USAGE_HTTP_TIMEOUT)
         .build()?
         .post(GROK_BILLING_ENDPOINT)
         .bearer_auth(token)
@@ -941,7 +1458,13 @@ fn parse_grok_billing(bytes: &[u8], now: i64) -> Option<(f64, Option<i64>)> {
 }
 
 fn read_json(path: &Path) -> anyhow::Result<Value> {
-    Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+    use std::io::Read;
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    std::fs::File::open(path)?
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() <= 1024 * 1024, "credential file exceeds limit");
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 fn find_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -1016,6 +1539,102 @@ mod tests {
     use super::*;
     use aipass_crypto::SecretString;
 
+    #[test]
+    fn copilot_usage_preserves_unlimited_and_separate_allowances() {
+        let (windows, plan) = parse_copilot_usage(
+            &serde_json::json!({"copilot_plan":"individual_pro","quota_reset_date":"2026-11-01","quota_snapshots":{"chat":{"unlimited":true},"completions":{"has_quota":true,"entitlement":2000,"quota_remaining":0},"premium_interactions":{"has_quota":true,"entitlement":300,"quota_remaining":75}}}),
+        );
+        assert_eq!(plan.as_deref(), Some("individual_pro"));
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].used_percent, None);
+        assert_eq!(windows[1].used_percent, Some(100.));
+        assert_eq!(windows[2].used_percent, Some(75.));
+        assert_eq!(
+            windows[2].resets_at.as_deref(),
+            Some("2026-11-01T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn copilot_cli_import_uses_matching_native_account_and_persists_client_kind() {
+        let config = serde_json::json!({"lastLoggedInUser":{"login":"alice","host":"https://github.com"},"loggedInUsers":[{"login":"alice"},{"login":"bob"},{"login":"enterprise","host":"https://company.example"}],"copilotTokens":{"https://github.com:alice":"synthetic-cli-token"}});
+        let accounts = copilot_cli_accounts_from(&config, |key| {
+            assert_eq!(key, "https://github.com:bob");
+            Some("synthetic-keychain-token".into())
+        });
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].identity.as_deref(), Some("alice"));
+        assert_eq!(accounts[1].token, "synthetic-keychain-token");
+        let directory = tempfile::tempdir().unwrap();
+        let vault = Vault::create(
+            directory.path(),
+            &aipass_crypto::SecretString::new("fixture password"),
+        )
+        .unwrap()
+        .vault;
+        let (_, id) = persist_account(
+            &vault,
+            &mut Vec::new(),
+            &mut HashSet::new(),
+            CollectedAccount {
+                account: accounts[0].clone(),
+                snapshot: None,
+            },
+        )
+        .unwrap();
+        let raw = vault
+            .provider_runtime_extension(id.unwrap(), "copilot_auth_v1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(raw.expose()).unwrap()["client"],
+            "cli"
+        );
+        assert!(
+            !serde_json::to_string(&vault.get_provider_summary(id.unwrap()).unwrap())
+                .unwrap()
+                .contains("synthetic-cli-token")
+        );
+    }
+
+    #[test]
+    fn codex_usage_is_bound_to_the_requested_workspace() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                bytes.push(byte[0]);
+            }
+            let headers = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+            assert!(headers.contains("authorization: bearer fake-workspace-token"));
+            assert!(headers.contains("chatgpt-account-id: workspace-b"));
+            let body = serde_json::json!({"plan_type":"team", "rate_limit":{"primary_window":{"used_percent":42.5, "limit_window_seconds":18000, "reset_at":1791000000}}, "credits":{"balance":0}}).to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap();
+        let (windows, credits, plan) = codex_usage_at(
+            &client,
+            &format!("http://{addr}/usage"),
+            "fake-workspace-token",
+            Some("workspace-b"),
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(plan.as_deref(), Some("team"));
+        assert_eq!(credits.as_deref(), Some("0"));
+        assert_eq!(windows[0].used_percent, Some(42.5));
+        assert_eq!(windows[0].window_minutes, Some(300));
+        assert!(parse_codex_usage(&serde_json::json!({"error":"not usage"})).is_err());
+    }
+
     fn test_vault(temp: &tempfile::TempDir) -> Vault {
         Vault::create(
             temp.path(),
@@ -1028,6 +1647,8 @@ mod tests {
     fn identity_less_account(token: &str) -> CollectedAccount {
         CollectedAccount {
             account: DiscoveredAccount {
+                native_credentials: None,
+                refresh_bundle: None,
                 provider_id: "anthropic",
                 identity: None,
                 account_id: None,
@@ -1112,6 +1733,8 @@ mod tests {
     #[test]
     fn subscription_snapshot_is_marked_with_automatic_source() {
         let account = DiscoveredAccount {
+            native_credentials: None,
+            refresh_bundle: None,
             provider_id: "xai",
             identity: Some("user@example.test".into()),
             account_id: None,
@@ -1176,6 +1799,8 @@ mod tests {
         let vault = test_vault(&temp);
         let account = CollectedAccount {
             account: DiscoveredAccount {
+                native_credentials: None,
+                refresh_bundle: None,
                 provider_id: "openai",
                 identity: Some("user@example.test".into()),
                 account_id: Some("acct-123".into()),

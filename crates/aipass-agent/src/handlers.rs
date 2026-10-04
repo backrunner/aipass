@@ -33,6 +33,112 @@ fn dispatch_request(
     request: AgentRequest,
 ) -> ServiceResult<AgentResponse> {
     match request {
+        AgentRequest::CommunityAccountRead { entry_id, marker } => {
+            with_vault(state, false, |vault| {
+                crate::community::read(vault, entry_id, marker.expose())
+            })
+            .map(AgentResponse::success)
+        }
+        AgentRequest::CommunityAccountWrite {
+            entry_id,
+            marker,
+            revision,
+            bundle,
+        } => with_vault(state, false, |vault| {
+            crate::community::write(vault, entry_id, marker.expose(), revision, bundle.expose())
+        })
+        .map(|()| AgentResponse::empty()),
+        AgentRequest::CommunityRefresh { entry_id } => {
+            crate::community::refresh(state, entry_id).map(AgentResponse::success)
+        }
+        request @ (AgentRequest::CommunityCatalog
+        | AgentRequest::CommunityLoginStart { .. }
+        | AgentRequest::CommunityLoginPoll { .. }
+        | AgentRequest::CommunityLoginCode { .. }
+        | AgentRequest::CommunityLoginCancel { .. }) => {
+            let (bridge, proxy) = with_vault(state, false, |vault| {
+                let mut proxy = state
+                    .proxy
+                    .lock()
+                    .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy unavailable")))?;
+                Ok((
+                    proxy.community_bridge(),
+                    proxy.load_config(vault)?.upstream_proxy,
+                ))
+            })?;
+            let error = |e| ServiceError::new(AgentErrorCode::ValidationFailed, e);
+            match request {
+                AgentRequest::CommunityCatalog => {
+                    bridge.catalog().map(AgentResponse::success).map_err(error)
+                }
+                AgentRequest::CommunityLoginStart { input } => bridge
+                    .login_start(state, input, proxy)
+                    .map(AgentResponse::success)
+                    .map_err(error),
+                AgentRequest::CommunityLoginPoll { ticket } => bridge
+                    .login_poll(ticket)
+                    .map(AgentResponse::success)
+                    .map_err(error),
+                AgentRequest::CommunityLoginCode { ticket, code } => bridge
+                    .login_code(ticket, code.expose())
+                    .map(|()| AgentResponse::empty())
+                    .map_err(error),
+                AgentRequest::CommunityLoginCancel { ticket } => bridge
+                    .login_cancel(ticket)
+                    .map(|()| AgentResponse::empty())
+                    .map_err(error),
+                _ => unreachable!(),
+            }
+        }
+        AgentRequest::ClaudeNativeRead {
+            entry_id,
+            access_token,
+        } => with_vault(state, false, |vault| {
+            crate::claude_bridge::validate_account(vault, entry_id, access_token.expose())?;
+            let grant = vault
+                .provider_runtime_extension(entry_id, "claude_native")
+                .map_err(map_vault_error)?;
+            Ok(AgentResponse::success(
+                grant.map(|v| SensitiveString::new(v.expose())),
+            ))
+        }),
+        AgentRequest::ClaudeNativeWrite {
+            entry_id,
+            previous_token,
+            previous_grant_hash,
+            credentials,
+        } => with_vault(state, false, |vault| {
+            crate::claude_bridge::persist_native_account(
+                vault,
+                entry_id,
+                previous_token.expose(),
+                previous_grant_hash,
+                credentials.expose(),
+            )?;
+            state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy lock poisoned")))?
+                .refresh_provider_credentials(vault, entry_id)?;
+            Ok(AgentResponse::empty())
+        }),
+        AgentRequest::ClaudeBridgeMcp {
+            capability,
+            request,
+        } => {
+            if session_status(state)?.locked {
+                return Err(ServiceError::new(AgentErrorCode::Locked, "vault is locked"));
+            }
+            let bridge = state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy lock poisoned")))?
+                .claude_bridge();
+            bridge
+                .mcp(capability.expose(), request)
+                .map(AgentResponse::success)
+                .map_err(|message| ServiceError::new(AgentErrorCode::PermissionDenied, message))
+        }
         AgentRequest::ControlPanelStatus => {
             state.control_panel.status().map(AgentResponse::success)
         }
@@ -534,6 +640,27 @@ fn dispatch_request(
             vault.search(&query).map_err(map_vault_error)
         })
         .map(AgentResponse::success),
+        AgentRequest::ProviderRuntimeGet { id } => with_vault(state, true, |vault| {
+            Ok(AgentResponse::success(crate::provider_runtime::view(
+                crate::provider_runtime::load(vault, id)?,
+            )))
+        }),
+        AgentRequest::ProviderRuntimeSet { id, options } => with_vault(state, true, |vault| {
+            let view = crate::provider_runtime::save(vault, id, options)?;
+            state
+                .proxy
+                .lock()
+                .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy unavailable")))?
+                .refresh_provider_credentials(vault, id)?;
+            Ok(AgentResponse::success(view))
+        }),
+        AgentRequest::ProviderRuntimeProbe { id } => {
+            crate::provider_runtime::probe(state, id).map(AgentResponse::success)
+        }
+        AgentRequest::ProviderWebhookTest { id, webhook_id } => {
+            crate::provider_runtime::test_webhook(state, id, webhook_id)
+                .map(|_| AgentResponse::empty())
+        }
         AgentRequest::ProviderGet { id } => with_vault(state, true, |vault| {
             vault.get_provider_summary(id).map_err(map_vault_error)
         })

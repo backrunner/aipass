@@ -1,0 +1,1953 @@
+[
+  {
+    "uid": "swe-2",
+    "label": "SWE-2",
+    "aliases": [
+      "swe"
+    ],
+    "models": [
+      {
+        "id": "swe-2-high",
+        "name": "SWE-2 High",
+        "context": 262000,
+        "output": 128000
+      },
+      {
+        "id": "swe-2-medium",
+        "name": "SWE-2 Medium",
+        "context": 262000,
+        "output": 128000
+      },
+      {
+        "id": "swe-2-max",
+        "name": "SWE-2 Max",
+        "context": 262000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "swe-1.7-lightning",
+    "label": "SWE-1.7 Lightning",
+    "aliases": [],
+    "models": [
+      {
+        "id": "swe-1-7-lightning",
+        "name": "SWE-1.7 Lightning Max",
+        "context": 202752,
+        "output": 96000
+      },
+      {
+        "id": "swe-1-7-lightning-medium",
+        "name": "SWE-1.7 Lightning Medium",
+        "context": 202752,
+        "output": 96000
+      }
+    ]
+  },
+  {
+    "uid": "claude-fable-5-1",
+    "label": "Claude Fable 5.1",
+    "aliases": [
+      "fable"
+    ],
+    "models": [
+      {
+        "id": "claude-fable-5-1-medium",
+        "name": "Claude Fable 5.1 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-fable-5-1-low",
+        "name": "Claude Fable 5.1 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-fable-5-1-high",
+        "name": "Claude Fable 5.1 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-fable-5-1-xhigh",
+        "name": "Claude Fable 5.1 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-fable-5-1-max",
+        "name": "Claude Fable 5.1 Max",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-opus-5-5",
+    "label": "Claude Opus 5.5",
+    "aliases": [],
+    "models": [
+      {
+        "id": "claude-opus-5-5-medium",
+        "name": "Claude Opus 5.5 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-low",
+        "name": "Claude Opus 5.5 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-high",
+        "name": "Claude Opus 5.5 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-xhigh",
+        "name": "Claude Opus 5.5 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-max",
+        "name": "Claude Opus 5.5 Max",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-low-fast",
+        "name": "Claude Opus 5.5 Low Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-medium-fast",
+        "name": "Claude Opus 5.5 Medium Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-high-fast",
+        "name": "Claude Opus 5.5 High Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-xhigh-fast",
+        "name": "Claude Opus 5.5 XHigh Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-5-max-fast",
+        "name": "Claude Opus 5.5 Max Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-6-astra",
+    "label": "GPT-6 Astra",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-6-astra-medium",
+        "name": "GPT-6 Astra Medium Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-low",
+        "name": "GPT-6 Astra Low Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-high",
+        "name": "GPT-6 Astra High Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-xhigh",
+        "name": "GPT-6 Astra XHigh Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-max",
+        "name": "GPT-6 Astra Max Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-low-priority",
+        "name": "GPT-6 Astra Low Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-medium-priority",
+        "name": "GPT-6 Astra Medium Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-high-priority",
+        "name": "GPT-6 Astra High Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-xhigh-priority",
+        "name": "GPT-6 Astra XHigh Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-astra-max-priority",
+        "name": "GPT-6 Astra Max Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-6-sol",
+    "label": "GPT-6 Sol",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-6-sol-medium",
+        "name": "GPT-6 Sol Medium Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-none",
+        "name": "GPT-6 Sol No Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-low",
+        "name": "GPT-6 Sol Low Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-high",
+        "name": "GPT-6 Sol High Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-xhigh",
+        "name": "GPT-6 Sol XHigh Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-max",
+        "name": "GPT-6 Sol Max Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-none-priority",
+        "name": "GPT-6 Sol No Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-low-priority",
+        "name": "GPT-6 Sol Low Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-medium-priority",
+        "name": "GPT-6 Sol Medium Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-high-priority",
+        "name": "GPT-6 Sol High Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-xhigh-priority",
+        "name": "GPT-6 Sol XHigh Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-sol-max-priority",
+        "name": "GPT-6 Sol Max Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-6-luna",
+    "label": "GPT-6 Luna",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-6-luna-medium",
+        "name": "GPT-6 Luna Medium Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-none",
+        "name": "GPT-6 Luna No Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-low",
+        "name": "GPT-6 Luna Low Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-high",
+        "name": "GPT-6 Luna High Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-xhigh",
+        "name": "GPT-6 Luna XHigh Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-max",
+        "name": "GPT-6 Luna Max Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-none-priority",
+        "name": "GPT-6 Luna No Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-low-priority",
+        "name": "GPT-6 Luna Low Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-medium-priority",
+        "name": "GPT-6 Luna Medium Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-high-priority",
+        "name": "GPT-6 Luna High Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-xhigh-priority",
+        "name": "GPT-6 Luna XHigh Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-luna-max-priority",
+        "name": "GPT-6 Luna Max Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "kimi-k3",
+    "label": "Kimi K3",
+    "aliases": [],
+    "models": [
+      {
+        "id": "kimi-k3-high",
+        "name": "Kimi K3 High",
+        "context": 1048576,
+        "output": 131072
+      },
+      {
+        "id": "kimi-k3-low",
+        "name": "Kimi K3 Low",
+        "context": 1048576,
+        "output": 131072
+      },
+      {
+        "id": "kimi-k3-max",
+        "name": "Kimi K3 Max",
+        "context": 1048576,
+        "output": 131072
+      }
+    ]
+  },
+  {
+    "uid": "glm-5.2",
+    "label": "GLM-5.2",
+    "aliases": [],
+    "models": [
+      {
+        "id": "glm-5-2",
+        "name": "GLM-5.2 High",
+        "context": 200000,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-2-max",
+        "name": "GLM-5.2 Max",
+        "context": 200000,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-2-1m",
+        "name": "GLM-5.2 High 1M",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-2-max-1m",
+        "name": "GLM-5.2 Max 1M",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-2-none",
+        "name": "GLM-5.2 No Thinking",
+        "context": 200000,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-2-none-1m",
+        "name": "GLM-5.2 No Thinking 1M",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "glm-5-3",
+    "label": "GLM-5.3",
+    "aliases": [],
+    "models": [
+      {
+        "id": "glm-5-3-low",
+        "name": "GLM-5.3 Low",
+        "context": 1048576,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-3-high",
+        "name": "GLM-5.3 High",
+        "context": 1048576,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-3-max",
+        "name": "GLM-5.3 Max",
+        "context": 1048576,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-sonnet-5-5",
+    "label": "Claude Sonnet 5.5",
+    "aliases": [],
+    "models": [
+      {
+        "id": "claude-sonnet-5-5-medium",
+        "name": "Claude Sonnet 5.5 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-5-low",
+        "name": "Claude Sonnet 5.5 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-5-high",
+        "name": "Claude Sonnet 5.5 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-5-xhigh",
+        "name": "Claude Sonnet 5.5 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-5-max",
+        "name": "Claude Sonnet 5.5 Max",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gemini-3-8-flash",
+    "label": "Gemini 3.8 Flash",
+    "aliases": [
+      "gemini"
+    ],
+    "models": [
+      {
+        "id": "gemini-3-8-flash-medium",
+        "name": "Gemini 3.8 Flash Medium",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-8-flash-low",
+        "name": "Gemini 3.8 Flash Low",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-8-flash-high",
+        "name": "Gemini 3.8 Flash High",
+        "context": 1048576,
+        "output": 65535
+      }
+    ]
+  },
+  {
+    "uid": "claude-opus-4.7",
+    "label": "Claude Opus 4.7",
+    "aliases": [],
+    "models": [
+      {
+        "id": "claude-opus-4-7-medium",
+        "name": "Claude Opus 4.7 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-7-low",
+        "name": "Claude Opus 4.7 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-7-high",
+        "name": "Claude Opus 4.7 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-7-xhigh",
+        "name": "Claude Opus 4.7 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-7-max",
+        "name": "Claude Opus 4.7 Max",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-opus-4.8",
+    "label": "Claude Opus 4.8",
+    "aliases": [],
+    "models": [
+      {
+        "id": "claude-opus-4-8-medium",
+        "name": "Claude Opus 4.8 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-low",
+        "name": "Claude Opus 4.8 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-high",
+        "name": "Claude Opus 4.8 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-xhigh",
+        "name": "Claude Opus 4.8 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-max",
+        "name": "Claude Opus 4.8 Max",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-low-fast",
+        "name": "Claude Opus 4.8 Low Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-medium-fast",
+        "name": "Claude Opus 4.8 Medium Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-high-fast",
+        "name": "Claude Opus 4.8 High Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-xhigh-fast",
+        "name": "Claude Opus 4.8 XHigh Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-8-max-fast",
+        "name": "Claude Opus 4.8 Max Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-opus-5",
+    "label": "Claude Opus 5",
+    "aliases": [
+      "opus"
+    ],
+    "models": [
+      {
+        "id": "claude-opus-5-medium",
+        "name": "Claude Opus 5 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-low",
+        "name": "Claude Opus 5 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-high",
+        "name": "Claude Opus 5 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-xhigh",
+        "name": "Claude Opus 5 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-max",
+        "name": "Claude Opus 5 Max",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-low-fast",
+        "name": "Claude Opus 5 Low Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-medium-fast",
+        "name": "Claude Opus 5 Medium Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-high-fast",
+        "name": "Claude Opus 5 High Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-xhigh-fast",
+        "name": "Claude Opus 5 XHigh Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-5-max-fast",
+        "name": "Claude Opus 5 Max Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-5-fable",
+    "label": "Claude Fable 5",
+    "aliases": [],
+    "models": [
+      {
+        "id": "claude-5-fable-low",
+        "name": "Claude Fable 5 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-5-fable-medium",
+        "name": "Claude Fable 5 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-5-fable-high",
+        "name": "Claude Fable 5 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-5-fable-xhigh",
+        "name": "Claude Fable 5 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-5-fable-max",
+        "name": "Claude Fable 5 Max",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-sonnet-5",
+    "label": "Claude Sonnet 5",
+    "aliases": [
+      "claude",
+      "sonnet"
+    ],
+    "models": [
+      {
+        "id": "claude-sonnet-5-low",
+        "name": "Claude Sonnet 5 Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-medium",
+        "name": "Claude Sonnet 5 Medium",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-high",
+        "name": "Claude Sonnet 5 High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-xhigh",
+        "name": "Claude Sonnet 5 XHigh",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-5-max",
+        "name": "Claude Sonnet 5 Max",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gemini-3.5-flash",
+    "label": "Gemini 3.5 Flash",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gemini-3-5-flash-minimal",
+        "name": "Gemini 3.5 Flash Minimal",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-5-flash-low",
+        "name": "Gemini 3.5 Flash Low",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-5-flash-medium",
+        "name": "Gemini 3.5 Flash Medium",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-5-flash-high",
+        "name": "Gemini 3.5 Flash High",
+        "context": 1048576,
+        "output": 65535
+      }
+    ]
+  },
+  {
+    "uid": "gemini-3.6-flash",
+    "label": "Gemini 3.6 Flash",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gemini-3-6-flash-minimal",
+        "name": "Gemini 3.6 Flash Minimal",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-6-flash-low",
+        "name": "Gemini 3.6 Flash Low",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-6-flash-medium",
+        "name": "Gemini 3.6 Flash Medium",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-6-flash-high",
+        "name": "Gemini 3.6 Flash High",
+        "context": 1048576,
+        "output": 65535
+      }
+    ]
+  },
+  {
+    "uid": "gemini-3-7-flash",
+    "label": "Gemini 3.7 Flash",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gemini-3-7-flash-low",
+        "name": "Gemini 3.7 Flash Low",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-7-flash-medium",
+        "name": "Gemini 3.7 Flash Medium",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-7-flash-high",
+        "name": "Gemini 3.7 Flash High",
+        "context": 1048576,
+        "output": 65535
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.6-sol",
+    "label": "GPT-5.6 Sol",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-5-6-sol-none",
+        "name": "GPT-5.6 Sol No Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-low",
+        "name": "GPT-5.6 Sol Low Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-medium",
+        "name": "GPT-5.6 Sol Medium Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-high",
+        "name": "GPT-5.6 Sol High Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-xhigh",
+        "name": "GPT-5.6 Sol XHigh Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-max",
+        "name": "GPT-5.6 Sol Max Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-none-priority",
+        "name": "GPT-5.6 Sol No Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-low-priority",
+        "name": "GPT-5.6 Sol Low Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-medium-priority",
+        "name": "GPT-5.6 Sol Medium Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-high-priority",
+        "name": "GPT-5.6 Sol High Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-xhigh-priority",
+        "name": "GPT-5.6 Sol XHigh Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-sol-max-priority",
+        "name": "GPT-5.6 Sol Max Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.6-terra",
+    "label": "GPT-5.6 Terra",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-5-6-terra-none",
+        "name": "GPT-5.6 Terra No Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-low",
+        "name": "GPT-5.6 Terra Low Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-medium",
+        "name": "GPT-5.6 Terra Medium Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-high",
+        "name": "GPT-5.6 Terra High Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-xhigh",
+        "name": "GPT-5.6 Terra XHigh Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-max",
+        "name": "GPT-5.6 Terra Max Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-none-priority",
+        "name": "GPT-5.6 Terra No Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-low-priority",
+        "name": "GPT-5.6 Terra Low Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-medium-priority",
+        "name": "GPT-5.6 Terra Medium Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-high-priority",
+        "name": "GPT-5.6 Terra High Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-xhigh-priority",
+        "name": "GPT-5.6 Terra XHigh Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-terra-max-priority",
+        "name": "GPT-5.6 Terra Max Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.6-luna",
+    "label": "GPT-5.6 Luna",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-5-6-luna-none",
+        "name": "GPT-5.6 Luna No Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-low",
+        "name": "GPT-5.6 Luna Low Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-medium",
+        "name": "GPT-5.6 Luna Medium Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-high",
+        "name": "GPT-5.6 Luna High Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-xhigh",
+        "name": "GPT-5.6 Luna XHigh Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-max",
+        "name": "GPT-5.6 Luna Max Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-none-priority",
+        "name": "GPT-5.6 Luna No Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-low-priority",
+        "name": "GPT-5.6 Luna Low Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-medium-priority",
+        "name": "GPT-5.6 Luna Medium Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-high-priority",
+        "name": "GPT-5.6 Luna High Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-xhigh-priority",
+        "name": "GPT-5.6 Luna XHigh Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-6-luna-max-priority",
+        "name": "GPT-5.6 Luna Max Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-6-1-sol",
+    "label": "GPT-6.1 Sol",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-6-1-sol-low",
+        "name": "GPT-6.1 Sol Low Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-medium",
+        "name": "GPT-6.1 Sol Medium Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-high",
+        "name": "GPT-6.1 Sol High Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-xhigh",
+        "name": "GPT-6.1 Sol XHigh Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-max",
+        "name": "GPT-6.1 Sol Max Thinking",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-low-priority",
+        "name": "GPT-6.1 Sol Low Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-medium-priority",
+        "name": "GPT-6.1 Sol Medium Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-high-priority",
+        "name": "GPT-6.1 Sol High Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-xhigh-priority",
+        "name": "GPT-6.1 Sol XHigh Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-6-1-sol-max-priority",
+        "name": "GPT-6.1 Sol Max Thinking Fast",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "grok-4.5",
+    "label": "Grok 4.5",
+    "aliases": [],
+    "models": [
+      {
+        "id": "grok-4-5-low",
+        "name": "Grok 4.5 Low",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-5-medium",
+        "name": "Grok 4.5 Medium",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-5-high",
+        "name": "Grok 4.5 High",
+        "context": 500000,
+        "output": 100000
+      }
+    ]
+  },
+  {
+    "uid": "grok-4-6",
+    "label": "Grok 4.6",
+    "aliases": [],
+    "models": [
+      {
+        "id": "grok-4-6-low",
+        "name": "Grok 4.6 Low",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-6-medium",
+        "name": "Grok 4.6 Medium",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-6-high",
+        "name": "Grok 4.6 High",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-6-xhigh",
+        "name": "Grok 4.6 XHigh",
+        "context": 500000,
+        "output": 100000
+      }
+    ]
+  },
+  {
+    "uid": "grok-4-7",
+    "label": "Grok 4.7",
+    "aliases": [],
+    "models": [
+      {
+        "id": "grok-4-7-low",
+        "name": "Grok 4.7 Low",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-7-medium",
+        "name": "Grok 4.7 Medium",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-7-high",
+        "name": "Grok 4.7 High",
+        "context": 500000,
+        "output": 100000
+      },
+      {
+        "id": "grok-4-7-xhigh",
+        "name": "Grok 4.7 XHigh",
+        "context": 500000,
+        "output": 100000
+      }
+    ]
+  },
+  {
+    "uid": "inkling",
+    "label": "Inkling",
+    "aliases": [],
+    "models": [
+      {
+        "id": "inkling-none",
+        "name": "Inkling None",
+        "context": 1048576,
+        "output": 131072
+      },
+      {
+        "id": "inkling-low",
+        "name": "Inkling Low",
+        "context": 1048576,
+        "output": 131072
+      },
+      {
+        "id": "inkling-medium",
+        "name": "Inkling Medium",
+        "context": 1048576,
+        "output": 131072
+      },
+      {
+        "id": "inkling-high",
+        "name": "Inkling High",
+        "context": 1048576,
+        "output": 131072
+      },
+      {
+        "id": "inkling-xhigh",
+        "name": "Inkling X-High",
+        "context": 1048576,
+        "output": 131072
+      },
+      {
+        "id": "inkling-max",
+        "name": "Inkling Max",
+        "context": 1048576,
+        "output": 131072
+      }
+    ]
+  },
+  {
+    "uid": "glm-5-3-flash",
+    "label": "GLM-5.3 Flash",
+    "aliases": [],
+    "models": [
+      {
+        "id": "glm-5-3-flash-low",
+        "name": "GLM-5.3 Flash Low",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-3-flash-high",
+        "name": "GLM-5.3 Flash High",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "glm-5-3-flash-max",
+        "name": "GLM-5.3 Flash Max",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "deepseek-v4-flash",
+    "label": "DeepSeek V4 Flash",
+    "aliases": [],
+    "models": [
+      {
+        "id": "deepseek-v4-flash-high",
+        "name": "DeepSeek V4 Flash High",
+        "context": 1048576,
+        "output": 384000
+      },
+      {
+        "id": "deepseek-v4-flash-max",
+        "name": "DeepSeek V4 Flash Max",
+        "context": 1048576,
+        "output": 384000
+      }
+    ]
+  },
+  {
+    "uid": "deepseek-v4-1-flash",
+    "label": "DeepSeek V4.1 Flash",
+    "aliases": [],
+    "models": [
+      {
+        "id": "deepseek-v4-1-flash-high",
+        "name": "DeepSeek V4.1 Flash High",
+        "context": 1048576,
+        "output": 384000
+      },
+      {
+        "id": "deepseek-v4-1-flash-max",
+        "name": "DeepSeek V4.1 Flash Max",
+        "context": 1048576,
+        "output": 384000
+      }
+    ]
+  },
+  {
+    "uid": "swe-1.7",
+    "label": "SWE-1.7",
+    "aliases": [],
+    "models": [
+      {
+        "id": "swe-1-7",
+        "name": "SWE-1.7 Max",
+        "context": 262000,
+        "output": 128000
+      },
+      {
+        "id": "swe-1-7-medium",
+        "name": "SWE-1.7 Medium",
+        "context": 262000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-opus-4.6",
+    "label": "Claude Opus 4.6",
+    "aliases": [],
+    "models": [
+      {
+        "id": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "context": 200000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-6-thinking",
+        "name": "Claude Opus 4.6 Thinking",
+        "context": 200000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-6-1m",
+        "name": "Claude Opus 4.6 1M",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-opus-4-6-thinking-1m",
+        "name": "Claude Opus 4.6 Thinking 1M",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.4",
+    "label": "GPT-5.4",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-5-4-none",
+        "name": "GPT-5.4 No Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-low",
+        "name": "GPT-5.4 Low Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-medium",
+        "name": "GPT-5.4 Medium Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-high",
+        "name": "GPT-5.4 High Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-xhigh",
+        "name": "GPT-5.4 XHigh Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-none-priority",
+        "name": "GPT-5.4 No Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-low-priority",
+        "name": "GPT-5.4 Low Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-medium-priority",
+        "name": "GPT-5.4 Medium Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-high-priority",
+        "name": "GPT-5.4 High Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-xhigh-priority",
+        "name": "GPT-5.4 XHigh Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.5",
+    "label": "GPT-5.5",
+    "aliases": [
+      "gpt"
+    ],
+    "models": [
+      {
+        "id": "gpt-5-5-none",
+        "name": "GPT-5.5 No Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-low",
+        "name": "GPT-5.5 Low Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-medium",
+        "name": "GPT-5.5 Medium Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-high",
+        "name": "GPT-5.5 High Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-xhigh",
+        "name": "GPT-5.5 XHigh Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-none-priority",
+        "name": "GPT-5.5 No Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-low-priority",
+        "name": "GPT-5.5 Low Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-medium-priority",
+        "name": "GPT-5.5 Medium Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-high-priority",
+        "name": "GPT-5.5 High Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-5-xhigh-priority",
+        "name": "GPT-5.5 XHigh Thinking Fast",
+        "context": 272000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.4-mini",
+    "label": "GPT-5.4 Mini",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gpt-5-4-mini-low",
+        "name": "GPT-5.4 Mini Low Thinking",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-mini-medium",
+        "name": "GPT-5.4 Mini Medium Thinking",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-mini-high",
+        "name": "GPT-5.4 Mini High Thinking",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-4-mini-xhigh",
+        "name": "GPT-5.4 Mini XHigh Thinking",
+        "context": 400000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-sonnet-4.6",
+    "label": "Claude Sonnet 4.6",
+    "aliases": [],
+    "models": [
+      {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "context": 200000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-4-6-thinking",
+        "name": "Claude Sonnet 4.6 Thinking",
+        "context": 200000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-4-6-1m",
+        "name": "Claude Sonnet 4.6 1M",
+        "context": 1000000,
+        "output": 128000
+      },
+      {
+        "id": "claude-sonnet-4-6-thinking-1m",
+        "name": "Claude Sonnet 4.6 Thinking 1M",
+        "context": 1000000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.2",
+    "label": "GPT-5.2",
+    "aliases": [],
+    "models": [
+      {
+        "id": "MODEL_GPT_5_2_LOW",
+        "name": "GPT-5.2 Low Thinking",
+        "context": 384000,
+        "output": 128000
+      },
+      {
+        "id": "MODEL_GPT_5_2_MEDIUM",
+        "name": "GPT-5.2 Medium Thinking",
+        "context": 384000,
+        "output": 128000
+      },
+      {
+        "id": "MODEL_GPT_5_2_NONE",
+        "name": "GPT-5.2 No Thinking",
+        "context": 384000,
+        "output": 128000
+      },
+      {
+        "id": "MODEL_GPT_5_2_HIGH",
+        "name": "GPT-5.2 High Thinking",
+        "context": 384000,
+        "output": 128000
+      },
+      {
+        "id": "MODEL_GPT_5_2_XHIGH",
+        "name": "GPT-5.2 XHigh Thinking",
+        "context": 384000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "claude-opus-4.5",
+    "label": "Claude Opus 4.5",
+    "aliases": [],
+    "models": [
+      {
+        "id": "MODEL_CLAUDE_4_5_OPUS",
+        "name": "Claude Opus 4.5",
+        "context": 200000,
+        "output": 64000
+      },
+      {
+        "id": "MODEL_CLAUDE_4_5_OPUS_THINKING",
+        "name": "Claude Opus 4.5 Thinking",
+        "context": 200000,
+        "output": 64000
+      }
+    ]
+  },
+  {
+    "uid": "Claude Haiku 4.5",
+    "label": "Claude Haiku 4.5",
+    "aliases": [],
+    "models": [
+      {
+        "id": "MODEL_PRIVATE_11",
+        "name": "Claude Haiku 4.5",
+        "context": 200000,
+        "output": 64000
+      }
+    ]
+  },
+  {
+    "uid": "claude-sonnet-4.5",
+    "label": "Claude Sonnet 4.5",
+    "aliases": [],
+    "models": [
+      {
+        "id": "MODEL_PRIVATE_2",
+        "name": "Claude Sonnet 4.5",
+        "context": 200000,
+        "output": 64000
+      },
+      {
+        "id": "MODEL_PRIVATE_3",
+        "name": "Claude Sonnet 4.5 Thinking",
+        "context": 200000,
+        "output": 64000
+      }
+    ]
+  },
+  {
+    "uid": "GPT-4.1",
+    "label": "GPT-4.1",
+    "aliases": [],
+    "models": [
+      {
+        "id": "MODEL_CHAT_GPT_4_1_2025_04_14",
+        "name": "GPT-4.1",
+        "context": 1047576,
+        "output": 32768
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.1",
+    "label": "GPT-5.1",
+    "aliases": [],
+    "models": [
+      {
+        "id": "MODEL_PRIVATE_12",
+        "name": "GPT-5.1 No Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "MODEL_PRIVATE_13",
+        "name": "GPT-5.1 Low Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "MODEL_PRIVATE_14",
+        "name": "GPT-5.1 Medium Thinking",
+        "context": 272000,
+        "output": 128000
+      },
+      {
+        "id": "MODEL_PRIVATE_15",
+        "name": "GPT-5.1 High Thinking",
+        "context": 272000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gpt-5.3-codex",
+    "label": "GPT-5.3-Codex",
+    "aliases": [
+      "codex"
+    ],
+    "models": [
+      {
+        "id": "gpt-5-3-codex-low",
+        "name": "GPT-5.3-Codex Low",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-3-codex-medium",
+        "name": "GPT-5.3-Codex Medium",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-3-codex-high",
+        "name": "GPT-5.3-Codex High",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-3-codex-xhigh",
+        "name": "GPT-5.3-Codex X-High",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-3-codex-low-priority",
+        "name": "GPT-5.3-Codex Low Fast",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-3-codex-medium-priority",
+        "name": "GPT-5.3-Codex Medium Fast",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-3-codex-high-priority",
+        "name": "GPT-5.3-Codex High Fast",
+        "context": 400000,
+        "output": 128000
+      },
+      {
+        "id": "gpt-5-3-codex-xhigh-priority",
+        "name": "GPT-5.3-Codex XHigh Fast",
+        "context": 400000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "kimi-k2.6",
+    "label": "Kimi K2.6",
+    "aliases": [],
+    "models": [
+      {
+        "id": "kimi-k2-6",
+        "name": "Kimi K2.6",
+        "context": 262144,
+        "output": 8192
+      }
+    ]
+  },
+  {
+    "uid": "kimi-k2.7",
+    "label": "Kimi K2.7",
+    "aliases": [],
+    "models": [
+      {
+        "id": "kimi-k2-7",
+        "name": "Kimi K2.7",
+        "context": 262144,
+        "output": 16000
+      }
+    ]
+  },
+  {
+    "uid": "nemotron-3-ultra",
+    "label": "Nemotron 3 Ultra",
+    "aliases": [],
+    "models": [
+      {
+        "id": "nemotron-3-ultra-none",
+        "name": "Nemotron 3 Ultra None",
+        "context": 1000000,
+        "output": 32768
+      },
+      {
+        "id": "nemotron-3-ultra-medium",
+        "name": "Nemotron 3 Ultra Medium",
+        "context": 1000000,
+        "output": 32768
+      },
+      {
+        "id": "nemotron-3-ultra-high",
+        "name": "Nemotron 3 Ultra High",
+        "context": 1000000,
+        "output": 32768
+      }
+    ]
+  },
+  {
+    "uid": "swe-1.6",
+    "label": "SWE-1.6",
+    "aliases": [],
+    "models": [
+      {
+        "id": "swe-1-6",
+        "name": "SWE-1.6",
+        "context": 200000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "swe-1.6-fast",
+    "label": "SWE-1.6 Fast",
+    "aliases": [],
+    "models": [
+      {
+        "id": "swe-1-6-fast",
+        "name": "SWE-1.6 Fast",
+        "context": 200000,
+        "output": 128000
+      }
+    ]
+  },
+  {
+    "uid": "gemini-3.1-pro",
+    "label": "Gemini 3.1 Pro",
+    "aliases": [],
+    "models": [
+      {
+        "id": "gemini-3-1-pro-low",
+        "name": "Gemini 3.1 Pro Low Thinking",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "gemini-3-1-pro-high",
+        "name": "Gemini 3.1 Pro High Thinking",
+        "context": 1048576,
+        "output": 65535
+      }
+    ]
+  },
+  {
+    "uid": "gemini-3.0-flash",
+    "label": "Gemini 3 Flash",
+    "aliases": [],
+    "models": [
+      {
+        "id": "MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL",
+        "name": "Gemini 3 Flash Minimal",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "MODEL_GOOGLE_GEMINI_3_0_FLASH_LOW",
+        "name": "Gemini 3 Flash Low",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "MODEL_GOOGLE_GEMINI_3_0_FLASH_MEDIUM",
+        "name": "Gemini 3 Flash Medium",
+        "context": 1048576,
+        "output": 65535
+      },
+      {
+        "id": "MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH",
+        "name": "Gemini 3 Flash High",
+        "context": 1048576,
+        "output": 65535
+      }
+    ]
+  },
+  {
+    "uid": "deepseek-v4-pro",
+    "label": "DeepSeek V4 Pro",
+    "aliases": [],
+    "models": [
+      {
+        "id": "deepseek-v4-pro-high",
+        "name": "DeepSeek V4 Pro High",
+        "context": 1048576,
+        "output": 384000
+      },
+      {
+        "id": "deepseek-v4-pro-max",
+        "name": "DeepSeek V4 Pro Max",
+        "context": 1048576,
+        "output": 384000
+      }
+    ]
+  }
+]

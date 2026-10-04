@@ -5,7 +5,7 @@
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
 
-  export type WebhookEvent =
+  type WebhookEvent =
     | "quota_low"
     | "quota_exhausted"
     | "rate_limit_detected"
@@ -15,7 +15,7 @@
     | "subscription_expiring"
     | "subscription_expired";
 
-  export interface WebhookConfig {
+  interface WebhookConfig {
     id: string;
     url: string;
     events: WebhookEvent[];
@@ -35,7 +35,8 @@
   let testingId: string | null = null;
   let testResults: Record<string, { success: boolean; error?: string }> = {};
 
-  $: allEvents: Array<{ value: WebhookEvent; label: string }> = [
+  let allEvents: Array<{ value: WebhookEvent; label: string }>;
+  $: allEvents = [
     { value: "quota_low", label: $t("webhook.eventQuotaLow") },
     { value: "quota_exhausted", label: $t("webhook.eventQuotaExhausted") },
     { value: "rate_limit_detected", label: $t("webhook.eventRateLimit") },
@@ -144,7 +145,7 @@
             <Field label={$t("webhook.payloadTemplate")}>
               <textarea
                 bind:value={webhook.customPayload}
-                placeholder='{{"provider": "{{provider_id}}", "event": "{{event_type}}", "message": "{{message}}"}}'
+                placeholder={'{"provider": "{{provider_id}}", "event": "{{event_type}}", "message": "{{message}}"}'}
                 rows="4"
                 disabled={!webhook.enabled}
                 on:change={() => onUpdateWebhook(webhook.id, { customPayload: webhook.customPayload })}

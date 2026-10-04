@@ -309,6 +309,11 @@ impl ProxyHandle {
     }
     /// Drain confirmed observations only after all transport tasks have ended.
     pub fn stop_with_websocket_capability_events(&mut self) -> Vec<WebsocketCapabilityEvent> {
+        if let Ok(backend) = self.state.subscription_backend.read() {
+            if let Some(backend) = backend.as_ref() {
+                backend.revoke();
+            }
+        }
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }

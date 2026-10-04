@@ -397,6 +397,23 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
             env_keys: &["OPENAI_API_KEY"],
         },
         ProviderDefinition {
+            id: "copilot",
+            display_name: "GitHub Copilot",
+            kind: ProviderKind::Official,
+            domains: &["api.githubcopilot.com"],
+            interfaces: &[InterfaceType::OpenAiCompatible],
+            auth_schemes: &[AuthScheme::Bearer],
+            endpoints: &[
+                ("api", EndpointKind::Api, "https://api.githubcopilot.com"),
+                (
+                    "console",
+                    EndpointKind::Console,
+                    "https://github.com/settings/copilot",
+                ),
+            ],
+            env_keys: &["COPILOT_GITHUB_TOKEN"],
+        },
+        ProviderDefinition {
             id: "anthropic",
             display_name: "Anthropic",
             kind: ProviderKind::Official,

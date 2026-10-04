@@ -1,303 +1,68 @@
-# Provider Components Verification Report
+# Provider pages and subscription connection verification
 
-**Date**: 2026-09-30
-**Components**: 16 (14 new + 2 modified)
-**Bugs Fixed**: 3
-**UI/UX Issues Fixed**: 9
+Date: 2026-10-03. The authoritative desktop minimum is 960×640 in Tauri.
 
-## ✅ Build Verification
+## Mounted paths
 
-### Schemas Package
-- [x] Build successful (386ms)
-- [x] All exports available
-- [x] provider-icons module exported correctly
+| Surface | Implementation and Agent contract |
+| --- | --- |
+| Provider detail | `ProviderDetailPane` mounts `ProviderRuntimePanel`; `provider_runtime_get/set` read and save encrypted runtime options, then refresh active proxy credentials/configuration. |
+| Quota and balance | Agent refresh preferences, official/community usage and bounded custom HTTP/JSON-path balance query; unknown usage stays unknown. |
+| Outbound proxy | Provider-specific override or inherited global setting; proxy URL secrets never enter plaintext UI summaries. |
+| Health and notifications | Agent passive status, opt-in webhook configuration, explicit test delivery. Opening a panel does not send notifications or save settings. |
+| Subscription login | Existing `OAuthConnectDialog` opens `CommunityConnectDialog`; Agent catalog/start/poll/code/cancel and ticket-bound browser opening. |
+| Community provider | After login, reload provider entries; detail action refreshes model catalog and usage, and local routes execute the native Rust protocol adapter. |
+| Routing | Existing local route editor exposes quota-aware strategy in addition to fallback and round-robin; real backend selection respects fresh and model-scoped windows. |
 
-### Modified Files
-- [x] 9 components modified
-- [x] +38 lines, -25 lines
-- [x] All changes committed
+Standalone legacy prototype files are not individually advertised as mounted
+features. The integrated surfaces above are the source of truth.
 
-## 🐛 Bug Fixes Applied
+## Automated checks
 
-### 1. ProviderProxyConfig - Undefined Access ✅
-**Severity**: 🔴 Critical
-**File**: `ProviderProxyConfig.svelte:23-26`
-```typescript
-// Auto-initialize proxyAuth when needed
-$: if (config.enabled && !config.useSystemProxy && !config.proxyAuth) {
-  config.proxyAuth = { username: "", password: "" };
-}
-```
-**Status**: ✅ Fixed
+- 241 desktop tests / 34 files passed, including failed secret-save retention,
+  read-only panel opening, pending login teardown, late poll cancellation and
+  commit-versus-cancel races.
+- `pnpm --filter @aipass/desktop typecheck`: zero errors and zero warnings.
+- Desktop production frontend build passed; existing chunk-size warning remains.
+- Rust integration covers credential encryption/CAS, bounded process cleanup,
+  conversion/SSE, native signatures, quota eligibility and distinct Copilot
+  editor/CLI sessions. Native Rust adapter tests exercise HTTP/2 duplex, outbound
+  proxy selection, early quota errors, callback ownership and durable ACK refusal.
 
-### 2. QuotaDisplay - Percentage Overflow ✅
-**Severity**: 🟡 Medium
-**File**: `QuotaDisplay.svelte:49`
-```svelte
-style:width="{Math.min(percentage, 100)}%"
-```
-**Status**: ✅ Fixed
+## Native desktop evidence and remaining gate
 
-### 3. SubscriptionDisplay - Percentage Overflow ✅
-**Severity**: 🟡 Medium
-**File**: `SubscriptionDisplay.svelte:64`
-```svelte
-style:width="{Math.min(window.usedPercent, 100)}%"
-```
-**Status**: ✅ Fixed
+The native Rust build was rechecked using the disposable app at
+`/tmp/aipass-runtime-recheck-20261003/AIPass.app`. It uses an isolated
+empty vault, a local-only sync configuration and a
+960×640 window. Production frontend resources were embedded using Tauri's
+`custom-protocol` feature. `result.json` reports `ok: true`; startup stage logs
+reach `complete`, and the runtime observer checked rendered DOM, native event-loop
+responsiveness, Agent IPC and window dimensions for 20 iterations. Both the
+desktop executable and bundled Agent were copied from the new Rust build.
+This startup check does not exercise real provider login or generation.
 
-### 4. TextField Not Exported from UI Package ✅
-**Severity**: 🔴 Critical
-**Files**: CustomBalanceEndpointConfig, CustomHeadersConfig, ProviderProxyConfig, WebhookNotificationConfig
-**Fix**: Replaced all `TextField` imports with native `<input>` elements
-**Status**: ✅ Fixed (14 replacements across 4 files)
+The first re-review fixture path produced a 106-byte Unix socket pathname and
+macOS rejected it with `AF_UNIX path too long`. Its failed startup report and logs
+remain at `/tmp/aipass-runtime-subscription-rereview-20261003`. The same binaries
+passed using the shorter fixture path above; `build-hashes.json` preserves their
+SHA-256 values.
 
-### 5. TypeScript Type Errors ✅
-**Severity**: 🔴 Critical
-**Issues Fixed**:
-- Badge tone "info" not in allowed types → changed to "neutral"
-- SelectField requires string values → converted all number options to strings
-- OptimizationConfig interface updated to use string types for interval values
-- SubscriptionDisplay undefined subscription access → added null check
-- Exported interfaces changed to internal (removed `export` keyword where not needed)
-- proxyAuth undefined access → added non-null assertion with reactive initialization
-**Status**: ✅ Fixed (0 TypeScript errors remaining)
+Initial attempts exposed stale local Agent binary version 12 versus protocol 13;
+building the Agent explicitly with `rtk proxy cargo build -p aipass-agent --bin
+aipass-agent` and copying that exact binary fixed the mismatch. The first Vite
+resource startup also had an empty document; the production-resource run passed.
+These failed attempts remain in `/tmp/aipass-runtime-subscription-review-20261002`
+for diagnostics.
 
-## 🎨 UI/UX Fixes Applied
+The native computer-control tool still returns `cgWindowNotFound` when selecting
+the new running Rust review app. Consequently screenshots,
+layout inspection, scrolling and click-through at 960×640 are **not signed off**.
+Do not promote the startup/IPC evidence to visual acceptance. No DMG/updater
+install/restart validation, real account login, paid generation, publication or
+remote CI run was performed for this review.
 
-### Responsive Layout Updates (960x640 minimum window)
+## 中文说明
 
-All components updated from `@media (max-width: 720px)` to `@media (max-width: 1000px)`
-
-#### 1. RoutingStrategyConfig ✅
-- Grid columns: `minmax(200px, 1fr)` → `minmax(220px, 1fr)`
-- Breakpoint: Forces 2 columns at < 1000px
-- **Impact**: Prevents 4-column squeeze at 960px
-
-#### 2. ProviderHealthMonitor ✅
-- Grid columns: `minmax(140px, 1fr)` → `minmax(160px, 1fr)`
-- Breakpoint: Forces 2 columns at < 1000px
-- **Impact**: Prevents 6-column squeeze at 960px
-
-#### 3. WebhookNotificationConfig ✅
-- Grid columns: `minmax(180px, 1fr)` → `minmax(200px, 1fr)`
-- Breakpoint: Forces 2 columns at < 1000px
-- **Impact**: Prevents 5-column squeeze at 960px
-
-#### 4. ProviderProxyConfig ✅
-- Auth fields: 2 columns → 1 column at < 1000px
-- **Impact**: Better form readability
-
-#### 5. CustomHeadersConfig ✅
-- Header row: Stacks fields vertically at < 1000px
-- **Impact**: Prevents horizontal overflow
-
-#### 6. CustomBalanceEndpointConfig ✅
-- Field row: Method/Unit stacks at < 1000px
-- **Impact**: Better form layout
-
-#### 7. CredentialManager ✅
-- Action buttons wrap at < 1000px
-- Meta labels adjust width
-- **Impact**: Better credential card layout
-
-## 📋 Verification Checklist
-
-### Phase 1 - Icons, Status, Quota
-
-#### ProviderSelectOption
-- [ ] Icons display correctly (26 providers)
-- [ ] Status indicators show correct colors (active/warning/error/inactive)
-- [ ] Text truncates with ellipsis
-- [ ] Compact mode works
-- [ ] Subtitle formatting correct
-
-#### QuotaDisplay
-- [ ] Progress bar capped at 100%
-- [ ] Color tones correct (>50% green, >20% yellow, <20% red)
-- [ ] Icons display (Check/AlertTriangle/X)
-- [ ] Compact mode works
-- [ ] Percentage calculation correct
-
-#### SubscriptionDisplay
-- [ ] Progress bar capped at 100%
-- [ ] Expiration warning triggers (< 7 days)
-- [ ] Window progress bars display
-- [ ] Error state shows correctly
-- [ ] Credits display formatted
-
-### Phase 2 - Credentials & Routing
-
-#### CredentialManager
-- [ ] Empty state displays with guidance
-- [ ] Primary badge shows on first credential
-- [ ] Move up/down buttons disabled correctly
-- [ ] Delete disabled when only 1 credential
-- [ ] Reorder logic correct
-- [ ] Action buttons wrap at 960px width
-- [ ] Credential cards display correctly
-
-#### RoutingStrategyConfig
-- [ ] 4 strategy cards display in 2 columns at 960px
-- [ ] Radio dots work correctly
-- [ ] Selected state highlights properly
-- [ ] Affinity dropdown functional
-- [ ] Fallback chain displays correctly
-- [ ] Info panel readable
-
-### Phase 3 - Monitoring & Optimization
-
-#### ClaudeQuotaTracker
-- [ ] Dual progress bars (requests/tokens) capped at 100%
-- [ ] Warmup badge appears when active
-- [ ] Window countdown displays
-- [ ] Warning state triggers (>80% usage)
-- [ ] Number formatting (1K, 1M) works
-
-#### RateLimitMonitor
-- [ ] Only shows when rate limit detected
-- [ ] Occurrence count badge displays
-- [ ] Retry countdown shows
-- [ ] Next available time displays
-- [ ] Switch recommendation shows
-
-#### ProviderHealthMonitor
-- [ ] Status icons correct (CheckCircle/AlertCircle/XCircle/Activity)
-- [ ] Badge tones match status
-- [ ] Metrics display in 2 columns at 960px
-- [ ] Auto-refresh indicator animates
-- [ ] Stale check warning (>5 min)
-
-#### ProviderOptimizationConfig
-- [ ] All toggles functional
-- [ ] Interval selects work
-- [ ] Claude-specific section highlighted
-- [ ] Configuration summary updates
-- [ ] Checkmarks show enabled features
-
-### Phase 4 - Advanced Features
-
-#### CustomBalanceEndpointConfig
-- [ ] Empty state displays
-- [ ] Add endpoint button works
-- [ ] Method/Unit fields stack at 960px
-- [ ] POST body field shows conditionally
-- [ ] Test button disables during testing
-- [ ] Test results display (success/error)
-- [ ] Remove endpoint button works
-
-#### ProviderProxyConfig
-- [ ] Enable toggle works
-- [ ] System proxy toggle works
-- [ ] proxyAuth auto-initializes (Bug fix #1)
-- [ ] Auth fields stack at 960px
-- [ ] Bypass domains parse correctly
-- [ ] Info panel displays
-
-#### CustomHeadersConfig
-- [ ] Empty state displays
-- [ ] Enable checkbox works
-- [ ] Common headers datalist suggests
-- [ ] Header rows stack at 960px
-- [ ] Remove button works
-- [ ] Common headers hint displays
-
-#### WebhookNotificationConfig
-- [ ] Empty state displays
-- [ ] Enable toggle works per webhook
-- [ ] Event grid displays in 2 columns at 960px
-- [ ] 8 event types all checkable
-- [ ] Custom payload section expands
-- [ ] Test button works
-- [ ] Test results display
-- [ ] Secret field masked
-
-## 🧪 Testing Scenarios
-
-### Scenario 1: Minimum Window Size (960x640)
-1. Resize desktop window to 960x640
-2. Navigate to provider detail page
-3. Open each configuration section
-4. Verify all grids display 2 columns or less
-5. Verify no horizontal scrolling
-6. Verify text truncates properly
-
-### Scenario 2: Credential Management
-1. Add multiple credentials
-2. Verify primary badge on first
-3. Reorder credentials with up/down
-4. Try to delete when only 1 left (should be disabled)
-5. Set different credential as primary
-
-### Scenario 3: Routing Configuration
-1. Select each of 4 routing strategies
-2. Change affinity mode
-3. Enable fallback chain
-4. Verify info panel updates
-
-### Scenario 4: Webhook Testing
-1. Add new webhook
-2. Enable webhook
-3. Select multiple events
-4. Add custom payload
-5. Click test button
-6. Verify test result displays
-
-### Scenario 5: Proxy Configuration
-1. Enable proxy
-2. Toggle between system/custom proxy
-3. Verify proxyAuth initializes automatically (Bug fix #1)
-4. Enter username/password
-5. Add bypass domains (comma-separated)
-
-## 🔍 Code Quality Checks
-
-### TypeScript
-- [ ] No type errors
-- [ ] All imports resolve
-- [ ] Schemas exported correctly
-
-### Svelte
-- [ ] No reactive statement errors
-- [ ] All bindings work
-- [ ] No unused variables
-
-### Styling
-- [ ] No CSS conflicts
-- [ ] All colors from design tokens
-- [ ] Responsive breakpoints correct
-- [ ] Text truncation working
-
-### Accessibility
-- [ ] 47 aria attributes present
-- [ ] Labels on all buttons
-- [ ] Focus states visible
-- [ ] Keyboard navigation works
-
-## 📊 Metrics
-
-| Metric | Value |
-|--------|-------|
-| Components verified | 16/16 ✅ |
-| Critical bugs fixed | 5/5 ✅ |
-| UI/UX issues fixed | 9/9 ✅ |
-| Responsive layouts fixed | 7/7 ✅ |
-| TypeScript errors | 0 ✅ |
-| Build status | ✅ Pass |
-
-## 🚀 Next Steps
-
-1. [ ] Run desktop app in dev mode
-2. [ ] Test each component at 960x640
-3. [ ] Verify all interactive features
-4. [ ] Check i18n keys exist
-5. [ ] Test with real provider data
-6. [ ] Perform manual accessibility testing
-7. [ ] Document any remaining issues
-
-## 📝 Notes
-
-- All changes follow AGENTS.md commit conventions
-- Tauri minimum window size: 960x640 (verified in tauri.conf.json)
-- All components use consistent design patterns
-- No breaking changes to existing APIs
+已接通实际供应商详情、运行时设置、社区登录和路由页面，后端读写由 Agent 负责。
+自动测试与原生启动/IPC/窗口尺寸检查通过。电脑控制工具无法取得窗口，960×640 的
+视觉和点击验收仍未完成；不得将测试或进程存活描述成视觉验收通过。

@@ -11,7 +11,23 @@ pub(crate) async fn read_error(
     target: &ResolvedTarget,
     local_tokens: &[&str],
 ) -> String {
-    let mut stream = response.bytes_stream();
+    read_error_stream(
+        Box::pin(
+            response
+                .bytes_stream()
+                .map(|r| r.map_err(|e| -> BoxError { Box::new(e) })),
+        ),
+        target,
+        local_tokens,
+    )
+    .await
+}
+
+pub(crate) async fn read_error_stream(
+    mut stream: UpstreamBodyStream,
+    target: &ResolvedTarget,
+    local_tokens: &[&str],
+) -> String {
     let mut body = Vec::new();
     let result = tokio::time::timeout(Duration::from_secs(1), async {
         while let Some(chunk) = stream.next().await {

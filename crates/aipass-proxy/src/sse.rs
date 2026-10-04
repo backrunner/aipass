@@ -115,6 +115,15 @@ pub(crate) fn sse_event_reports_output(protocol: ProxyProtocol, event: &[u8]) ->
             let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
                 return true;
             };
+            if kind == "response.output_item.added" {
+                let item = &value["item"];
+                return item["type"]
+                    .as_str()
+                    .is_some_and(|kind| kind.ends_with("_call"))
+                    || item
+                        .get("encrypted_content")
+                        .is_some_and(json_value_has_output);
+            }
             if matches!(
                 kind,
                 "response.created"
@@ -141,6 +150,9 @@ pub(crate) fn sse_event_reports_output(protocol: ProxyProtocol, event: &[u8]) ->
                     return false;
                 };
                 delta.get("content").is_some_and(json_value_has_output)
+                    || ["reasoning_content", "reasoning", "refusal"]
+                        .iter()
+                        .any(|key| delta.get(*key).is_some_and(json_value_has_output))
                     || delta.get("tool_calls").is_some_and(json_value_has_output)
                     || delta
                         .get("function_call")
@@ -152,7 +164,16 @@ pub(crate) fn sse_event_reports_output(protocol: ProxyProtocol, event: &[u8]) ->
                 return true;
             };
             match kind {
-                "message_start" | "content_block_start" | "message_delta" | "message_stop" => false,
+                "message_start" | "message_delta" | "message_stop" => false,
+                "content_block_start" => {
+                    let block = &value["content_block"];
+                    matches!(
+                        block["type"].as_str(),
+                        Some("tool_use" | "server_tool_use" | "redacted_thinking")
+                    ) || ["text", "thinking", "data"]
+                        .iter()
+                        .any(|key| block.get(*key).is_some_and(json_value_has_output))
+                }
                 "content_block_delta" => value.get("delta").is_some_and(json_value_has_output),
                 _ => true,
             }
@@ -268,6 +289,24 @@ pub(crate) fn stream_reports_completion(protocol: ProxyProtocol, bytes: &[u8]) -
         offset = end;
     }
     offset < bytes.len() && sse_event_reports_completion(protocol, &bytes[offset..])
+}
+
+pub(crate) fn stream_reports_output(protocol: ProxyProtocol, bytes: &[u8]) -> bool {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let end = sse_event_boundary_end(&bytes[offset..])
+            .map(|n| offset + n)
+            .unwrap_or(bytes.len());
+        let event = &bytes[offset..end];
+        if !sse_event_reports_error(event)
+            && !sse_event_is_heartbeat(event)
+            && sse_event_reports_output(protocol, event)
+        {
+            return true;
+        }
+        offset = end;
+    }
+    false
 }
 
 pub(crate) fn sse_event_reports_completion(protocol: ProxyProtocol, event: &[u8]) -> bool {
@@ -388,7 +427,19 @@ where
                     continue;
                 }
                 match source.next().await {
-                    Some(Ok(chunk)) => buffer.extend_from_slice(&chunk),
+                    Some(Ok(chunk)) => {
+                        if buffer.len().saturating_add(chunk.len()) > MAX_BUFFERED_RESPONSE_BYTES {
+                            done = true;
+                            return Some((
+                                Err(std::io::Error::other(
+                                    "upstream event exceeds proxy buffer limit",
+                                )
+                                .into()),
+                                (source, buffer, pending, converter, done),
+                            ));
+                        }
+                        buffer.extend_from_slice(&chunk);
+                    }
                     Some(Err(err)) => {
                         done = true;
                         return Some((Err(err), (source, buffer, pending, converter, done)));
@@ -406,6 +457,15 @@ where
                                         (source, buffer, pending, converter, done),
                                     ));
                                 }
+                            }
+                        }
+                        match converter.finish() {
+                            Ok(events) => pending.extend(events.into_iter().map(Bytes::from)),
+                            Err(err) => {
+                                return Some((
+                                    Err(Box::new(err) as BoxError),
+                                    (source, buffer, pending, converter, done),
+                                ))
                             }
                         }
                     }
@@ -438,7 +498,7 @@ pub(crate) fn track_usage_stream<S>(
     context: UsageTrackingContext,
 ) -> Pin<Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>>
 where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
+    S: Stream<Item = Result<Bytes, BoxError>> + Send + 'static,
 {
     let UsageTrackingContext {
         ws_evidence,
@@ -478,7 +538,7 @@ where
                 result = source.next() => result,
             };
             let result: Result<Bytes, BoxError> = match next {
-                Some(result) => result.map_err(|err| Box::new(err) as BoxError),
+                Some(result) => result,
                 None => {
                     source_ended = true;
                     break;

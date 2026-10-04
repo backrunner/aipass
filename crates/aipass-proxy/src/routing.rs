@@ -31,6 +31,9 @@ pub(super) fn preserved_targets(old: &RuntimeConfig, new: &RuntimeConfig) -> Has
                     && before.config.auth_scheme == target.config.auth_scheme
                     && before.config.headers == target.config.headers
                     && before.config.protocol == target.config.protocol
+                    && before.upstream_kind == target.upstream_kind
+                    && before.profile == target.profile
+                    && before.upstream_proxy == target.upstream_proxy
                     && tokens_match(&before.api_key, &target.api_key)
             }) {
                 preserved.insert((route.config.id, target.config.id));

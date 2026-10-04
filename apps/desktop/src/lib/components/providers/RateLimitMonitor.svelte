@@ -4,7 +4,7 @@
 
   import { t } from "../../stores/i18n";
 
-  export interface RateLimitStatus {
+  interface RateLimitStatus {
     detected: boolean;
     lastOccurrence?: string;
     occurrenceCount: number;

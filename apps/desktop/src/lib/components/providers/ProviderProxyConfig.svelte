@@ -5,7 +5,7 @@
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
 
-  export interface ProxyConfig {
+  interface ProxyConfig {
     enabled: boolean;
     proxyUrl?: string;
     proxyAuth?: {

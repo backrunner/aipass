@@ -8,6 +8,11 @@ pub struct ProxyHandle {
 }
 
 impl ProxyHandle {
+    pub fn set_subscription_backend(&self, backend: Arc<dyn SubscriptionBackend>) {
+        if let Ok(mut current) = self.state.subscription_backend.write() {
+            *current = Some(backend);
+        }
+    }
     pub fn start(config: RuntimeConfig, usage: Arc<UsageStore>) -> Result<Self, ProxyError> {
         for route in &config.routes {
             for target in route.targets.iter().filter(|target| target.config.enabled) {
@@ -35,6 +40,9 @@ impl ProxyHandle {
             .map_err(|_| ProxyError::InvalidConfig("bind address must be host:port".into()))?;
         let ws_health = websocket::capability::initial_health(&config);
         let state = RuntimeState {
+            subscription_backend: Arc::new(RwLock::new(None)),
+            copilot_sessions: Arc::new(tokio::sync::Mutex::new(copilot::Sessions::default())),
+            gemini_signatures: Arc::new(Mutex::new(gemini::SignatureLedger::default())),
             config: Arc::new(RwLock::new(config)),
             stats: Arc::new(Mutex::new(RuntimeStats::default())),
             usage,
@@ -136,6 +144,7 @@ impl ProxyHandle {
                                     .map(|until| until.saturating_duration_since(now))
                                     .unwrap_or_default();
                                 ChannelStatus {
+                                    last_status: health.and_then(|h| h.last_status),
                                     route_id: route.config.id,
                                     target_id: target.config.id,
                                     provider_entry_id: target.config.provider_entry_id,
@@ -302,7 +311,51 @@ impl ProxyHandle {
             .session_affinity
             .lock()
             .map_err(|_| ProxyError::Poisoned)?;
-        let preserved = routing::preserved_targets(&current, &config);
+        let mut preserved = routing::preserved_targets(&current, &config);
+        let revoked = current
+            .routes
+            .iter()
+            .flat_map(|r| &r.targets)
+            .any(|t| !preserved.iter().any(|(_, id)| *id == t.config.id));
+        if revoked {
+            if let Ok(backend) = self.state.subscription_backend.read() {
+                if let Some(backend) = backend.as_ref() {
+                    let rotated = backend.retain_targets(
+                        &config
+                            .routes
+                            .iter()
+                            .filter(|r| r.config.enabled)
+                            .flat_map(|r| &r.targets)
+                            .collect::<Vec<_>>(),
+                    );
+                    for route in &config.routes {
+                        for target in &route.targets {
+                            if target.upstream_kind == UpstreamKind::ClaudeSubscription
+                                && rotated.contains(&target.config.id)
+                                && current
+                                    .routes
+                                    .iter()
+                                    .find(|r| {
+                                        r.config == route.config
+                                            && tokens_match(&r.local_token, &route.local_token)
+                                    })
+                                    .is_some_and(|r| {
+                                        r.targets.iter().any(|old| {
+                                            old.config == target.config
+                                                && old.upstream_kind == target.upstream_kind
+                                        })
+                                    })
+                            {
+                                preserved.insert((route.config.id, target.config.id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(mut ledger) = self.state.gemini_signatures.lock() {
+            ledger.retain_targets(&preserved.iter().map(|(_, id)| *id).collect());
+        }
         health.retain(|id, _| preserved.iter().any(|(_, target)| target == id));
         session_affinity
             .retain(|(route, _), affinity| preserved.contains(&(*route, affinity.target_id)));
@@ -374,6 +427,11 @@ impl ProxyHandle {
 
 impl Drop for ProxyHandle {
     fn drop(&mut self) {
+        if let Ok(backend) = self.state.subscription_backend.read() {
+            if let Some(backend) = backend.as_ref() {
+                backend.revoke();
+            }
+        }
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }

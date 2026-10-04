@@ -4,7 +4,7 @@
 
   import { t } from "../../stores/i18n";
 
-  export interface HealthCheckResult {
+  interface HealthCheckResult {
     status: "healthy" | "degraded" | "unhealthy" | "unknown";
     lastCheck: string;
     responseTime?: number;
@@ -38,16 +38,16 @@
     }
   }
 
-  function getStatusTone(status: HealthCheckResult["status"] | undefined): string {
+  function getStatusTone(status: HealthCheckResult["status"] | undefined) {
     switch (status) {
       case "healthy":
-        return "success";
+        return "success" as const;
       case "degraded":
-        return "warning";
+        return "warning" as const;
       case "unhealthy":
-        return "danger";
+        return "danger" as const;
       default:
-        return "neutral";
+        return "neutral" as const;
     }
   }
 

@@ -74,7 +74,7 @@ describe("local proxy route helpers", () => {
   });
 
   it("returns no native protocol for interfaces that cannot be proxy targets", () => {
-    expect(nativeProtocolForEntry(entry("gemini"))).toBeNull();
+    expect(nativeProtocolForEntry(entry("gemini"))).toBe("open_ai_chat_completions");
     expect(nativeProtocolForEntry(entry("bedrock"))).toBeNull();
     expect(nativeProtocolForEntry(entry("custom_http"))).toBeNull();
   });

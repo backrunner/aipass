@@ -5,8 +5,8 @@
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
 
-  export type RoutingStrategy = "smart" | "order" | "rotate" | "usage";
-  export type AffinityMode = "auto" | "session" | "turn" | "off";
+  type RoutingStrategy = "smart" | "order" | "rotate" | "usage";
+  type AffinityMode = "auto" | "session" | "turn" | "off";
 
   export let strategy: RoutingStrategy = "smart";
   export let affinity: AffinityMode = "auto";
@@ -93,7 +93,7 @@
     <SelectField
       bind:value={affinity}
       options={affinityOptions.map(opt => ({ value: opt.value, label: opt.label }))}
-      onValueChange={onAffinityChange}
+      onValueChange={(value) => onAffinityChange(value as AffinityMode)}
     />
 
     <div class="affinity-info">

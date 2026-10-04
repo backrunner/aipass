@@ -25,6 +25,8 @@ struct Config {
 #[serde(rename_all = "camelCase")]
 enum Mode {
     Startup,
+    /// Keep the isolated fixture open for native UI review; never an update gate.
+    Interactive,
     Install,
     Cached,
 }
@@ -48,9 +50,9 @@ pub(crate) fn endpoint() -> Option<url::Url> {
 }
 
 pub(crate) fn reinstall_same_version() -> bool {
-    CHECK
-        .get()
-        .is_some_and(|check| check.config.mode != Mode::Startup && check.restarted_from.is_none())
+    CHECK.get().is_some_and(|check| {
+        matches!(check.config.mode, Mode::Install | Mode::Cached) && check.restarted_from.is_none()
+    })
 }
 
 pub(crate) fn initialize() -> Result<(), String> {
@@ -188,7 +190,7 @@ pub(crate) fn start(app: AppHandle) {
                 ))?;
                 return Err("installer returned without restarting the application".into());
             }
-            if check.config.mode != Mode::Startup {
+            if !matches!(check.config.mode, Mode::Startup | Mode::Interactive) {
                 let previous = check
                     .restarted_from
                     .ok_or("cached update did not restart")?;
@@ -215,6 +217,9 @@ pub(crate) fn start(app: AppHandle) {
             &serde_json::to_vec_pretty(&report).unwrap(),
         )
         .is_ok();
+        if check.config.mode == Mode::Interactive {
+            return;
+        }
         if let Ok(client) = crate::agent_client(&app) {
             let _ = client.shutdown();
         }

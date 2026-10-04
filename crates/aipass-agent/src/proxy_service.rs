@@ -32,6 +32,8 @@ struct PersistedProxyConfig {
 }
 
 pub struct ProxyService {
+    community_bridge: Arc<crate::community::CommunityBridge>,
+    claude_bridge: Arc<crate::claude_bridge::ClaudeBridge>,
     vault_dir: PathBuf,
     config: ProxyConfig,
     handle: Option<ProxyHandle>,
@@ -46,6 +48,18 @@ pub struct ProxyService {
 }
 
 impl ProxyService {
+    pub(crate) fn community_bridge(&self) -> Arc<crate::community::CommunityBridge> {
+        self.community_bridge.clone()
+    }
+    fn subscription_backend(&self) -> Arc<dyn aipass_proxy::SubscriptionBackend> {
+        Arc::new(crate::community::Dispatch {
+            claude: self.claude_bridge.clone(),
+            community: self.community_bridge.clone(),
+        })
+    }
+    pub(crate) fn claude_bridge(&self) -> Arc<crate::claude_bridge::ClaudeBridge> {
+        self.claude_bridge.clone()
+    }
     pub(crate) fn begin_ws_probe(
         &self,
         key: [u8; 32],
@@ -60,6 +74,8 @@ impl ProxyService {
     pub fn new(vault_dir: &Path) -> anyhow::Result<Self> {
         let usage = Arc::new(UsageStore::open(vault_dir.join("proxy-usage.sqlite"))?);
         Ok(Self {
+            claude_bridge: Arc::new(crate::claude_bridge::ClaudeBridge::new(vault_dir)),
+            community_bridge: Arc::new(crate::community::CommunityBridge::new(vault_dir)),
             vault_dir: vault_dir.to_path_buf(),
             config: ProxyConfig::default(),
             handle: None,
@@ -339,6 +355,7 @@ impl ProxyService {
         let runtime = self.runtime_config(vault)?;
         let handle = ProxyHandle::start(runtime, self.usage.clone())
             .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))?;
+        handle.set_subscription_backend(self.subscription_backend());
         let previous_enabled = self.config.enabled;
         self.config.enabled = true;
         if let Err(err) = self.save_config(vault) {
@@ -489,6 +506,7 @@ impl ProxyService {
         self.handle.take();
         let next = ProxyHandle::start(runtime, self.usage.clone())
             .map_err(|err| ServiceError::internal(anyhow::anyhow!(err)))?;
+        next.set_subscription_backend(self.subscription_backend());
         for event in &self.pending_ws_events {
             next.restore_websocket_capability_event(event);
         }
@@ -1061,11 +1079,21 @@ impl ProxyService {
                         .interface_type
                         .as_ref()
                         .unwrap_or(&entry.interface_type);
+                    if credential.effective_auth(&entry.interface_type, &entry.auth_scheme)
+                        == AuthScheme::GoogleApiKey
+                        && *interface != InterfaceType::Gemini
+                    {
+                        return Err(ServiceError::new(
+                            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                            "Google API credentials require the Gemini interface",
+                        ));
+                    }
                     if !matches!(
                         interface,
                         InterfaceType::AnthropicMessages
                             | InterfaceType::OpenAiCompatible
                             | InterfaceType::AzureOpenAi
+                            | InterfaceType::Gemini
                     ) {
                         return Err(ServiceError::new(
                             aipass_agent_protocol::AgentErrorCode::ValidationFailed,
@@ -1082,11 +1110,42 @@ impl ProxyService {
                     // for the wrong format. An explicit target protocol remains
                     // available for legacy/advanced configs; otherwise use the
                     // route's configured upstream protocol verbatim.
-                    let target_protocol = target.protocol.unwrap_or(route.upstream_protocol);
+                    let upstream_kind = if crate::community::is_account(vault, entry.id) {
+                        aipass_proxy::UpstreamKind::CommunitySubscription
+                    } else if upstream_kind(&entry) == aipass_proxy::UpstreamKind::Copilot
+                        && vault
+                            .provider_runtime_extension(entry.id, "copilot_auth_v1")
+                            .map_err(map_vault_error)?
+                            .is_some_and(|v| {
+                                serde_json::from_str::<serde_json::Value>(v.expose())
+                                    .is_ok_and(|v| v["client"] == "cli")
+                            })
+                    {
+                        aipass_proxy::UpstreamKind::CopilotCli
+                    } else if *interface == InterfaceType::Gemini {
+                        aipass_proxy::UpstreamKind::GeminiNative
+                    } else {
+                        upstream_kind(&entry)
+                    };
+                    let target_protocol =
+                        if upstream_kind == aipass_proxy::UpstreamKind::CodexSubscription {
+                            aipass_proxy::Protocol::OpenAiResponses
+                        } else if upstream_kind == aipass_proxy::UpstreamKind::ClaudeSubscription {
+                            aipass_proxy::Protocol::AnthropicMessages
+                        } else if matches!(
+                            upstream_kind,
+                            aipass_proxy::UpstreamKind::GeminiNative
+                                | aipass_proxy::UpstreamKind::CommunitySubscription
+                        ) {
+                            aipass_proxy::Protocol::OpenAiChatCompletions
+                        } else {
+                            target.protocol.unwrap_or(route.upstream_protocol)
+                        };
                     let mut credentials = vault
                         .runtime_provider_credentials(target.provider_entry_id, &target.secret_id)
                         .map_err(map_vault_error)?;
-                    let api_key = credentials.secret.expose().to_owned();
+                    let api_key = managed_oauth_token(vault, &entry, &target.secret_id)?
+                        .unwrap_or_else(|| credentials.secret.expose().to_owned());
                     let provider_headers = std::mem::take(&mut *credentials.headers);
                     let mut target_config = target.clone();
                     target_config.protocol = Some(target_protocol);
@@ -1135,9 +1194,39 @@ impl ProxyService {
                             target_config.headers.push((name, value));
                         }
                     }
+                    let preferences = crate::provider_runtime::load(vault, entry.id)?;
+                    let provider_proxy =
+                        crate::provider_runtime::outbound(&preferences).map_err(|e| {
+                            ServiceError::new(
+                                aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                                e,
+                            )
+                        })?;
                     Ok(ResolvedTarget {
+                        upstream_proxy: if upstream_kind
+                            == aipass_proxy::UpstreamKind::CommunitySubscription
+                        {
+                            Some(
+                                provider_proxy
+                                    .clone()
+                                    .unwrap_or_else(|| self.config.upstream_proxy.clone()),
+                            )
+                        } else {
+                            provider_proxy.clone()
+                        },
+                        upstream_kind,
+                        quota: if upstream_kind == aipass_proxy::UpstreamKind::CommunitySubscription
+                        {
+                            crate::community::quota(vault, entry.id)
+                        } else {
+                            account_quota(&entry)
+                        },
+                        profile: provider_profile(&entry),
+                        model_override: None,
                         max_concurrent_requests: entry.max_concurrent_requests,
-                        supports_websockets: entry.supports_websockets.unwrap_or(true),
+                        supports_websockets: entry.supports_websockets.unwrap_or(true)
+                            && provider_proxy.is_none()
+                            && upstream_kind != aipass_proxy::UpstreamKind::CommunitySubscription,
                         config: target_config,
                         api_key,
                     })
@@ -1193,6 +1282,130 @@ impl ProxyService {
 
 /// Official OAuth tokens are only valid against the provider's own backend,
 /// so an editable entry endpoint must never redirect them elsewhere.
+fn provider_profile(entry: &aipass_vault::EntrySummary) -> aipass_proxy::ProviderProfile {
+    use aipass_proxy::ProviderProfile::*;
+    if entry.provider_kind != ProviderKind::Official {
+        return Generic;
+    }
+    match entry.provider_id.as_deref() {
+        Some("openai") => OpenAi,
+        Some("deepseek") => DeepSeek,
+        Some("moonshot" | "kimi") => Kimi,
+        Some("mistral") => Mistral,
+        Some("gemini") => GeminiCompatible,
+        _ => Generic,
+    }
+}
+
+fn account_quota(entry: &aipass_vault::EntrySummary) -> Vec<aipass_proxy::QuotaWindow> {
+    if entry.provider_kind != ProviderKind::Official
+        || entry.credential_kind != CredentialKind::OAuth
+    {
+        return Vec::new();
+    }
+    let Some(snapshot) = entry
+        .subscription
+        .as_ref()
+        .filter(|s| !s.stale && s.error.is_none())
+    else {
+        return Vec::new();
+    };
+    let timestamp = |value: &str| {
+        OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+            .ok()
+            .and_then(|t| u64::try_from(t.unix_timestamp()).ok())
+    };
+    let Some(observed_at) = timestamp(&snapshot.observed_at) else {
+        return Vec::new();
+    };
+    snapshot
+        .windows
+        .iter()
+        .filter_map(|window| {
+            // Model-specific limits must not disable every model on the account.
+            if !window.id.starts_with("community_account_")
+                && !matches!(
+                    window.id.as_str(),
+                    "primary" | "secondary" | "five_hour" | "seven_day"
+                )
+            {
+                return None;
+            }
+            let used = window.used_percent.filter(|v| v.is_finite() && *v >= 0.0)?;
+            Some(aipass_proxy::QuotaWindow {
+                models: None,
+                not_models: Vec::new(),
+                used_basis_points: (used.min(100.0) * 100.0).round() as u16,
+                observed_at,
+                resets_at: window.resets_at.as_deref().and_then(timestamp),
+            })
+        })
+        .collect()
+}
+
+/// Managed OAuth is authoritative even if a secondary secret mirror failed.
+/// Only its linked primary credential participates; extra API keys retain
+/// their own credential selection and never inherit a subscription token.
+fn managed_oauth_token(
+    vault: &Vault,
+    entry: &aipass_vault::EntrySummary,
+    secret_id: &str,
+) -> ServiceResult<Option<String>> {
+    use aipass_provider_registry::OAuthProvider;
+    if entry.provider_kind != ProviderKind::Official
+        || entry.credential_kind != CredentialKind::OAuth
+        || aipass_provider_registry::primary_secret_ref(&entry.secret_refs)
+            .is_none_or(|secret| secret.id != secret_id)
+    {
+        return Ok(None);
+    }
+    let provider = match entry.provider_id.as_deref() {
+        Some("openai" | "codex") => OAuthProvider::Codex,
+        Some("xai") => OAuthProvider::Grok,
+        _ => return Ok(None),
+    };
+    let account = vault
+        .list_oauth_accounts(Some(provider))
+        .map_err(map_vault_error)?
+        .into_iter()
+        .find(|a| a.entry_id == Some(entry.id));
+    let Some(account) = account else {
+        return Ok(None);
+    };
+    if account.requires_reauth
+        || account.access_token.trim().is_empty()
+        || (account.expires_at_ms > 0 && account.expires_at_ms <= crate::oauth::now_ms())
+    {
+        return Err(ServiceError::new(
+            aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+            "managed OAuth credential needs refresh or sign-in",
+        ));
+    }
+    Ok(Some(account.access_token.clone()))
+}
+
+pub(crate) fn upstream_kind(entry: &aipass_vault::EntrySummary) -> aipass_proxy::UpstreamKind {
+    if entry.provider_kind == ProviderKind::Official
+        && entry.credential_kind == CredentialKind::OAuth
+        && entry.provider_id.as_deref() == Some("anthropic")
+    {
+        return aipass_proxy::UpstreamKind::ClaudeSubscription;
+    }
+    if entry.provider_kind == ProviderKind::Official
+        && entry.provider_id.as_deref() == Some("copilot")
+    {
+        return aipass_proxy::UpstreamKind::Copilot;
+    }
+    if entry.provider_kind == ProviderKind::Official
+        && entry.credential_kind == CredentialKind::OAuth
+        && matches!(entry.provider_id.as_deref(), Some("openai" | "codex"))
+    {
+        aipass_proxy::UpstreamKind::CodexSubscription
+    } else {
+        aipass_proxy::UpstreamKind::Standard
+    }
+}
+
 pub(crate) fn pinned_official_oauth_endpoint(
     provider_kind: &ProviderKind,
     credential_kind: &CredentialKind,
@@ -1203,8 +1416,9 @@ pub(crate) fn pinned_official_oauth_endpoint(
     }
     match provider_id {
         Some("anthropic") => Some("https://api.anthropic.com"),
-        Some("openai") => Some("https://chatgpt.com/backend-api/codex"),
+        Some("openai" | "codex") => Some("https://chatgpt.com/backend-api/codex"),
         Some("xai") => Some("https://cli-chat-proxy.grok.com/v1"),
+        Some("copilot") => Some("https://api.githubcopilot.com"),
         _ => None,
     }
 }
@@ -1215,7 +1429,8 @@ pub(crate) fn proxy_auth_scheme(auth_scheme: &AuthScheme) -> Option<&'static str
         AuthScheme::CustomHeader => Some("custom_header"),
         AuthScheme::XApiKey => Some("x_api_key"),
         AuthScheme::AzureApiKey => Some("azure_api_key"),
-        AuthScheme::GoogleApiKey | AuthScheme::AwsProfile => None,
+        AuthScheme::GoogleApiKey => Some("google_api_key"),
+        AuthScheme::AwsProfile => None,
     }
 }
 
@@ -1229,6 +1444,7 @@ pub(crate) fn key_upstream_protocol(
 ) -> Option<aipass_proxy::Protocol> {
     match interface {
         InterfaceType::AnthropicMessages => Some(aipass_proxy::Protocol::AnthropicMessages),
+        InterfaceType::Gemini => Some(aipass_proxy::Protocol::OpenAiChatCompletions),
         InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi => {
             if entry.provider_id.as_deref() == Some("openai")
                 || (entry.provider_id.as_deref() == Some("codex")
@@ -1894,6 +2110,11 @@ mod tests {
             config: service.config.routes[0].clone(),
             local_token: local_token.into(),
             targets: vec![ResolvedTarget {
+                upstream_proxy: None,
+                upstream_kind: aipass_proxy::UpstreamKind::Standard,
+                quota: Vec::new(),
+                model_override: None,
+                profile: aipass_proxy::ProviderProfile::Generic,
                 max_concurrent_requests: None,
                 supports_websockets: false,
                 config: ProxyTargetConfig {
@@ -2252,7 +2473,7 @@ mod tests {
                     favicon_url: None,
                     endpoints: vec![ProviderEndpoint::api("http://127.0.0.1:9/v1")],
                     interface_type: InterfaceType::OpenAiCompatible,
-                    auth_scheme: AuthScheme::GoogleApiKey,
+                    auth_scheme: AuthScheme::AwsProfile,
                     api_key: None,
                     secret_label: None,
                     default_model: None,
@@ -2881,13 +3102,48 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_unsupported_protocol_conversion() {
-        // Chat Completions <-> Responses has no conversion path.
+    fn config_accepts_direct_openai_protocol_conversion() {
         let mut config = config_with_token("matching-token");
         config.routes[0].inbound_protocol = aipass_proxy::Protocol::OpenAiChatCompletions;
         config.routes[0].upstream_protocol = aipass_proxy::Protocol::OpenAiResponses;
         config.routes[0].conversion_enabled = true;
-        assert!(validate_config(&config).is_err());
+        assert!(validate_config(&config).is_ok());
+        config.routes[0].inbound_protocol = aipass_proxy::Protocol::OpenAiResponses;
+        config.routes[0].upstream_protocol = aipass_proxy::Protocol::OpenAiChatCompletions;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn subscription_adaptation_requires_official_oauth_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::create(
+            temp.path(),
+            &SecretString::new("correct horse battery staple"),
+        )
+        .unwrap()
+        .vault;
+        let input = provider_input(
+            "fake-token",
+            "https://chatgpt.com/backend-api/codex".into(),
+            "header",
+        );
+        let id = vault.add_provider(input).unwrap();
+        let mut entry = vault.get_provider_summary(id).unwrap();
+        assert_eq!(upstream_kind(&entry), aipass_proxy::UpstreamKind::Standard);
+        entry.provider_kind = ProviderKind::Official;
+        assert_eq!(upstream_kind(&entry), aipass_proxy::UpstreamKind::Standard);
+        entry.credential_kind = CredentialKind::OAuth;
+        assert_eq!(
+            upstream_kind(&entry),
+            aipass_proxy::UpstreamKind::CodexSubscription
+        );
+        entry.provider_id = Some("codex".into());
+        assert_eq!(
+            upstream_kind(&entry),
+            aipass_proxy::UpstreamKind::CodexSubscription
+        );
+        entry.provider_kind = ProviderKind::ThirdParty;
+        assert_eq!(upstream_kind(&entry), aipass_proxy::UpstreamKind::Standard);
     }
 
     #[test]
@@ -2975,6 +3231,59 @@ mod tests {
             ),
             Some("https://api.anthropic.com")
         );
+    }
+
+    #[test]
+    fn managed_oauth_authority_survives_a_stale_mirror_and_quarantines_dead_grants() {
+        use aipass_provider_registry::OAuthProvider;
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::create(temp.path(), &SecretString::new("test password"))
+            .unwrap()
+            .vault;
+        let mut input = provider_input(
+            "stale-mirror",
+            "https://chatgpt.com/backend-api/codex".into(),
+            "header",
+        );
+        input.provider_kind = ProviderKind::Official;
+        input.credential_kind = CredentialKind::OAuth;
+        input.provider_id = Some("openai".into());
+        let id = vault.add_provider(input).unwrap();
+        let entry = vault.get_provider_summary(id).unwrap();
+        let primary = &entry.secret_refs[0].id;
+        let mut account = aipass_vault::ManagedOAuthAccount {
+            id: Uuid::new_v4(),
+            provider: OAuthProvider::Codex,
+            entry_id: Some(id),
+            access_token: "durable-rotated-access".into(),
+            refresh_token: "durable-refresh".into(),
+            expires_at_ms: crate::oauth::now_ms() + 3600000,
+            last_refresh_ms: 42,
+            id_token: None,
+            chatgpt_account_id: None,
+            account_identity: None,
+            requires_reauth: false,
+            is_default: false,
+            authenticated_at: OffsetDateTime::now_utc(),
+        };
+        vault.add_oauth_account(account.clone()).unwrap();
+        assert_eq!(
+            managed_oauth_token(&vault, &entry, primary)
+                .unwrap()
+                .as_deref(),
+            Some("durable-rotated-access")
+        );
+        assert!(managed_oauth_token(&vault, &entry, "separate-api-key")
+            .unwrap()
+            .is_none());
+        assert_eq!(vault.reveal_secret(id).unwrap(), "stale-mirror");
+        account.requires_reauth = true;
+        vault.update_oauth_account(account.clone()).unwrap();
+        assert!(managed_oauth_token(&vault, &entry, primary).is_err());
+        account.requires_reauth = false;
+        account.expires_at_ms = 1;
+        vault.update_oauth_account(account).unwrap();
+        assert!(managed_oauth_token(&vault, &entry, primary).is_err());
     }
 
     #[test]
