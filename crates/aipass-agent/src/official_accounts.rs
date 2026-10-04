@@ -14,7 +14,6 @@ use base64::Engine as _;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const USAGE_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -1029,7 +1028,7 @@ fn read_keychain_bytes(
     account: Option<&str>,
 ) -> anyhow::Result<zeroize::Zeroizing<Vec<u8>>> {
     use std::io::Read;
-    use std::process::Stdio;
+    use std::process::{Command, Stdio};
     let mut command = Command::new("security");
     command.args(["find-generic-password", "-s", service, "-w"]);
     if let Some(account) = account {

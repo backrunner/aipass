@@ -83,10 +83,10 @@ async fn who(c: &Context, token: &str) -> Result<(String, String)> {
         .unwrap_or(Value::Null);
     Ok((email, s(&plan["planInfo"], "planName").into()))
 }
-async fn native_token(c: &Context) -> Result<String> {
+async fn native_token(_c: &Context) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        let mut cmd = native_cli::command(std::path::Path::new("/usr/bin/security"), c);
+        let mut cmd = native_cli::command(std::path::Path::new("/usr/bin/security"), _c);
         cmd.args([
             "find-generic-password",
             "-s",
