@@ -166,6 +166,37 @@ a:hover {
   background: var(--accent-soft);
 }
 
+// Preserve native scrollbar gutters while intersecting the two content fades.
+// Applied by scrollMask only while an edge has more content beyond it.
+[data-scroll-mask] {
+  -webkit-mask-image:
+    linear-gradient(black, black),
+    linear-gradient(black, black),
+    linear-gradient(to bottom, transparent, black var(--scroll-mask-top), black calc(100% - var(--scroll-mask-bottom)), transparent),
+    linear-gradient(to right, transparent, black var(--scroll-mask-left), black calc(100% - var(--scroll-mask-right)), transparent);
+  mask-image:
+    linear-gradient(black, black),
+    linear-gradient(black, black),
+    linear-gradient(to bottom, transparent, black var(--scroll-mask-top), black calc(100% - var(--scroll-mask-bottom)), transparent),
+    linear-gradient(to right, transparent, black var(--scroll-mask-left), black calc(100% - var(--scroll-mask-right)), transparent);
+  -webkit-mask-size:
+    var(--scroll-mask-bar-y) 100%,
+    100% var(--scroll-mask-bar-x),
+    calc(100% - var(--scroll-mask-bar-y)) calc(100% - var(--scroll-mask-bar-x)),
+    calc(100% - var(--scroll-mask-bar-y)) calc(100% - var(--scroll-mask-bar-x));
+  mask-size:
+    var(--scroll-mask-bar-y) 100%,
+    100% var(--scroll-mask-bar-x),
+    calc(100% - var(--scroll-mask-bar-y)) calc(100% - var(--scroll-mask-bar-x)),
+    calc(100% - var(--scroll-mask-bar-y)) calc(100% - var(--scroll-mask-bar-x));
+  -webkit-mask-position: right top, left bottom, left top, left top;
+  mask-position: right top, left bottom, left top, left top;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-composite: source-over, source-over, source-in, source-over;
+  mask-composite: add, add, intersect, add;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

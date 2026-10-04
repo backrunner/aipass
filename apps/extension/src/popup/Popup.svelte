@@ -12,6 +12,7 @@
     type ProviderKind
   } from "@aipass/schemas";
   import {
+    scrollMask,
     applyBillingToDraft,
     Badge,
     Banner,
@@ -1735,7 +1736,7 @@
 {/snippet}
 
 {#snippet selectedDetail(entry: Entry)}
-  <section class="detail-pane">
+  <section use:scrollMask class="detail-pane">
     <header class="detail-head">
       <div class="detail-identity">
         <ProviderIcon
@@ -1795,7 +1796,7 @@
 
     {#if detailEditMode && editingEntryId === entry.id}
       {#key editingEntryId}
-      <div class="detail-edit-body">
+      <div use:scrollMask class="detail-edit-body">
         <ProviderFormFields
           formMode="edit"
           bind:draft={addDraft}
@@ -2045,7 +2046,7 @@
             <RefreshCw class="spin" size={13} />
           {/if}
         </form>
-        <div class="vault-list" role="listbox" aria-label={$t("providerList.providers")}>
+        <div use:scrollMask class="vault-list" role="listbox" aria-label={$t("providerList.providers")}>
           {#if filteredEntries.length}
             {#each filteredEntries as entry (entry.id)}
               {@render entryListItem(entry)}
@@ -2068,7 +2069,7 @@
       {#if selectedEntry}
         {@render selectedDetail(selectedEntry)}
       {:else}
-        <section class="detail-pane empty-detail">
+        <section use:scrollMask class="detail-pane empty-detail">
           <span class="empty-icon"><KeyRound size={20} /></span>
           <strong>{$t("providerDetail.noneSelected")}</strong>
           <p>{$t("providerDetail.noneSelectedDesc")}</p>

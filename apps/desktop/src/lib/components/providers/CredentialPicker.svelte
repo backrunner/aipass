@@ -1,6 +1,6 @@
 <script lang="ts">
   import { secretInterfaceType, type ProviderEntry, type SecretRef } from "@aipass/schemas";
-  import { interfaceLabel } from "@aipass/ui";
+  import { interfaceLabel, scrollMask } from "@aipass/ui";
   import { Select } from "bits-ui";
   import { Check, ChevronDown, KeyRound } from "lucide-svelte";
   import { t } from "../../stores/i18n";
@@ -38,17 +38,21 @@
           <div {...wrapperProps} style:z-index="220">
             <div {...props}>
               <Select.Viewport class="credential-picker-options">
-                {#each entry.secretRefs as secret (secret.id)}
-                  <Select.Item class="credential-picker-option" value={secret.id} label={optionLabel(secret)} title={optionLabel(secret)}>
-                    {#snippet children({ selected: active })}
-                      <span class="option-copy">
-                        <span class="option-heading"><span class="credential-name">{secret.label}</span><code>{secret.masked}</code></span>
-                        <CredentialTags format={secretInterfaceType(secret, entry.interfaceType)} group={secret.group ?? entry.gateway?.group} />
-                      </span>
-                      <span class="option-check">{#if active}<Check size={14} />{/if}</span>
-                    {/snippet}
-                  </Select.Item>
-                {/each}
+                {#snippet child({ props })}
+                  <div {...props} use:scrollMask>
+                    {#each entry.secretRefs as secret (secret.id)}
+                      <Select.Item class="credential-picker-option" value={secret.id} label={optionLabel(secret)} title={optionLabel(secret)}>
+                        {#snippet children({ selected: active })}
+                          <span class="option-copy">
+                            <span class="option-heading"><span class="credential-name">{secret.label}</span><code>{secret.masked}</code></span>
+                            <CredentialTags format={secretInterfaceType(secret, entry.interfaceType)} group={secret.group ?? entry.gateway?.group} />
+                          </span>
+                          <span class="option-check">{#if active}<Check size={14} />{/if}</span>
+                        {/snippet}
+                      </Select.Item>
+                    {/each}
+                  </div>
+                {/snippet}
               </Select.Viewport>
             </div>
           </div>

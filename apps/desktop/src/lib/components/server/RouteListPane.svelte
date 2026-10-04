@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { Badge } from "@aipass/ui";
+  import { scrollMask, Badge } from "@aipass/ui";
   import { ContextMenu, Switch } from "bits-ui";
   import { AlertTriangle, Pencil, Plus, Server, Trash2 } from "lucide-svelte";
 
@@ -60,7 +60,7 @@
     </button>
   </div>
 
-  <div class="entries" role="listbox" aria-label={$t("server.groups")}>
+  <div use:scrollMask class="entries" role="listbox" aria-label={$t("server.groups")}>
     {#if routes.length === 0}
       <div class="empty">
         <span class="empty-icon"><Server size={22} /></span>

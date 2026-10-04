@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { scrollMask } from "@aipass/ui";
   import { onDestroy, onMount } from "svelte";
   import { CircleAlert, X } from "lucide-svelte";
   import { resolveMessage, t } from "../../stores/i18n";
@@ -31,7 +32,7 @@
   on:focusout={() => { focused = false; scheduleDismiss(); }}
 >
   <CircleAlert size={18} aria-hidden="true" />
-  <div class="message">{resolveMessage($t, message)}</div>
+  <div use:scrollMask class="message">{resolveMessage($t, message)}</div>
   <button type="button" aria-label={$t("common.close")} on:click={onDismiss}>
     <X size={16} aria-hidden="true" />
   </button>

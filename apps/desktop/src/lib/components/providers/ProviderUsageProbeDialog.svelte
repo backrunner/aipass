@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { Banner, Button } from "@aipass/ui";
+  import { scrollMask, Banner, Button } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { Check, Gauge, RefreshCw, X } from "lucide-svelte";
 
@@ -135,7 +135,7 @@
           </Dialog.Close>
         </header>
 
-        <div class="usage-modal-body">
+        <div use:scrollMask class="usage-modal-body">
           <div class="usage-field">
             <span class="usage-label">{$t("providerDetail.usageProbeMode")}</span>
             <SegmentedControl

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SecretRef } from "@aipass/schemas";
-  import { Banner, Button, IconButton, SelectField } from "@aipass/ui";
+  import { scrollMask, Banner, Button, IconButton, SelectField } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { ArrowRight, ChevronRight, History, KeyRound, Pencil, Plus, X } from "lucide-svelte";
   import { t } from "../../stores/i18n";
@@ -44,7 +44,7 @@
           <Dialog.Title class="pricing-key-title">{$t("pricing.credentialSettings")}</Dialog.Title>
           <IconButton size="sm" label={$t("common.close")} disabled={saving} on:click={onClose}><X size={16} /></IconButton>
         </header>
-        <div class="pricing-key-body">
+        <div use:scrollMask class="pricing-key-body">
           <Dialog.Description class="pricing-key-identity">
             <KeyRound size={14} /><span title={secret.label}>{secret.label}</span><code>{secret.masked}</code>
           </Dialog.Description>

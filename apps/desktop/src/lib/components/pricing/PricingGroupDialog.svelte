@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Banner, Button } from "@aipass/ui";
+  import { scrollMask, Banner, Button } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { ChevronRight, History, Info, Plus, Trash2, X } from "lucide-svelte";
 
@@ -252,13 +252,13 @@
 
         {#if error}<Banner tone="danger">{error}</Banner>{/if}
         {#if view === "delete"}
-          <div class="modal-body"><p>{$t(deletingVersion !== undefined ? "pricing.deleteVersionConfirm" : "pricing.deleteGroupConfirm")}</p><p>{$t("pricing.sharedImpact", { count: assignedCount })}</p></div>
+          <div use:scrollMask class="modal-body"><p>{$t(deletingVersion !== undefined ? "pricing.deleteVersionConfirm" : "pricing.deleteGroupConfirm")}</p><p>{$t("pricing.sharedImpact", { count: assignedCount })}</p></div>
           <footer class="modal-footer">
             <Button variant="ghost" disabled={saving} on:click={() => (view = "form")}>{$t("common.cancel")}</Button>
             <Button variant="primary" disabled={saving} on:click={removeGroup}>{$t(deletingVersion !== undefined ? "pricing.deleteVersion" : "pricing.deleteGroup")}</Button>
           </footer>
         {:else if view === "confirm"}
-          <div class="modal-body confirm-body">
+          <div use:scrollMask class="modal-body confirm-body">
             <h3 class="confirm-title">
               {hasVersions ? $t("pricing.confirmUpdateTitle") : $t("pricing.confirmFirstTitle")}
             </h3>
@@ -279,7 +279,7 @@
             </Button>
           </footer>
         {:else}
-          <div class="modal-body">
+          <div use:scrollMask class="modal-body">
             <div class="group-overview">
             <label class="field group-name">
               <span class="field-label">{$t("pricing.group")}</span>

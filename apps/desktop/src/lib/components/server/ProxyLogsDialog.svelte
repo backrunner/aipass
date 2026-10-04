@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { scrollMask } from "@aipass/ui";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
   import { Dialog } from "bits-ui";
   import { LoaderCircle, X } from "lucide-svelte";
@@ -167,7 +168,7 @@
       <div class="proxy-log-body" aria-busy={loading}>
         {#if logs.length > 0}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex (the scroll region needs keyboard access) -->
-          <div class="proxy-log-code" role="region" aria-label={$t("server.proxyLogs")} tabindex="0" bind:this={logContainer} use:followLogs={logs} on:scroll={trackScroll}>
+          <div use:scrollMask class="proxy-log-code" role="region" aria-label={$t("server.proxyLogs")} tabindex="0" bind:this={logContainer} use:followLogs={logs} on:scroll={trackScroll}>
             <div class="proxy-log-rows" style:height={`${$virtualizer.getTotalSize()}px`}>
               {#each visibleLogs as item (item.key)}
                 <div class="proxy-log-row" data-index={item.index} style:transform={`translateY(${item.start}px)`} use:measureLog={item.index}>{@html item.html}{"\n"}</div>

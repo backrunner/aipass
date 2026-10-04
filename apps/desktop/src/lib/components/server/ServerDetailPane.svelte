@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Badge, Banner, Button, IconButton } from "@aipass/ui";
+  import { scrollMask, Badge, Banner, Button, IconButton } from "@aipass/ui";
   import { AlertTriangle, Check, Copy, FileText, LoaderCircle, Pencil, Play, RotateCw, Server, Square, Trash2, X } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
 
@@ -199,7 +199,7 @@
     </div>
   </header>
 
-  <div class="detail-body">
+  <div use:scrollMask class="detail-body">
     {#if !status.running && config.routes.some((route) => Boolean(route.token))}
       <Banner tone="warning">{$t("server.integrationsInactive")}</Banner>
     {/if}
@@ -284,7 +284,7 @@
       {#if integrateRoute}
         <div class="kv-line">
           <span class="kv-label">{$t("server.endpoint")}</span>
-          <code class="kv-value mono" title={integrateEndpoint}>{integrateEndpoint}</code>
+          <code use:scrollMask class="kv-value mono" title={integrateEndpoint}>{integrateEndpoint}</code>
           <div class="kv-actions">
             <IconButton size="sm" label={$t("server.copyEndpoint")} on:click={() => onCopyEndpoint(integrateEndpoint)}>
               <Copy size={13} />
@@ -294,7 +294,7 @@
         <div class="kv-line">
           <span class="kv-label">{$t("server.token")}</span>
           {#if integrateRoute.token}
-            <code class="kv-value mono" title={integrateRoute.token}>{integrateRoute.token}</code>
+            <code use:scrollMask class="kv-value mono" title={integrateRoute.token}>{integrateRoute.token}</code>
             <div class="kv-actions">
               <IconButton size="sm" label={$t("server.copyToken")} on:click={() => onCopyToken(integrateRoute.token)}>
                 <Copy size={13} />

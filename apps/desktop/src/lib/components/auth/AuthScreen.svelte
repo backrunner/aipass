@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Banner, Brand, Button } from "@aipass/ui";
+  import { scrollMask, Banner, Brand, Button } from "@aipass/ui";
 
   import { t } from "../../stores/i18n";
   import type { AuthMode, MaybePromise, PasswordStrength, VaultStatus } from "../../types";
@@ -62,7 +62,7 @@
 <main class="auth-shell">
   <HeroBackground />
 
-  <div class="auth-card" role="dialog" aria-label={$t("auth.dialog")}>
+  <div use:scrollMask class="auth-card" role="dialog" aria-label={$t("auth.dialog")}>
     <div class="auth-brand">
       <Brand size="md" />
     </div>
@@ -244,7 +244,7 @@
           {#if errorDetail}
             <details class="error-detail">
               <summary>{$t("auth.errorDetails")}</summary>
-              <pre class="error-detail-body">{errorDetail}</pre>
+              <pre use:scrollMask class="error-detail-body">{errorDetail}</pre>
             </details>
           {/if}
         </div>

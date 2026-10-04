@@ -1,4 +1,5 @@
 export * from "./helpers";
+export { scrollMask } from "./actions/scrollMask";
 
 export type {
   Draft,

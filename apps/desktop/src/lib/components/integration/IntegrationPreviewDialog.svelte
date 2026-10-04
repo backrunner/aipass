@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Dialog, Tabs } from "bits-ui";
   import { X } from "lucide-svelte";
-  import { Button } from "@aipass/ui";
+  import { scrollMask, Button } from "@aipass/ui";
 
   import { t } from "../../stores/i18n";
   import type { ToolConfigPreview } from "../../types";
@@ -111,11 +111,11 @@
             {#each bodies as item, index (item.file.path)}
               <Tabs.Content class="file-tab-content" value={String(index)}>
                 {#if item.unchanged}
-                  <div class="code-block placeholder">{$t("integration.noChanges")}</div>
+                  <div use:scrollMask class="code-block placeholder">{$t("integration.noChanges")}</div>
                 {:else if item.showDiff}
                   <DiffViewer rows={item.rows} />
                 {:else}
-                  <pre class="code-block" data-lang={detectLang(item.file.path)}>{@html highlightCode(item.text, item.file.path)}</pre>
+                  <pre use:scrollMask class="code-block" data-lang={detectLang(item.file.path)}>{@html highlightCode(item.text, item.file.path)}</pre>
                 {/if}
               </Tabs.Content>
             {/each}
@@ -125,11 +125,11 @@
             <code class="active-path mono" title={activePath}>{activePath}</code>
           </div>
           {#if bodies[0].unchanged}
-            <div class="code-block placeholder">{$t("integration.noChanges")}</div>
+            <div use:scrollMask class="code-block placeholder">{$t("integration.noChanges")}</div>
           {:else if bodies[0].showDiff}
             <DiffViewer rows={bodies[0].rows} />
           {:else}
-            <pre class="code-block" data-lang={detectLang(bodies[0].file.path)}>{@html highlightCode(bodies[0].text, bodies[0].file.path)}</pre>
+            <pre use:scrollMask class="code-block" data-lang={detectLang(bodies[0].file.path)}>{@html highlightCode(bodies[0].text, bodies[0].file.path)}</pre>
           {/if}
         {/if}
       {/if}

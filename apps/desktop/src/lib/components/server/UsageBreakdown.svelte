@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { scrollMask } from "@aipass/ui";
   import type { ProviderEntry } from "@aipass/schemas";
   import { Tooltip } from "bits-ui";
   import { Table } from "lucide-svelte";
@@ -78,7 +79,7 @@
 </script>
 
 <Tooltip.Provider delayDuration={150}>
-<div class="usage-breakdown">
+<div use:scrollMask class="usage-breakdown">
   {#if hasData}
     <table class="breakdown-table">
       <thead>

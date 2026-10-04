@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { Dialog } from "bits-ui";
-  import { Banner, Button, Field, IconButton, ProviderIcon, SelectField } from "@aipass/ui";
+  import { scrollMask, Banner, Button, Field, IconButton, ProviderIcon, SelectField } from "@aipass/ui";
   import { ArrowRight, Check, ExternalLink, Globe, KeyRound, Search, ShieldCheck, Terminal, X } from "lucide-svelte";
   import { t } from "../../stores/i18n";
   type Prompt = { key: string; type: string; message: string; placeholder?: string; options?: { label: string; value: string }[] };
@@ -102,7 +102,7 @@
               <Search size={14} aria-hidden="true" />
               <input bind:value={query} disabled={busy} placeholder={$t("communityConnect.search")} aria-label={$t("communityConnect.search")} />
             </label>
-            <nav class="provider-list" aria-label={$t("communityConnect.provider")}>
+            <nav use:scrollMask class="provider-list" aria-label={$t("communityConnect.provider")}>
               {#each filteredProviders as p}
                 <button type="button" class="provider-option" class:active={providerId === p.id} aria-pressed={providerId === p.id} disabled={busy}
                   on:click={() => { providerId = p.id; methodIndex = p.methods[0]?.index ?? 0; apiKey = ""; inputs = {}; }}>
@@ -115,7 +115,7 @@
             </nav>
             <span class="catalog-count">{$t("communityConnect.providerCount", { count: providers.length })}</span>
           </aside>
-          <div class="connection-body">
+          <div use:scrollMask class="connection-body">
             {#if error}<Banner tone="danger">{error}</Banner>{/if}
             {#if provider}
               <div class="selected-provider">

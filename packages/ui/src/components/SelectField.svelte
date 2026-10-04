@@ -3,6 +3,7 @@
   import { Check, ChevronDown } from "lucide-svelte";
 
   import { t } from "../i18n";
+  import { scrollMask } from "../actions/scrollMask";
 
   export let value = "";
   export let label = "";
@@ -42,21 +43,25 @@
           <div {...wrapperProps} style:z-index="220">
             <div {...props}>
               <Select.Viewport class="select-viewport">
-                {#each options as option}
-                  <Select.Item
-                    class="select-item"
-                    value={option.value}
-                    label={option.label}
-                    disabled={option.disabled}
-                  >
-                    {#snippet children({ selected })}
-                      <span class="select-item-text">{option.label}</span>
-                      {#if selected}
-                        <Check size={14} />
-                      {/if}
-                    {/snippet}
-                  </Select.Item>
-                {/each}
+                {#snippet child({ props })}
+                  <div {...props} use:scrollMask>
+                    {#each options as option}
+                      <Select.Item
+                        class="select-item"
+                        value={option.value}
+                        label={option.label}
+                        disabled={option.disabled}
+                      >
+                        {#snippet children({ selected })}
+                          <span class="select-item-text">{option.label}</span>
+                          {#if selected}
+                            <Check size={14} />
+                          {/if}
+                        {/snippet}
+                      </Select.Item>
+                    {/each}
+                  </div>
+                {/snippet}
               </Select.Viewport>
             </div>
           </div>

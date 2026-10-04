@@ -6,6 +6,7 @@
   import CredentialTags from "./CredentialTags.svelte";
   import type { InterfaceType, ProviderEntry, ProviderKind, SecretRef } from "@aipass/schemas";
   import {
+    scrollMask,
     Badge,
     Banner,
     Button,
@@ -595,7 +596,7 @@
       </div>
     </header>
 
-    <div class="detail-body">
+    <div use:scrollMask class="detail-body">
       {#if notice}<Banner tone="success">{notice}</Banner>{/if}
       {#if selected.websocketWarning}<Banner tone="warning">{$t("providerForm.websocketAutoDisabled")}</Banner>{/if}
       {#if saving && draft.websocketPreferenceTouched && draft.supportsWebsockets && selected.supportsWebsockets === false}
@@ -814,7 +815,7 @@
                   {/if}
                 </div>
                 <button type="button" class="secret-copy" title={secret.label} aria-label={$t("providerDetail.copySecret", { label: secret.label })} on:click={() => onCopySecret(secret.id)}></button>
-                <code class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
+                <code use:scrollMask class="kv-value mono" class:revealed={Boolean(revealedSecrets[secret.id])}>{revealedSecrets[secret.id] || fullyMasked()}</code>
                 <span class="kv-actions">
                   {#if copied === `secret:${secret.id}`}
                     <span class="kv-hint copied"><Check size={13} /> {$t("providerDetail.copied")}</span>

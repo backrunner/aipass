@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Banner, Button, IconButton } from "@aipass/ui";
+  import { scrollMask, Banner, Button, IconButton } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import {
     ArrowLeft,
@@ -360,7 +360,7 @@
           </nav>
         {/if}
 
-        <div class="modal-body">
+        <div use:scrollMask class="modal-body">
           {#if view === "choose"}
             <div class="intro">
               <h2>{$t("oauthConnect.chooseProvider")}</h2>

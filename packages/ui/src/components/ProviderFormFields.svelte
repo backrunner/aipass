@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { scrollMask } from "../actions/scrollMask";
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { authSchemeCompatibleWithInterface, providerDefinitions } from "@aipass/schemas";
   import { ChevronDown, Eye, EyeOff, Plus, X } from "lucide-svelte";
@@ -520,16 +521,22 @@
       <DropdownMenu.Trigger class="add-field-trigger"><Plus size={14} />{$t("providerForm.addField")}<ChevronDown size={14} /></DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content class="provider-field-menu" sideOffset={6} align="start">
-          {#each [detailsAvailable, advancedAvailable] as fields, index}
-            {#if fields.length}
-              <DropdownMenu.Group>
-                <DropdownMenu.GroupHeading class="provider-field-menu-heading">{$t(index === 0 ? "providerForm.details" : "providerForm.advanced")}</DropdownMenu.GroupHeading>
-                {#each fields as field}
-                  <DropdownMenu.Item class="provider-field-menu-item" onSelect={() => { setTimeout(() => addField(field.id), 0); }}>{$t(field.label)}</DropdownMenu.Item>
+          {#snippet child({ props, wrapperProps })}
+            <div {...wrapperProps} style:z-index="230">
+              <div {...props} use:scrollMask>
+                {#each [detailsAvailable, advancedAvailable] as fields, index}
+                  {#if fields.length}
+                    <DropdownMenu.Group>
+                      <DropdownMenu.GroupHeading class="provider-field-menu-heading">{$t(index === 0 ? "providerForm.details" : "providerForm.advanced")}</DropdownMenu.GroupHeading>
+                      {#each fields as field}
+                        <DropdownMenu.Item class="provider-field-menu-item" onSelect={() => { setTimeout(() => addField(field.id), 0); }}>{$t(field.label)}</DropdownMenu.Item>
+                      {/each}
+                    </DropdownMenu.Group>
+                  {/if}
                 {/each}
-              </DropdownMenu.Group>
-            {/if}
-          {/each}
+              </div>
+            </div>
+          {/snippet}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

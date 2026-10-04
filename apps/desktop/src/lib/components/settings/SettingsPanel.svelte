@@ -25,7 +25,7 @@
   } from "../../types";
   import { checkForUpdates, clearPendingUpdate, installUpdate, persistUpdateChannel, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
   import { buildTimeLabel } from "../../build";
-  import { Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
+  import { scrollMask, Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
   import Card from "../shared/Card.svelte";
   import ConfirmModal from "../shared/ConfirmModal.svelte";
   import UpdateRestartConfirmModal from "../shared/UpdateRestartConfirmModal.svelte";
@@ -422,7 +422,7 @@
       </header>
 
       {#if error || operationError || notice}
-        <div class="operation-feedback">
+        <div use:scrollMask class="operation-feedback">
           {#if error || operationError}
             <Banner tone="danger">{error || operationError}</Banner>
           {:else if notice}
@@ -433,15 +433,19 @@
 
       <Tabs.Root bind:value={activeTab} class="settings-tabs">
         <Tabs.List class="tabs-list">
-          <Tabs.Trigger value="general" class="tab-trigger">{$t("settings.general")}</Tabs.Trigger>
-          <Tabs.Trigger value="security" class="tab-trigger">{$t("settings.security")}</Tabs.Trigger>
-          <Tabs.Trigger value="sync" class="tab-trigger">{$t("settings.sync")}</Tabs.Trigger>
-          <Tabs.Trigger value="server" class="tab-trigger">{$t("settings.server")}</Tabs.Trigger>
-          <Tabs.Trigger value="backup" class="tab-trigger">{$t("settings.backup")}</Tabs.Trigger>
-          <Tabs.Trigger value="about" class="tab-trigger">{$t("settings.about")}</Tabs.Trigger>
+          {#snippet child({ props })}
+            <div {...props} use:scrollMask>
+              <Tabs.Trigger value="general" class="tab-trigger">{$t("settings.general")}</Tabs.Trigger>
+              <Tabs.Trigger value="security" class="tab-trigger">{$t("settings.security")}</Tabs.Trigger>
+              <Tabs.Trigger value="sync" class="tab-trigger">{$t("settings.sync")}</Tabs.Trigger>
+              <Tabs.Trigger value="server" class="tab-trigger">{$t("settings.server")}</Tabs.Trigger>
+              <Tabs.Trigger value="backup" class="tab-trigger">{$t("settings.backup")}</Tabs.Trigger>
+              <Tabs.Trigger value="about" class="tab-trigger">{$t("settings.about")}</Tabs.Trigger>
+            </div>
+          {/snippet}
         </Tabs.List>
 
-        <div class="tabs-body">
+        <div use:scrollMask class="tabs-body">
           <Tabs.Content value="general" class="tab-panel">
             <Card title={$t("settings.appearance")}>
               <div class="rows">

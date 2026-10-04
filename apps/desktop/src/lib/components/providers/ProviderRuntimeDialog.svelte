@@ -10,7 +10,7 @@
 </script>
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { Banner, Button, Field, IconButton, SelectField, SwitchField } from "@aipass/ui";
+  import { scrollMask, Banner, Button, Field, IconButton, SelectField, SwitchField } from "@aipass/ui";
   import { Dialog, Tabs } from "bits-ui";
   import { Bell, CircleDollarSign, Clock3, Globe, Info, Plus, Send, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-svelte";
   import { t } from "../../stores/i18n";
@@ -101,7 +101,7 @@
               <Tabs.Trigger class="settings-tab" value={section.id} disabled={busy}><svelte:component this={section.icon} size={15} />{$t(section.label)}</Tabs.Trigger>
             {/each}
           </Tabs.List>
-          <div class="modal-body">
+          <div use:scrollMask class="modal-body">
             {#if error}<Banner tone="danger">{error}</Banner>{/if}
             {#if notice}<Banner tone="success">{notice}</Banner>{/if}
             {#if loading}<p class="loading-message" aria-busy="true">{$t("common.loading")}</p>

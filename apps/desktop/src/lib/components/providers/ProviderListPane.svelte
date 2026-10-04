@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { Badge, Button, ProviderIcon } from "@aipass/ui";
+  import { scrollMask, Badge, Button, ProviderIcon } from "@aipass/ui";
   import { ContextMenu, DropdownMenu } from "bits-ui";
   import { ChevronRight, KeyRound, Plug, Plus, RefreshCw, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
@@ -144,7 +144,7 @@
     {/if}
   </div>
 
-  <div class="entries" role="listbox" aria-label={$t("providerList.providers")}>
+  <div use:scrollMask class="entries" role="listbox" aria-label={$t("providerList.providers")}>
     {#if entries.length === 0}
       <ProviderEmptyState
         title={$t(showTrash ? "providerList.trashEmpty" : showFavorites ? "providerList.favoritesEmpty" : showArchived ? "providerList.archiveEmpty" : "providerList.noProviders")}

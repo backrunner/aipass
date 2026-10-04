@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Banner, Button, ProviderFormFields } from "@aipass/ui";
+  import { scrollMask, Banner, Button, ProviderFormFields } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { X } from "lucide-svelte";
 
@@ -59,7 +59,7 @@
           </Dialog.Close>
         </header>
 
-        <div class="modal-body">
+        <div use:scrollMask class="modal-body">
           <ProviderFormFields
             showConcurrencySetting
             showWebsocketSetting

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
-  import { Badge, Banner, Button, Field, IconButton, SelectField, SwitchField, interfaceLabel } from "@aipass/ui";
+  import { scrollMask, Badge, Banner, Button, Field, IconButton, SelectField, SwitchField, interfaceLabel } from "@aipass/ui";
   import { Dialog, Switch } from "bits-ui";
   import { AlertTriangle, ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
 
@@ -266,7 +266,7 @@
           </Dialog.Close>
         </header>
 
-        <div class="modal-body">
+        <div use:scrollMask class="modal-body">
           <div class="form-block">
             <Field label={$t("server.groupName")}>
               <input bind:value={name} placeholder={$t("server.groupName")} disabled={saving} />

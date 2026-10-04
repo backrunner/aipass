@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ProviderIcon } from "@aipass/ui";
+  import { scrollMask, ProviderIcon } from "@aipass/ui";
   import { ArrowRight, Check, ChevronDown, CircleHelp, FileText, KeyRound, Languages, Layers, LockKeyhole, LogOut, Monitor, Moon, Pencil, Play, Search, Server, ShieldCheck, ShieldAlert, Square, Sun, Terminal, X } from "lucide-svelte";
   import logoUrl from "../../desktop/public/aipass-logo.png?inline";
   import { ApiError, request } from "./api";
@@ -176,7 +176,7 @@
       </div>
     </aside>
   {/if}
-  <main class:login-page={!data} class:content-pane={!!data}>
+  <main use:scrollMask class:login-page={!data} class:content-pane={!!data}>
   {#if !data}
     <section class="login-card">
       <div class="login-identity"><img src={logoUrl} width="48" height="48" alt="AIPass" /><span class="login-lock"><LockKeyhole size={13} /></span></div>
@@ -207,7 +207,7 @@
         {:else}<span class="read-scope"><ShieldCheck size={14} />{tr("密钥已隐藏", "Secrets masked")}</span>{/if}
       </div>
     </header>
-    <div class="content-body" class:credentials-body={tab === "credentials"}>
+    <div use:scrollMask class="content-body" class:credentials-body={tab === "credentials"}>
     {#if error}<div class="banner error" role="alert">{error}<button class="quiet icon-button" aria-label={tr("关闭提示", "Dismiss")} onclick={() => error = ""}><X size={14} /></button></div>{/if}
     {#if notice}<div class="banner" role="status"><Check size={14} />{notice}</div>{/if}
     {#if busy}<p class="pending" role="status">{tr("正在处理…", "Working…")}</p>{/if}
@@ -248,14 +248,14 @@
         {#each data.logs as log}<div class="log-row"><time>{new Date(log.timestamp * 1000).toLocaleTimeString()}</time><span>{log.level}</span><pre>{log.message}</pre></div>{/each}</div>
       </details>
     {:else}
-      <div class="credentials-layout">
-        <section class="provider-list"><div class="search-field"><Search size={14} /><input type="search" aria-label={tr("搜索凭据", "Search credentials")} placeholder={tr("搜索凭据…", "Search credentials…")} bind:value={search} /></div>
+      <div use:scrollMask class="credentials-layout">
+        <section use:scrollMask class="provider-list"><div class="search-field"><Search size={14} /><input type="search" aria-label={tr("搜索凭据", "Search credentials")} placeholder={tr("搜索凭据…", "Search credentials…")} bind:value={search} /></div>
           <div class="provider-entries">{#each providers as provider (provider.id)}
             <button class:selected={providerId === provider.id} aria-pressed={providerId === provider.id} disabled={!!busy} onclick={() => chooseProvider(provider.id)}><ProviderIcon title={provider.title} size="md" /><span class="provider-text"><strong>{provider.title}</strong><span class="subtle">{provider.providerId ?? provider.interfaceType} · {provider.secrets.length} {tr("个密钥", "keys")}</span></span></button>
           {/each}
           {#if !providers.length}<p class="empty">{tr("没有匹配的凭据", "No matching credentials")}</p>{/if}</div>
         </section>
-        <section class="credential-detail">
+        <section use:scrollMask class="credential-detail">
           {#if selected}
             <div class="credential-identity"><ProviderIcon title={selected.title} size="lg" /><div><h2>{selected.title}</h2><span class="subtle">{selected.providerId ?? selected.interfaceType}</span></div><span class="badge">{selected.credentialKind === "oauth" ? "OAuth" : "API Key"}</span></div>
             <section class="detail-card"><div class="card-heading"><KeyRound size={14} /><h3>{tr("密钥", "Keys")}</h3><span class="section-count">{selected.secrets.length}</span></div>
@@ -279,7 +279,7 @@
     </div>
 
     {#if editing}
-      <dialog use:openDialog class="dialog" aria-labelledby="edit-title" oncancel={e => { if (busy) e.preventDefault(); else editing = undefined; }}>
+      <dialog use:scrollMask use:openDialog class="dialog" aria-labelledby="edit-title" oncancel={e => { if (busy) e.preventDefault(); else editing = undefined; }}>
         <h2 id="edit-title">{tr("编辑上游凭据", "Edit upstream credential")}</h2>
         <form onsubmit={e => { e.preventDefault(); if (editing) void mutate({ type: "target_update", routeId: editing.routeId, targetId: editing.target.id, revision: editing.revision, providerEntryId: editing.target.providerEntryId, secretId: editing.target.secretId, enabled: editing.target.enabled, priority: editing.target.priority, weight: editing.target.weight, preferWs: editing.target.preferWs }, "target"); }}>
           <label>{tr("服务商", "Provider")}<select value={editing.target.providerEntryId} onchange={e => editProvider(e.currentTarget.value)}>{#each data.providers as provider}<option value={provider.id}>{provider.title}</option>{/each}</select></label>
@@ -293,10 +293,10 @@
       </dialog>
     {/if}
     {#if preview}
-      <dialog use:openDialog class="dialog wide" aria-labelledby="preview-title" oncancel={e => { if (busy) e.preventDefault(); else preview = undefined; }}>
+      <dialog use:scrollMask use:openDialog class="dialog wide" aria-labelledby="preview-title" oncancel={e => { if (busy) e.preventDefault(); else preview = undefined; }}>
         <div class="eyebrow">{preview.tool} · {preview.mode}</div><h2 id="preview-title">{preview.entryTitle}</h2><p class="subtle mono">{preview.targetPath}</p>
         {#if preview.mode === "plaintext"}<p class="warning">{tr("确认后会把凭据或本地代理 token 写入这台电脑的工具配置文件。", "Confirming writes the credential or local proxy token into this computer’s tool configuration.")}</p>{/if}
-        <pre class="diff">{preview.preview}</pre>
+        <pre use:scrollMask class="diff">{preview.preview}</pre>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
         <div class="dialog-actions"><button disabled={!!busy} onclick={() => preview = undefined}>{tr("取消", "Cancel")}</button><button class="primary" disabled={!!busy} onclick={() => { const id = preview!.previewId; void run("apply", async () => { await request("/api/action", { type: "tool_apply", previewId: id }, data?.csrf); preview = undefined; notice = tr("配置已应用到本机工具", "Configuration applied to the host tool"); }); }}>{busy === "apply" ? tr("应用中…", "Applying…") : tr("确认应用", "Confirm and apply")}</button></div>
       </dialog>

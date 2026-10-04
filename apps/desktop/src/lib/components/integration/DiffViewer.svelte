@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { scrollMask } from "@aipass/ui";
   import { ChevronDown, ChevronUp } from "lucide-svelte";
   import { t } from "../../stores/i18n";
   import type { DiffRow } from "../../utils/config-diff";
@@ -75,7 +76,7 @@
   <div class="diff-body">
     {#each sides as side}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Scrollable source panes need keyboard focus.) -->
-      <div
+      <div use:scrollMask
         class="diff-pane"
         class:before={side === "old"}
         role="region"
