@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Field, IconButton, SelectField, SwitchField } from "@aipass/ui";
+  import { Button, Collapsible, Field, IconButton, SelectField, SwitchField } from "@aipass/ui";
   import { Bell, Plus, TestTube, Trash2 } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -140,8 +140,7 @@
             </div>
           </div>
 
-          <details class="custom-payload">
-            <summary>{$t("webhook.customPayload")}</summary>
+          <Collapsible title={$t("webhook.customPayload")} compact>
             <Field label={$t("webhook.payloadTemplate")}>
               <textarea
                 bind:value={webhook.customPayload}
@@ -152,7 +151,7 @@
               ></textarea>
               <span class="field-hint">{$t("webhook.payloadHint")}</span>
             </Field>
-          </details>
+          </Collapsible>
 
           <div class="webhook-actions">
             <Button
@@ -320,33 +319,6 @@
 
     &:hover {
       color: var(--text);
-    }
-  }
-
-  .custom-payload {
-    padding: 10px;
-    border: 1px solid var(--divider);
-    border-radius: var(--radius-sm);
-    background: var(--surface-2);
-
-    summary {
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      user-select: none;
-
-      &:hover {
-        color: var(--text);
-      }
-    }
-
-    &[open] {
-      padding-bottom: 12px;
-
-      summary {
-        margin-bottom: 10px;
-      }
     }
   }
 

@@ -44,17 +44,18 @@ test("renders cached favicon data URLs", () => {
 test("renders built-in icon for known provider ID", () => {
   mountIcon({ title: "OpenAI", providerId: "openai" });
 
-  const img = document.body.querySelector("img");
-  expect(img).not.toBeNull();
-  expect(img?.getAttribute("src")).toContain("openai.svg");
+  const mask = document.body.querySelector<HTMLElement>(".monochrome-icon");
+  expect(mask).not.toBeNull();
+  expect(mask?.style.getPropertyValue("--provider-icon")).toContain("data:image/svg+xml");
+  expect(document.body.querySelector(".initials")).toBeNull();
 });
 
 test("renders built-in icon for known domain", () => {
   mountIcon({ title: "OpenAI", domain: "api.openai.com" });
 
-  const img = document.body.querySelector("img");
-  expect(img).not.toBeNull();
-  expect(img?.getAttribute("src")).toContain("openai.svg");
+  const mask = document.body.querySelector<HTMLElement>(".monochrome-icon");
+  expect(mask).not.toBeNull();
+  expect(mask?.style.getPropertyValue("--provider-icon")).toContain("data:image/svg+xml");
 });
 
 test("falls back to initials for unknown provider", () => {
@@ -68,7 +69,14 @@ test("prefers built-in icon over cached favicon", () => {
   const cached = "data:image/png;base64,iVBORw0KGgo=";
   mountIcon({ title: "OpenAI", providerId: "openai", faviconUrl: cached });
 
-  const img = document.body.querySelector("img");
-  expect(img?.getAttribute("src")).toContain("openai.svg");
-  expect(img?.getAttribute("src")).not.toBe(cached);
+  const mask = document.body.querySelector<HTMLElement>(".monochrome-icon");
+  expect(mask?.style.getPropertyValue("--provider-icon")).toContain("data:image/svg+xml");
+  expect(document.body.querySelector("img")).toBeNull();
+});
+
+test("renders colored built-in icons from bundled assets", () => {
+  mountIcon({ title: "Gemini", providerId: "gemini" });
+
+  expect(document.body.querySelector("img")?.getAttribute("src")).toContain("data:image/svg+xml");
+  expect(document.body.querySelector(".monochrome-icon")).toBeNull();
 });

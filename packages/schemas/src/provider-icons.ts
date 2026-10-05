@@ -128,10 +128,3 @@ function extractHostname(url: string): string | undefined {
     return undefined;
   }
 }
-
-/**
- * Get icon asset path for desktop app
- */
-export function getIconAssetPath(iconName: ProviderIconName): string {
-  return `/src/assets/provider-icons/${iconName}.svg`;
-}

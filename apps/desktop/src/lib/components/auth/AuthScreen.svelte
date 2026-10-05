@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { scrollMask, Banner, Brand, Button } from "@aipass/ui";
+  import { scrollMask, Banner, Brand, Button, Collapsible } from "@aipass/ui";
 
   import { t } from "../../stores/i18n";
   import type { AuthMode, MaybePromise, PasswordStrength, VaultStatus } from "../../types";
@@ -242,10 +242,9 @@
         <div class="error-block">
           <span>{error}</span>
           {#if errorDetail}
-            <details class="error-detail">
-              <summary>{$t("auth.errorDetails")}</summary>
+            <Collapsible title={$t("auth.errorDetails")} variant="inline">
               <pre use:scrollMask class="error-detail-body">{errorDetail}</pre>
-            </details>
+            </Collapsible>
           {/if}
         </div>
       </Banner>
@@ -415,20 +414,6 @@
     gap: 8px;
     min-width: 0;
     flex: 1;
-  }
-
-  .error-detail {
-    summary {
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 500;
-      color: inherit;
-      opacity: 0.8;
-
-      &:hover {
-        opacity: 1;
-      }
-    }
   }
 
   .error-detail-body {

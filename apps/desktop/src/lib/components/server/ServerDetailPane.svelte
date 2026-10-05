@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { scrollMask, Badge, Banner, Button, IconButton } from "@aipass/ui";
+  import { scrollMask, Badge, Banner, Button, IconButton, ProxyStatusGrid } from "@aipass/ui";
   import { AlertTriangle, Check, Copy, FileText, LoaderCircle, Pencil, Play, RotateCw, Server, Square, Trash2, X } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
 
@@ -8,7 +8,7 @@
   import { formatCompact } from "../../utils/format";
   import { integrationToolDefinitions, localProxyAvailability } from "../../utils/integrations";
   import { advertisedProxyAddress } from "../../utils/server";
-  import Card from "../shared/Card.svelte";
+  import { Card } from "@aipass/ui";
   import ConfirmModal from "../shared/ConfirmModal.svelte";
   import IntegrationCard from "../integration/IntegrationCard.svelte";
   import UsageBreakdown from "./UsageBreakdown.svelte";
@@ -124,12 +124,6 @@
   }
   $: if (status.running) editingBindAddr = false;
 
-  function formatSuccessRate(value: number, completedAttempts: number): string {
-    if (completedAttempts === 0) return "-";
-    const percent = value / 100;
-    return `${percent.toFixed(Number.isInteger(percent) ? 0 : 1)}%`;
-  }
-
   async function openProxyLogs() {
     if (logsOpening) return;
     logsOpening = true;
@@ -154,7 +148,7 @@
         {#if enabledRoutes.length > 0}
           <div class="group-badges" aria-label={$t("server.activeGroups")} title={$t("server.activeGroups")}>
             {#each enabledRoutes as route (route.id)}
-              <Badge size="sm">{route.name}</Badge>
+              <Badge size="sm"><span class="group-name" title={route.name}>{route.name}</span></Badge>
             {/each}
           </div>
         {/if}
@@ -166,7 +160,7 @@
               <button type="button" class="bind-cancel" disabled={Boolean(busy) || savingBindAddr} on:click={cancelBindAddr} aria-label={$t("common.cancel")}><X size={13} /></button>
             </form>
           {:else}
-            <code class="mono">{status.running ? status.bindAddr : config.bindAddr}</code>
+            <code class="mono" title={status.running ? status.bindAddr : config.bindAddr}>{status.running ? status.bindAddr : config.bindAddr}</code>
             {#if !status.running}
               <button type="button" class="bind-edit" disabled={Boolean(busy)} on:click={() => (editingBindAddr = true)} aria-label={$t("server.editBindAddress")}><Pencil size={12} /></button>
             {/if}
@@ -205,40 +199,7 @@
     {/if}
 
     <Card padded={false}>
-      <div class="status-grid">
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.requests")}</span>
-          <strong class="cell-number">{formatCompact(status.requests)}</strong>
-        </div>
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.failures")}</span>
-          <strong class="cell-number">{formatCompact(status.failures)}</strong>
-        </div>
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.rpm")}</span>
-          <strong class="cell-number">{formatCompact(status.recentRequests)}</strong>
-        </div>
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.tpm")}</span>
-          <strong class="cell-number">{formatCompact(status.recentTokens)}</strong>
-        </div>
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.successRate")}</span>
-          <strong class="cell-number">{formatSuccessRate(status.successRateBps ?? 0, status.requests)}</strong>
-        </div>
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.firstToken")}</span>
-          <strong class="cell-number">{status.averageFirstTokenMs == null ? "-" : `${formatCompact(status.averageFirstTokenMs)} ms`}</strong>
-        </div>
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.realtimeConcurrency")}</span>
-          <strong class="cell-number">{formatCompact(status.inFlightRequests ?? 0)}</strong>
-        </div>
-        <div class="status-cell">
-          <span class="cell-label">{$t("server.availableChannels")}</span>
-          <strong class="cell-number">{formatCompact(availableChannels)}/{formatCompact(totalChannels)}</strong>
-        </div>
-      </div>
+      <ProxyStatusGrid {status} {availableChannels} {totalChannels} />
     </Card>
 
     <Card title={$t("server.usageChart")} padded={false}>
@@ -423,35 +384,13 @@
     flex-shrink: 0;
   }
 
-  .status-grid {
-    display: grid;
-    grid-template-columns: repeat(8, minmax(64px, 1fr));
-    gap: 12px;
-    align-items: center;
-    padding: 12px 16px;
-  }
 
-  .status-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-  }
 
-  .cell-label {
-    color: var(--text-tertiary);
-    font-size: 11px;
-    font-weight: 600;
-  }
 
-  .cell-number {
-    display: flex;
-    align-items: center;
-    min-height: 22px;
-    font-size: 20px;
-    line-height: 1.1;
-    font-variant-numeric: tabular-nums;
-  }
+
+
+
+
 
   .cell-muted {
     color: var(--text-tertiary);
@@ -459,6 +398,7 @@
   }
 
   .bind-chip {
+    max-width: 100%;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -469,11 +409,16 @@
     border-radius: 999px;
 
     code {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       color: var(--text-secondary);
       font-size: 12px;
     }
 
     input {
+      min-width: 0;
       width: 140px;
       min-height: 22px;
       padding: 0 2px;
@@ -514,6 +459,9 @@
     font-size: 12px;
     line-height: 1.4;
   }
+
+  .group-badges :global(.badge) { max-width: 100%; }
+  .group-name { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .kv-line {
     display: grid;
@@ -589,19 +537,13 @@
       gap: 10px 12px;
     }
 
+    .identity { display: contents; }
+    .identity-text { grid-column: 1; grid-row: 1; }
+    .proxy-meta { grid-column: 1 / -1; grid-row: 2; }
+
     .actions {
       grid-column: 2;
       grid-row: 1;
-    }
-
-    .status-grid {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-  }
-
-  @container (max-width: 480px) {
-    .status-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 

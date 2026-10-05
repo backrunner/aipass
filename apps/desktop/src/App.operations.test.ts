@@ -1,6 +1,7 @@
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
-import type { EntrySummary, OAuthAccountSummary } from "./lib/types";
+import type { EntrySummary, OAuthAccountSummary, ProxyConfig } from "./lib/types";
+import { defaultRetryPolicy } from "./lib/utils/server";
 
 const { invoke, listeners } = vi.hoisted(() => ({ invoke: vi.fn(), listeners: new Map<string, (event?: any) => void>() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -130,7 +131,7 @@ test("repeated provider submissions share one write and a failure preserves the 
   let resolve!: (id: string) => void;
   let attempt = 0;
   await render({ provider_add: () => new Promise<string>((done, fail) => { attempt++; resolve = done; reject = fail; }) });
-  document.querySelector<HTMLButtonElement>(".cta-btn.primary")!.click();
+  document.querySelector<HTMLButtonElement>(".cta-btn.btn-primary")!.click();
   flushSync();
   input('.provider-dialog-content input[placeholder="My provider"]', "New fixture");
   input('.provider-dialog-content .secret-input input', "fixture-key");
@@ -228,7 +229,7 @@ test("external errors use an expiring toast and repeated identical failures get 
 
 test("an unrelated failure stays out of the provider form and dismissing its toast preserves the draft", async () => {
   await render();
-  document.querySelector<HTMLButtonElement>(".cta-btn.primary")!.click();
+  document.querySelector<HTMLButtonElement>(".cta-btn.btn-primary")!.click();
   flushSync();
   input('.provider-dialog-content input[placeholder="My provider"]', "Unsaved provider");
   listeners.get("aipass-provider-add-error")!({ payload: { message: "fixture unrelated failure" } });
@@ -299,4 +300,143 @@ test("pricing write failures preserve the key draft and support retry", async ()
   document.querySelector<HTMLButtonElement>('.pricing-key-dialog .btn-primary')!.click();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector('.pricing-key-dialog')).toBeNull(); });
   expect(invoke.mock.calls.filter(([command]) => command === 'pricing_assignment_set')).toHaveLength(2);
+});
+
+const serverSettingsFixture = (): ProxyConfig => ({
+  enabled: false, bindAddr: "127.0.0.1:8787", routes: [], upstreamProxy: { mode: "system" },
+  pricing: [{ model: "gpt-", inputMicrosPerMillion: 1, outputMicrosPerMillion: 2, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }]
+});
+async function openServerSettings() {
+  document.querySelector<HTMLButtonElement>(".menu-trigger")!.click(); flushSync();
+  [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.trim() === "Settings")!.click();
+  await vi.waitFor(() => { flushSync(); expect(button("Server")).toBeTruthy(); });
+  button("Server").click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".pricing-price-grid")).toBeTruthy(); });
+}
+function changeSetting(selector: string, value: string) {
+  input(selector, value);
+  document.querySelector<HTMLInputElement>(selector)!.dispatchEvent(new Event("change", { bubbles: true }));
+  flushSync();
+}
+
+test("server autosave serializes rapid edits and closing waits for the latest draft", async () => {
+  let config = serverSettingsFixture();
+  const writes: typeof config[] = [];
+  let release: () => void = () => {};
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await render({ server_config_get: () => config, server_config_set: async args => {
+    writes.push(structuredClone(args.config));
+    if (writes.length === 1) await pending;
+    config = args.config;
+    return config;
+  } });
+  await openServerSettings();
+  expect(button("Save settings")).toBeUndefined();
+  expect(button("Save configuration")).toBeUndefined();
+  changeSetting('.pricing-price-grid .field:nth-child(1) input', '1000');
+  changeSetting('.pricing-price-grid .field:nth-child(2) input', '2000');
+  expect(writes).toHaveLength(1);
+  document.querySelector<HTMLButtonElement>('.settings-drawer .close-btn')!.click();
+  flushSync();
+  expect(document.querySelector('.settings-drawer')).toBeTruthy();
+  release();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.settings-drawer')).toBeNull(); });
+  expect(writes).toHaveLength(2);
+  expect(config.pricing[0]).toMatchObject({ inputMicrosPerMillion: 1000, outputMicrosPerMillion: 2000 });
+});
+
+test("server autosave retains a failed draft for retry and waits for a complete custom proxy", async () => {
+  let config = serverSettingsFixture();
+  let fail = true;
+  const writes: typeof config[] = [];
+  await render({ server_config_get: () => config, server_config_set: args => {
+    writes.push(structuredClone(args.config));
+    if (fail) throw new Error('fixture automatic save failed');
+    config = args.config;
+    return config;
+  } });
+  await openServerSettings();
+  changeSetting('.pricing-price-grid .field:nth-child(1) input', '4000');
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.settings-drawer [role="alert"]')?.textContent).toContain('fixture automatic save failed'); });
+  expect(document.querySelector<HTMLInputElement>('.pricing-price-grid input')?.value).toBe('4000');
+  fail = false;
+  button('Retry save').click();
+  await vi.waitFor(() => { flushSync(); expect(writes).toHaveLength(2); expect(button('Retry save')).toBeUndefined(); });
+  const custom = [...document.querySelectorAll<HTMLButtonElement>('.settings-drawer .segmented button')].find(node => node.textContent?.trim() === 'Custom')!;
+  custom.click(); flushSync();
+  expect(writes).toHaveLength(2);
+  document.querySelector<HTMLButtonElement>('.settings-drawer .close-btn')!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.settings-drawer [role="alert"]')?.textContent).toContain('Enter a proxy URL'); });
+  expect(document.querySelector('.settings-drawer')).toBeTruthy();
+  changeSetting('input[placeholder="http://user:pass@127.0.0.1:7890"]', 'http://127.0.0.1:7890');
+  await vi.waitFor(() => { flushSync(); expect(writes).toHaveLength(3); expect(button('Retry save')).toBeUndefined(); });
+  expect(config.upstreamProxy).toEqual({ mode: 'custom', customUrl: 'http://127.0.0.1:7890' });
+  changeSetting('.pricing-price-grid input', '-1');
+  expect(writes).toHaveLength(3);
+  expect(document.querySelector('.settings-drawer [role="alert"]')?.textContent).toContain('whole number');
+  changeSetting('.pricing-price-grid input', '5000');
+  await vi.waitFor(() => { flushSync(); expect(writes).toHaveLength(4); });
+});
+
+test("locked settings discard queued autosaves and ignore a late write response", async () => {
+  let locked = false;
+  const config = serverSettingsFixture();
+  let release: (value: typeof config) => void = () => {};
+  const pending = new Promise<typeof config>(resolve => { release = resolve; });
+  await render({ vault_status: () => ({ exists: true, locked }), server_config_get: () => config, server_config_set: () => pending });
+  await openServerSettings();
+  changeSetting('.pricing-price-grid .field:nth-child(1) input', '1000');
+  changeSetting('.pricing-price-grid .field:nth-child(2) input', '2000');
+  locked = true;
+  listeners.get('vault-status-changed')!();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.settings-drawer')).toBeNull(); });
+  const statusReads = invoke.mock.calls.filter(([cmd]) => cmd === 'server_status').length;
+  release(config);
+  await new Promise(resolve => setTimeout(resolve, 50)); flushSync();
+  expect(invoke.mock.calls.filter(([cmd]) => cmd === 'server_config_set')).toHaveLength(1);
+  expect(invoke.mock.calls.filter(([cmd]) => cmd === 'server_status')).toHaveLength(statusReads);
+  expect(document.querySelector('.error-toast')).toBeNull();
+});
+
+test("retry settings save on change and an incomplete pricing row cannot close silently", async () => {
+  let config = serverSettingsFixture();
+  config.routes = [{ id: 'route', name: 'Fixture route', token: 'synthetic-route-token', enabled: true,
+    strategy: 'fallback', inboundProtocol: 'open_ai_responses', upstreamProtocol: 'open_ai_responses',
+    conversionEnabled: false, targets: [], retry: defaultRetryPolicy() }];
+  const writes: ProxyConfig[] = [];
+  await render({ server_config_get: () => config, server_config_set: args => {
+    config = args.config; writes.push(structuredClone(config)); return config;
+  } });
+  await openServerSettings();
+  changeSetting('.server-settings-grid .field:nth-child(1) input', '4');
+  await vi.waitFor(() => { flushSync(); expect(writes).toHaveLength(1); });
+  expect(config.routes[0].retry.maxAttempts).toBe(4);
+  button('Add pricing').click(); flushSync();
+  expect(writes).toHaveLength(1);
+  document.querySelector<HTMLButtonElement>('.settings-drawer .close-btn')!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.settings-drawer [role="alert"]')?.textContent).toContain('Enter a model or prefix'); });
+  changeSetting('.pricing-row:nth-of-type(2) .pricing-model-row input', 'claude-');
+  await vi.waitFor(() => { flushSync(); expect(writes).toHaveLength(2); });
+  expect(config.pricing[1].model).toBe('claude-');
+  document.querySelectorAll<HTMLButtonElement>('.pricing-remove')[1].click();
+  await vi.waitFor(() => { flushSync(); expect(writes).toHaveLength(3); });
+  expect(config.pricing).toHaveLength(1);
+});
+
+test("a status refresh failure after autosave does not repeat a committed write", async () => {
+  let config = serverSettingsFixture();
+  let saved = false;
+  await render({ server_config_get: () => config, server_config_set: args => {
+    config = args.config; saved = true; return config;
+  }, server_status: () => {
+    if (saved) throw new Error('fixture status refresh failed');
+    return { running: false, enabled: false, activeRoutes: 0, requests: 0, failures: 0 };
+  } });
+  await openServerSettings();
+  changeSetting('.pricing-price-grid input', '1000');
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.settings-drawer [role="alert"]')?.textContent).toContain('fixture status refresh failed'); });
+  expect(button('Retry save')).toBeUndefined();
+  document.querySelector<HTMLButtonElement>('.settings-drawer .close-btn')!.click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.settings-drawer')).toBeNull(); });
+  expect(invoke.mock.calls.filter(([cmd]) => cmd === 'server_config_set')).toHaveLength(1);
 });

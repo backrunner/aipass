@@ -10,6 +10,7 @@
 </script>
 
 <button
+  {...$$restProps}
   type="button"
   class={`icon-btn size-${size} tone-${tone} ${className}`}
   aria-label={label}
@@ -56,6 +57,8 @@
     height: 32px;
   }
 
+  .icon-btn :global(svg) { flex-shrink: 0; }
+
   .size-sm {
     width: 26px;
     height: 26px;
@@ -68,5 +71,6 @@
 
   .tone-primary {
     color: var(--accent);
+    &[aria-pressed="true"] { background: var(--accent-soft); }
   }
 </style>

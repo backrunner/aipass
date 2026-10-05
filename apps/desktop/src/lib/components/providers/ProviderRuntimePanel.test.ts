@@ -109,7 +109,7 @@ test("a late overview read cannot replace newly saved settings", async () => {
     if (command === "provider_runtime_set") { current = structuredClone(args!.options) as typeof initial; return structuredClone(current); }
   });
   app = mount(Panel, { target: document.body, props: { id: "provider-e", invokeTauri: invoke as never } });
-  document.querySelector<HTMLButtonElement>('.card-toggle')!.click(); flushSync();
+  document.querySelector<HTMLButtonElement>('.collapsible-trigger')!.click(); flushSync();
   await vi.waitFor(() => expect(reads).toBe(1));
   configure();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector('[role="switch"]')).toBeTruthy(); });

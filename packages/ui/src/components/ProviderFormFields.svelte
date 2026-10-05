@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Collapsible from "./Collapsible.svelte";
   import { scrollMask } from "../actions/scrollMask";
   import type { AuthScheme, InterfaceType } from "@aipass/schemas";
   import { authSchemeCompatibleWithInterface, providerDefinitions } from "@aipass/schemas";
@@ -379,19 +380,9 @@
   </section>
 {/if}
 
-<section class="form-section advanced-section" class:expanded={advancedOpen}>
-  <button
-    type="button"
-    class="advanced-toggle"
-    aria-expanded={advancedOpen}
-    on:click={() => (advancedOpen = !advancedOpen)}
-  >
-    <span>{$t("providerForm.advanced")}</span>
-    <ChevronDown size={14} />
-  </button>
-  <div class="advanced-collapse" inert={!advancedOpen}>
-    <div class="advanced-collapse-inner">
-      <div class="section-fields">
+<section class="form-section advanced-section">
+  <Collapsible title={$t("providerForm.advanced")} bind:open={advancedOpen} --collapsible-body-padding="0">
+    <div class="section-fields">
     <div class="protocol-field">
       <SelectField
         label={$t("providerForm.interface")}
@@ -510,9 +501,8 @@
         </button>
       </div>
     {/if}
-      </div>
     </div>
-  </div>
+  </Collapsible>
 </section>
 
 {#if detailsAvailable.length > 0 || advancedAvailable.length > 0}
@@ -565,57 +555,9 @@
 <style lang="scss">
   .form-section.advanced-section { gap: 0; }
 
-  .advanced-toggle {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    padding: 12px 14px;
-    border: 1px solid var(--divider);
-    border-radius: var(--radius);
-    background: var(--surface);
-    text-align: left;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    transition: border-radius 220ms ease, background-color 120ms ease;
-  }
-  .advanced-toggle:hover {
-    background: var(--surface-2);
-  }
-  .advanced-toggle :global(svg) {
-    transition: transform 220ms ease;
-  }
-  .advanced-section.expanded .advanced-toggle {
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-    border-bottom-color: transparent;
-  }
-  .advanced-section.expanded .advanced-toggle :global(svg) {
-    transform: rotate(180deg);
-  }
-  .advanced-collapse {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 220ms ease, opacity 180ms ease;
-    opacity: 0;
-  }
-  .advanced-section.expanded .advanced-collapse {
-    grid-template-rows: 1fr;
-    opacity: 1;
-  }
-  .advanced-collapse-inner {
-    min-height: 0;
-    overflow: hidden;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .advanced-collapse, .advanced-toggle, .advanced-toggle :global(svg) { transition: none; }
-  }
-
   .provider-form-fields .advanced-section .section-fields {
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
+    border: 0;
+    border-radius: 0;
     margin-top: 0;
   }
 

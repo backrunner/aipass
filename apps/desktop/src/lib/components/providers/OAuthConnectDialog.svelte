@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { scrollMask, Banner, Button, IconButton } from "@aipass/ui";
+  import { scrollMask, Banner, Button, Collapsible, IconButton } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import {
     ArrowLeft,
@@ -444,10 +444,9 @@
               <div class="state-panel error-panel" role="alert">
                 <span class="state-icon"><RefreshCw size={22} /></span><strong>{error}</strong>
                 <p>{$t("oauthConnect.retryHint")}</p>
-                {#if errorDetail}<details>
-                    <summary>{$t("oauthConnect.details")}</summary>
-                    <p>{errorDetail}</p>
-                  </details>{/if}<Button
+                {#if errorDetail}<Collapsible title={$t("oauthConnect.details")} variant="inline">
+                    <p class="error-detail">{errorDetail}</p>
+                  </Collapsible>{/if}<Button
                   variant="primary"
                   on:click={() => provider && startLogin(provider, reauthAccount)}
                   ><RefreshCw size={14} />{$t("oauthConnect.retry")}</Button
@@ -498,10 +497,9 @@
                 </div>{/if}
               {#if warning}<div class="retry-warning" role="status">
                   <p>{$t("oauthConnect.retrying")}</p>
-                  <details>
-                    <summary>{$t("oauthConnect.details")}</summary>
-                    <p>{warning}</p>
-                  </details>
+                  <Collapsible title={$t("oauthConnect.details")} variant="inline">
+                    <p class="error-detail">{warning}</p>
+                  </Collapsible>
                 </div>{/if}
               <div class="waiting">
                 <span class="waiting-label" role="status"
@@ -1020,27 +1018,19 @@
     color: var(--danger);
     background: var(--danger-soft);
   }
-  details {
-    font-size: 11px;
+  .error-detail {
+    margin: 0;
     color: var(--text-tertiary);
-    max-width: 100%;
-  }
-  details p {
-    margin-top: 8px;
     font-size: 11px;
+    line-height: 1.5;
     text-align: left;
     white-space: pre-wrap;
-  }
-  summary {
-    cursor: pointer;
+    overflow-wrap: anywhere;
   }
   .retry-warning {
     padding: 10px 12px;
     border-radius: 6px;
     background: var(--surface-2);
-  }
-  .retry-warning details {
-    margin-top: 4px;
   }
   .accounts-heading {
     display: flex;

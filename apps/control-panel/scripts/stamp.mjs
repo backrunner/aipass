@@ -18,6 +18,8 @@ const sources = [
   "index.html",
   ...files("../../packages/ui/src"),
   "../../packages/ui/package.json",
+  ...files("../../packages/schemas/src"),
+  "../../packages/schemas/package.json",
   "../desktop/public/aipass-logo.png",
 ].sort();
 writeFileSync(

@@ -1,13 +1,21 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { scrollMask, Badge, Button, ProviderIcon } from "@aipass/ui";
+  import { scrollMask } from "../actions/scrollMask";
+  import Badge from "./Badge.svelte";
+  import Button from "./Button.svelte";
+  import IconButton from "./IconButton.svelte";
+  import SearchField from "./SearchField.svelte";
+  import ProviderIcon from "./ProviderIcon.svelte";
   import { ContextMenu, DropdownMenu } from "bits-ui";
-  import { ChevronRight, KeyRound, Plug, Plus, RefreshCw, Search, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
+  import { ChevronRight, KeyRound, Plug, Plus, RefreshCw, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
   import ProviderEmptyState from "./ProviderEmptyState.svelte";
-  import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProviderFilter } from "../../types";
+  import { t } from "../i18n";
+  import type { MaybePromise } from "../types";
+  import type { ProviderFilter } from "@aipass/schemas";
 
+  export let readOnly = false;
+  export let supportedFilters: ProviderFilter[] | undefined = undefined;
   export let entries: ProviderEntry[] = [];
   export let filterEntries: ProviderEntry[] = [];
   export let selectedId = "";
@@ -43,7 +51,7 @@
   ];
 
   $: filterOptions = [
-    ...baseFilterOptions,
+    ...baseFilterOptions.filter(option => !supportedFilters || supportedFilters.includes(option.value)),
     ...unique(filterEntries.flatMap((entry) => entry.tags))
       .slice(0, 12)
       .map((tag) => ({
@@ -63,6 +71,7 @@
     if (entry.accountIdentity) parts.push(entry.accountIdentity);
     const target = entry.domains[0] ?? entry.endpoints[0]?.url ?? entry.defaultModel;
     if (target) parts.push(target);
+    if (readOnly && !parts.length) parts.push(entry.providerId ?? entry.interfaceType);
     return parts.join(" · ");
   }
 
@@ -77,30 +86,15 @@
 
 <section class="list-pane">
   <div class="toolbar">
-    <label class="search">
-      <Search size={14} />
-      <input
-        bind:value={query}
-        on:input={() => onSearch()}
-        placeholder={$t("providerList.search")}
-        type="search"
-        spellcheck="false"
-        autocapitalize="off"
-      />
+    <SearchField value={query} placeholder={$t("providerList.search")} onValueChange={value => { query = value; void onSearch(); }}>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
           {#snippet child({ props })}
-            <button
-              {...props}
-              type="button"
-              class="filter-trigger"
-              class:active-filter={providerFilter !== "all"}
-              aria-label={$t("providerList.filter")}
-              title={$t("providerList.filter")}
-              disabled={showArchived || showTrash || showFavorites}
-            >
+            <IconButton {...props} class="filter-trigger" label={$t("providerList.filter")} size="sm"
+              tone={providerFilter !== "all" ? "primary" : "neutral"} pressed={providerFilter !== "all"}
+              disabled={showArchived || showTrash || showFavorites}>
               <SlidersHorizontal size={14} />
-            </button>
+            </IconButton>
           {/snippet}
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -117,38 +111,34 @@
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-    </label>
+    </SearchField>
+    {#if !readOnly}
     {#if showTrash}
-      <button
-        type="button"
-        class="cta-btn danger"
-        on:click={() => onEmptyTrash()}
-        disabled={entries.length === 0}
-      >
-        <Trash2 size={14} />
-        <span>{$t("providerList.emptyTrash")}</span>
-      </button>
+      <Button variant="danger" class="cta-btn" on:click={() => onEmptyTrash()} disabled={entries.length === 0}>
+        <Trash2 size={14} /><span>{$t("providerList.emptyTrash")}</span>
+      </Button>
     {:else}
       {#if officialAccountsImport}
-        <button type="button" class="icon-btn" class:spinning={refreshAccountsBusy} on:click={() => onRefreshAccounts()} disabled={refreshAccountsBusy} aria-label={$t("providerList.refreshAccounts")} title={$t("providerList.refreshAccounts")}>
+        <IconButton class={`provider-refresh ${refreshAccountsBusy ? "spinning" : ""}`} on:click={() => onRefreshAccounts()} disabled={refreshAccountsBusy} label={$t("providerList.refreshAccounts")}>
           <RefreshCw size={14} />
-        </button>
+        </IconButton>
       {/if}
-      <button type="button" class="icon-btn" on:click={() => onConnectOAuth()} aria-label={$t("oauthConnect.title")} title={$t("oauthConnect.title")}>
+      <IconButton on:click={() => onConnectOAuth()} label={$t("oauthConnect.title")}>
         <Plug size={14} />
-      </button>
-      <button type="button" class="cta-btn primary" on:click={() => onAdd()}>
+      </IconButton>
+      <Button variant="primary" class="cta-btn" on:click={() => onAdd()}>
         <Plus size={14} />
         <span>{$t("providerList.add")}</span>
-      </button>
+      </Button>
+    {/if}
     {/if}
   </div>
 
   <div use:scrollMask class="entries" role="listbox" aria-label={$t("providerList.providers")}>
     {#if entries.length === 0}
       <ProviderEmptyState
-        title={$t(showTrash ? "providerList.trashEmpty" : showFavorites ? "providerList.favoritesEmpty" : showArchived ? "providerList.archiveEmpty" : "providerList.noProviders")}
-        description={$t(showTrash ? "providerList.trashEmptyDesc" : showFavorites ? "providerList.favoritesEmptyDesc" : showArchived ? "providerList.archiveEmptyDesc" : "providerList.noProvidersDesc")}
+        title={$t(query.trim() ? "providerList.noMatchingProviders" : showTrash ? "providerList.trashEmpty" : showFavorites ? "providerList.favoritesEmpty" : showArchived ? "providerList.archiveEmpty" : providerFilter !== "all" ? "providerList.groupEmpty" : "providerList.noProviders")}
+        description={readOnly || query.trim() || providerFilter !== "all" ? "" : $t(showTrash ? "providerList.trashEmptyDesc" : showFavorites ? "providerList.favoritesEmptyDesc" : showArchived ? "providerList.archiveEmptyDesc" : "providerList.noProvidersDesc")}
       >
         {#snippet icon()}
           {#if showTrash}
@@ -160,7 +150,7 @@
           {/if}
         {/snippet}
         {#snippet actions()}
-          {#if !showArchived && !showTrash && !showFavorites}
+          {#if !readOnly && !showArchived && !showTrash && !showFavorites}
             <Button variant="primary" size="sm" on:click={() => onAdd()}>
               <Plus size={14} /> {$t("providerList.addProvider")}
             </Button>
@@ -171,19 +161,7 @@
         {/snippet}
       </ProviderEmptyState>
     {/if}
-    {#each entries as entry (entry.id)}
-      <ContextMenu.Root>
-        <ContextMenu.Trigger>
-          {#snippet child({ props })}
-            <button
-              {...props}
-              type="button"
-              role="option"
-              aria-selected={selectedId === entry.id}
-              class="entry"
-              class:selected={selectedId === entry.id}
-              on:click={() => onSelect(entry.id)}
-            >
+    {#snippet entryContent(entry: ProviderEntry)}
               <ProviderIcon
                 title={entry.title}
                 kind={entry.providerKind}
@@ -202,6 +180,26 @@
                 </div>
                 <span class="subtitle">{entrySubtitle(entry)}</span>
               </div>
+    {/snippet}
+    {#each entries as entry (entry.id)}
+      {#if readOnly}
+        <button type="button" role="option" aria-selected={selectedId === entry.id} class="entry" class:selected={selectedId === entry.id} title={entry.title} on:click={() => onSelect(entry.id)}>
+          {@render entryContent(entry)}
+        </button>
+      {:else}
+      <ContextMenu.Root>
+        <ContextMenu.Trigger>
+          {#snippet child({ props })}
+            <button
+              {...props}
+              type="button"
+              role="option"
+              aria-selected={selectedId === entry.id}
+              class="entry"
+              class:selected={selectedId === entry.id}
+              on:click={() => onSelect(entry.id)}
+            >
+              {@render entryContent(entry)}
             </button>
           {/snippet}
         </ContextMenu.Trigger>
@@ -226,6 +224,7 @@
           </ContextMenu.Content>
         </ContextMenu.Portal>
       </ContextMenu.Root>
+      {/if}
     {/each}
   </div>
 </section>
@@ -236,6 +235,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
     position: relative;
     background: color-mix(in oklab, var(--surface) 86%, transparent);
     backdrop-filter: blur(8px);
@@ -250,87 +250,13 @@
     padding: 10px 16px 8px;
   }
 
-  .filter-trigger {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    margin-right: -4px;
-    border-radius: 6px;
-    color: var(--text-tertiary);
-    transition: background-color 80ms ease, color 120ms ease;
 
-    &:hover:not(:disabled),
-    &.active-filter {
-      background: var(--accent-soft);
-      color: var(--accent);
-    }
 
-    &:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-  }
 
-  .cta-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 34px;
-    flex-shrink: 0;
-    padding: 0 12px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background-color 80ms ease, color 120ms ease, transform 120ms ease;
 
-    &:active {
-      transform: scale(0.97);
-    }
 
-    &.primary {
-      background: var(--accent);
-      color: #fff;
-      border: 1px solid var(--accent);
 
-      &:hover {
-        background: var(--accent-hover);
-      }
-    }
-
-    &.danger {
-      background: transparent;
-      color: var(--danger);
-      border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent);
-
-      &:hover:not(:disabled) {
-        background: var(--danger-soft);
-      }
-
-      &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-    }
-  }
-
-  .icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    flex-shrink: 0;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    &:hover { background: var(--surface-2); color: var(--text); }
-    &:disabled { opacity: 0.6; cursor: default; }
-    &.spinning :global(svg) { animation: refresh-spin 1s linear infinite; }
-  }
+  :global(.provider-refresh.spinning svg) { animation: refresh-spin 1s linear infinite; }
 
   @keyframes refresh-spin {
     to { transform: rotate(360deg); }
@@ -373,45 +299,7 @@
     font-size: 11px;
   }
 
-  .search {
-    display: flex;
-    flex: 1;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    height: 34px;
-    padding: 0 6px 0 12px;
-    border: 1px solid transparent;
-    border-radius: var(--radius);
-    background: var(--surface-2);
-    color: var(--text-secondary);
-    transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
 
-    &:focus-within {
-      border-color: var(--accent);
-      background: var(--surface);
-      box-shadow: 0 0 0 3px var(--accent-ring);
-    }
-
-    input {
-      flex: 1;
-      width: 100%;
-      min-width: 0;
-      border: 0;
-      outline: 0;
-      background: transparent;
-      color: var(--text);
-      font-size: 13px;
-
-      &::placeholder {
-        color: var(--text-tertiary);
-      }
-
-      &::-webkit-search-cancel-button {
-        appearance: none;
-      }
-    }
-  }
 
   .entries {
     flex: 1;

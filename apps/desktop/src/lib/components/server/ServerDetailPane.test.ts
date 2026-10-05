@@ -156,7 +156,7 @@ test("switches chart totals and provider details together for every period", () 
     flushSync();
     check(tokens);
     const breakdownCard = document.querySelector(".usage-breakdown")!.closest(".card");
-    expect(breakdownCard?.querySelector(".card-actions")?.textContent).toContain(label);
+    expect(breakdownCard?.querySelector(".collapsible-actions")?.textContent).toContain(label);
   }
 });
 

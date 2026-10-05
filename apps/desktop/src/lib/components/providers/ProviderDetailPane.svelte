@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import ProviderRuntimePanel from "./ProviderRuntimePanel.svelte";
-  import ProviderEmptyState from "./ProviderEmptyState.svelte";
+  import { ProviderEmptyState } from "@aipass/ui";
   import CredentialPicker from "./CredentialPicker.svelte";
   import CredentialTags from "./CredentialTags.svelte";
   import type { InterfaceType, ProviderEntry, ProviderKind, SecretRef } from "@aipass/schemas";
@@ -63,7 +63,7 @@
   } from "../../utils/integrations";
   import { secretAuthScheme, secretInterfaceType } from "@aipass/schemas";
   import { usageSourceLabelKey } from "../../utils/usageProbe";
-  import Card from "../shared/Card.svelte";
+  import { Card } from "@aipass/ui";
   import IntegrationCard from "../integration/IntegrationCard.svelte";
   import CredentialPricingDialog from "../pricing/CredentialPricingDialog.svelte";
   import PricingGroupDialog from "../pricing/PricingGroupDialog.svelte";
@@ -692,9 +692,9 @@
                   </div>
                 </div>
               {/if}
-              <button type="button" class="key-pricing-advanced" on:click={() => (pricingSecretId = secret.id)}>
+              <Button variant="secondary" size="sm" class="key-pricing-advanced" on:click={() => (pricingSecretId = secret.id)}>
                 <SlidersHorizontal size={13} /> {$t("pricing.credentialSettings")}
-              </button>
+              </Button>
             {/each}
             {#if showAddSecret}
               <div class="add-secret-row">
@@ -1709,31 +1709,7 @@
     }
   }
 
-  .key-pricing {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 80px 34px;
-    align-items: end;
-    gap: 10px;
-  }
-
-  .key-pricing-advanced {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    color: var(--text-tertiary);
-    transition: background-color 80ms ease, border-color 120ms ease, color 120ms ease;
-
-    &:hover {
-      background: var(--surface-2);
-      border-color: var(--border-strong);
-      color: var(--text);
-    }
-  }
+  .section-fields :global(.key-pricing-advanced) { align-self: flex-start; }
 
   .pricing-badge {
     display: inline-flex;

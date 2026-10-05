@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from "svelte";
   import { Banner, Button, IconButton } from "@aipass/ui";
   import { Bell, ChevronRight, CircleDollarSign, Clock3, Globe, Settings2, SlidersHorizontal } from "lucide-svelte";
-  import Card from "../shared/Card.svelte";
+  import { Card } from "@aipass/ui";
   import ProviderRuntimeDialog, { type Options, type Section } from "./ProviderRuntimeDialog.svelte";
   import { t } from "../../stores/i18n";
 

@@ -144,14 +144,14 @@ test("edits the selected Anthropic credential with explicit inheritance clears a
 test("retains billing edits across collapse and keeps the editor open after a failed save", async () => {
   render();
   await click("Edit credential Claude");
-  const toggle = document.querySelector<HTMLButtonElement>(".billing-toggle")!;
+  const toggle = document.querySelector<HTMLButtonElement>(".secret-billing .collapsible-trigger")!;
   expect(toggle.textContent).toContain("1.5× · USD");
   expect(toggle.textContent).not.toContain("1.5x×");
-  expect(document.querySelector(".billing-collapse")?.hasAttribute("inert")).toBe(true);
+  expect(document.querySelector(".secret-billing .collapsible-content")?.hasAttribute("inert")).toBe(true);
   toggle.click();
   flushSync();
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  expect(document.querySelector(".billing-collapse")?.hasAttribute("inert")).toBe(false);
+  expect(document.querySelector(".secret-billing .collapsible-content")?.hasAttribute("inert")).toBe(false);
   fill("Rate", "2");
   fill("Currency", "CNY");
   fill("Unit price", "0.02");

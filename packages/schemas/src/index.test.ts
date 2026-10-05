@@ -7,7 +7,8 @@ import {
   detectInterfaceFromProvider,
   inferProviderFromEndpoint,
   matchProviderByDomain,
-  maskSecret
+  maskSecret,
+  newProxyId
 } from "./index.js";
 
 test("matches first-class non OpenAI providers", () => {
@@ -80,4 +81,20 @@ test("falls back to custom_http only when an endpoint has no AI evidence", () =>
 
 test("masks secrets", () => {
   assert.equal(maskSecret("sk-ant-api03-fake-1234"), "sk-ant...1234");
+});
+
+
+test("creates secure UUIDs for HTTP LAN panels without crypto.randomUUID", () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "crypto")!;
+  const getRandomValues = crypto.getRandomValues.bind(crypto);
+  Object.defineProperty(globalThis, "crypto", { configurable: true, value: { getRandomValues } });
+  try {
+    const ids = Array.from({ length: 128 }, () => newProxyId());
+    assert.equal(new Set(ids).size, ids.length);
+    for (const id of ids) {
+      assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    }
+  } finally {
+    Object.defineProperty(globalThis, "crypto", original);
+  }
 });

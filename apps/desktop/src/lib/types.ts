@@ -1,3 +1,5 @@
+import type { ProxyProtocol, RetryPolicy, ProxyTargetConfig, ProxyRouteStrategy, ProxyRouteConfig, ProxyChannelStatus, ProxyStatus } from "@aipass/schemas";
+export type { ProxyProtocol, RetryPolicy, ProxyTargetConfig, ProxyRouteStrategy, ProxyRouteConfig, ProxyChannelStatus, ProxyStatus } from "@aipass/schemas";
 import type {
   AuthScheme,
   CcSwitchDetection,
@@ -92,53 +94,6 @@ export type CodexApiKeyMode = "experimental_bearer_token" | "auth_json";
 export type VaultStatus = { exists: boolean; locked: boolean; initialSyncPending?: boolean; initialSyncFailed?: boolean; syncRevision?: number; syncStatus?: SyncReport["status"] };
 export type VaultImportSource = { source: "backup" | "vault" | "local" | "icloud" | "webdav"; path: string; password: string; url: string; username: string; webdavPassword: string };
 
-export type ProxyProtocol = "open_ai_responses" | "open_ai_chat_completions" | "anthropic_messages";
-
-export type RetryPolicy = {
-  maxAttempts: number;
-  failureThreshold: number;
-  circuitOpenSeconds: number;
-  connectTimeoutMs: number;
-  firstByteTimeoutMs: number;
-  streamIdleTimeoutMs: number;
-  silentRetry?: boolean;
-  maxSilentRetries?: number;
-  holdOnFailure?: boolean;
-  holdInitialDelayMs?: number;
-  holdMaxDelayMs?: number;
-  holdMaxDurationMs?: number;
-};
-
-export type ProxyTargetConfig = {
-  id: string;
-  providerEntryId: string;
-  secretId: string;
-  label: string;
-  baseUrl: string;
-  authScheme: string;
-  headers?: Array<[string, string]>;
-  group?: string;
-  priority: number;
-  weight: number;
-  enabled: boolean;
-  protocol?: ProxyProtocol;
-};
-
-export type ProxyRouteStrategy = "fallback" | "round_robin" | "quota_aware";
-
-export type ProxyRouteConfig = {
-  id: string;
-  name: string;
-  token: string;
-  strategy: ProxyRouteStrategy;
-  inboundProtocol: ProxyProtocol;
-  upstreamProtocol: ProxyProtocol;
-  conversionEnabled: boolean;
-  targets: ProxyTargetConfig[];
-  retry: RetryPolicy;
-  enabled: boolean;
-};
-
 export type ModelPricing = {
   model: string;
   inputMicrosPerMillion: number;
@@ -160,38 +115,6 @@ export type ProxyConfig = {
   routes: ProxyRouteConfig[];
   pricing: ModelPricing[];
   upstreamProxy: UpstreamProxyConfig;
-};
-
-export type ProxyChannelStatus = {
-  routeId: string;
-  targetId: string;
-  providerEntryId: string;
-  secretId: string;
-  inFlightRequests: number;
-  degraded: boolean;
-  available: boolean;
-  cooldownRemainingMs: number;
-  websocketCoolingDown: boolean;
-};
-
-export type ProxyStatus = {
-  running: boolean;
-  enabled: boolean;
-  bindAddr: string;
-  activeRoutes: number;
-  requests: number;
-  failures: number;
-  lastError?: string;
-  degraded?: boolean;
-  degradedTargetIds?: string[];
-  recentRequests: number;
-  recentTokens: number;
-  successRateBps: number;
-  averageFirstTokenMs?: number;
-  inFlightRequests?: number;
-  availableChannels?: number;
-  totalChannels?: number;
-  channels?: ProxyChannelStatus[];
 };
 
 export type ProxyLogEntry = {
@@ -465,17 +388,7 @@ export type SyncConflict = {
   snapshotSummary?: { providerCount: number; titles: string[] };
 };
 
-export type ProviderFilter =
-  | "all"
-  | "recent"
-  | "quota_low"
-  | "expiring"
-  | "oauth"
-  | "api"
-  | ProviderKind
-  | `tag:${string}`;
-
-export type ProviderCounts = Record<"all" | "recent" | "favorites" | ProviderKind, number>;
+export type { ProviderFilter, ProviderCounts } from "@aipass/schemas";
 
 export type DeviceRecord = {
   id: string;

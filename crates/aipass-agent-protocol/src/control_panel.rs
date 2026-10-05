@@ -66,6 +66,14 @@ pub enum ControlPanelAction {
         route_id: Uuid,
         enabled: bool,
     },
+    RouteSave {
+        revision: String,
+        route: ControlPanelRouteDraft,
+    },
+    RouteDelete {
+        revision: String,
+        route_id: Uuid,
+    },
     TargetUpdate {
         route_id: Uuid,
         target_id: Uuid,
@@ -84,6 +92,31 @@ pub enum ControlPanelAction {
         preview_id: Uuid,
     },
     VaultLock,
+}
+
+/// Only editable routing fields cross the remote boundary. Tokens, endpoints,
+/// authentication and headers remain owned and resolved by the Agent.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ControlPanelRouteDraft {
+    pub id: Uuid,
+    pub name: String,
+    pub enabled: bool,
+    pub strategy: aipass_proxy::RouteStrategy,
+    pub inbound_protocol: aipass_proxy::Protocol,
+    pub retry: aipass_proxy::RetryPolicy,
+    pub targets: Vec<ControlPanelTargetDraft>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ControlPanelTargetDraft {
+    pub id: Uuid,
+    pub provider_entry_id: Uuid,
+    pub secret_id: String,
+    pub enabled: bool,
+    pub priority: u16,
+    pub weight: u32,
 }
 
 #[derive(Clone, Deserialize)]

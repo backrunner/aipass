@@ -2,9 +2,16 @@ export interface Provider {
   id: string;
   title: string;
   providerId: string | null;
-  credentialKind: string;
-  interfaceType: string;
-  secrets: { id: string; label: string; masked: string; interfaceType?: string }[];
+  credentialKind: CredentialKind;
+  interfaceType: InterfaceType;
+  authScheme?: AuthScheme;
+  providerKind?: ProviderKind;
+  favorite?: boolean;
+  tags?: string[];
+  lastUsedAt?: string | null;
+  archivedAt?: string | null;
+  deletedAt?: string | null;
+  secrets: { id: string; label: string; masked: string; interfaceType?: InterfaceType; proxyEligible?: boolean }[];
 }
 export interface Target {
   id: string;
@@ -15,13 +22,18 @@ export interface Target {
   priority: number;
   weight: number;
   preferWs: boolean;
+  protocol?: ProxyProtocol;
 }
 export interface Route {
   id: string;
   name: string;
   enabled: boolean;
-  strategy: string;
-  protocol: string;
+  strategy: ProxyRouteStrategy;
+  protocol: ProxyProtocol;
+  inboundProtocol?: ProxyProtocol;
+  upstreamProtocol?: ProxyProtocol;
+  conversionEnabled?: boolean;
+  retry?: RetryPolicy;
   targets: Target[];
 }
 export interface Snapshot {
@@ -39,6 +51,10 @@ export interface Snapshot {
     inFlightRequests: number;
     availableChannels: number;
     totalChannels: number;
+    successRateBps?: number;
+    averageFirstTokenMs?: number;
+    degraded?: boolean;
+    degradedTargetIds?: string[];
   };
   logs: { timestamp: number; level: string; message: string }[];
 }
@@ -50,3 +66,4 @@ export interface Preview {
   targetPath: string;
   preview: string;
 }
+import type { AuthScheme, CredentialKind, InterfaceType, ProviderKind, ProxyProtocol, ProxyRouteStrategy, RetryPolicy } from "@aipass/schemas";

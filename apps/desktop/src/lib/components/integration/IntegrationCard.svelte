@@ -10,7 +10,7 @@
     ToolDetection
   } from "../../types";
   import type { IntegrationToolDefinition } from "../../utils/integrations";
-  import Card from "../shared/Card.svelte";
+  import { Card } from "@aipass/ui";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
   import IntegrationPreviewDialog from "./IntegrationPreviewDialog.svelte";
   import IntegrationToolIcon from "./IntegrationToolIcon.svelte";

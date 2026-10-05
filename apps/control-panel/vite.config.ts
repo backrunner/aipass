@@ -6,6 +6,12 @@ import { defineConfig } from "vite";
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // Embed the fingerprinted source, never a stale ignored dist directory.
+      "@aipass/schemas": fileURLToPath(new URL("../../packages/schemas/src/index.ts", import.meta.url)),
+    },
+  },
   plugins: [svelte({
     preprocess: vitePreprocess(),
     compilerOptions: {

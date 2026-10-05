@@ -120,7 +120,7 @@
             {#if provider}
               <div class="selected-provider">
                 <ProviderIcon title={provider.name} kind="official" size="lg" />
-                <div><h2>{provider.name}</h2><p>{$t("communityConnect.connectAccount")}</p></div>
+                <div><h2>{provider.name}</h2></div>
               </div>
             {/if}
             <fieldset disabled={busy}>

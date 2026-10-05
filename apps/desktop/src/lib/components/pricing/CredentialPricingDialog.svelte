@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { SecretRef } from "@aipass/schemas";
-  import { scrollMask, Banner, Button, IconButton, SelectField } from "@aipass/ui";
+  import { scrollMask, Banner, Button, Collapsible, IconButton, SelectField } from "@aipass/ui";
   import { Dialog } from "bits-ui";
-  import { ArrowRight, ChevronRight, History, KeyRound, Pencil, Plus, X } from "lucide-svelte";
+  import { ArrowRight, History, KeyRound, Pencil, Plus, X } from "lucide-svelte";
   import { t } from "../../stores/i18n";
   import type { CredentialAssignment, MaybePromise, PricingGroup } from "../../types";
 
@@ -75,8 +75,8 @@
             </div>
           </section>
           {#if secret.billing}
-            <details class="reference">
-              <summary><ChevronRight size={13} /><span>{$t("pricing.referenceBilling")}</span><span class="reference-tag">{$t("pricing.referenceOnly")}</span></summary>
+            <Collapsible title={$t("pricing.referenceBilling")} compact>
+              {#snippet summary()}<span class="reference-tag">{$t("pricing.referenceOnly")}</span>{/snippet}
               <div class="reference-body">
                 <dl>
                   {#if secret.billing.rate}<div><dt>{$t("pricing.multiplier")}</dt><dd>×{secret.billing.rate}</dd></div>{/if}
@@ -90,7 +90,7 @@
                   {/if}
                 </div>
               </div>
-            </details>
+            </Collapsible>
           {/if}
           <p class="impact-note"><History size={13} /><span>{$t("pricing.assignmentImpact")}</span></p>
           {#if error}<Banner tone="danger">{error}</Banner>{/if}
@@ -130,12 +130,7 @@
   .cost-preview strong.estimated { color: var(--accent); font-weight: 600; }
   .currency-tag, .reference-tag { padding: 3px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; line-height: 1; color: var(--text-tertiary); }
   .currency-tag { margin-left: auto; }
-  .reference { border: 1px solid var(--divider); border-radius: 8px; font-size: 12px; }
-  summary { display: flex; align-items: center; gap: 7px; padding: 11px 12px; color: var(--text-secondary); cursor: pointer; list-style: none; }
-  summary::-webkit-details-marker { display: none; }
-  summary .reference-tag { margin-left: auto; }
-  .reference[open] summary :global(svg) { transform: rotate(90deg); }
-  .reference-body { display: grid; gap: 12px; padding: 0 12px 12px; }
+  .reference-body { display: grid; gap: 12px; }
   dl { display: flex; gap: 24px; margin: 0; }
   dl div { display: grid; gap: 5px; min-width: 0; }
   dt { color: var(--text-tertiary); font-size: 11px; }

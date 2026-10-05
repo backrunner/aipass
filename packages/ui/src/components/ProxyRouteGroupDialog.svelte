@@ -1,19 +1,33 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
-  import { scrollMask, Badge, Banner, Button, Field, IconButton, SelectField, SwitchField, interfaceLabel } from "@aipass/ui";
+  import { scrollMask } from "../actions/scrollMask";
+  import { interfaceLabel } from "../helpers";
+  import Badge from "./Badge.svelte";
+  import Banner from "./Banner.svelte";
+  import Button from "./Button.svelte";
+  import Field from "./Field.svelte";
+  import IconButton from "./IconButton.svelte";
+  import SelectField from "./SelectField.svelte";
+  import SwitchField from "./SwitchField.svelte";
   import { Dialog, Switch } from "bits-ui";
   import { AlertTriangle, ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
 
-  import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyStatus, ProxyTargetConfig, RetryPolicy } from "../../types";
-  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, proxySupportedEntry, reorderItems } from "../../utils/server";
-  import Card from "../shared/Card.svelte";
+  import { t } from "../i18n";
+  import type { MaybePromise } from "../types";
+  import type { ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyStatus, ProxyTargetConfig, RetryPolicy } from "@aipass/schemas";
+  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, newProxyId, proxySupportedEntry, reorderItems } from "@aipass/schemas";
+  import Card from "./Card.svelte";
 
   export let route: ProxyRouteConfig | undefined = undefined;
   export let entries: ProviderEntry[] = [];
   export let status: ProxyStatus | undefined = undefined;
   export let onSave: (route: ProxyRouteConfig) => MaybePromise<boolean | void> = () => {};
   export let onClose: () => MaybePromise = () => {};
+  // Remote adapters provide availability and minimal drafts. The Agent
+  // resolves private endpoint/authentication fields when saving.
+  export let credentialAvailable: (entry: ProviderEntry, secret: SecretRef) => boolean =
+    (entry, secret) => Boolean(secret.endpoint ?? apiBaseUrl(entry)) && proxySupportedEntry(entry, secret);
+  export let createTarget = buildRouteTarget;
 
   type Member = { targetId?: string; entry: ProviderEntry; secret: SecretRef; weight: number; enabled: boolean };
 
@@ -54,7 +68,7 @@
   $: credentialOptions = entries
     .flatMap((entry) =>
       entry.secretRefs
-        .filter((secret) => Boolean(secret.endpoint ?? apiBaseUrl(entry)) && proxySupportedEntry(entry, secret))
+        .filter((secret) => credentialAvailable(entry, secret))
         .map((secret) => ({
         value: `${entry.id}::${secret.id}`,
         label: `${entry.title} · ${secret.label} · ${secret.masked} · ${interfaceLabel[secret.interfaceType ?? entry.interfaceType]}${secret.group ? ` · ${secret.group}` : ""}`,
@@ -91,7 +105,7 @@
     const entry = entries.find((item) => item.id === entryId);
     const secret = entry?.secretRefs.find((item) => item.id === secretId);
     if (!entry || !secret) return;
-    if (!proxySupportedEntry(entry, secret)) return;
+    if (!credentialAvailable(entry, secret)) return;
     if (members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)) return;
     members = [...members, { entry, secret, weight: 1, enabled: true }];
     name ||= entry.title;
@@ -180,7 +194,7 @@
       const existing = route?.targets.find(
         (target) => target.providerEntryId === member.entry.id && target.secretId === member.secret.id
       );
-      const base = buildRouteTarget(member.entry, member.secret, index);
+      const base = existing ?? createTarget(member.entry, member.secret, index);
       if (!base) return undefined;
       return {
         ...base,
@@ -222,7 +236,7 @@
           retry
         }
       : {
-        id: crypto.randomUUID(),
+        id: newProxyId(),
         name: name.trim(),
         token: "",
         strategy,
@@ -552,6 +566,9 @@
     justify-content: center;
     width: 28px;
     height: 28px;
+    min-height: 28px;
+    padding: 0;
+    border: 0;
     border-radius: var(--radius-sm);
     color: var(--text-tertiary);
     transition: background-color 80ms ease, color 120ms ease;
@@ -710,7 +727,7 @@
     padding: 2px;
     border: 0;
     border-radius: 999px;
-    background: var(--surface-strong);
+    background: var(--border);
     cursor: pointer;
   }
 

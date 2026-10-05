@@ -19,13 +19,13 @@
   import AuthScreen from "./lib/components/auth/AuthScreen.svelte";
   import RecoveryKitModal from "./lib/components/auth/RecoveryKitModal.svelte";
   import UnlockTransition from "./lib/components/auth/UnlockTransition.svelte";
-  import Sidebar from "./lib/components/layout/Sidebar.svelte";
+  import { VaultSidebar as Sidebar } from "@aipass/ui";
   import ProviderDetailPane from "./lib/components/providers/ProviderDetailPane.svelte";
-  import ProviderListPane from "./lib/components/providers/ProviderListPane.svelte";
+  import { ProviderListPane } from "@aipass/ui";
   import ProviderModal from "./lib/components/providers/ProviderModal.svelte";
   import CommunityConnectDialog from "./lib/components/providers/CommunityConnectDialog.svelte";
   import OAuthConnectDialog from "./lib/components/providers/OAuthConnectDialog.svelte";
-  import RouteListPane from "./lib/components/server/RouteListPane.svelte";
+  import { ProxyRouteList as RouteListPane } from "@aipass/ui";
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
@@ -81,7 +81,7 @@
     VaultStatus
   } from "./lib/types";
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
-  import { emptyDraft, isExpiringSoon, mergeHeaderPairs, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
+  import { emptyDraft, entryMatchesFilter, mergeHeaderPairs, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
   import { aipassProviderLinkToDraft, ccSwitchLinkToDraft, findAipassProviderDuplicate, findCcSwitchDuplicate, splitEndpointList } from "./lib/utils/deeplink";
   import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry } from "./lib/utils/server";
@@ -1127,6 +1127,7 @@
   }
 
   function clearSensitiveUnlockedState() {
+    serverMutationVersion++;
     errorToast = undefined;
     showOAuthConnect = false;
     entries = [];
@@ -1356,32 +1357,6 @@
     } finally {
       officialAccountsBusy = false;
     }
-  }
-
-  function entryMatchesFilter(entry: ProviderEntry, filter: ProviderFilter): boolean {
-    if (filter === "all") return true;
-    if (filter === "recent") return Boolean(entry.lastUsedAt);
-    if (filter === "quota_low") return isQuotaLow(entry.quota);
-    if (filter === "expiring") return isExpiringSoon(entry.quota, entry.subscription);
-    if (filter === "oauth" || filter === "api") return (entry.credentialKind ?? "api") === filter;
-    if (filter.startsWith("tag:")) return entry.tags.includes(filter.slice("tag:".length));
-    return entry.providerKind === filter;
-  }
-
-  function isQuotaLow(quota?: QuotaInfo): boolean {
-    const remaining = numericQuota(quota?.remaining);
-    const limit = numericQuota(quota?.limit);
-    if (remaining === undefined) return false;
-    if (limit && limit > 0) return remaining / limit <= 0.2;
-    return remaining <= 0;
-  }
-
-  function numericQuota(value?: string): number | undefined {
-    if (!value) return undefined;
-    const normalized = value.replace(/,/g, "").match(/\d+(\.\d+)?/u)?.[0];
-    if (!normalized) return undefined;
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : undefined;
   }
 
   function inferDraftFromDomain() {
@@ -1963,6 +1938,7 @@
   }
 
   function loadServer(): Promise<void> {
+    if (!status.exists || status.locked) return Promise.resolve();
     // The status event and the periodic refresh can arrive together. Share the
     // in-flight request so a slower refresh cannot be overwritten by an older
     // concurrent response, while every refresh still covers the whole page.
@@ -1974,7 +1950,7 @@
           refreshServerStatus(),
           invokeTauri<ProxyConfig>("server_config_get")
         ]);
-        if (serverMutationInFlight || refreshVersion !== serverMutationVersion) return;
+        if (status.locked || serverMutationInFlight || refreshVersion !== serverMutationVersion) return;
         serverConfig = { ...nextConfig, upstreamProxy: nextConfig.upstreamProxy ?? { mode: "system" } };
       } catch (err) {
         console.warn("server state load failed", err);
@@ -2008,6 +1984,7 @@
   function endServerMutation() {
     serverMutationInFlight = false;
     serverMutationVersion += 1;
+    if (!status.exists || status.locked) return;
     const refresh = serverRefreshPromise;
     if (refresh) {
       void refresh.finally(() => void loadServer());
@@ -2273,14 +2250,22 @@
     if (serverBusy) return false;
     serverBusy = "save";
     beginServerMutation();
+    const revision = serverMutationVersion;
+    const current = () => revision === serverMutationVersion && !status.locked;
+    let saved = false;
     clearError();
     try {
-      serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config });
-      serverStatus = await invokeTauri<ProxyStatus>("server_status");
+      const next = await invokeTauri<ProxyConfig>("server_config_set", { config });
+      if (!current()) return false;
+      serverConfig = next;
+      saved = true;
+      const nextStatus = await invokeTauri<ProxyStatus>("server_status");
+      if (!current()) return false;
+      serverStatus = nextStatus;
       return true;
     } catch (err) {
-      reportError(String(err), showSettings ? "settings" : undefined);
-      return false;
+      if (current()) reportError(String(err), showSettings ? "settings" : undefined);
+      return saved && current();
     } finally {
       endServerMutation();
       serverBusy = "";

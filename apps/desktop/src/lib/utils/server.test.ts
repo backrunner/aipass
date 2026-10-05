@@ -54,8 +54,12 @@ describe("local proxy route helpers", () => {
     expect(buildRouteTarget(relay, relay.secretRefs[0], 0)?.group).toBe("premium");
   });
 
-  it("does not expose Gemini-native entries as proxy routes", () => {
-    expect(proxySupportedEntry(entry("gemini"))).toBe(false);
+  it("offers Gemini credentials supported by the native Rust adapter", () => {
+    const gemini = { ...entry("gemini"), authScheme: "google_api_key" as const };
+    expect(proxySupportedEntry(gemini)).toBe(true);
+    const route = buildSingleEntryRoute(gemini, gemini.secretRefs[0]);
+    expect(route?.inboundProtocol).toBe("open_ai_chat_completions");
+    expect(route?.targets[0].authScheme).toBe("google_api_key");
   });
 
   it("maps entry interfaces to native upstream protocols", () => {

@@ -4,7 +4,7 @@ import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { ProxyRouteConfig, ProxyStatus } from "../../types";
-import RouteGroupDialog from "./RouteGroupDialog.svelte";
+import { ProxyRouteGroupDialog as RouteGroupDialog } from "@aipass/ui";
 
 const entries = [
   {
@@ -153,6 +153,19 @@ test("preserves explicit target protocols when renaming a converted route", asyn
   document.body.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await Promise.resolve();
   expect(onSave.mock.calls[0][0].targets[0].protocol).toBe("open_ai_responses");
+});
+
+test("renaming a group preserves private target overrides and websocket preference", async () => {
+  const target = document.createElement("div"); document.body.appendChild(target);
+  const onSave = vi.fn().mockResolvedValue(true);
+  const existing: ProxyRouteConfig = { ...route, targets: [{ ...route.targets[0],
+    baseUrl: "https://override.example.test/v1", headers: [["x-custom", "fixture-header"]], group: "vip", preferWs: true,
+  }] };
+  app = mount(RouteGroupDialog, { target, props: { route: existing, entries, onSave } }) as never;
+  flushSync();
+  document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await Promise.resolve();
+  expect(onSave.mock.calls[0][0].targets[0]).toEqual(existing.targets[0]);
 });
 
 test("rejects an invalid backoff and saves safely after holding is disabled", async () => {

@@ -286,7 +286,7 @@ test("keeps the provider context and retries a failed start in place", async () 
   flushSync();
   expect(document.body.textContent).toContain("Could not start sign-in");
   expect(document.body.textContent).toContain("Connect Grok (xAI)");
-  expect(document.body.querySelector("details")?.textContent).toContain("network timeout");
+  expect(document.body.querySelector(".collapsible")?.textContent).toContain("network timeout");
   clickButton("Try again");
   await vi.advanceTimersByTimeAsync(0);
   flushSync();

@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { Button } from "@aipass/ui";
-  import { Dialog } from "bits-ui";
+  import { Button, Modal } from "@aipass/ui";
   import { AlertTriangle } from "lucide-svelte";
 
   import type { MaybePromise } from "../../types";
@@ -35,64 +34,22 @@
   }
 </script>
 
-<Dialog.Root {open} onOpenChange={handleOpenChange}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="confirm-overlay" />
-    <Dialog.Content class="confirm-content">
-      <div class={`confirm-icon tone-${tone}`} aria-hidden="true">
-        {#if $$slots.icon}
-          <slot name="icon" />
-        {:else}
-          <AlertTriangle size={20} />
-        {/if}
-      </div>
-      <Dialog.Title class="confirm-title">{title}</Dialog.Title>
-      <Dialog.Description class="confirm-description">{description}</Dialog.Description>
-      <footer class="confirm-actions">
-        <Button variant="ghost" on:click={() => handleOpenChange(false)} disabled={confirming}>
-          {cancelLabel}
-        </Button>
-        <Button variant={tone === "danger" ? "danger" : "primary"} on:click={confirm} loading={confirming}>
-          {confirmLabel}
-        </Button>
-      </footer>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+<Modal {open} {title} {description} layer={220} size="sm" busy={confirming} showClose={false} onOpenChange={handleOpenChange}>
+  <div slot="header-leading" class={`confirm-icon tone-${tone}`} aria-hidden="true">
+    {#if $$slots.icon}<slot name="icon" />{:else}<AlertTriangle size={20} />{/if}
+  </div>
+  <div slot="footer" class="confirm-actions">
+    <Button variant="ghost" on:click={() => handleOpenChange(false)} disabled={confirming}>{cancelLabel}</Button>
+    <Button variant={tone === "danger" ? "danger" : "primary"} on:click={confirm} loading={confirming}>{confirmLabel}</Button>
+  </div>
+</Modal>
 
 <style lang="scss">
-  :global(.confirm-overlay) {
-    position: fixed;
-    inset: 0;
-    z-index: 220;
-    background: rgba(15, 17, 16, 0.5);
-    backdrop-filter: blur(4px);
-  }
-
-  :global(.confirm-overlay[data-state="closed"]),
-  :global(.confirm-content[data-state="closed"]) {
-    display: none;
-  }
-
-  :global(.confirm-content) {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    z-index: 221;
-    width: min(420px, calc(100vw - 32px));
-    transform: translate(-50%, -50%);
-    padding: 22px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--surface);
-    box-shadow: var(--shadow-modal);
-  }
-
   .confirm-icon {
     display: grid;
+    flex-shrink: 0;
     width: 36px;
     height: 36px;
-    margin-bottom: 14px;
     place-items: center;
     border-radius: 50%;
   }
@@ -107,24 +64,9 @@
     background: var(--warning-soft);
   }
 
-  :global(.confirm-title) {
-    margin: 0;
-    color: var(--text);
-    font-size: 16px;
-    font-weight: 650;
-  }
-
-  :global(.confirm-description) {
-    margin: 8px 0 0;
-    color: var(--text-secondary);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
   .confirm-actions {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
-    margin-top: 22px;
   }
 </style>

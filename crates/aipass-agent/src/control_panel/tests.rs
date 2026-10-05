@@ -20,6 +20,322 @@ struct Fixture {
     vault_id: Uuid,
 }
 
+fn route_draft(snapshot: &Value) -> Value {
+    let route = &snapshot["routes"][0];
+    json!({"id":route["id"],"name":route["name"],"enabled":route["enabled"],
+        "strategy":route["strategy"],"inboundProtocol":route["inboundProtocol"],"retry":route["retry"],
+        "targets":route["targets"].as_array().unwrap().iter().map(|target| json!({
+            "id":target["id"],"providerEntryId":target["providerEntryId"],"secretId":target["secretId"],
+            "enabled":target["enabled"],"priority":target["priority"],"weight":target["weight"]
+        })).collect::<Vec<_>>()})
+}
+
+#[test]
+fn route_editor_preserves_private_runtime_fields_and_rejects_stale_or_injected_drafts() {
+    let fixture = Fixture::new(false);
+    let (cookie, csrf) = fixture.credentials();
+    let before = fixture.get(&cookie).json::<Value>().unwrap();
+    let mut draft = route_draft(&before);
+    draft["name"] = json!("Renamed group");
+    draft["targets"][0]["weight"] = json!(3);
+    let response = fixture.action(
+        &cookie,
+        &csrf,
+        json!({"type":"route_save","revision":before["revision"],"route":draft}),
+    );
+    assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+    session::with_vault(&fixture.state, false, |vault| {
+        let config = fixture.state.proxy.lock().unwrap().config(vault)?;
+        assert_eq!(config.routes[0].token, "fake-panel-proxy-token");
+        assert_eq!(
+            config.routes[0].targets[0].headers,
+            vec![("x-private".into(), "fake-panel-header-secret".into())]
+        );
+        assert_eq!(
+            config.routes[0].targets[0].base_url,
+            "http://127.0.0.1:9/v1"
+        );
+        assert_eq!(config.routes[0].targets[0].weight, 3);
+        Ok(())
+    })
+    .unwrap();
+    let stale = fixture.action(
+        &cookie,
+        &csrf,
+        json!({"type":"route_save","revision":before["revision"],"route":draft}),
+    );
+    assert_eq!(stale.status(), 409);
+    let after = fixture.get(&cookie).json::<Value>().unwrap();
+    let mut injected = route_draft(&after);
+    injected["targets"][0]["baseUrl"] = json!("http://attacker.invalid");
+    assert_eq!(
+        fixture
+            .action(
+                &cookie,
+                &csrf,
+                json!({"type":"route_save","revision":after["revision"],"route":injected})
+            )
+            .status(),
+        400
+    );
+    let serialized = after.to_string();
+    assert!(!serialized.contains("fake-panel-proxy-token"));
+    assert!(!serialized.contains("fake-panel-header-secret"));
+    assert!(!serialized.contains("fake-panel-provider-secret"));
+    assert_eq!(after["routes"][0]["name"], "Renamed group");
+}
+
+#[test]
+fn remote_route_creation_resolves_credentials_and_deletion_requires_the_current_revision() {
+    let fixture = Fixture::new(false);
+    let (cookie, csrf) = fixture.credentials();
+    let before = fixture.get(&cookie).json::<Value>().unwrap();
+    let mut draft = route_draft(&before);
+    let route_id = Uuid::new_v4();
+    draft["id"] = json!(route_id);
+    draft["name"] = json!("New remote group");
+    draft["targets"][0]["id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        fixture
+            .action(
+                &cookie,
+                "wrong-csrf",
+                json!({"type":"route_save","revision":before["revision"],"route":draft})
+            )
+            .status(),
+        401
+    );
+    let response = fixture.action(
+        &cookie,
+        &csrf,
+        json!({"type":"route_save","revision":before["revision"],"route":draft}),
+    );
+    assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+    session::with_vault(&fixture.state, false, |vault| {
+        let config = fixture.state.proxy.lock().unwrap().config(vault)?;
+        let added = config
+            .routes
+            .iter()
+            .find(|route| route.id == route_id)
+            .unwrap();
+        assert!(!added.token.is_empty());
+        assert_ne!(added.token, config.routes[0].token);
+        assert!(!added.targets[0].base_url.is_empty());
+        assert_eq!(added.targets[0].auth_scheme, "bearer");
+        assert!(added.targets[0].headers.is_empty());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        fixture
+            .action(
+                &cookie,
+                &csrf,
+                json!({"type":"route_delete","routeId":route_id,"revision":before["revision"]})
+            )
+            .status(),
+        409
+    );
+    let current = fixture.get(&cookie).json::<Value>().unwrap();
+    assert_eq!(
+        fixture
+            .action(
+                &cookie,
+                &csrf,
+                json!({"type":"route_delete","routeId":route_id,"revision":current["revision"]})
+            )
+            .status(),
+        200
+    );
+    assert_eq!(
+        fixture.get(&cookie).json::<Value>().unwrap()["routes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn remote_route_editor_rejects_invalid_credentials_duplicate_ids_and_empty_groups() {
+    let fixture = Fixture::new(false);
+    let (cookie, csrf) = fixture.credentials();
+    let before = fixture.get(&cookie).json::<Value>().unwrap();
+    for kind in ["credential", "duplicate", "empty", "weight"] {
+        let mut draft = route_draft(&before);
+        match kind {
+            "credential" => draft["targets"][0]["secretId"] = json!("missing-credential"),
+            "duplicate" => {
+                let second = draft["targets"][0].clone();
+                draft["targets"].as_array_mut().unwrap().push(second);
+            }
+            "empty" => draft["targets"] = json!([]),
+            _ => draft["targets"][0]["weight"] = json!(0),
+        }
+        let response = fixture.action(
+            &cookie,
+            &csrf,
+            json!({"type":"route_save","revision":before["revision"],"route":draft}),
+        );
+        assert!(!response.status().is_success(), "accepted {kind}");
+        assert_eq!(
+            fixture.get(&cookie).json::<Value>().unwrap()["revision"],
+            before["revision"]
+        );
+    }
+}
+
+#[test]
+fn deleting_the_last_running_group_stops_and_persists_the_proxy() {
+    let fixture = Fixture::new(false);
+    let (cookie, csrf) = fixture.credentials();
+    assert_eq!(
+        fixture
+            .action(&cookie, &csrf, json!({"type":"proxy_start"}))
+            .status(),
+        200
+    );
+    let before = fixture.get(&cookie).json::<Value>().unwrap();
+    assert_eq!(before["proxy"]["running"], true);
+    let response = fixture.action(
+        &cookie,
+        &csrf,
+        json!({"type":"route_delete","routeId":fixture.route,"revision":before["revision"]}),
+    );
+    assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+    let after = fixture.get(&cookie).json::<Value>().unwrap();
+    assert_eq!(after["proxy"]["running"], false);
+    assert!(after["routes"].as_array().unwrap().is_empty());
+    session::with_vault(&fixture.state, false, |vault| {
+        let config = fixture.state.proxy.lock().unwrap().config(vault)?;
+        assert!(!config.enabled);
+        assert!(config.routes.is_empty());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn remote_route_creation_accepts_gemini_credentials_without_exposing_them() {
+    let fixture = Fixture::new(false);
+    let (provider_id, secret_id) = session::with_vault(&fixture.state, false, |vault| {
+        let mut input = crate::server::tests::sync_test_provider("Gemini", "fake-gemini-key");
+        input.provider_id = Some("gemini".into());
+        input.interface_type = aipass_provider_registry::InterfaceType::Gemini;
+        input.auth_scheme = aipass_provider_registry::AuthScheme::GoogleApiKey;
+        let id = vault.add_provider(input).unwrap();
+        Ok((
+            id,
+            vault.get_provider_summary(id).unwrap().secret_refs[0]
+                .id
+                .clone(),
+        ))
+    })
+    .unwrap();
+    let (cookie, csrf) = fixture.credentials();
+    let before = fixture.get(&cookie).json::<Value>().unwrap();
+    let provider = before["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|provider| provider["id"] == json!(provider_id))
+        .unwrap();
+    assert_eq!(provider["secrets"][0]["proxyEligible"], true);
+    let route_id = Uuid::new_v4();
+    let mut draft = route_draft(&before);
+    draft["id"] = json!(route_id);
+    draft["name"] = json!("Gemini group");
+    draft["inboundProtocol"] = json!("open_ai_chat_completions");
+    draft["targets"][0]["id"] = json!(Uuid::new_v4());
+    draft["targets"][0]["providerEntryId"] = json!(provider_id);
+    draft["targets"][0]["secretId"] = json!(secret_id);
+    let response = fixture.action(
+        &cookie,
+        &csrf,
+        json!({"type":"route_save","revision":before["revision"],"route":draft}),
+    );
+    assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+    session::with_vault(&fixture.state, false, |vault| {
+        let config = fixture.state.proxy.lock().unwrap().config(vault)?;
+        let route = config
+            .routes
+            .iter()
+            .find(|route| route.id == route_id)
+            .unwrap();
+        assert_eq!(route.inbound_protocol, Protocol::OpenAiChatCompletions);
+        assert_eq!(route.targets[0].auth_scheme, "google_api_key");
+        assert_eq!(route.targets[0].provider_entry_id, provider_id);
+        assert_eq!(route.targets[0].secret_id, secret_id);
+        Ok(())
+    })
+    .unwrap();
+    assert!(!fixture
+        .get(&cookie)
+        .text()
+        .unwrap()
+        .contains("fake-gemini-key"));
+}
+
+#[test]
+fn snapshot_exposes_group_metadata_and_keeps_inactive_credentials_unavailable() {
+    let fixture = Fixture::new(false);
+    let (active, archived, trashed) = session::with_vault(&fixture.state, false, |vault| {
+        let active = vault.list_provider_summaries().unwrap()[0].id;
+        vault.set_provider_favorite(active, true).unwrap();
+        let _ = vault.reveal_secret(active).unwrap();
+        let archived = vault
+            .add_provider(crate::server::tests::sync_test_provider(
+                "Archived",
+                "fake-archived-secret",
+            ))
+            .unwrap();
+        vault.set_provider_favorite(archived, true).unwrap();
+        vault.archive_provider(archived).unwrap();
+        let trashed = vault
+            .add_provider(crate::server::tests::sync_test_provider(
+                "Trash",
+                "fake-trashed-secret",
+            ))
+            .unwrap();
+        vault.trash_provider(trashed).unwrap();
+        Ok((active, archived, trashed))
+    })
+    .unwrap();
+    let (cookie, _) = fixture.credentials();
+    let snapshot = fixture.get(&cookie).json::<Value>().unwrap();
+    let providers = snapshot["providers"].as_array().unwrap();
+    assert_eq!(providers.len(), 3);
+    let entry = |id| {
+        providers
+            .iter()
+            .find(|entry| entry["id"] == json!(id))
+            .unwrap()
+    };
+    assert_eq!(entry(active)["favorite"], true);
+    time::OffsetDateTime::parse(
+        entry(active)["lastUsedAt"].as_str().unwrap(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    assert_eq!(entry(active)["secrets"][0]["proxyEligible"], true);
+    for (id, field) in [(archived, "archivedAt"), (trashed, "deletedAt")] {
+        time::OffsetDateTime::parse(
+            entry(id)[field].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert_eq!(entry(id)["secrets"][0]["proxyEligible"], false);
+    }
+    let serialized = snapshot.to_string();
+    for secret in [
+        "fake-panel-provider-secret",
+        "fake-archived-secret",
+        "fake-trashed-secret",
+    ] {
+        assert!(!serialized.contains(secret));
+    }
+}
+
 fn port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()

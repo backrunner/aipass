@@ -1625,7 +1625,7 @@ fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
             }
             if !matches!(
                 target.auth_scheme.as_str(),
-                "bearer" | "custom_header" | "x_api_key" | "azure_api_key"
+                "bearer" | "custom_header" | "x_api_key" | "azure_api_key" | "google_api_key"
             ) {
                 return Err(ServiceError::new(
                     aipass_agent_protocol::AgentErrorCode::ValidationFailed,
@@ -1903,6 +1903,42 @@ mod tests {
     fn config_accepts_plaintext_token() {
         let config = config_with_token("matching-token");
         assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn config_accepts_every_resolvable_auth_scheme_and_rejects_unknown_schemes() {
+        let mut config = config_with_token("matching-token");
+        config.routes[0].targets.push(ProxyTargetConfig {
+            id: Uuid::new_v4(),
+            provider_entry_id: Uuid::new_v4(),
+            secret_id: "primary".into(),
+            label: "primary".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            auth_scheme: "bearer".into(),
+            headers: Vec::new(),
+            group: None,
+            priority: 0,
+            weight: 1,
+            enabled: true,
+            protocol: None,
+            prefer_ws: false,
+        });
+        for auth in [
+            AuthScheme::Bearer,
+            AuthScheme::CustomHeader,
+            AuthScheme::XApiKey,
+            AuthScheme::AzureApiKey,
+            AuthScheme::GoogleApiKey,
+        ] {
+            let scheme = proxy_auth_scheme(&auth).unwrap();
+            config.routes[0].targets[0].auth_scheme = scheme.into();
+            assert!(validate_config(&config).is_ok(), "rejected {scheme}");
+        }
+        assert!(proxy_auth_scheme(&AuthScheme::AwsProfile).is_none());
+        for unsupported in ["aws_profile", "unknown"] {
+            config.routes[0].targets[0].auth_scheme = unsupported.into();
+            assert!(validate_config(&config).is_err());
+        }
     }
 
     #[test]

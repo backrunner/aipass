@@ -13,7 +13,7 @@
     <h2>{title}</h2>
   </div>
   <div class="empty-body">
-    <p>{description}</p>
+    {#if description}<p>{description}</p>{/if}
     {#if actions}
       <div class="empty-actions">{@render actions()}</div>
     {/if}

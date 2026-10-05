@@ -91,7 +91,7 @@
         <header class="modal-header">
           <div class="dialog-heading"><span class="heading-icon"><SlidersHorizontal size={18} /></span><div>
             <Dialog.Title class="provider-dialog-title">{$t("providerRuntime.title")}</Dialog.Title>
-            <Dialog.Description class="dialog-description">{#if providerTitle}<span class="provider-identity" title={providerTitle}>{providerTitle}</span><span aria-hidden="true"> · </span>{/if}{$t("providerRuntime.description")}</Dialog.Description>
+            <Dialog.Description class="dialog-description" hidden={!providerTitle}>{providerTitle}</Dialog.Description>
           </div></div>
           <IconButton label={$t("common.close")} disabled={busy} on:click={closeEditor}><X size={17} /></IconButton>
         </header>
@@ -108,7 +108,6 @@
             {:else if options}
               <fieldset disabled={busy} on:input={changed} on:change={changed}>
                 <Tabs.Content value="quota" class="tab-content">
-                  <div class="section-intro"><h2>{$t("providerRuntime.quotaTab")}</h2><p>{$t("providerRuntime.quotaDescription")}</p></div>
                   <div class="settings-section">
                     <SwitchField label={$t("optimization.enableQuotaTracking")} description={$t("providerRuntime.quotaHint")} checked={options.quotaTracking} disabled={busy}
                       onCheckedChange={(value) => { options!.quotaTracking = value; changed(); }} />
@@ -117,10 +116,8 @@
                       options={[60, 120, 300, 900, 3600].map(seconds => ({ value: String(seconds), label: `${seconds / 60} ${$t("providerRuntime.minutes")}` }))}
                       onValueChange={(value) => { options!.quotaRefreshSeconds = Number(value); changed(); }} />
                   </div>
-                  <p class="context-note"><Info size={14} /><span>{$t("providerRuntime.routeHint")}</span></p>
                 </Tabs.Content>
                 <Tabs.Content value="proxy" class="tab-content">
-                  <div class="section-intro"><h2>{$t("proxy.configuration")}</h2><p>{$t("providerRuntime.proxyDescription")}</p></div>
                   <div class="settings-section">
                     <SelectField label={$t("providerRuntime.outbound")} value={options.proxy?.mode ?? "inherit"} disabled={busy}
                       options={[
@@ -128,7 +125,7 @@
                         { value: "direct", label: $t("providerRuntime.direct") }, { value: "environment", label: $t("providerRuntime.environment") }, { value: "custom", label: $t("providerRuntime.custom") }
                       ]} onValueChange={setProxyMode} />
                     {#if options.proxy?.mode === "custom"}
-                      <Field label={$t("proxy.proxyUrl")}><input type="url" bind:value={options.proxy.url} placeholder="http://127.0.0.1:7890" /></Field>
+                      <Field label={$t("proxy.proxyUrl")} hint={$t("providerRuntime.customProxyHint")}><input type="url" bind:value={options.proxy.url} placeholder="http://127.0.0.1:7890" /></Field>
                       <div class="section-divider"></div>
                       <div class="subsection-title"><span>{$t("proxy.authentication")}</span><span class="optional-tag">{$t("providerRuntime.optional")}</span></div>
                       <div class="columns">
@@ -138,10 +135,8 @@
                       {#if options.proxy.hasCredentials}<label class="check"><input type="checkbox" bind:checked={options.proxy.clearCredentials} />{$t("providerRuntime.clearAuth")}</label>{/if}
                     {/if}
                   </div>
-                  <p class="context-note"><Globe size={14} /><span>{$t(options.proxy?.mode === "custom" ? "providerRuntime.customProxyHint" : "providerRuntime.proxyHint")}</span></p>
                 </Tabs.Content>
                 <Tabs.Content value="balance" class="tab-content">
-                  <div class="section-intro"><h2>{$t("providerRuntime.balance")}</h2><p>{$t("providerRuntime.balanceDescription")}</p></div>
                   <div class="settings-section">
                     <SwitchField label={$t("providerRuntime.enableBalance")} checked={Boolean(options.balance)} disabled={busy}
                       onCheckedChange={(value) => { options!.balance = value ? { url: "", post: false, headers: [], jsonPath: "$.data.balance", unit: "USD" } : null; changed(); }} />
@@ -153,7 +148,7 @@
                         <Field label="URL"><input type="url" bind:value={options.balance.url} placeholder="https://example.com/account/balance" /></Field>
                       </div>
                       <div class="columns">
-                        <Field label={$t("providerRuntime.path")}><input bind:value={options.balance.jsonPath} placeholder="$.data.balance" /></Field>
+                        <Field label={$t("providerRuntime.path")} hint={$t("providerRuntime.pathHint")}><input bind:value={options.balance.jsonPath} placeholder="$.data.balance" /></Field>
                         <Field label={$t("providerRuntime.unit")}><input bind:value={options.balance.unit} /></Field>
                       </div>
                       {#if options.balance.post}<Field label={$t("providerRuntime.body")}><textarea bind:value={options.balance.body} placeholder={$t("providerRuntime.keepSecret")}></textarea></Field>{/if}
@@ -172,7 +167,6 @@
                   </div>
                 </Tabs.Content>
                 <Tabs.Content value="webhooks" class="tab-content">
-                  <div class="section-intro"><h2>{$t("webhook.notifications")}</h2><p>{$t("providerRuntime.webhooksDescription")}</p></div>
                   {#if !options.webhooks.length}
                     <div class="empty-state"><span class="empty-icon"><Bell size={22} /></span><strong>{$t("providerRuntime.noWebhooks")}</strong><p>{$t("providerRuntime.noWebhooksHint")}</p></div>
                   {/if}
@@ -210,7 +204,6 @@
   .dialog-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .dialog-heading > div { min-width: 0; }
   .heading-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 10px; color: var(--text-secondary); }
-  .provider-identity { color: var(--text-secondary); font-weight: 500; }
   :global(.runtime-dialog .dialog-description) { margin: 4px 0 0; font-size: 12px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   :global(.runtime-dialog .settings-tabs) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   :global(.runtime-dialog .settings-nav) { display: flex; gap: 24px; padding: 0 24px; border-bottom: 1px solid var(--divider); flex-shrink: 0; }
@@ -221,12 +214,10 @@
   .modal-body { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; background: var(--bg); display: flex; flex-direction: column; gap: 16px; }
   fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
   :global(.runtime-dialog .tab-content[data-state="active"]) { display: flex; flex-direction: column; gap: 16px; }
-  .section-intro { display: grid; gap: 5px; }
-  h2 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; letter-spacing: -.015em; }
   p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-tertiary); }
   .settings-section { display: grid; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
   .section-divider { height: 1px; background: var(--divider); }
-  .columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+  .columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
   .request-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 14px; }
   .subsection-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
   .optional-tag { color: var(--text-tertiary); font-size: 10px; font-weight: 400; }

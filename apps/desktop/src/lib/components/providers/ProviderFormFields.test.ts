@@ -6,7 +6,7 @@ test("preserves an explicit WebSocket opt-out when reopening the provider form",
   const draft = { ...emptyDraft(), interfaceType: "openai_compatible" as const };
   let app = mount(ProviderFormFields, { target: document.body, props: { draft, itemLayout: true, formMode: "edit", showWebsocketSetting: true } });
   flushSync();
-  document.querySelector<HTMLButtonElement>(".advanced-toggle")!.click();
+  document.querySelector<HTMLButtonElement>(".advanced-section .collapsible-trigger")!.click();
   flushSync();
   const toggle = document.querySelector<HTMLButtonElement>("[role=switch]")!;
   expect(toggle.getAttribute("aria-checked")).toBe("true");

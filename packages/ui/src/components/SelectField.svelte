@@ -53,7 +53,7 @@
                         disabled={option.disabled}
                       >
                         {#snippet children({ selected })}
-                          <span class="select-item-text">{option.label}</span>
+                          <span class="select-item-text" title={option.label}>{option.label}</span>
                           {#if selected}
                             <Check size={14} />
                           {/if}
@@ -74,6 +74,7 @@
 <style lang="scss">
   .select-field {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
     min-width: 0;
   }
@@ -90,6 +91,7 @@
     justify-content: space-between;
     gap: 8px;
     width: 100%;
+    min-width: 0;
     min-height: 34px;
     padding: 0 10px;
     border: 1px solid var(--border);
@@ -117,6 +119,7 @@
 
   .select-value {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -128,7 +131,8 @@
   }
 
   :global(.select-content) {
-    min-width: var(--bits-select-anchor-width, 180px);
+    width: var(--bits-select-anchor-width, 180px);
+    max-width: calc(100vw - 32px);
     max-height: 280px;
     padding: 4px;
     background: var(--surface);
@@ -167,6 +171,7 @@
 
   .select-item-text {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -139,7 +139,7 @@ Newest entries last within each section.
 - **Root cause**: `ServerDetailPane` loaded logs before opening the dialog; the portalled log body had no mount/update scroll handling or refresh lifecycle.
 - **Fix**: `ProxyLogsDialog` loads immediately and schedules the next refresh two seconds after completion, follows the bottom unless the user scrolls up, and invalidates pending work on close/unmount. Virtualize and highlight only visible rows with measured wrapping heights and content/occurrence keys to preserve reading anchors as history is trimmed. Capture tail-follow intent before layout adjustments; show loading during imports and requests, retaining the last good snapshot on transient failures and skipping unchanged DOM updates.
 - **Guardrail**: bind scrolling to the actual mounted log body, prevent overlapping refreshes, and reject responses from previous openings. Verify bounded rendering/highlighting, duplicate entries, trimmed history, loading, opening/reopening, manual scrolling, failures, close and unmount in `ProxyLogsDialog.test.ts`; check wrapped rows and tail following at 960×640.
-- **Watch points**: dialog portal mounting, `ServerDetailPane` lazy loading and `onLoadProxyLogs`, typed `server_logs` IPC.
+- **Watch points**: dialog portal mounting, `ServerDetailPane` lazy loading and `onLoadProxyLogs`, typed `server_logs` IPC. The control-panel modal shares its existing guarded state refresh; reverse its newest-first snapshot for tail following, preserve duplicate rows, and unmount the portal on authorization loss. Check focus return, live refresh and session removal in control-panel `App.test.ts`.
 
 ### Unsupported Responses tools must not disappear during conversion
 - **Symptom**: Responses-to-Anthropic conversion returned success after removing `custom` execution tools and their call history.
@@ -535,7 +535,7 @@ Newest entries last within each section.
 - **Symptom**: editing retry settings appeared not to save when the agent rejected an invalid backoff range; the dialog closed or showed no reason to correct the values.
 - **Root cause**: the route dialog used bespoke controls and discarded a `false` save result, while the agent requires maximum backoff to be at least initial backoff (`crates/aipass-agent/src/proxy_service.rs:1068`).
 - **Fix**: reuse shared form/card controls, validate retry numbers and ordering before IPC, and keep the dialog open with an inline error on persistence failure.
-- **Guardrail**: validate advanced retry fields before saving and surface every failed route-config write in the open dialog. When disabling an option, retain valid persisted/default numbers instead of submitting invalid hidden inputs. Covered by `RouteGroupDialog.test.ts`.
+- **Guardrail**: validate advanced retry fields before saving and surface every failed route-config write in the open dialog. When disabling an option, retain valid persisted/default numbers instead of submitting invalid hidden inputs. Covered by `RouteGroupDialog.test.ts`. When only renaming or reordering a group, retain each existing target's private headers, base URL, group, protocol and WebSocket preference; do not rebuild it from provider metadata.
 - **Watch points**: `RouteGroupDialog.svelte`, `App.svelte` `saveRouteGroup`, and agent `validate_config`.
 
 ### Lock and save outcomes must own the active dialog lifecycle
@@ -562,6 +562,22 @@ Newest entries last within each section.
 - **Fix**: remove the detail page's generic error prop, route ordinary failures into a dismissible, expiring toast, and scope inline auth, provider-form and settings feedback to their own surfaces. Dialogs that already handle rejected callbacks own their errors without a duplicate host notification.
 - **Guardrail**: report operation errors through `reportError`; never pass app-wide errors to an entity detail page. Test unrelated errors during editing, repeated identical failures, auto-dismiss and closing a failed settings surface in `App.operations.test.ts`. Preserve drafts on failure and clear workspace toasts on lock.
 - **Watch points**: App operation handlers, provider inline/modal saves, settings feedback, integration/usage dialogs, and `ErrorToast.svelte` at 960×640.
+
+## Desktop settings layout
+
+### Automatic saves must retain the newest draft and finish before closing
+- **Symptom**: retry fields depended on another card's save button; changing to automatic saves could overwrite a newer edit with an earlier response or discard pending edits on close.
+- **Root cause**: `SettingsPanel.svelte:227` mutated the host's whole proxy configuration without persisting individual edits; `App.svelte:2273` rejected writes while busy and replaced the shared draft on completion.
+- **Fix**: keep a settings draft and serialize its latest revisions, wait for writes before close, and retain failed writes for explicit retry. Save listener controls on completed changes, wait for both certificate files, and preserve immediate stop independently of validation. Ignore stale responses and queued edits after lock/unmount; distinguish committed config writes from status refresh failure.
+- **Guardrail**: test rapid edits, close during a pending write, incomplete custom proxy/pricing/certificate inputs, invalid numbers, write retry, lock during a write and failed post-commit refresh. Keep file imports retryable, clear selected files on success/unmount, and zeroize the transient private-key string.
+- **Watch points**: `SettingsPanel.svelte`, `ControlPanelSettings.svelte`, `App.svelte` mutation/load guards, `App.operations.test.ts` and `ControlPanelSettings.test.ts`.
+
+### Empty fixtures concealed clipped controls and inconsistent card content
+- **Symptom**: Server settings had flush card content and native checkboxes; populated pricing rules clipped their delete buttons, and long group names overlapped proxy actions.
+- **Root cause**: `ControlPanelSettings.svelte:139` duplicated control styling without horizontal padding; `SettingsPanel.svelte:1462` required more column width than the settings drawer provides. Header badges retained their full intrinsic text width.
+- **Fix**: Reuse shared controls with explicit 16px content padding, place pricing values in two columns, and constrain badge text while keeping header actions on their own row in narrow panes.
+- **Guardrail**: Review at 960×640 with populated pricing, long group names, running/stopped states and expanded certificate forms in both languages and themes. Check child bounds against card edges; a parent's hidden overflow can conceal clipped controls despite equal scroll and client widths. Use content-sized shared buttons when adding a text label to an icon action; verify English labels remain on one line. Keep immediate stop independent of invalid listener drafts.
+- **Watch points**: `ControlPanelSettings.svelte`, `SettingsPanel.svelte`, `ServerDetailPane.svelte`, `ProviderDetailPane.svelte` credential pricing, shared `Card`, `Field`, `Button` and `SwitchField`, and the control-panel behavior regressions. Center empty states in the available list area using shared `EmptyState`; validate independent group scrolling and shared switches at 960×640. Keep legacy global button rules from overriding shared controls' dimensions, alignment and hover states.
 
 ## Build toolchain
 
@@ -591,10 +607,31 @@ Newest entries last within each section.
 - **Symptom**: the Node CI job passed tests and build but failed the committed embedded-output comparison; local macOS rebuilding produced no diff.
 - **Root cause**: `apps/control-panel/vite.config.ts` used Svelte's default CSS hash for shared components outside the Vite root, including the absolute filename in their scope identifiers.
 - **Fix**: hash the repository-relative, separator-normalized filename together with the CSS. Rebuilt assets match byte-for-byte in two independent checkout directories.
-- **Guardrail**: keep the CI embedded-output comparison enabled and verify both JS and CSS when changing shared component compilation. Never patch only the generated scope identifiers or accept machine-specific output.
+- **Guardrail**: keep the CI embedded-output comparison enabled and verify both JS and CSS when changing shared component compilation. Never patch only the generated scope identifiers or accept machine-specific output. Resolve shared schemas directly to the fingerprinted source instead of an ignored, possibly stale `dist` directory.
 - **Watch points**: control-panel Vite config, shared UI components, `scripts/stamp.mjs`, Agent `build.rs`, and the Node CI reproducibility step.
 
 ## LAN control panel
+
+### Credential navigation must share desktop categories and scope selection
+- **Symptom**: The panel flattened providers under one Credentials entry, ignored desktop favorites/recent/provider kinds, and kept details selected outside the active category.
+- **Root cause**: The remote snapshot omitted favorite and lifecycle metadata; panel navigation and list filtering were maintained separately.
+- **Fix**: Share `VaultSidebar`, `ProviderListPane`, provider counts and filter helpers. Expose only public grouping metadata with RFC3339 timestamps through the authenticated Agent snapshot, including archive/trash views.
+- **Guardrail**: Count only active providers in ordinary categories; sort Recent by use time. Scope search and selection to the chosen group and clear stale previews when polling removes a selected entry. Exclude archived/trashed records from proxy choices and tool actions. Bundle provider icons from the shared UI assets; never reference desktop `/src` URLs in a production surface. Use masks for monochrome SVGs to preserve theme colors. Verify categories, counts, empty groups, icons and scroll masks in both languages/themes at 960×640.
+- **Watch points**: Shared schema provider helpers, desktop counts/search, panel App tests, Agent snapshot metadata tests and read-only list capabilities.
+
+### Shared controls must own their appearance and pending layout
+- **Symptom**: The panel's sidebar icons, native selects and action buttons differed from desktop; clicking Preview changes shifted the entire form and resized its button.
+- **Root cause**: `apps/control-panel/src/style.scss` duplicated global button/input/select/svg rules while `App.svelte` inserted a generic pending paragraph. Native modal dialogs also block SelectField portals outside the browser top layer.
+- **Fix**: Reuse SidebarItem, SearchField, Button, IconButton, SelectField, Field, SwitchField and the shared Bits UI Modal. Preserve button content dimensions during loading; discard pending previews when groups change, retain failed editor drafts, and return modal focus to the opening control.
+- **Guardrail**: Keep surface CSS scoped to layout; let common controls own sizing, padding, icon strokes, hover and focus states. Verify pending button bounds, keyboard selection, modal portal hit testing, form-associated footer submission, failure retry and focus return at 960x640 in both languages and themes. Constrain Select grid tracks and triggers to min-width zero; keep popup width tied to its anchor and test long labels for viewport overflow. Preserve elevated confirmation layers above existing dialogs. Synthetic Select tests must dispatch pointerdown on triggers and pointerup on options.
+- **Watch points**: Shared UI controls, desktop ConfirmModal, panel ProxyLogsDialog and App.test.ts; embedded panel build/stamp and Agent source fingerprint.
+
+### Shared group management must retain Agent authority and snapshot ordering
+- **Symptom**: The panel could only toggle existing groups; copying the desktop draft would expose private routing fields, and an older poll could leave a successful save showing stale groups.
+- **Root cause**: The panel maintained its own layout and received only a sanitized snapshot, while desktop route configuration includes tokens, endpoints and headers.
+- **Fix**: Share the list, editor, empty state, cards, status grid and schema helpers. Submit a strict editable group DTO with the opening revision; resolve new credentials and preserve existing private target fields inside the Agent. Await an older poll and then fetch the committed snapshot.
+- **Guardrail**: Reject stale revisions and injected private fields; capture the revision when an editor opens. Verify create/edit/delete, deletion of the last running group, overlapping polls, authorization-loss portal removal, and credential redaction. Keep supported authentication in eligibility, configuration validation and runtime resolution aligned, including Google API keys. Use cryptographic `getRandomValues` for UUIDs when HTTP LAN contexts omit `randomUUID`; verify creation through a non-loopback HTTP origin.
+- **Watch points**: Shared `ProxyRouteList` / `ProxyRouteGroupDialog`, panel `App.test.ts`, protocol `ControlPanelRouteDraft`, Agent HTTP management tests and `proxy_service` auth validation tests.
 
 ### Remote authorization must follow the current vault session
 - **Symptom**: checking a browser session only when a request arrives can allow queued work to run after a local lock/unlock, password change, or access-code rotation; a code tied only to a directory can authorize a replacement vault.
@@ -666,3 +703,10 @@ Newest entries last within each section.
 - **Fix**: Isolate the editor in `ProviderRuntimeDialog.svelte`, clear draft secret fields through a plain helper during teardown, and keep summary requests guarded by a generation counter.
 - **Guardrail**: Clear sensitive draft fields on teardown without assigning reactive editor state; verify cancel-and-reopen and preserve failed-save drafts. Let portalled select focus handlers settle between synthetic pointer actions.
 - **Watch points**: `ProviderRuntimeDialog.svelte`, `ProviderRuntimePanel.svelte`, shared `SelectField`, `Card`, and `ProviderRuntimePanel.test.ts`.
+
+### Disclosure panels must preserve forms and independent header actions
+- **Symptom**: Certificate import, advanced provider fields, billing references, cards and diagnostic details used separate disclosure implementations with inconsistent hit areas and keyboard behavior.
+- **Root cause**: Native details and copied grid animations were maintained independently across desktop, extension and control-panel UI.
+- **Fix**: Share `packages/ui/src/components/Collapsible.svelte`; retain mounted content behind `inert` and `aria-hidden`, bind expansion state, and place header actions outside the toggle button.
+- **Guardrail**: Preserve file selections and drafts across collapse; verify external closure restores focus, unique content IDs, disabled toggles, independent actions, and runtime-panel lazy loading. Keep legacy slot forwarding snippets scoped to the component rather than hoisted callbacks.
+- **Watch points**: Desktop `Card`, `ControlPanelSettings`, provider advanced fields, credential billing, OAuth diagnostics and pricing history; `Collapsible.test.ts` and certificate/billing draft regressions.

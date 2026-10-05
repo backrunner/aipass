@@ -3,6 +3,7 @@
   import { getProviderIcon } from "@aipass/schemas";
 
   import { initials, providerKindTone } from "../helpers";
+  import { builtInProviderIcons, monochromeProviderIcons } from "../provider-icons";
 
   export let title: string;
   export let kind: ProviderKind = "unknown";
@@ -12,16 +13,17 @@
   export let size: "sm" | "md" | "lg" = "md";
 
   let faviconBroken = false;
-  let lastFaviconUrl: string | undefined = faviconUrl;
+  let lastIconUrl: string | undefined;
   $: tone = providerKindTone[kind];
-  $: if (faviconUrl !== lastFaviconUrl) {
-    lastFaviconUrl = faviconUrl;
+  $: if (iconUrl !== lastIconUrl) {
+    lastIconUrl = iconUrl;
     faviconBroken = false;
   }
 
   // Try built-in icon first, then cached favicon, then fallback to initials
   $: builtInIcon = providerId || domain ? getProviderIcon(providerId || "", domain) : undefined;
-  $: builtInIconUrl = builtInIcon ? `/src/assets/provider-icons/${builtInIcon}.svg` : undefined;
+  $: builtInIconUrl = builtInIcon ? builtInProviderIcons[builtInIcon] : undefined;
+  $: monochrome = builtInIcon ? monochromeProviderIcons.has(builtInIcon) : false;
   $: cachedFaviconUrl = faviconUrl?.startsWith("data:image/") ? faviconUrl : undefined;
   $: iconUrl = builtInIconUrl || cachedFaviconUrl;
   $: showIcon = Boolean(iconUrl) && !faviconBroken;
@@ -29,7 +31,11 @@
 
 <span class={`provider-icon tone-${tone} size-${size}`} aria-hidden="true">
   {#if showIcon}
-    <img src={iconUrl} alt="" on:error={() => (faviconBroken = true)} />
+    {#if monochrome}
+      <span class="monochrome-icon" style:--provider-icon={`url("${iconUrl}")`}></span>
+    {:else}
+      <img src={iconUrl} alt="" on:error={() => (faviconBroken = true)} />
+    {/if}
   {:else}
     <span class="initials">{initials(title || "?")}</span>
   {/if}
@@ -51,6 +57,14 @@
       height: 60%;
       object-fit: contain;
     }
+  }
+
+  .monochrome-icon {
+    width: 60%;
+    height: 60%;
+    background: currentColor;
+    mask: var(--provider-icon) center / contain no-repeat;
+    -webkit-mask: var(--provider-icon) center / contain no-repeat;
   }
 
   .size-sm {

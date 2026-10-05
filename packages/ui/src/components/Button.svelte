@@ -10,6 +10,7 @@
 </script>
 
 <button
+  {...$$restProps}
   {type}
   disabled={disabled || loading}
   aria-busy={loading}
@@ -19,11 +20,12 @@
   {#if loading}
     <span class="spinner" aria-hidden="true"></span>
   {/if}
-  <slot />
+  <span class="button-content" class:loading><slot /></span>
 </button>
 
 <style lang="scss">
   .btn {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -51,7 +53,11 @@
     }
   }
 
+  .button-content { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .button-content.loading { opacity: 0; }
+
   .spinner {
+    position: absolute;
     width: 12px;
     height: 12px;
     border: 2px solid currentColor;
@@ -59,6 +65,8 @@
     border-radius: 999px;
     animation: spin 0.7s linear infinite;
   }
+
+  .btn :global(svg) { flex-shrink: 0; }
 
   @keyframes spin {
     to {

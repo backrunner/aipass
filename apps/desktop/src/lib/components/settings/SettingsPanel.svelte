@@ -26,7 +26,7 @@
   import { checkForUpdates, clearPendingUpdate, installUpdate, persistUpdateChannel, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
   import { buildTimeLabel } from "../../build";
   import { scrollMask, Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
-  import Card from "../shared/Card.svelte";
+  import { Card } from "@aipass/ui";
   import ConfirmModal from "../shared/ConfirmModal.svelte";
   import UpdateRestartConfirmModal from "../shared/UpdateRestartConfirmModal.svelte";
   import SegmentedControl from "../shared/SegmentedControl.svelte";
@@ -224,17 +224,93 @@
             : $t("settings.upstreamProxyCustom")
   }));
 
-  function updateUpstreamProxy(patch: Partial<ProxyConfig["upstreamProxy"]>) {
-    serverConfig = { ...serverConfig, upstreamProxy: { ...serverConfig.upstreamProxy, ...patch } };
+  let panelSettings: ControlPanelSettings | undefined;
+  let serverDraft = serverConfig;
+  let serverSource = serverConfig;
+  let serverDirty = false;
+  let serverSaveFailed = false;
+  let serverSaving = false;
+  let serverRevision = 0;
+  let serverDisposed = false;
+  let serverSaveTask: Promise<boolean> | undefined;
+  $: if (serverConfig !== serverSource) {
+    serverSource = serverConfig;
+    if (!serverDirty && !serverSaving) serverDraft = serverConfig;
   }
 
-  function updateRouteRetry(routeId: string, key: keyof ProxyConfig["routes"][number]["retry"], value: number) {
-    serverConfig = {
-      ...serverConfig,
-      routes: serverConfig.routes.map((route) => route.id === routeId
-        ? { ...route, retry: { ...route.retry, [key]: value } }
+  function changeServerConfig(next: ProxyConfig, complete = true) {
+    serverDraft = next;
+    serverDirty = true;
+    serverRevision++;
+    serverSaveFailed = false;
+    operationError = "";
+    if (complete) void saveServerDraft();
+  }
+
+  function validateServerDraft(): string {
+    if (serverDraft.upstreamProxy.mode === "custom" && !serverDraft.upstreamProxy.customUrl?.trim()) {
+      return $t("settings.proxyUrlRequired");
+    }
+    if (serverDraft.pricing.some(item => !item.model.trim())) return $t("settings.pricingModelRequired");
+    return "";
+  }
+
+  function saveServerDraft(): Promise<boolean> {
+    if (serverSaveTask) return serverSaveTask;
+    serverSaving = true;
+    serverSaveFailed = false;
+    operationError = "";
+    serverSaveTask = (async () => {
+      while (serverDirty && !serverDisposed) {
+        const validation = validateServerDraft();
+        if (validation) { operationError = validation; serverSaveFailed = true; return false; }
+        const revision = serverRevision;
+        const snapshot = structuredClone(serverDraft);
+        try {
+          if ((await onSaveServerConfig(snapshot)) === false) {
+            if (serverDisposed) return false;
+            await tick();
+            if (!error) operationError = $t("settings.saveFailed");
+            serverSaveFailed = true;
+            return false;
+          }
+        } catch (err) {
+          if (!serverDisposed) { operationError = String(err); serverSaveFailed = true; }
+          return false;
+        }
+        if (serverDisposed) return false;
+        if (revision === serverRevision) serverDirty = false;
+      }
+      return !serverDisposed;
+    })().finally(() => { serverSaving = false; serverSaveTask = undefined; });
+    return serverSaveTask;
+  }
+
+  function validNumber(input: HTMLInputElement): boolean {
+    const valid = input.value !== "" && input.validity.valid && Number.isSafeInteger(Number(input.value));
+    if (!valid) {
+      operationError = $t("server.invalidRetryNumber", {
+        field: input.closest(".field")?.querySelector(".field-label")?.textContent ?? "",
+        min: input.min || 0, max: input.max || Number.MAX_SAFE_INTEGER
+      });
+      input.reportValidity();
+    }
+    return valid;
+  }
+
+  function updateUpstreamProxy(patch: Partial<ProxyConfig["upstreamProxy"]>) {
+    const next = { ...serverDraft, upstreamProxy: { ...serverDraft.upstreamProxy, ...patch } };
+    changeServerConfig(next, next.upstreamProxy.mode !== "custom" || Boolean(next.upstreamProxy.customUrl?.trim()));
+  }
+
+  function updateRouteRetry(routeId: string, key: keyof ProxyConfig["routes"][number]["retry"], input: HTMLInputElement) {
+    if (!validNumber(input)) return;
+    changeServerConfig({
+      ...serverDraft,
+      routes: serverDraft.routes.map((route) => route.id === routeId
+        ? { ...route, retry: { ...route.retry, [key]: Number(input.value) } }
         : route)
-    };
+    });
   }
 
   function addPricing() {
@@ -245,15 +321,20 @@
       cacheReadMicrosPerMillion: 0,
       cacheCreationMicrosPerMillion: 0
     };
-    serverConfig = { ...serverConfig, pricing: [...serverConfig.pricing, pricing] };
+    changeServerConfig({ ...serverDraft, pricing: [...serverDraft.pricing, pricing] }, false);
   }
 
   function updatePricing(index: number, patch: Partial<ModelPricing>) {
-    serverConfig = { ...serverConfig, pricing: serverConfig.pricing.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) };
+    const pricing = serverDraft.pricing.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
+    changeServerConfig({ ...serverDraft, pricing }, pricing.every(item => Boolean(item.model.trim())));
+  }
+
+  function updatePricingNumber(index: number, key: keyof Omit<ModelPricing, "model">, input: HTMLInputElement) {
+    if (validNumber(input)) updatePricing(index, { [key]: Number(input.value) });
   }
 
   function removePricing(index: number) {
-    serverConfig = { ...serverConfig, pricing: serverConfig.pricing.filter((_, itemIndex) => itemIndex !== index) };
+    changeServerConfig({ ...serverDraft, pricing: serverDraft.pricing.filter((_, itemIndex) => itemIndex !== index) });
   }
 
   let updateCheck: UpdateCheckResult | undefined;
@@ -299,6 +380,7 @@
   });
 
   onDestroy(() => {
+    serverDisposed = true;
     updateProgressListenerDisposed = true;
     unlistenUpdateProgress?.();
   });
@@ -392,6 +474,8 @@
     closing = true;
     operationError = "";
     try {
+      if (!(await panelSettings?.flushSettings() ?? true)) return;
+      if (serverDirty && !(await saveServerDraft())) return;
       if ((await onClose()) === false) {
         await tick();
         if (!error) operationError = $t("settings.saveFailed");
@@ -425,6 +509,7 @@
         <div use:scrollMask class="operation-feedback">
           {#if error || operationError}
             <Banner tone="danger">{error || operationError}</Banner>
+            {#if serverSaveFailed}<Button size="sm" disabled={serverSaving || Boolean(serverBusy)} on:click={() => saveServerDraft()}>{$t("settings.retrySave")}</Button>{/if}
           {:else if notice}
             <Banner tone="success">{notice}</Banner>
           {/if}
@@ -718,20 +803,19 @@
           </Tabs.Content>
 
           <Tabs.Content value="server" class="tab-panel">
-            <ControlPanelSettings {onCopyAccessCode} />
+            <ControlPanelSettings bind:this={panelSettings} {onCopyAccessCode} />
             <Card title={$t("settings.serverFailover")}>
-              <p class="hint">{$t("settings.serverResponseWait")}</p>
               <div class="settings-stack">
-                {#each serverConfig.routes as route (route.id)}
+                {#each serverDraft.routes as route (route.id)}
                   <section class="server-route-settings">
                     <div class="server-route-title"><Server size={14} /><strong>{route.name}</strong></div>
                     <div class="server-settings-grid">
-                      <Field label={$t("server.maxAttempts")}><input type="number" min="1" max="10" value={route.retry.maxAttempts} on:change={(event) => updateRouteRetry(route.id, "maxAttempts", Number(event.currentTarget.value))} /></Field>
-                      <Field label={$t("server.failureThreshold")}><input type="number" min="1" max="20" value={route.retry.failureThreshold} on:change={(event) => updateRouteRetry(route.id, "failureThreshold", Number(event.currentTarget.value))} /></Field>
-                      <Field label={$t("settings.circuitOpenSeconds")}><input type="number" min="1" value={route.retry.circuitOpenSeconds} on:change={(event) => updateRouteRetry(route.id, "circuitOpenSeconds", Number(event.currentTarget.value))} /></Field>
-                      <Field label={$t("settings.connectTimeoutMs")}><input type="number" min="100" step="100" value={route.retry.connectTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "connectTimeoutMs", Number(event.currentTarget.value))} /></Field>
-                      <Field label={$t("server.firstByteTimeout")}><input type="number" min="1000" step="1000" value={route.retry.firstByteTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "firstByteTimeoutMs", Number(event.currentTarget.value))} /></Field>
-                      <Field label={$t("settings.streamIdleTimeoutMs")}><input type="number" min="1000" step="1000" value={route.retry.streamIdleTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "streamIdleTimeoutMs", Number(event.currentTarget.value))} /></Field>
+                      <Field label={$t("server.maxAttempts")}><input type="number" min="1" max="10" value={route.retry.maxAttempts} on:change={(event) => updateRouteRetry(route.id, "maxAttempts", event.currentTarget)} /></Field>
+                      <Field label={$t("server.failureThreshold")}><input type="number" min="1" max="20" value={route.retry.failureThreshold} on:change={(event) => updateRouteRetry(route.id, "failureThreshold", event.currentTarget)} /></Field>
+                      <Field label={$t("settings.circuitOpenSeconds")}><input type="number" min="1" value={route.retry.circuitOpenSeconds} on:change={(event) => updateRouteRetry(route.id, "circuitOpenSeconds", event.currentTarget)} /></Field>
+                      <Field label={$t("settings.connectTimeoutMs")}><input type="number" min="100" step="100" value={route.retry.connectTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "connectTimeoutMs", event.currentTarget)} /></Field>
+                      <Field label={$t("server.firstByteTimeout")}><input type="number" min="1000" step="1000" value={route.retry.firstByteTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "firstByteTimeoutMs", event.currentTarget)} /></Field>
+                      <Field label={$t("settings.streamIdleTimeoutMs")}><input type="number" min="1000" step="1000" value={route.retry.streamIdleTimeoutMs} on:change={(event) => updateRouteRetry(route.id, "streamIdleTimeoutMs", event.currentTarget)} /></Field>
                     </div>
                   </section>
                 {:else}
@@ -742,52 +826,51 @@
 
             <Card title={$t("settings.upstreamProxy")}>
               <div class="rows">
-                <p class="hint">{$t("settings.upstreamProxyDesc")}</p>
                 <div class="row">
                   <div class="row-text">
                     <span class="row-label">{$t("settings.upstreamProxyMode")}</span>
-                    {#if serverConfig.upstreamProxy.mode === "environment"}
+                    {#if serverDraft.upstreamProxy.mode === "environment"}
                       <span class="row-desc">{$t("settings.upstreamProxyEnvironmentDesc")}</span>
                     {/if}
                   </div>
                   <SegmentedControl
                     ariaLabel={$t("settings.upstreamProxyMode")}
-                    value={serverConfig.upstreamProxy.mode}
+                    value={serverDraft.upstreamProxy.mode}
                     options={localizedUpstreamProxyOptions}
                     onChange={(mode) => updateUpstreamProxy({ mode })}
                   />
                 </div>
-                {#if serverConfig.upstreamProxy.mode === "custom"}
+                {#if serverDraft.upstreamProxy.mode === "custom"}
                   <Field label={$t("settings.upstreamProxyUrl")}>
                     <input
-                      value={serverConfig.upstreamProxy.customUrl ?? ""}
+                      value={serverDraft.upstreamProxy.customUrl ?? ""}
                       placeholder="http://user:pass@127.0.0.1:7890"
                       on:change={(event) => updateUpstreamProxy({ customUrl: event.currentTarget.value.trim() })}
                     />
                   </Field>
                 {/if}
-                <div class="button-row">
-                  <Button variant="primary" on:click={() => onSaveServerConfig(serverConfig)} disabled={Boolean(serverBusy)}><Check size={14} /> {$t("server.save")}</Button>
-                </div>
               </div>
             </Card>
 
             <Card title={$t("settings.modelPricing")}>
               <div class="settings-stack">
                 <p class="hint">{$t("settings.modelPricingDesc")}</p>
-                {#each serverConfig.pricing as pricing, index}
+                {#each serverDraft.pricing as pricing, index}
                   <div class="pricing-row">
-                    <Field label={$t("settings.modelPrefix")}><input value={pricing.model} on:change={(event) => updatePricing(index, { model: event.currentTarget.value })} /></Field>
-                    <Field label={$t("settings.inputPrice")}><input type="number" min="0" value={pricing.inputMicrosPerMillion} on:change={(event) => updatePricing(index, { inputMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
-                    <Field label={$t("settings.outputPrice")}><input type="number" min="0" value={pricing.outputMicrosPerMillion} on:change={(event) => updatePricing(index, { outputMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
-                    <Field label={$t("settings.cacheReadPrice")}><input type="number" min="0" value={pricing.cacheReadMicrosPerMillion} on:change={(event) => updatePricing(index, { cacheReadMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
-                    <Field label={$t("settings.cacheCreationPrice")}><input type="number" min="0" value={pricing.cacheCreationMicrosPerMillion} on:change={(event) => updatePricing(index, { cacheCreationMicrosPerMillion: Number(event.currentTarget.value) })} /></Field>
-                    <button type="button" class="pricing-remove" title={$t("settings.removePricing")} on:click={() => removePricing(index)}><Trash2 size={14} /></button>
+                    <div class="pricing-model-row">
+                      <Field label={$t("settings.modelPrefix")}><input value={pricing.model} on:change={(event) => updatePricing(index, { model: event.currentTarget.value.trim() })} /></Field>
+                      <button type="button" class="pricing-remove" title={$t("settings.removePricing")} aria-label={$t("settings.removePricing")} on:click={() => removePricing(index)}><Trash2 size={14} /></button>
+                    </div>
+                    <div class="pricing-price-grid">
+                      <Field label={$t("settings.inputPrice")}><input type="number" min="0" value={pricing.inputMicrosPerMillion} on:change={(event) => updatePricingNumber(index, "inputMicrosPerMillion", event.currentTarget)} /></Field>
+                      <Field label={$t("settings.outputPrice")}><input type="number" min="0" value={pricing.outputMicrosPerMillion} on:change={(event) => updatePricingNumber(index, "outputMicrosPerMillion", event.currentTarget)} /></Field>
+                      <Field label={$t("settings.cacheReadPrice")}><input type="number" min="0" value={pricing.cacheReadMicrosPerMillion} on:change={(event) => updatePricingNumber(index, "cacheReadMicrosPerMillion", event.currentTarget)} /></Field>
+                      <Field label={$t("settings.cacheCreationPrice")}><input type="number" min="0" value={pricing.cacheCreationMicrosPerMillion} on:change={(event) => updatePricingNumber(index, "cacheCreationMicrosPerMillion", event.currentTarget)} /></Field>
+                    </div>
                   </div>
                 {/each}
                 <div class="button-row">
                   <Button variant="ghost" size="sm" on:click={addPricing}><Plus size={13} /> {$t("settings.addPricing")}</Button>
-                  <Button variant="primary" on:click={() => onSaveServerConfig(serverConfig)} disabled={Boolean(serverBusy)}><Check size={14} /> {$t("server.save")}</Button>
                 </div>
               </div>
             </Card>
@@ -1463,9 +1546,24 @@
 
   .pricing-row {
     display: grid;
-    grid-template-columns: minmax(120px, 1fr) repeat(4, minmax(90px, 0.8fr)) 28px;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--divider);
+    border-radius: var(--radius);
+  }
+
+  .pricing-model-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 28px;
     align-items: end;
     gap: 8px;
+  }
+
+  .pricing-price-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    align-items: start;
   }
 
   .pricing-remove {
@@ -1484,7 +1582,7 @@
 
   @media (max-width: 560px) {
     .server-settings-grid,
-    .pricing-row {
+    .pricing-price-grid {
       grid-template-columns: 1fr;
     }
     .extension-summary {

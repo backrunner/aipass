@@ -18,22 +18,39 @@ pub(super) struct Preview {
 
 pub(super) fn snapshot(state: &Arc<AgentState>) -> ServiceResult<Value> {
     with_vault(state, false, |vault| {
-        let entries = vault.list_provider_summaries().map_err(map_vault_error)?;
+        let mut entries = vault.list_provider_summaries().map_err(map_vault_error)?;
+        entries.extend(
+            vault
+                .list_archived_provider_summaries()
+                .map_err(map_vault_error)?,
+        );
+        entries.extend(
+            vault
+                .list_trash_provider_summaries()
+                .map_err(map_vault_error)?,
+        );
         let mut proxy = state.proxy.lock().map_err(|_| unavailable())?;
         let config = proxy.config(vault)?;
         let status = proxy.status();
-        let providers: Vec<_> = entries.iter().filter(|e| e.archived_at.is_none() && e.deleted_at.is_none())
-            .map(|entry| json!({"id":entry.id,"title":entry.title,"providerId":entry.provider_id,
-                "credentialKind":entry.credential_kind,"interfaceType":entry.interface_type,
-                "secrets":entry.secret_refs.iter().map(|s| json!({"id":s.id,"label":s.label,"masked":s.masked,"interfaceType":s.interface_type.as_ref().unwrap_or(&entry.interface_type)})).collect::<Vec<_>>() }))
-            .collect();
+        let providers: Vec<_> = entries.iter()
+            .map(|entry| Ok(json!({"id":entry.id,"title":entry.title,"providerId":entry.provider_id,
+                "credentialKind":entry.credential_kind,"interfaceType":entry.interface_type,"authScheme":entry.auth_scheme,"providerKind":entry.provider_kind,
+                "favorite":entry.favorite,"tags":entry.tags,"lastUsedAt":panel_timestamp(entry.last_used_at)?,
+                "archivedAt":panel_timestamp(entry.archived_at)?,"deletedAt":panel_timestamp(entry.deleted_at)?,
+                "secrets":entry.secret_refs.iter().map(|s| json!({"id":s.id,"label":s.label,"masked":s.masked,"interfaceType":s.interface_type.as_ref().unwrap_or(&entry.interface_type),
+                    "proxyEligible":entry.archived_at.is_none() && entry.deleted_at.is_none()
+                        && crate::proxy_service::key_upstream_protocol(s.interface_type.as_ref().unwrap_or(&entry.interface_type),entry).is_some()
+                        && crate::proxy_service::proxy_auth_scheme(&s.effective_auth(&entry.interface_type, &entry.auth_scheme)).is_some()
+                        && (s.endpoint.is_some() || aipass_agent_protocol::endpoint_url(&entry.endpoints).is_some())})).collect::<Vec<_>>() })))
+            .collect::<ServiceResult<Vec<_>>>()?;
         let routes: Vec<_> = config.routes.iter().map(|route| json!({
             "id":route.id,"name":route.name,"enabled":route.enabled,"strategy":route.strategy,
-            "protocol":route.inbound_protocol,
+            "protocol":route.inbound_protocol,"inboundProtocol":route.inbound_protocol,
+            "upstreamProtocol":route.upstream_protocol,"conversionEnabled":route.conversion_enabled,"retry":route.retry,
             "targets":route.targets.iter().map(|target| json!({
                 "id":target.id,"label":target.label,"providerEntryId":target.provider_entry_id,
                 "secretId":target.secret_id,"enabled":target.enabled,"priority":target.priority,
-                "weight":target.weight,"preferWs":target.prefer_ws,
+                "weight":target.weight,"preferWs":target.prefer_ws,"protocol":target.protocol,
             })).collect::<Vec<_>>()
         })).collect();
         let mut logs =
@@ -45,9 +62,21 @@ pub(super) fn snapshot(state: &Arc<AgentState>) -> ServiceResult<Value> {
             "proxy":{"running":status.running,"bindAddr":status.bind_addr,"requests":status.requests,
                 "failures":status.failures,"recentRequests":status.recent_requests,"recentTokens":status.recent_tokens,
                 "inFlightRequests":status.in_flight_requests,"availableChannels":status.available_channels,
-                "totalChannels":status.total_channels},"logs":logs}),
+                "totalChannels":status.total_channels,"successRateBps":status.success_rate_bps,
+                "averageFirstTokenMs":status.average_first_token_ms,"degraded":status.degraded,
+                "degradedTargetIds":status.degraded_target_ids},"logs":logs}),
         )
     })
+}
+
+fn panel_timestamp(value: Option<time::OffsetDateTime>) -> ServiceResult<Option<String>> {
+    value
+        .map(|value| {
+            value
+                .format(&time::format_description::well_known::Rfc3339)
+                .map_err(|_| unavailable())
+        })
+        .transpose()
 }
 
 pub(super) fn action(
@@ -60,6 +89,8 @@ pub(super) fn action(
         ControlPanelAction::ProxyStart => "control_panel.proxy.start",
         ControlPanelAction::ProxyStop => "control_panel.proxy.stop",
         ControlPanelAction::RouteEnabled { .. } => "control_panel.route.enabled",
+        ControlPanelAction::RouteSave { .. } => "control_panel.route.save",
+        ControlPanelAction::RouteDelete { .. } => "control_panel.route.delete",
         ControlPanelAction::TargetUpdate { .. } => "control_panel.target.update",
         ControlPanelAction::ToolPreview { .. } => "control_panel.tool.preview",
         ControlPanelAction::ToolApply { .. } => "control_panel.tool.apply",
@@ -118,6 +149,138 @@ fn perform(
                 Ok(json!({"ok":true}))
             })
         }
+        ControlPanelAction::RouteSave {
+            revision: expected,
+            route,
+        } => with_vault(state, false, |vault| {
+            let mut proxy = state.proxy.lock().map_err(|_| unavailable())?;
+            let mut config = proxy.config(vault)?;
+            require_revision(&config, &expected)?;
+            let previous = config.routes.iter().find(|item| item.id == route.id);
+            if route.name.trim().is_empty()
+                || route.name.len() > 256
+                || route.targets.is_empty()
+                || route.targets.len() > 1024
+            {
+                return Err(invalid(
+                    "A group needs a name and at least one upstream credential.",
+                ));
+            }
+            let mut ids = std::collections::HashSet::new();
+            let targets = route
+                .targets
+                .iter()
+                .map(|draft| {
+                    if !ids.insert(draft.id)
+                        || config
+                            .routes
+                            .iter()
+                            .filter(|item| item.id != route.id)
+                            .any(|item| item.targets.iter().any(|target| target.id == draft.id))
+                    {
+                        return Err(invalid("Duplicate upstream identifier."));
+                    }
+                    if !(1..=100_000).contains(&draft.weight) {
+                        return Err(invalid("Weight must be between 1 and 100000."));
+                    }
+                    let existing = previous
+                        .and_then(|item| item.targets.iter().find(|target| target.id == draft.id))
+                        .filter(|target| {
+                            target.provider_entry_id == draft.provider_entry_id
+                                && target.secret_id == draft.secret_id
+                        });
+                    let mut target = if let Some(existing) = existing {
+                        existing.clone()
+                    } else {
+                        let entry = vault
+                            .get_provider_summary(draft.provider_entry_id)
+                            .map_err(map_vault_error)?;
+                        vault
+                            .runtime_provider_credentials(draft.provider_entry_id, &draft.secret_id)
+                            .map_err(map_vault_error)?;
+                        let secret = entry
+                            .secret_refs
+                            .iter()
+                            .find(|secret| secret.id == draft.secret_id)
+                            .ok_or_else(|| invalid("Credential no longer exists."))?;
+                        crate::proxy_service::key_upstream_protocol(
+                            secret
+                                .interface_type
+                                .as_ref()
+                                .unwrap_or(&entry.interface_type),
+                            &entry,
+                        )
+                        .ok_or_else(|| {
+                            invalid("This credential does not support the proxy's protocols.")
+                        })?;
+                        aipass_proxy::ProxyTargetConfig {
+                            id: draft.id,
+                            provider_entry_id: draft.provider_entry_id,
+                            secret_id: draft.secret_id.clone(),
+                            label: entry.title.clone(),
+                            base_url: secret
+                                .endpoint
+                                .clone()
+                                .or_else(|| aipass_agent_protocol::endpoint_url(&entry.endpoints))
+                                .ok_or_else(|| invalid("Provider needs an API endpoint."))?,
+                            auth_scheme: crate::proxy_service::proxy_auth_scheme(
+                                &secret.effective_auth(&entry.interface_type, &entry.auth_scheme),
+                            )
+                            .ok_or_else(|| invalid("Unsupported authentication scheme."))?
+                            .to_owned(),
+                            headers: Vec::new(),
+                            group: secret.group.clone(),
+                            priority: draft.priority,
+                            weight: draft.weight,
+                            enabled: draft.enabled,
+                            protocol: None,
+                            prefer_ws: false,
+                        }
+                    };
+                    target.priority = draft.priority;
+                    target.weight = draft.weight;
+                    target.enabled = draft.enabled;
+                    Ok(target)
+                })
+                .collect::<ServiceResult<Vec<_>>>()?;
+            let next = aipass_proxy::ProxyRouteConfig {
+                id: route.id,
+                name: route.name.trim().to_owned(),
+                enabled: route.enabled,
+                token: previous.map(|item| item.token.clone()).unwrap_or_default(),
+                strategy: route.strategy,
+                inbound_protocol: route.inbound_protocol,
+                upstream_protocol: previous
+                    .filter(|item| item.conversion_enabled)
+                    .map(|item| item.upstream_protocol)
+                    .unwrap_or(route.inbound_protocol),
+                conversion_enabled: previous.is_some_and(|item| item.conversion_enabled),
+                retry: route.retry,
+                targets,
+            };
+            if let Some(item) = config.routes.iter_mut().find(|item| item.id == next.id) {
+                *item = next;
+            } else {
+                config.routes.push(next);
+            }
+            proxy.set_config(vault, config)?;
+            Ok(json!({"ok":true}))
+        }),
+        ControlPanelAction::RouteDelete {
+            revision: expected,
+            route_id,
+        } => with_vault(state, false, |vault| {
+            let mut proxy = state.proxy.lock().map_err(|_| unavailable())?;
+            let mut config = proxy.config(vault)?;
+            require_revision(&config, &expected)?;
+            let before = config.routes.len();
+            config.routes.retain(|route| route.id != route_id);
+            if config.routes.len() == before {
+                return Err(invalid("Group no longer exists."));
+            }
+            proxy.set_config(vault, config)?;
+            Ok(json!({"ok":true}))
+        }),
         ControlPanelAction::TargetUpdate {
             route_id,
             target_id,
@@ -174,11 +337,9 @@ fn perform(
                     .clone()
                     .or_else(|| aipass_agent_protocol::endpoint_url(&entry.endpoints))
                     .ok_or_else(|| invalid("Provider needs an API endpoint."))?;
-                target.auth_scheme = serde_json::to_value(
-                    secret.effective_auth(&entry.interface_type, &entry.auth_scheme),
+                target.auth_scheme = crate::proxy_service::proxy_auth_scheme(
+                    &secret.effective_auth(&entry.interface_type, &entry.auth_scheme),
                 )
-                .map_err(|_| unavailable())?
-                .as_str()
                 .ok_or_else(|| invalid("Unsupported authentication scheme."))?
                 .to_owned();
                 target.provider_entry_id = provider_entry_id;
@@ -317,6 +478,16 @@ fn revision(config: &ProxyConfig) -> ServiceResult<String> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+fn require_revision(config: &ProxyConfig, expected: &str) -> ServiceResult<()> {
+    if revision(config)? != expected {
+        return Err(ServiceError::new(
+            AgentErrorCode::Conflict,
+            "Configuration changed. Reopen the editor and try again.",
+        ));
+    }
+    Ok(())
 }
 
 // Proxy diagnostics already redact known wire fields. Remove exact current

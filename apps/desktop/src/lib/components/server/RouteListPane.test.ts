@@ -4,7 +4,7 @@ import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { ProxyRouteConfig, ProxyStatus } from "../../types";
-import RouteListPane from "./RouteListPane.svelte";
+import { ProxyRouteList as RouteListPane } from "@aipass/ui";
 
 const retry = {
   maxAttempts: 3,

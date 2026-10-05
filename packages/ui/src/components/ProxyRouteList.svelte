@@ -1,12 +1,16 @@
 <script lang="ts">
-  import type { ProviderEntry } from "@aipass/schemas";
-  import { scrollMask, Badge } from "@aipass/ui";
+  import type { ProviderEntry, SecretRef } from "@aipass/schemas";
+  import { scrollMask } from "../actions/scrollMask";
+  import Badge from "./Badge.svelte";
+  import Button from "./Button.svelte";
   import { ContextMenu, Switch } from "bits-ui";
   import { AlertTriangle, Pencil, Plus, Server, Trash2 } from "lucide-svelte";
 
-  import { t } from "../../stores/i18n";
-  import type { MaybePromise, ProxyRouteConfig, ProxyStatus } from "../../types";
-  import RouteGroupDialog from "./RouteGroupDialog.svelte";
+  import { t } from "../i18n";
+  import type { MaybePromise } from "../types";
+  import type { ProxyRouteConfig, ProxyStatus } from "@aipass/schemas";
+  import RouteGroupDialog from "./ProxyRouteGroupDialog.svelte";
+  import EmptyState from "./EmptyState.svelte";
 
   export let routes: ProxyRouteConfig[] = [];
   export let entries: ProviderEntry[] = [];
@@ -17,12 +21,16 @@
   export let onSave: (route: ProxyRouteConfig) => MaybePromise<boolean | void> = () => {};
   export let onDelete: (routeId: string) => MaybePromise = () => {};
   export let onToggle: (routeId: string, enabled: boolean) => MaybePromise = () => {};
+  export let credentialAvailable: ((entry: ProviderEntry, secret: SecretRef) => boolean) | undefined = undefined;
+  export let createTarget: typeof import("@aipass/schemas").buildRouteTarget | undefined = undefined;
+  export let onEditorOpen: () => void = () => {};
 
   let dialogOpen = false;
   let editingRoute: ProxyRouteConfig | undefined;
   $: degradedTargetIds = new Set(status?.running ? status.degradedTargetIds ?? [] : []);
 
   function openCreate() {
+    onEditorOpen();
     editingRoute = undefined;
     dialogOpen = true;
   }
@@ -30,6 +38,7 @@
   function openEdit(route: ProxyRouteConfig) {
     if (busy) return;
     selectRoute(route);
+    onEditorOpen();
     editingRoute = route;
     dialogOpen = true;
   }
@@ -54,19 +63,17 @@
     <div class="pane-heading">
       <h2>{$t("server.groups")}</h2>
     </div>
-    <button type="button" class="cta-btn primary" on:click={openCreate} disabled={entries.length === 0}>
+    <Button variant="primary" class="cta-btn" on:click={openCreate} disabled={Boolean(busy) || entries.length === 0}>
       <Plus size={14} />
       <span>{$t("server.addGroup")}</span>
-    </button>
+    </Button>
   </div>
 
   <div use:scrollMask class="entries" role="listbox" aria-label={$t("server.groups")}>
     {#if routes.length === 0}
-      <div class="empty">
-        <span class="empty-icon"><Server size={22} /></span>
-        <strong class="empty-title">{$t("server.noGroups")}</strong>
-        <span class="empty-meta">{$t("server.noGroupsDesc")}</span>
-      </div>
+      <EmptyState title={$t("server.noGroups")} description={$t("server.noGroupsDesc")}>
+        {#snippet icon()}<Server size={22} />{/snippet}
+      </EmptyState>
     {/if}
     {#each routes as route (route.id)}
       <ContextMenu.Root>
@@ -97,7 +104,7 @@
               <span class="entry-icon" aria-hidden="true"><Server size={16} /></span>
               <div class="entry-content">
                 <span class="entry-heading">
-                  <span class="title">{route.name}</span>
+                  <span class="title" title={route.name}>{route.name}</span>
                   {#if route.enabled && route.targets.some((target) => target.enabled && degradedTargetIds.has(target.id))}
                     <Badge tone="warning" size="sm"><AlertTriangle size={12} /> {$t("server.degraded")}</Badge>
                   {/if}
@@ -141,7 +148,7 @@
 </section>
 
 {#if dialogOpen}
-  <RouteGroupDialog route={editingRoute} {entries} {status} onSave={saveDialog} onClose={closeDialog} />
+  <RouteGroupDialog route={editingRoute} {entries} {status} {credentialAvailable} {createTarget} onSave={saveDialog} onClose={closeDialog} />
 {/if}
 
 <style lang="scss">
@@ -149,6 +156,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
     position: relative;
     background: color-mix(in oklab, var(--surface) 86%, transparent);
     backdrop-filter: blur(8px);
@@ -176,37 +184,7 @@
 
   }
 
-  .cta-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 34px;
-    padding: 0 12px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background-color 80ms ease, color 120ms ease, transform 120ms ease;
 
-    &:active {
-      transform: scale(0.96);
-    }
-
-    &.primary {
-      background: var(--accent);
-      color: #fff;
-      border: 1px solid var(--accent);
-
-      &:hover {
-        background: var(--accent-hover);
-      }
-
-      &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-    }
-  }
 
   .entries {
     flex: 1;
@@ -307,6 +285,8 @@
     align-items: center;
     width: 36px;
     height: 20px;
+    min-height: 20px;
+    border: 0;
     padding: 2px;
     border-radius: 999px;
     background: var(--border);
@@ -378,40 +358,4 @@
     background: var(--divider);
   }
 
-  .empty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 24px 16px;
-    text-align: center;
-    color: var(--text-tertiary);
-    pointer-events: none;
-
-    .empty-title {
-      color: var(--text);
-      font-weight: 600;
-      font-size: 14px;
-    }
-
-    .empty-meta {
-      max-width: 240px;
-      font-size: 12px;
-      line-height: 1.4;
-    }
-  }
-
-  .empty-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    color: var(--text-tertiary);
-    margin-bottom: 4px;
-  }
 </style>

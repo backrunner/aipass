@@ -101,11 +101,11 @@ test("repairs masks after component style updates and stops masking visible over
   await settle();
   // Portalled primitives can replace their inline styles after repositioning.
   node.style.cssText = "overflow-y: auto; overflow-x: hidden;";
-  await settle();
-  expect(node.style.getPropertyValue("--scroll-mask-bottom")).toBe("16px");
+  // MutationObserver delivery and the next animation frame can span separate
+  // timer turns in Happy DOM; wait for the observed state, not one fixed delay.
+  await vi.waitFor(() => expect(node.style.getPropertyValue("--scroll-mask-bottom")).toBe("16px"));
   node.style.overflowY = "visible";
-  await settle();
-  expect(node.hasAttribute("data-scroll-mask")).toBe(false);
+  await vi.waitFor(() => expect(node.hasAttribute("data-scroll-mask")).toBe(false));
 });
 
 test("releases removed content and pending work without changing existing styles", async () => {

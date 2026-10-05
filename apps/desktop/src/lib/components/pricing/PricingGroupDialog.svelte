@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { scrollMask, Banner, Button } from "@aipass/ui";
+  import { scrollMask, Banner, Button, Collapsible } from "@aipass/ui";
   import { Dialog } from "bits-ui";
-  import { ChevronRight, History, Info, Plus, Trash2, X } from "lucide-svelte";
+  import { History, Info, Plus, Trash2, X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
   import type {
@@ -372,8 +372,9 @@
             </section>
 
             {#if group && versionsDesc.length > 0}
-              <details class="history-section">
-                <summary><ChevronRight size={13} /><History size={13} /><span>{$t("pricing.history")}</span><span class="history-count">{versionsDesc.length}</span></summary>
+              <Collapsible class="history-section" title={$t("pricing.history")} compact>
+                {#snippet icon()}<History size={14} />{/snippet}
+                {#snippet summary()}<span class="history-count">{versionsDesc.length}</span>{/snippet}
                 <div class="version-list">
                   {#each versionsDesc as version (version.effectiveFrom)}
                     <div class="version-row">
@@ -397,7 +398,7 @@
                     </div>
                   {/each}
                 </div>
-              </details>
+              </Collapsible>
             {/if}
           </div>
 
@@ -660,12 +661,7 @@
     cursor: pointer;
   }
 
-  .history-section { border-top: 1px solid var(--divider); padding-top: 14px; }
-  .history-section summary { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: 12px; cursor: pointer; list-style: none; }
-  .history-section summary::-webkit-details-marker { display: none; }
-  .history-section[open] summary :global(svg:first-child) { transform: rotate(90deg); }
   .history-count { margin-left: auto; min-width: 22px; justify-content: center; padding: 3px 6px; }
-  .history-section .version-list { margin-top: 12px; }
 
   .version-list {
     display: flex;
