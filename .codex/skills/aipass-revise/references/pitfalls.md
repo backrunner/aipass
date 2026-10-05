@@ -654,6 +654,13 @@ Newest entries last within each section.
 - **Guardrail**: keep stopping available independently of access-code, address, port and certificate validation. Verify immediate stop with invalid drafts, failed-enable rollback, and disabled persistence with the control-panel component and Agent tests.
 - **Watch points**: `ControlPanelSettings.svelte`, `panel_commands::control_panel_stop`, `ControlPanel::{stop,restore}`, tray Stop.
 
+### Authentication primitive tests must use the actual stored credential
+- **Symptom**: The new proof verifier rejected the value returned by `compute_verifier`, although the round-trip test passed.
+- **Root cause**: `aipass-crypto/src/remote_auth.rs` generated proofs with the auth secret and verified with a different HMAC key; the test supplied the auth secret instead of the computed verifier. Comments incorrectly described this as SRP or zero-knowledge authentication.
+- **Fix**: Derive one domain-separated proof key for both paths; explicitly document that the verifier is a secret authentication credential. Use zeroizing key buffers, the dependency's safe consuming ECDH API, and reject non-contributory peer keys.
+- **Guardrail**: Test the exported derive, verifier, proof and verify sequence, wrong keys, changed nonce, changed or reversed public keys and low-order peers. Encrypt verifiers at rest; never use them as vault wrapping keys. Protocol callers must authenticate the server and expire and consume challenges once.
+- **Watch points**: `aipass-crypto/src/{ecdh,remote_auth}.rs`; these primitives are not yet wired into the existing control-panel login protocol.
+
 ### Stop must finish releasing the listener before returning
 - **Symptom**: an immediate stop/restart intermittently failed to bind the saved port during the full workspace test suite.
 - **Root cause**: `control_panel/transport.rs` signaled shutdown but returned while the accept thread still owned a cloned listening socket.

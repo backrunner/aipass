@@ -1,3 +1,12 @@
+mod ecdh;
+mod remote_auth;
+
+pub use ecdh::{generate_nonce, EphemeralPrivateKey, EphemeralPublicKey};
+pub use remote_auth::{
+    compute_verifier, derive_auth_secret, derive_session_key, derive_wrap_key, generate_proof,
+    verify_proof, SecureAccessCode,
+};
+
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -36,6 +45,12 @@ pub enum CryptoError {
     InvalidKeyLength,
     #[error("invalid recovery secret")]
     InvalidRecoverySecret,
+    #[error("invalid encoding")]
+    InvalidEncoding,
+    #[error("key derivation failed")]
+    KeyDerivationFailed,
+    #[error("non-contributory peer public key")]
+    NonContributoryPublicKey,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
