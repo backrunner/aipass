@@ -42,7 +42,7 @@ pub fn namespace_for_vault_dir(path: impl AsRef<Path>) -> Result<String> {
 
 pub fn agent_service_name(path: impl AsRef<Path>) -> Result<String> {
     Ok(format!(
-        "dev.aipass.agent.{}",
+        "com.aipass.agent.{}",
         namespace_for_vault_dir(path)?
     ))
 }

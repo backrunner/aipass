@@ -129,7 +129,7 @@ fn shutdown_agent(vault_dir: &Path) {
 
 fn tray_service_name(vault_dir: &Path) -> Result<String> {
     Ok(format!(
-        "dev.aipass.desktop.tray.{}",
+        "com.aipass.tray.{}",
         crate::paths::namespace_for_vault_dir(vault_dir)?
     ))
 }
@@ -523,6 +523,10 @@ mod imp {
 <dict>
   <key>Label</key>
   <string>{}</string>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Background</string>
   <key>ProgramArguments</key>
   <array>
     <string>{}</string>
