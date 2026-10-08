@@ -31,6 +31,8 @@ pub(super) fn preserved_targets(old: &RuntimeConfig, new: &RuntimeConfig) -> Has
                     && before.config.auth_scheme == target.config.auth_scheme
                     && before.config.headers == target.config.headers
                     && before.config.protocol == target.config.protocol
+                    && before.config.model == target.config.model
+                    && before.model_override == target.model_override
                     && before.upstream_kind == target.upstream_kind
                     && before.profile == target.profile
                     && before.upstream_proxy == target.upstream_proxy

@@ -66,6 +66,9 @@ pub(crate) async fn forward(mut ctx: RequestContext<'_>) -> ForwardOutcome {
     if object.get("background") == Some(&Value::Bool(true)) {
         return ForwardOutcome::HttpFallback(None);
     }
+    if let Some(model) = &ctx.target.model_override {
+        object.insert("model".into(), Value::String(model.clone()));
+    }
     object.remove("stream");
     object.insert("type".into(), Value::String("response.create".into()));
     let Some(key) = pool::key(

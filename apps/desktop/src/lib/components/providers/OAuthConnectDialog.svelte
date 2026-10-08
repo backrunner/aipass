@@ -10,7 +10,8 @@
   export let onConnected: (entryId: string) => void | Promise<void> = () => {};
   export let onCommunity: () => void = () => {};
   export let onImportCli: () => void | Promise<void> = () => {};
-  let selected = "";
+  export let initialProvider = "";
+  let selected = initialProvider;
   const providers = [
     { id: "claude", name: "Claude", description: "claudeConnect.providerDescription" },
     { id: "codex", name: "ChatGPT (Codex)", description: "subscriptionCli.codexDescription" },

@@ -19,7 +19,9 @@ use session::{command, rpc};
 pub(super) use session::{fresh, login};
 #[cfg(test)]
 use store::config_home;
-pub(crate) use store::{check_device, default_home, device, handoff_home, new_home, reference};
+pub(crate) use store::{
+    check_device, default_home, device, handoff_home, import_reference, new_home, reference,
+};
 use store::{read, root};
 
 #[cfg(test)]

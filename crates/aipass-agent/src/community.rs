@@ -632,7 +632,10 @@ impl CommunityBridge {
 mod account;
 mod backend;
 mod quota;
-pub(crate) use account::{bind_cli, ensure_owner, identity, is_account, read, register_cli, write};
+pub(crate) use account::{
+    bind_cli, ensure_owner, identity, identity_value, is_account, legacy_scope_matches, read,
+    register_cli, write,
+};
 use account::{decode, invalid, persist, register_cli_with_models, Account};
 #[cfg(test)]
 use backend::Cancel;

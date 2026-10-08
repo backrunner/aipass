@@ -507,6 +507,7 @@ pub(crate) fn sync_test_state(vault_dir: PathBuf) -> Arc<AgentState> {
     )
     .unwrap();
     Arc::new(AgentState {
+        subscription_imports: Default::default(),
         control_panel: Default::default(),
         policy: Mutex::new(SessionPolicy::default()),
         vault_dir: vault_dir.clone(),
@@ -694,6 +695,7 @@ fn sync_download_reloads_the_unlocked_vault_and_keeps_the_proxy_serving() {
                         enabled: true,
                         protocol: None,
                         prefer_ws: false,
+                        model: None,
                     }],
                     retry: aipass_proxy::RetryPolicy::default(),
                     enabled: true,

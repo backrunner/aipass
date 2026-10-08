@@ -1,7 +1,11 @@
 pub use aipass_config_writers::ToolId;
+mod account_results;
 mod community;
 mod subscription_cli;
+mod subscription_import;
+pub use account_results::*;
 pub use subscription_cli::*;
+pub use subscription_import::*;
 mod control_panel;
 mod provider_runtime;
 pub use community::*;
@@ -42,7 +46,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 13 adds subscription bridges and encrypted provider runtime management.
 // Version 14 adds genuine Claude Code login and usage operations.
 // Version 15 delegates official subscription ownership to local vendor CLIs.
-pub const AGENT_PROTOCOL_VERSION: u32 = 15;
+// Version 16 adds cancellable, source-bound native subscription imports.
+pub const AGENT_PROTOCOL_VERSION: u32 = 16;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
@@ -893,6 +898,12 @@ pub enum AgentRequest {
         #[serde(default)]
         provider_ids: Vec<String>,
     },
+    #[serde(rename = "subscription.import.start")]
+    SubscriptionImportStart { input: SubscriptionImportInput },
+    #[serde(rename = "subscription.import.poll")]
+    SubscriptionImportPoll { ticket: Uuid },
+    #[serde(rename = "subscription.import.cancel")]
+    SubscriptionImportCancel { ticket: Uuid },
     #[serde(rename = "subscription.cli.status")]
     SubscriptionCliStatus { provider: String },
     #[serde(rename = "claude.cli.status")]
@@ -1014,88 +1025,6 @@ pub enum AgentRequest {
     AgentShutdown,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OfficialAccountRefreshResult {
-    pub provider_id: String,
-    pub account_identity: Option<String>,
-    pub credential_kind: CredentialKind,
-    pub snapshot: Option<SubscriptionSnapshot>,
-    /// One of "imported", "refreshed", "skipped", or "error".
-    pub status: String,
-    pub error: Option<String>,
-}
-
-/// Device-code challenge handed to the desktop so the user can authorize in a
-/// browser. Contains no secrets beyond the one-time user code.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct OAuthDeviceStart {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_uri: String,
-    #[serde(default)]
-    pub verification_uri_complete: Option<String>,
-    pub expires_in: u64,
-    pub interval: u64,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum OAuthLoginStatus {
-    Pending,
-    Authorized,
-    Expired,
-    Error,
-}
-
-/// Result of polling an in-flight device-code login. On `Authorized` the
-/// token-free account summary is returned; tokens stay inside the agent/vault.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct OAuthLoginPoll {
-    pub status: OAuthLoginStatus,
-    #[serde(default)]
-    pub account: Option<OAuthAccountSummary>,
-    #[serde(default)]
-    pub message: Option<String>,
-    /// Current server-side poll interval in seconds. Present on `pending`
-    /// responses so the client backs off in step with `slow_down` bumps.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interval_secs: Option<u64>,
-}
-
-/// Token-free view of a managed OAuth account, safe to send to the frontend.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct OAuthAccountSummary {
-    pub id: Uuid,
-    pub provider: OAuthProvider,
-    pub account_identity: Option<String>,
-    #[serde(default)]
-    pub chatgpt_account_id: Option<String>,
-    #[serde(default)]
-    pub entry_id: Option<Uuid>,
-    pub is_default: bool,
-    /// Unix milliseconds.
-    pub authenticated_at: i64,
-    #[serde(default)]
-    pub credential_expires_at: Option<String>,
-    #[serde(default)]
-    pub requires_reauth: bool,
-}
-
-/// Whether CC Switch's config is present on this machine and, on macOS,
-/// whether the app itself is installed.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CcSwitchDetection {
-    pub config_exists: bool,
-    pub app_installed: bool,
-    #[serde(default)]
-    pub config_path: Option<String>,
-}
-
 /// Ceiling for a request that has no inherent duration of its own.
 const DEFAULT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Password-derivation, whole-vault rewrites and network sync legitimately run
@@ -1191,6 +1120,9 @@ impl AgentRequest {
             Self::CommunityAccountRead { .. } => "community.account.read",
             Self::CommunityAccountWrite { .. } => "community.account.write",
             Self::OfficialAccountsRefresh { .. } => "official_accounts.refresh",
+            Self::SubscriptionImportStart { .. } => "subscription.import.start",
+            Self::SubscriptionImportPoll { .. } => "subscription.import.poll",
+            Self::SubscriptionImportCancel { .. } => "subscription.import.cancel",
             Self::SubscriptionCliStatus { .. } => "subscription.cli.status",
             Self::ClaudeCliStatus => "claude.cli.status",
             Self::ClaudeLoginStart => "claude.login.start",

@@ -91,6 +91,9 @@ pub struct ProxyTargetConfig {
     /// Prefer WebSocket connections when available for this target.
     #[serde(default)]
     pub prefer_ws: bool,
+    /// Actual upstream model for a member of a fixed-model routing group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl ProxyTargetConfig {
@@ -181,4 +184,14 @@ pub struct ModelPricing {
     pub output_micros_per_million: u64,
     pub cache_read_micros_per_million: u64,
     pub cache_creation_micros_per_million: u64,
+}
+
+impl ProxyRouteConfig {
+    /// The stable public model name when this route binds member models.
+    pub fn group_model_id(&self) -> Option<String> {
+        self.targets
+            .iter()
+            .any(|target| target.enabled && target.model.is_some())
+            .then(|| format!("group/{}", self.id))
+    }
 }

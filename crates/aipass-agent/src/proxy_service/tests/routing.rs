@@ -124,6 +124,7 @@ fn config_rejects_target_protocol_mismatch_without_conversion() {
         enabled: true,
         protocol: Some(aipass_proxy::Protocol::AnthropicMessages),
         prefer_ws: false,
+        model: None,
     }];
     assert!(validate_config(&config).is_err());
     config.routes[0].conversion_enabled = true;
@@ -165,6 +166,7 @@ fn runtime_config_populates_target_protocols() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     }];
     let runtime = service
         .runtime_config(&creation.vault)
@@ -173,6 +175,43 @@ fn runtime_config_populates_target_protocols() {
         runtime.routes[0].targets[0].config.protocol,
         Some(aipass_proxy::Protocol::OpenAiResponses)
     );
+    service.config.routes[0].targets[0].model = Some("member-model".into());
+    let runtime = service.runtime_config(&creation.vault).unwrap();
+    assert_eq!(
+        runtime.routes[0].targets[0].model_override.as_deref(),
+        Some("member-model")
+    );
+    service.config.routes[0].inbound_protocol = aipass_proxy::Protocol::AnthropicMessages;
+    service.config.routes[0].targets[0].protocol = Some(aipass_proxy::Protocol::AnthropicMessages);
+    let mut config = service.config.clone();
+    config::resolve_model_bindings(&creation.vault, &mut config).unwrap();
+    assert_eq!(
+        config.routes[0].targets[0].protocol,
+        Some(aipass_proxy::Protocol::OpenAiResponses)
+    );
+    assert!(config.routes[0].conversion_enabled);
+}
+
+#[test]
+fn fixed_model_groups_reject_partial_or_invalid_bindings() {
+    let mut config = config_with_token("model-group");
+    let target: ProxyTargetConfig = serde_json::from_value(serde_json::json!({
+        "id":Uuid::new_v4(),"providerEntryId":Uuid::new_v4(),"secretId":"primary",
+        "label":"first","baseUrl":"https://example.test","authScheme":"bearer",
+        "group":null,"priority":0,"enabled":true,"model":"gpt-model"
+    }))
+    .unwrap();
+    let mut second = target.clone();
+    second.id = Uuid::new_v4();
+    second.model = None;
+    config.routes[0].targets = vec![target, second];
+    assert!(validate_config(&config).is_err());
+    config.routes[0].targets[1].enabled = false;
+    assert!(validate_config(&config).is_ok());
+    for model in ["", " padded", "bad\nmodel"] {
+        config.routes[0].targets[0].model = Some(model.into());
+        assert!(validate_config(&config).is_err());
+    }
 }
 
 #[test]
@@ -412,6 +451,7 @@ fn reload_if_running_rebuilds_credentials_after_the_vault_changed() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     }];
     service
         .save_config(&creation.vault)

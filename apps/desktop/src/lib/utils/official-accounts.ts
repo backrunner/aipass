@@ -25,3 +25,16 @@ export function officialAccountFailureMessage(
   }
   return `${label}: ${item.error ?? ""}`;
 }
+
+export async function importCcSwitchConfigurations(
+  invoke: <T>(command: string) => Promise<T>,
+  reload: () => Promise<void>,
+  translate: Translate
+): Promise<{ count: number; error: string }> {
+  const results = await invoke<OfficialAccountRefreshResult[]>("ccswitch_import");
+  await reload();
+  return {
+    count: results.filter(item => !item.error && item.status !== "skipped").length,
+    error: results.filter(item => item.error).map(item => officialAccountFailureMessage(item, translate)).join("; ")
+  };
+}

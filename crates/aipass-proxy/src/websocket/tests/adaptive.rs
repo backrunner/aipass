@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::{json, Value};
 
+mod model_routes;
+
 struct Mock {
     address: String,
     upgrades: Arc<AtomicU64>,

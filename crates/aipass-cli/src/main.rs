@@ -159,4 +159,29 @@ mod tests {
         };
         assert_eq!(provider_ids, ["openai", "anthropic"]);
     }
+    #[test]
+    fn account_import_parses_provider_and_custom_home() {
+        let cli = Cli::try_parse_from([
+            "aipass",
+            "accounts",
+            "import",
+            "--provider",
+            "gemini-cli",
+            "--directory",
+            "/fixture/home",
+        ])
+        .unwrap();
+        let Command::Accounts {
+            command:
+                AccountsCommand::Import {
+                    provider_ids,
+                    directory,
+                },
+        } = cli.command
+        else {
+            panic!("expected import")
+        };
+        assert_eq!(provider_ids, ["gemini-cli"]);
+        assert_eq!(directory, Some(PathBuf::from("/fixture/home")));
+    }
 }

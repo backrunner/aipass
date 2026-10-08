@@ -41,6 +41,7 @@ fn claude_cli_inherits_global_proxy_and_respects_provider_override() {
         enabled: true,
         protocol: None,
         prefer_ws: true,
+        model: None,
     }];
     let runtime = service.runtime_config(&vault).unwrap();
     let target = &runtime.routes[0].targets[0];
@@ -116,6 +117,7 @@ fn runtime_config_uses_configured_route_protocol_without_provider_inference() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     }];
     assert!(service.runtime_config(&creation.vault).is_ok());
 
@@ -216,6 +218,7 @@ fn key_bound_interface_syncs_target_protocol_on_refresh() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     }];
     assert!(service
         .refresh_provider_credentials(&creation.vault, provider_id)
@@ -253,6 +256,7 @@ fn key_bound_interface_syncs_target_protocol_on_refresh() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     });
     service
         .save_config(&creation.vault)
@@ -309,6 +313,7 @@ fn reconcile_prunes_targets_whose_credential_was_removed() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     };
     let mut service = ProxyService::new(temp.path()).expect("proxy service");
     service.config = config_with_token("aipass-reconcile");
@@ -388,6 +393,7 @@ fn deleting_first_and_last_keys_cleans_live_routes_and_pricing_by_id() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     };
     let mut service = ProxyService::new(temp.path()).unwrap();
     service.config = config_with_token("aipass-delete-keys");

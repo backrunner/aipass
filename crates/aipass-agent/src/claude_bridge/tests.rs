@@ -160,6 +160,39 @@ async fn cancellation_kills_process_and_capability() {
 }
 
 #[tokio::test]
+async fn changing_a_group_model_revokes_the_original_claude_process() {
+    let (_temp, bridge, mut target) = fixture("read -r input\nwhile read -r input; do :; done\n");
+    target.config.model = Some("original-model".into());
+    let stream = bridge
+        .open(
+            &target,
+            &json!({"model":"original-model","messages":[{"role":"user","content":"wait"}]}),
+            None,
+        )
+        .unwrap();
+    let capability = bridge
+        .inner
+        .runs
+        .lock()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    bridge.retain_targets(&[&target]);
+    assert!(bridge
+        .mcp(&capability, ClaudeBridgeRequest::ListTools)
+        .is_ok());
+    target.config.model = Some("replacement-model".into());
+    bridge.retain_targets(&[&target]);
+    assert!(bridge.inner.runs.lock().unwrap().is_empty());
+    assert!(bridge
+        .mcp(&capability, ClaudeBridgeRequest::ListTools)
+        .is_err());
+    drop(stream);
+}
+
+#[tokio::test]
 async fn rebinding_a_cli_account_revokes_existing_process_capabilities() {
     let (_temp, bridge, mut target) = fixture("read -r input\nwhile read -r input; do :; done\n");
     let stream = bridge

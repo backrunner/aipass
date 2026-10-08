@@ -111,7 +111,7 @@ pub(crate) fn identity(auth: &Value) -> Option<String> {
             .map(str::to_owned)
     })
 }
-pub(super) fn identity_value(v: &Value) -> Option<String> {
+pub(crate) fn identity_value(v: &Value) -> Option<String> {
     v.as_str()
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
@@ -229,6 +229,8 @@ pub(super) fn bind_cli_with_models(
     auth: Value,
     live_models: Option<Value>,
 ) -> ServiceResult<()> {
+    let private = crate::subscription_import::reader::PrivateAuth(auth);
+    let auth = &private.0;
     let catalog: Value = serde_json::from_str(include_str!("../subscriptions/catalog.json"))
         .map_err(ServiceError::internal)?;
     let models = catalog
@@ -237,14 +239,14 @@ pub(super) fn bind_cli_with_models(
         .ok_or_else(|| invalid("unknown CLI subscription"))?["models"]
         .clone();
     let models = live_models.unwrap_or(models);
-    let identity = identity(&auth).ok_or_else(|| invalid("CLI account has no identity"))?;
+    let identity = identity(auth).ok_or_else(|| invalid("CLI account has no identity"))?;
     let account = Account {
         provider: provider.into(),
         generation: Uuid::new_v4(),
         auth: SensitiveString::new(auth.to_string()),
         models,
         revision: 0,
-        native_method: Some(1),
+        native_method: Some(crate::subscriptions::native_import::method(provider)),
         identity: identity.clone(),
     };
     let marker = format!("aipass:community:{}", account.generation);
@@ -258,18 +260,70 @@ pub(super) fn bind_cli_with_models(
 pub(crate) fn register_cli(vault: &Vault, provider: &str, auth: Value) -> ServiceResult<Uuid> {
     register_cli_with_models(vault, provider, auth, None)
 }
+
+/// Existing ZCode imports used a user-only identity. Upgrade the matching site
+/// and organization in place, without merging distinct coding-plan scopes.
+pub(crate) fn legacy_scope_matches(
+    vault: &Vault,
+    entry: &aipass_vault::EntrySummary,
+    auth: &Value,
+) -> ServiceResult<bool> {
+    if entry.provider_id.as_deref() != Some("zcode") {
+        return Ok(false);
+    }
+    let Some(user) = entry.account_identity.as_deref() else {
+        return Ok(false);
+    };
+    if user.contains("::") {
+        return Ok(false);
+    }
+    let Some(raw) = vault
+        .provider_runtime_extension(entry.id, KEY)
+        .map_err(map_vault_error)?
+    else {
+        return Ok(false);
+    };
+    let old = decode(raw.expose())?;
+    let old_auth = crate::subscription_import::reader::PrivateAuth(
+        serde_json::from_str(old.auth.expose()).map_err(|_| invalid("invalid ZCode account"))?,
+    );
+    let old_scope = crate::subscription_import::reader::PrivateAuth(
+        serde_json::from_str(old_auth.0["refresh"].as_str().unwrap_or("null"))
+            .map_err(|_| invalid("invalid ZCode scope"))?,
+    );
+    let new_scope = crate::subscription_import::reader::PrivateAuth(
+        serde_json::from_str(auth["refresh"].as_str().unwrap_or("null"))
+            .map_err(|_| invalid("invalid ZCode scope"))?,
+    );
+    let val = |v: &Value, field: &str| v[field].as_str().unwrap_or("").to_owned();
+    let expected = format!(
+        "{}::{}::{}::{}",
+        user,
+        val(&new_scope.0, "site"),
+        val(&new_scope.0, "org"),
+        val(&new_scope.0, "project")
+    );
+    Ok(identity(auth).as_deref() == Some(&expected)
+        && ["site", "org", "project"]
+            .iter()
+            .all(|key| val(&old_scope.0, key) == val(&new_scope.0, key)))
+}
 pub(super) fn register_cli_with_models(
     vault: &Vault,
     provider: &str,
     auth: Value,
     live_models: Option<Value>,
 ) -> ServiceResult<Uuid> {
-    let identity = identity(&auth).ok_or_else(|| invalid("CLI account has no identity"))?;
+    let private = crate::subscription_import::reader::PrivateAuth(auth);
+    let auth = &private.0;
+    let identity = identity(auth).ok_or_else(|| invalid("CLI account has no identity"))?;
     for entry in vault.list_provider_summaries().map_err(map_vault_error)? {
         let provider_matches = entry.provider_id.as_deref() == Some(provider)
             || (provider == "codex" && entry.provider_id.as_deref() == Some("openai"))
             || (provider == "grok" && entry.provider_id.as_deref() == Some("xai"));
-        let legacy_matches = if provider == "codex" && provider_matches {
+        let legacy_matches = if provider == "zcode" && provider_matches {
+            legacy_scope_matches(vault, &entry, auth)?
+        } else if provider == "codex" && provider_matches {
             vault
                 .list_oauth_accounts(None)
                 .map_err(map_vault_error)?
@@ -297,10 +351,11 @@ pub(super) fn register_cli_with_models(
                     .map_err(map_vault_error)?
                 {
                     let mut account = decode(raw.expose())?;
-                    if serde_json::from_str::<Value>(account.auth.expose())
-                        .map_err(ServiceError::internal)?
-                        == auth
-                    {
+                    let stored_auth = crate::subscription_import::reader::PrivateAuth(
+                        serde_json::from_str(account.auth.expose())
+                            .map_err(ServiceError::internal)?,
+                    );
+                    if stored_auth.0 == *auth {
                         if let Some(models) = live_models {
                             if models != account.models {
                                 let revision = account.revision;
@@ -322,7 +377,7 @@ pub(super) fn register_cli_with_models(
                     }
                 }
             }
-            bind_cli_with_models(vault, entry.id, provider, auth, live_models)?;
+            bind_cli_with_models(vault, entry.id, provider, auth.clone(), live_models)?;
             for legacy in vault.list_oauth_accounts(None).map_err(map_vault_error)? {
                 if legacy.entry_id == Some(entry.id) {
                     vault
@@ -349,7 +404,7 @@ pub(super) fn register_cli_with_models(
             auth: SensitiveString::new(auth.to_string()),
             models,
             revision: 0,
-            native_method: Some(1),
+            native_method: Some(crate::subscriptions::native_import::method(provider)),
             identity,
         },
     )

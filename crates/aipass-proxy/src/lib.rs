@@ -29,6 +29,7 @@ mod diagnostics;
 mod endpoints;
 mod forward;
 mod images;
+mod model_routes;
 mod routing;
 mod runtime;
 mod selection;

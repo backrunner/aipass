@@ -284,6 +284,37 @@ test("uses the selected route protocol for mixed-protocol groups", async () => {
   expect(saved.targets).toHaveLength(2);
 });
 
+test("saves cross-brand model bindings with native protocols and automatic conversion", async () => {
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  const onSave = vi.fn().mockResolvedValue(true);
+  const bound = { ...mixedRoute, targets: mixedRoute.targets.map((member, index) => ({ ...member, model: index ? "gpt-test" : "claude-test" })) };
+  app = mount(RouteGroupDialog, { target, props: { route: bound, entries: mixedEntries, onSave } }) as never;
+  flushSync();
+  expect(document.body.querySelector('.group-model-display .mono')?.textContent).toBe("group/route-mixed");
+  expect(document.body.querySelectorAll(".member-model")).toHaveLength(2);
+  document.body.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await Promise.resolve(); await Promise.resolve(); flushSync();
+  const saved = onSave.mock.calls[0][0] as ProxyRouteConfig;
+  expect(saved.conversionEnabled).toBe(true);
+  expect(saved.targets.map(member => [member.model, member.protocol])).toEqual([
+    ["claude-test", "anthropic_messages"], ["gpt-test", "open_ai_responses"]
+  ]);
+});
+
+test("rejects a bound group with an enabled member missing its model", async () => {
+  const target = document.createElement("div");
+  document.body.appendChild(target);
+  const onSave = vi.fn();
+  const bound = { ...mixedRoute, targets: mixedRoute.targets.map((member, index) => ({ ...member, model: index ? undefined : "claude-test" })) };
+  app = mount(RouteGroupDialog, { target, props: { route: bound, entries: mixedEntries, onSave } }) as never;
+  flushSync();
+  document.body.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await Promise.resolve(); flushSync();
+  expect(onSave).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("Set an upstream model for every enabled member.");
+});
+
 test("preserves a disabled member across an edit-save round trip", async () => {
   const disabledRoute: ProxyRouteConfig = {
     ...route,

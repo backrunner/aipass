@@ -135,6 +135,7 @@ pub fn run_server(options: ServerOptions) -> Result<()> {
         .context("failed to set agent listener to nonblocking accept mode")?;
     let auth_token = ipc::load_or_create_auth_token(&vault_dir)?;
     let state = Arc::new(AgentState {
+        subscription_imports: Default::default(),
         control_panel: Default::default(),
         policy: Mutex::new(load_policy(&vault_dir)?),
         vault_dir: vault_dir.clone(),

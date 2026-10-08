@@ -74,6 +74,7 @@ pub(super) fn probe_entry(
             enabled: true,
             protocol: Some(ProxyProtocol::OpenAiResponses),
             prefer_ws: false,
+            model: None,
         },
     });
     let observation = state.and_then(|state| {

@@ -55,6 +55,11 @@ fn cli_db() -> Result<std::path::PathBuf> {
         ".local/share/kiro-cli/data.sqlite3"
     }))
 }
+fn native_db(source: &Value) -> Result<std::path::PathBuf> {
+    Ok(native_import::root(source)
+        .map(|p| p.join("data.sqlite3"))
+        .unwrap_or(cli_db()?))
+}
 fn cli_executable() -> Option<std::path::PathBuf> {
     let name = if cfg!(windows) {
         "kiro-cli.exe"
@@ -79,41 +84,55 @@ fn expiry(v: &Value) -> u64 {
         .map(|t| t.unix_timestamp().max(0) as u64 * 1000)
         .unwrap_or(0)
 }
-fn native() -> Result<Value> {
-    if let Ok(db) =
-        rusqlite::Connection::open_with_flags(cli_db()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-    {
-        let get = |key: &str| {
-            db.query_row("SELECT value FROM auth_kv WHERE key=?1", [key], |r| {
-                r.get::<_, String>(0)
-            })
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        };
-        for kind in ["social", "odic", "external-idp"] {
-            let key = format!("kirocli:{kind}:token");
-            if let Some(m) = get(&key).filter(|v| !s(v, "access_token").is_empty()) {
-                let mut a = json!({"type":"oauth","access":m["access_token"],"refresh":m["refresh_token"],"expires":expiry(&m["expires_at"]),"region":m["region"].as_str().unwrap_or("us-east-1"),"profileArn":m["profile_arn"],"method":if kind=="odic"{"idc"}else{kind},"source":"kiro-cli","dbKey":key});
-                if kind == "odic" {
-                    if let Some(reg) = get("kirocli:odic:device-registration") {
-                        a["clientId"] = reg["client_id"].clone();
-                        a["clientSecret"] = reg["client_secret"].clone();
-                    }
-                } else if kind == "external-idp" {
-                    a["clientId"] = m["client_id"].clone();
-                    a["tokenURL"] = json!(m["token_endpoint"]
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!(
-                            "{}/v1/token",
-                            s(&m, "issuer_url").trim_end_matches('/')
-                        )));
+fn native(source: &Value) -> Result<Value> {
+    let selected = native_import::selector(source);
+    if selected != "ide" {
+        if let Ok(db) = rusqlite::Connection::open_with_flags(
+            native_db(source)?,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) {
+            if selected.starts_with("cli:") {
+                db.prepare("SELECT value FROM auth_kv WHERE key=?1")
+                    .map_err(|_| "invalid Kiro CLI credential database")?;
+            }
+            let get = |key: &str| {
+                db.query_row("SELECT value FROM auth_kv WHERE key=?1", [key], |r| {
+                    r.get::<_, String>(0)
+                })
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            };
+            for kind in ["social", "odic", "external-idp"] {
+                if !selected.is_empty() && selected != format!("cli:{kind}") {
+                    continue;
                 }
-                return Ok(a);
+                let key = format!("kirocli:{kind}:token");
+                if let Some(m) = get(&key).filter(|v| !s(v, "access_token").is_empty()) {
+                    let mut a = json!({"type":"oauth","access":m["access_token"],"refresh":m["refresh_token"],"expires":expiry(&m["expires_at"]),"region":m["region"].as_str().unwrap_or("us-east-1"),"profileArn":m["profile_arn"],"method":if kind=="odic"{"idc"}else{kind},"source":"kiro-cli","dbKey":key});
+                    if kind == "odic" {
+                        if let Some(reg) = get("kirocli:odic:device-registration") {
+                            a["clientId"] = reg["client_id"].clone();
+                            a["clientSecret"] = reg["client_secret"].clone();
+                        }
+                    } else if kind == "external-idp" {
+                        a["clientId"] = m["client_id"].clone();
+                        a["tokenURL"] = json!(m["token_endpoint"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!(
+                                "{}/v1/token",
+                                s(&m, "issuer_url").trim_end_matches('/')
+                            )));
+                    }
+                    return Ok(a);
+                }
             }
         }
     }
-    let dir = home()?.join(".aws/sso/cache");
+    if selected.starts_with("cli:") {
+        return Err("Kiro CLI is not signed in".into());
+    }
+    let dir = native_import::root(source).unwrap_or(home()?.join(".aws/sso/cache"));
     let m = read_json(&dir.join("kiro-auth-token.json"))?;
     if s(&m, "accessToken").is_empty() {
         return Err("Kiro is not signed in".into());
@@ -135,10 +154,7 @@ fn native() -> Result<Value> {
     }
     Ok(a)
 }
-async fn profile(c: &mut Context) -> Result<()> {
-    if !s(&c.auth, "profileArn").is_empty() {
-        return Ok(());
-    }
+pub(super) async fn import_profile(c: &Context) -> Result<String> {
     let arn = if c.auth["type"] == "api" {
         let v = json_request(signed(
             c,
@@ -172,6 +188,13 @@ async fn profile(c: &mut Context) -> Result<()> {
     if arn.is_empty() {
         return Err("Kiro returned no account profile".into());
     }
+    Ok(arn)
+}
+async fn profile(c: &mut Context) -> Result<()> {
+    if !s(&c.auth, "profileArn").is_empty() {
+        return Ok(());
+    }
+    let arn = import_profile(c).await?;
     let mut next = c.auth.clone();
     next["profileArn"] = json!(arn);
     c.save(next).await
@@ -246,7 +269,7 @@ fn save_back(before: &Value, next: &Value) -> Result<()> {
     .unwrap_or_default();
     match s(before, "source") {
         "kiro-cli" => {
-            let mut db = rusqlite::Connection::open(cli_db()?)
+            let mut db = rusqlite::Connection::open(native_db(before)?)
                 .map_err(|_| "cannot update Kiro CLI sign-in")?;
             db.busy_timeout(Duration::from_secs(3))
                 .map_err(|_| "Kiro CLI database unavailable")?;
@@ -278,7 +301,9 @@ fn save_back(before: &Value, next: &Value) -> Result<()> {
             tx.commit().map_err(|_| "cannot save Kiro CLI refresh")?;
         }
         "kiro-ide" => {
-            let path = home()?.join(".aws/sso/cache/kiro-auth-token.json");
+            let path = native_import::root(before)
+                .unwrap_or(home()?.join(".aws/sso/cache"))
+                .join("kiro-auth-token.json");
             let mut v = read_json(&path)?;
             if v["accessToken"] != before["access"] || v["refreshToken"] != before["refresh"] {
                 return Err(
@@ -302,7 +327,7 @@ fn save_back(before: &Value, next: &Value) -> Result<()> {
 }
 pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
     if method == 1 {
-        return native();
+        return native(&c.auth);
     }
     let cb = loopback::Loopback::bind(&[
         3128, 4649, 6588, 8008, 9091, 49153, 50153, 51153, 52153, 53153,
@@ -410,7 +435,7 @@ pub(super) async fn fresh(c: &mut Context) -> Result<()> {
 async fn fresh_inner(c: &mut Context, mut force: bool) -> Result<()> {
     let mut owner_has_current_grant = false;
     if matches!(s(&c.auth, "source"), "kiro-cli" | "kiro-ide") {
-        let mut n = native()?;
+        let mut n = native(&c.auth)?;
         if !previous_native_grant(&c.auth, &n) {
             n = pin_native_profile(c, n).await?;
             if !native_matches(&c.auth, &n) {
@@ -442,7 +467,7 @@ async fn fresh_inner(c: &mut Context, mut force: bool) -> Result<()> {
                 let mut command = native_cli::command(&exe, c);
                 command.args(["debug", "refresh-auth-token"]);
                 let _ = native_cli::run(command, 20).await;
-                let mut n = pin_native_profile(c, native()?).await?;
+                let mut n = pin_native_profile(c, native(&c.auth)?).await?;
                 if !native_matches(&before, &n) || n["dbKey"] != before["dbKey"] {
                     return Err(
                         "Kiro CLI account changed during refresh; reconnect explicitly".into(),

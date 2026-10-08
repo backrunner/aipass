@@ -287,9 +287,10 @@ fn decrypt(key: &[u8], v: &Value) -> Option<String> {
         .ok()?;
     String::from_utf8(plain).ok()
 }
-fn native() -> Result<Value> {
+fn native(source: &Value) -> Result<Value> {
     let home = home()?;
-    let dir = home.join(".zcode/v2");
+    let dir = native_import::root(source).unwrap_or_else(|| home.join(".zcode/v2"));
+    let selected = native_import::selector(source);
     let store = read_json(&dir.join("credentials.json"))?;
     let os = if cfg!(target_os = "macos") {
         "darwin"
@@ -309,9 +310,13 @@ fn native() -> Result<Value> {
         )
     });
     let key = Sha256::digest(seed.as_bytes());
+    let mut key_owner = String::new();
     let mut st = json!({"site":"zai","device":uuid::Uuid::new_v4().to_string(),"source":"zcode","jwt":decrypt(&key,&store["zcodejwttoken"]).unwrap_or_default().trim_start_matches("Bearer "),"key":""});
     for (name, v) in store.as_object().ok_or("invalid ZCode credential store")? {
-        if name.contains(":coding-plan:") && name.ends_with(":api-key") {
+        if name.contains(":coding-plan:")
+            && name.ends_with(":api-key")
+            && (selected.is_empty() || selected == format!("key:{name}"))
+        {
             if let Some(k) = decrypt(&key, v).filter(|k| k.contains('.')) {
                 let site = if name.contains(":bigmodel-") {
                     "bigmodel"
@@ -321,6 +326,12 @@ fn native() -> Result<Value> {
                 if s(&st, "key").is_empty() || site == "zai" {
                     st["key"] = json!(k);
                     st["site"] = json!(site);
+                    // The vendor credential key is scoped by stable user ID.
+                    // Site-wide user_info describes only the latest login.
+                    key_owner = name
+                        .split_once(":coding-plan:")
+                        .map(|(user, _)| user.to_owned())
+                        .unwrap_or_default();
                 }
             }
         }
@@ -328,35 +339,58 @@ fn native() -> Result<Value> {
     if let Ok(settings) = read_json(&dir.join("setting.json")) {
         for site in ["zai", "bigmodel"] {
             let sel = &settings["providerFamilyConnectionSelections"][site];
-            if sel["kind"] == "team-coding-plan" {
+            if sel["kind"] == "team-coding-plan"
+                && (selected.is_empty() || selected == format!("team:{site}"))
+            {
                 if let Some(tok) = decrypt(&key, &store[format!("oauth:{site}:access_token")]) {
                     st["site"] = json!(site);
-                    st["org"] = sel["organizationId"].clone();
-                    st["project"] = sel["projectId"].clone();
+                    st["org"] = json!(crate::community::identity_value(&sel["organizationId"])
+                        .unwrap_or_default());
+                    st["project"] = json!(
+                        crate::community::identity_value(&sel["projectId"]).unwrap_or_default()
+                    );
                     st["token"] = json!(tok);
                     st["key"] = json!("");
+                    key_owner.clear();
                     break;
                 }
             }
         }
     }
-    let mut identity = String::new();
+    if (selected.starts_with("key:") && s(&st, "key").is_empty())
+        || (selected.starts_with("team:") && s(&st, "token").is_empty())
+    {
+        return Err("Selected ZCode sign-in is unavailable".into());
+    }
+    let mut identity = key_owner;
     for site in ["zai", "bigmodel"] {
-        if let Some(info) = decrypt(&key, &store[format!("oauth:{site}:user_info")])
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        {
-            identity = info["user_id"]
-                .as_str()
-                .or(info["email"].as_str())
-                .unwrap_or("")
-                .into();
-            if !identity.is_empty() {
-                break;
+        if site != s(&st, "site") {
+            continue;
+        }
+        if identity.is_empty() {
+            if let Some(info) = decrypt(&key, &store[format!("oauth:{site}:user_info")])
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            {
+                identity = crate::community::identity_value(&info["user_id"])
+                    .or_else(|| crate::community::identity_value(&info["email"]))
+                    .unwrap_or_default();
+                if !identity.is_empty() {
+                    break;
+                }
             }
         }
     }
     if s(&st, "key").is_empty() && s(&st, "jwt").is_empty() && s(&st, "token").is_empty() {
         return Err("ZCode is not signed in".into());
+    }
+    if !selected.is_empty() && !identity.is_empty() {
+        identity = format!(
+            "{}::{}::{}::{}",
+            identity,
+            s(&st, "site"),
+            s(&st, "org"),
+            s(&st, "project")
+        );
     }
     Ok(
         json!({"type":"oauth","access":if s(&st,"key").is_empty(){s(&st,"jwt")}else{s(&st,"key")},"refresh":st.to_string(),"expires":0,"accountId":identity}),
@@ -364,7 +398,7 @@ fn native() -> Result<Value> {
 }
 pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
     if method == 2 {
-        return native();
+        return native(&c.auth);
     }
     let site = if method == 1 { "bigmodel" } else { "zai" };
     let poll = format!("Bearer {}{}", hex_id(), hex_id());
@@ -433,7 +467,7 @@ pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
 pub(super) async fn fresh(c: &mut Context) -> Result<()> {
     let mut st = state(c)?;
     if st["source"] == "zcode" {
-        let next = native()?;
+        let next = native(&c.auth)?;
         if s(&next, "accountId").is_empty() || next["accountId"] != c.auth["accountId"] {
             return Err("ZCode native account changed; reconnect explicitly".into());
         }

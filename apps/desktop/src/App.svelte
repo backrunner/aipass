@@ -24,6 +24,7 @@
   import { ProviderListPane } from "@aipass/ui";
   import ProviderModal from "./lib/components/providers/ProviderModal.svelte";
   import CommunityConnectDialog from "./lib/components/providers/CommunityConnectDialog.svelte";
+  import SubscriptionImportDialog from "./lib/components/providers/SubscriptionImportDialog.svelte";
   import OAuthConnectDialog from "./lib/components/providers/OAuthConnectDialog.svelte";
   import { ProxyRouteList as RouteListPane } from "@aipass/ui";
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
@@ -62,7 +63,6 @@
     AipassProviderImportError,
     AipassProviderLink,
     PendingDeepLink,
-    OfficialAccountRefreshResult,
     SyncConflict,
     SyncSettings,
     SyncMode,
@@ -81,9 +81,9 @@
   } from "./lib/types";
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { emptyDraft, entryMatchesFilter, mergeHeaderPairs, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
-  import { officialAccountFailureMessage } from "./lib/utils/official-accounts";
+  import { importCcSwitchConfigurations } from "./lib/utils/official-accounts";
   import { aipassProviderLinkToDraft, ccSwitchLinkToDraft, findAipassProviderDuplicate, findCcSwitchDuplicate, splitEndpointList } from "./lib/utils/deeplink";
-  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry } from "./lib/utils/server";
+  import { buildRouteTarget, buildSingleEntryRoute, proxySupportedEntry, prepareRouteSave } from "./lib/utils/server";
   import { checkForUpdates, downloadUpdate, installPendingUpdate, installUpdate, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateProgress } from "./lib/services/updates";
   import { isThemePreference, setTheme, themeStore } from "./lib/stores/appearance";
   import { emptyServerUsage, loadServerUsage } from "./lib/services/serverUsage";
@@ -1128,7 +1128,7 @@
   function clearSensitiveUnlockedState() {
     serverMutationVersion++;
     errorToast = undefined;
-    showOAuthConnect = false;
+    showOAuthConnect = showSubscriptionImport = officialAccountsBusy = false;
     entries = [];
     countEntries = [];
     archivedEntries = [];
@@ -1322,6 +1322,9 @@
   }
 
   let officialAccountsBusy = false;
+  let showSubscriptionImport = false;
+  let subscriptionImportLaunch = 0;
+  let subscriptionLoginProvider = "";
 
   async function detectCcSwitch(): Promise<CcSwitchDetection | undefined> {
     try {
@@ -1332,30 +1335,15 @@
     }
   }
 
-  async function refreshOfficialAccounts() {
-    if (!officialAccountsImport || officialAccountsBusy) return;
-    officialAccountsBusy = true;
+  function refreshOfficialAccounts() { showOAuthConnect = false; showSubscriptionImport = true; subscriptionImportLaunch++; }
+
+  async function importCcSwitchAccounts() {
     clearError();
     try {
-      const results = await invokeTauri<OfficialAccountRefreshResult[]>("official_accounts_refresh", { providerIds: ["openai", "anthropic", "xai", "copilot"] });
-      const importResults = await invokeTauri<OfficialAccountRefreshResult[]>("ccswitch_import");
-      await loadEntries();
-      const combined = [...(results ?? []), ...(importResults ?? [])];
-      const failures = combined.filter((item) => item.error);
-      if (failures.length > 0) {
-        reportError(failures.map((item) => officialAccountFailureMessage(item, $t)).join("; "));
-      }
-      const succeeded = combined.length - failures.length;
-      if (succeeded > 0) {
-        const skipped = combined.filter((item) => !item.error && item.status === "skipped").length;
-        notice = localizedMessage("providerList.accountsRefreshedSummary", { refreshed: succeeded - skipped, skipped });
-        setTimeout(() => (notice = ""), 1800);
-      }
-    } catch (err) {
-      reportError(String(err));
-    } finally {
-      officialAccountsBusy = false;
-    }
+      const result = await importCcSwitchConfigurations(invokeTauri, loadEntries, $t);
+      if (result.error) reportError(result.error);
+      notice = localizedMessage("settings.ccSwitchImported", { count: result.count });
+    } catch (e) { reportError(String(e)); }
   }
 
   function inferDraftFromDomain() {
@@ -1415,6 +1403,7 @@
 
   function openOAuthConnect() {
     clearError();
+    subscriptionLoginProvider = "";
     showOAuthConnect = true;
   }
 
@@ -2350,13 +2339,10 @@
   }
 
   async function saveRouteGroup(route: ProxyRouteConfig) {
-    const exists = serverConfig.routes.some((item) => item.id === route.id);
-    const nextRoutes = exists
-      ? serverConfig.routes.map((item) => (item.id === route.id ? route : item))
-      : [...serverConfig.routes, route];
-    const saved = await saveServerConfig({ ...serverConfig, routes: nextRoutes });
+    const { routes, created } = prepareRouteSave(serverConfig.routes, route);
+    const saved = await saveServerConfig({ ...serverConfig, routes });
     if (!saved) throw new Error(resolveMessage($t, error) || $t("server.saveGroupFailed"));
-    if (!exists) selectedRouteId = route.id;
+    if (created) selectedRouteId = route.id;
     return saved;
   }
 
@@ -3380,7 +3366,7 @@
         onConnectOAuth={openOAuthConnect}
         onRefreshAccounts={refreshOfficialAccounts}
         refreshAccountsBusy={officialAccountsBusy}
-        {officialAccountsImport}
+        officialAccountsImport={true}
         onFilterChange={setProviderFilter}
         onEmptyTrash={emptyTrash}
         onSelect={selectProvider}
@@ -3535,6 +3521,7 @@
     {conflictBusy}
     {browserExtensionStatus}
     {browserExtensionBusy}
+    onImportCcSwitch={importCcSwitchAccounts}
     bind:officialAccountsImport
     {ccSwitchDetection}
     {securityBusy}
@@ -3582,18 +3569,27 @@
   />
 {/if}
 
+{#if showWorkspace && !showAuthScreen && !lockTransitioning}
+  <SubscriptionImportDialog {invokeTauri} bind:open={showSubscriptionImport} launch={subscriptionImportLaunch} bind:busy={officialAccountsBusy} onChanged={loadEntries} onLogin={(provider) => {
+    subscriptionLoginProvider = provider;
+    if (["anthropic", "codex", "grok", "copilot", "gemini-cli"].includes(provider)) showOAuthConnect = true;
+    else showCommunityConnect = true;
+  }} />
+{/if}
+
 {#if showOAuthConnect && showWorkspace && !showAuthScreen && !lockTransitioning}
   <OAuthConnectDialog
     {invokeTauri}
     onClose={() => { showOAuthConnect = false; }}
     onConnected={onSubscriptionConnected}
     onCommunity={() => { showOAuthConnect = false; showCommunityConnect = true; }}
+    initialProvider={subscriptionLoginProvider === "anthropic" ? "claude" : subscriptionLoginProvider}
     onImportCli={refreshOfficialAccounts}
   />
 {/if}
 
 {#if showCommunityConnect && showWorkspace && !showAuthScreen && !lockTransitioning}
-  <CommunityConnectDialog {invokeTauri} onClose={() => { showCommunityConnect = false; }} onConnected={onSubscriptionConnected} />
+  <CommunityConnectDialog {invokeTauri} initialProvider={subscriptionLoginProvider} onClose={() => { showCommunityConnect = false; }} onConnected={onSubscriptionConnected} />
 {/if}
 
 {#if unlockTransitioning}

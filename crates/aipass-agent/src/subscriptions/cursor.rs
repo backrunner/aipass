@@ -86,20 +86,25 @@ async fn who(c: &Context, token: &str) -> Result<(String, String)> {
 async fn native_token(_c: &Context) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        let mut cmd = native_cli::command(std::path::Path::new("/usr/bin/security"), _c);
-        cmd.args([
-            "find-generic-password",
-            "-s",
-            "cursor-access-token",
-            "-a",
-            "cursor-user",
-            "-w",
-        ]);
-        if let Ok(token) = native_cli::run(cmd, 10).await {
-            let token = token.trim();
-            if !token.is_empty() {
-                return Ok(token.into());
+        if native_import::selector(&_c.auth) != "file" {
+            let mut cmd = native_cli::command(std::path::Path::new("/usr/bin/security"), _c);
+            cmd.args([
+                "find-generic-password",
+                "-s",
+                "cursor-access-token",
+                "-a",
+                "cursor-user",
+                "-w",
+            ]);
+            if let Ok(token) = native_cli::run(cmd, 10).await {
+                let token = token.trim();
+                if !token.is_empty() {
+                    return Ok(token.into());
+                }
             }
+        }
+        if native_import::selector(&_c.auth) == "keychain" {
+            return Err("Cursor secure store unavailable".into());
         }
     }
     let p = if cfg!(target_os = "macos") {
@@ -115,6 +120,9 @@ async fn native_token(_c: &Context) -> Result<String> {
             .unwrap_or(home()?.join(".config"))
             .join("cursor/auth.json")
     };
+    let p = native_import::root(&_c.auth)
+        .map(|r| r.join("auth.json"))
+        .unwrap_or(p);
     let v = read_json(&p)?;
     v["accessToken"]
         .as_str()
@@ -125,6 +133,10 @@ async fn native_token(_c: &Context) -> Result<String> {
 pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
     if method == 1 {
         let token = native_token(c).await?;
+        if native_import::root(&c.auth).is_some() && expires(&token) > 0 && expires(&token) <= now()
+        {
+            return Err("Cursor native sign-in expired".into());
+        }
         let (email, plan) = who(c, &token).await?;
         return Ok(
             json!({"type":"oauth","access":token,"refresh":"cursor-agent","expires":expires(&token),"accountId":email,"plan":plan}),

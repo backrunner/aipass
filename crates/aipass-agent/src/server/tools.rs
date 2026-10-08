@@ -318,22 +318,24 @@ pub(super) fn build_tool_config_proxy_plan(
     let tool_bind_addr = advertised_bind_addr(&bind_addr);
     let endpoint = proxy_endpoint_for_tool(&request.tool, route.inbound_protocol, &tool_bind_addr);
     let anthropic = route.inbound_protocol == ProxyProtocol::AnthropicMessages;
-    let default_model = route
-        .targets
-        .iter()
-        .filter(|target| target.enabled)
-        .find_map(|target| {
-            let entry = vault.get_provider_summary(target.provider_entry_id).ok()?;
-            let secret = entry
-                .secret_refs
-                .iter()
-                .find(|secret| secret.id == target.secret_id)?;
-            secret
-                .default_model
-                .clone()
-                .or(entry.default_model)
-                .filter(|model| !model.trim().is_empty())
-        });
+    let default_model = route.group_model_id().or_else(|| {
+        route
+            .targets
+            .iter()
+            .filter(|target| target.enabled)
+            .find_map(|target| {
+                let entry = vault.get_provider_summary(target.provider_entry_id).ok()?;
+                let secret = entry
+                    .secret_refs
+                    .iter()
+                    .find(|secret| secret.id == target.secret_id)?;
+                secret
+                    .default_model
+                    .clone()
+                    .or(entry.default_model)
+                    .filter(|model| !model.trim().is_empty())
+            })
+    });
     if matches!(request.tool, ToolId::Grok | ToolId::Pi) && default_model.is_none() {
         return Err(ServiceError::new(
             AgentErrorCode::ValidationFailed,

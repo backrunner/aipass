@@ -307,9 +307,10 @@ test("selecting a group scopes upstream details and tool previews to that group"
   }, 'fixture-csrf'));
 });
 
-test("the shared group editor preserves its opening revision and sends only editable fields", async () => {
+test.each([undefined, "bound-member-model"])("the shared group editor preserves revision and editable model %s", async (model) => {
   vi.useFakeTimers();
   let current = structuredClone(snapshot);
+  current.routes[0].targets[0].model = model;
   request.mockImplementation(async path => path === '/api/state' ? current : { ok: true });
   app = mount(App, { target: document.body });
   flushSync(); await vi.advanceTimersByTimeAsync(50); flushSync();
@@ -324,7 +325,7 @@ test("the shared group editor preserves its opening revision and sends only edit
   const save = request.mock.calls.find(([, body]) => body?.type === 'route_save')!;
   expect(save[1]).toEqual({ type: 'route_save', revision: 'revision-before-edit', route: {
     id: 'route-a', name: 'Renamed group', enabled: true, strategy: 'fallback', inboundProtocol: 'open_ai_responses',
-    retry: expect.any(Object), targets: [{ id: 'target-a', providerEntryId: 'provider-a', secretId: 'key-a', enabled: true, priority: 0, weight: 1 }],
+    retry: expect.any(Object), targets: [{ id: 'target-a', providerEntryId: 'provider-a', secretId: 'key-a', enabled: true, priority: 0, weight: 1, model: model ?? null }],
   } });
   expect(save[2]).toBe('fixture-csrf');
   expect(document.querySelector('.route-dialog-content')).toBeNull();

@@ -17,8 +17,13 @@ pub fn websocket_config_key(target: &ResolvedTarget, outbound: &UpstreamProxyCon
         hash.update(bytes);
     }
     let metadata = zeroize::Zeroizing::new(
-        serde_json::to_vec(&(&target.config.headers, target.config.protocol, outbound))
-            .expect("serializable transport configuration"),
+        serde_json::to_vec(&(
+            &target.config.headers,
+            target.config.protocol,
+            &target.config.model,
+            outbound,
+        ))
+        .expect("serializable transport configuration"),
     );
     hash.update(metadata.as_slice());
     hash.finalize().into()

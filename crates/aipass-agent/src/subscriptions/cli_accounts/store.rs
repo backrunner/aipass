@@ -69,6 +69,24 @@ pub(crate) fn reference(provider: &str, root: &Path) -> Result<Value> {
     )
 }
 
+pub(crate) fn import_reference(provider: &str, root: &Path) -> Result<Value> {
+    let auth = read(provider, root)?;
+    let expires = auth["expires"]
+        .as_u64()
+        .unwrap_or(0)
+        .max(super::super::expires(s(&auth, "access")) / 1000);
+    if expires > 0 && expires <= now() / 1000 {
+        return Err("CLI sign-in expired; renew it in the official CLI".into());
+    }
+    let identity = s(&auth, "accountId");
+    if identity.is_empty() {
+        return Err("CLI returned no account identity; sign in again".into());
+    }
+    Ok(
+        json!({"type":"oauth","nativeHome":root,"accountId":identity,"nativeProvider":provider,"nativeDevice":device()?}),
+    )
+}
+
 pub(crate) fn device() -> Result<String> {
     #[cfg(test)]
     return Ok("local-test-device".into());

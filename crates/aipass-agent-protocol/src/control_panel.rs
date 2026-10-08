@@ -117,6 +117,15 @@ pub struct ControlPanelTargetDraft {
     pub enabled: bool,
     pub priority: u16,
     pub weight: u32,
+    /// Omission preserves an existing binding; explicit null clears it.
+    #[serde(default, deserialize_with = "model_patch")]
+    pub model: Option<Option<String>>,
+}
+
+fn model_patch<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Deserialize)]

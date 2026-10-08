@@ -21,7 +21,11 @@ fn plan_info(id: &str) -> (&'static str, f64) {
 }
 pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
     let a = if method == 1 {
-        read_json(&home()?.join(".commandcode/auth.json"))?
+        read_json(
+            &native_import::root(&c.auth)
+                .unwrap_or(home()?.join(".commandcode"))
+                .join("auth.json"),
+        )?
     } else {
         let callback = loopback::Loopback::bind(&[0]).await?;
         let state = format!("{}{}", hex_id(), hex_id());
@@ -50,17 +54,30 @@ pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
     if s(&a, "apiKey").is_empty() {
         return Err("Command Code returned no API key".into());
     }
-    let me = json_request(
-        c.client
-            .get(format!("{API}/alpha/whoami"))
-            .bearer_auth(s(&a, "apiKey")),
-    )
-    .await?;
+    let me = if method == 1 && !s(&a, "userId").is_empty() {
+        json!({"user":{"id":a["userId"],"email":a["email"]}})
+    } else {
+        json_request(
+            c.client
+                .get(format!("{API}/alpha/whoami"))
+                .bearer_auth(s(&a, "apiKey")),
+        )
+        .await?
+    };
     Ok(
         json!({"type":"api","key":a["apiKey"],"metadata":{"userId":me["user"]["id"].as_str().or(a["userId"].as_str()),"email":me["user"]["email"],"cli":method==1}}),
     )
 }
 pub(super) async fn fresh(c: &mut Context) -> Result<()> {
+    if native_import::root(&c.auth).is_some() {
+        let mut next = login(c, 1).await?;
+        crate::community::ensure_owner(&c.auth, &next)?;
+        if next["key"] != c.auth["key"] {
+            c.save(next).await?;
+        } else {
+            native_import::erase(&mut next);
+        }
+    }
     if now().saturating_sub(c.auth["metadata"]["planAt"].as_u64().unwrap_or(0)) < 600000 {
         return Ok(());
     }

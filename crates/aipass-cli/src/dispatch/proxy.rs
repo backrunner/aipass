@@ -109,6 +109,7 @@ pub(crate) fn handle_proxy_command(
                     enabled: true,
                     protocol: None,
                     prefer_ws: false,
+                    model: None,
                 }],
                 retry: aipass_proxy::RetryPolicy::default(),
                 enabled: true,
@@ -537,6 +538,7 @@ pub(crate) fn handle_proxy_command(
                 enabled: true,
                 protocol: None,
                 prefer_ws: entry.supports_websockets.unwrap_or(false),
+                model: None,
             };
 
             route.targets.push(target.clone());

@@ -73,15 +73,16 @@ pub(super) async fn handle_request(
     let fallback_pool = Arc::new(pool::Pool::default());
     // Limited routes must select/admit each generation, not pin an idle socket
     // to a provider that may be full when the next response.create arrives.
-    if route
-        .targets
-        .iter()
-        .filter(|target| target.config.enabled)
-        .any(|target| {
-            target
-                .max_concurrent_requests
-                .is_some_and(|limit| limit > 0)
-        })
+    if model_routes::model_id(&route).is_some()
+        || route
+            .targets
+            .iter()
+            .filter(|target| target.config.enabled)
+            .any(|target| {
+                target
+                    .max_concurrent_requests
+                    .is_some_and(|limit| limit > 0)
+            })
     {
         return bridge::upgrade(
             request,

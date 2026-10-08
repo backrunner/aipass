@@ -20,6 +20,7 @@ mod provider_runtime;
 pub mod proxy_service;
 pub mod server;
 pub mod session;
+mod subscription_import;
 mod subscriptions;
 pub(crate) mod sync_watch;
 pub(crate) mod usage_probe;

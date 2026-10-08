@@ -26,7 +26,7 @@ fn route_draft(snapshot: &Value) -> Value {
         "strategy":route["strategy"],"inboundProtocol":route["inboundProtocol"],"retry":route["retry"],
         "targets":route["targets"].as_array().unwrap().iter().map(|target| json!({
             "id":target["id"],"providerEntryId":target["providerEntryId"],"secretId":target["secretId"],
-            "enabled":target["enabled"],"priority":target["priority"],"weight":target["weight"]
+            "enabled":target["enabled"],"priority":target["priority"],"weight":target["weight"],"model":target["model"]
         })).collect::<Vec<_>>()})
 }
 
@@ -38,6 +38,7 @@ fn route_editor_preserves_private_runtime_fields_and_rejects_stale_or_injected_d
     let mut draft = route_draft(&before);
     draft["name"] = json!("Renamed group");
     draft["targets"][0]["weight"] = json!(3);
+    draft["targets"][0]["model"] = json!("bound-member-model");
     let response = fixture.action(
         &cookie,
         &csrf,
@@ -56,6 +57,10 @@ fn route_editor_preserves_private_runtime_fields_and_rejects_stale_or_injected_d
             "http://127.0.0.1:9/v1"
         );
         assert_eq!(config.routes[0].targets[0].weight, 3);
+        assert_eq!(
+            config.routes[0].targets[0].model.as_deref(),
+            Some("bound-member-model")
+        );
         Ok(())
     })
     .unwrap();
@@ -83,6 +88,42 @@ fn route_editor_preserves_private_runtime_fields_and_rejects_stale_or_injected_d
     assert!(!serialized.contains("fake-panel-header-secret"));
     assert!(!serialized.contains("fake-panel-provider-secret"));
     assert_eq!(after["routes"][0]["name"], "Renamed group");
+    assert_eq!(
+        after["routes"][0]["targets"][0]["model"],
+        "bound-member-model"
+    );
+}
+
+#[test]
+fn remote_route_editor_preserves_omitted_models_and_clears_explicit_null() {
+    let fixture = Fixture::new(false);
+    let (cookie, csrf) = fixture.credentials();
+    let mut snapshot = fixture.get(&cookie).json::<Value>().unwrap();
+    for mode in ["set", "omit", "clear"] {
+        let mut draft = route_draft(&snapshot);
+        match mode {
+            "set" => draft["targets"][0]["model"] = json!("member-model"),
+            "omit" => {
+                draft["targets"][0].as_object_mut().unwrap().remove("model");
+            }
+            _ => draft["targets"][0]["model"] = Value::Null,
+        }
+        let response = fixture.action(
+            &cookie,
+            &csrf,
+            json!({"type":"route_save","revision":snapshot["revision"],"route":draft}),
+        );
+        assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+        snapshot = fixture.get(&cookie).json().unwrap();
+        assert_eq!(
+            snapshot["routes"][0]["targets"][0]["model"],
+            if mode == "clear" {
+                Value::Null
+            } else {
+                json!("member-model")
+            }
+        );
+    }
 }
 
 #[test]
@@ -414,6 +455,7 @@ impl Fixture {
                             enabled: true,
                             protocol: None,
                             prefer_ws: false,
+                            model: None,
                         }],
                     }],
                     ..Default::default()

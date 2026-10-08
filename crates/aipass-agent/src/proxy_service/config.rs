@@ -29,6 +29,43 @@ pub(super) fn generate_local_token() -> String {
     format!("sk-{}", Uuid::new_v4().simple())
 }
 
+/// Fixed-model members always use the credential's trusted native protocol.
+/// All clients share this normalization, including CLI and remote-panel edits.
+pub(super) fn resolve_model_bindings(vault: &Vault, config: &mut ProxyConfig) -> ServiceResult<()> {
+    for route in &mut config.routes {
+        for target in route
+            .targets
+            .iter_mut()
+            .filter(|target| target.enabled && target.model.is_some())
+        {
+            let entry = vault
+                .get_provider_summary(target.provider_entry_id)
+                .map_err(map_vault_error)?;
+            let secret = entry
+                .secret_refs
+                .iter()
+                .find(|secret| secret.id == target.secret_id)
+                .ok_or_else(|| {
+                    ServiceError::new(
+                        aipass_agent_protocol::AgentErrorCode::NotFound,
+                        "group member credential no longer exists",
+                    )
+                })?;
+            target.protocol = key_upstream_protocol(
+                secret
+                    .interface_type
+                    .as_ref()
+                    .unwrap_or(&entry.interface_type),
+                &entry,
+            );
+            route.conversion_enabled |= target
+                .protocol
+                .is_some_and(|protocol| protocol != route.inbound_protocol);
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
     let bind_addr = config
         .bind_addr
@@ -66,6 +103,30 @@ pub(super) fn validate_config(config: &ProxyConfig) -> ServiceResult<()> {
         })?;
     }
     for route in &config.routes {
+        let bound = route
+            .targets
+            .iter()
+            .any(|target| target.enabled && target.model.is_some());
+        for target in &route.targets {
+            if let Some(model) = &target.model {
+                if model.trim().is_empty()
+                    || model != model.trim()
+                    || model.len() > 256
+                    || model.chars().any(char::is_control)
+                {
+                    return Err(ServiceError::new(
+                        aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                        "upstream model must be nonempty, trimmed and at most 256 bytes",
+                    ));
+                }
+            }
+            if bound && target.enabled && target.model.is_none() {
+                return Err(ServiceError::new(
+                    aipass_agent_protocol::AgentErrorCode::ValidationFailed,
+                    "every enabled group member must bind an upstream model",
+                ));
+            }
+        }
         // `upstream_protocol` is the legacy route-level fallback; targets
         // with an explicit protocol validate against their own value.
         let target_protocols = std::iter::once(route.upstream_protocol).chain(

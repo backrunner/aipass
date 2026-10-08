@@ -678,20 +678,6 @@ pub(crate) async fn entries_search(
 }
 
 #[tauri::command]
-pub(crate) async fn official_accounts_refresh(
-    app: AppHandle,
-    provider_ids: Option<Vec<String>>,
-) -> Result<Vec<OfficialAccountRefreshResult>, String> {
-    agent_request_async(
-        app,
-        AgentRequest::OfficialAccountsRefresh {
-            provider_ids: provider_ids.unwrap_or_default(),
-        },
-    )
-    .await
-}
-
-#[tauri::command]
 pub(crate) async fn oauth_login_start(
     app: AppHandle,
     provider: OAuthProvider,

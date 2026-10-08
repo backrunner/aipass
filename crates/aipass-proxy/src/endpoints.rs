@@ -29,6 +29,9 @@ pub(crate) async fn handle_models_request(
         );
     };
     route.local_token.zeroize();
+    if let Some(model) = model_routes::model_id(&route) {
+        return model_routes::models_response(&model, route.config.inbound_protocol);
+    }
 
     let mut last_error = None;
     let mut saw_not_found = false;

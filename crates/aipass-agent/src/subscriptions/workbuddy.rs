@@ -83,15 +83,13 @@ pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
         } else {
             ".local/share/CodeBuddyExtension"
         };
-        let file =
-            home()?
-                .join(root)
-                .join("Data/Public/auth")
-                .join(if c.provider == "workbuddy-ai" {
-                    "workbuddy-desktop-ai.info"
-                } else {
-                    "workbuddy-desktop.info"
-                });
+        let file = native_import::root(&c.auth)
+            .unwrap_or(home()?.join(root).join("Data/Public/auth"))
+            .join(if c.provider == "workbuddy-ai" {
+                "workbuddy-desktop-ai.info"
+            } else {
+                "workbuddy-desktop.info"
+            });
         let v = read_json(&file)?;
         let mut a = merge(json!({"type":"oauth"}), &v["auth"])?;
         a["uid"] = json!(identifier(&v["account"]["uid"]));
@@ -181,6 +179,22 @@ async fn poll(
     Err("WorkBuddy sign-in timed out".into())
 }
 pub(super) async fn fresh(c: &mut Context) -> Result<()> {
+    if native_import::root(&c.auth).is_some() {
+        let mut next = login(c, 1).await?;
+        crate::community::ensure_owner(&c.auth, &next)?;
+        // Never replace a durably rotated grant with the older vendor-file snapshot.
+        if next["access"] != c.auth["access"]
+            && ((next["expires"].as_u64().unwrap_or(0) == 0
+                && c.auth["expires"].as_u64().unwrap_or(0) == 0)
+                || (next["expires"].as_u64().unwrap_or(0) > now()
+                    && next["expires"].as_u64().unwrap_or(0)
+                        >= c.auth["expires"].as_u64().unwrap_or(0)))
+        {
+            c.save(next).await?;
+        } else {
+            native_import::erase(&mut next);
+        }
+    }
     let expiry = c.auth["expires"].as_u64().unwrap_or(0);
     if expiry == 0 || expiry > now() + 60000 {
         return Ok(());

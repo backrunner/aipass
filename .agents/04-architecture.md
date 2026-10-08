@@ -28,6 +28,7 @@ flowchart LR
 - Provider registry 和 schemas 在 TS/Rust 间共享生成。
 - 订阅认证、额度和协议适配由 AIPass 的 Rust crates 维护；兼容性以厂商协议和官方 CLI 行为为准。实现结构与设计决策由本仓库定义，不引入第三方 provider 引擎、源码下载生成器或运行时插件加载器。
 - Claude、Codex、Grok Build、Copilot CLI 和 Gemini CLI 的登录与续期归官方 CLI 管理；Agent 保存本机账号引用并分发本地代理请求。具体契约见 [本机订阅管理](../docs/native-subscriptions.md) 和 [工程边界](../docs/provider-engineering.md)。
+- 跨品牌订阅/API 混组通过明确的成员模型绑定与 `group/<UUID>` 入口实现。Agent 校验和解析原生协议，proxy 负责选择、模型映射与会话来源约束；详情见 [路由契约](../docs/proxy-routing.md)。
 
 ## 2. Monorepo 结构
 

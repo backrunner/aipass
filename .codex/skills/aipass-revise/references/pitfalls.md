@@ -392,6 +392,13 @@ Newest entries last within each section.
 
 ## Public model pricing (aipass-agent pricing)
 
+### Routing groups need transport-wide model bindings
+- **Symptom**: A mixed-brand group sent the caller's one model name to every member; spooled requests or native WebSocket paths could omit an override.
+- **Root cause**: Config had no member model; Agent runtime initialized `model_override` to `None`, and HTTP/WS used different submission paths.
+- **Fix**: Explicit member `model`, a public group alias, trusted Agent normalization, effective-model quota/pricing, and shared history-origin restrictions. Preserve rewritten spooled bodies and invalidate changed model bindings.
+- **Guardrail**: Run `cargo test -p aipass-proxy model_routes` and Agent routing tests; cover HTTP/WS, API/subscription fallback, spooled JSON, unknown opaque history, cache invalidation and actual model quota. Keep schemas, desktop and panel round trips aligned.
+- **Watch points**: `model_routes`, `forward/prepare`, `selection`, `websocket/upstream`, `proxy_service/config`, `runtime`, tool config plans and shared route editor.
+
 ### Startup-only refresh and encrypted metadata left prices stale
 - **Symptom**: a long-running agent never retried a failed price download or refreshed again; downloads while locked left the reported update time stale. Empty upstream tables could replace a good cache with built-in prices.
 - **Root cause**: `crates/aipass-agent/src/pricing.rs` `spawn_list_price_refresh` ran once, `refresh_list_prices` saved its timestamp through `with_vault`, and checked for usable rules only after adding built-in fallbacks.

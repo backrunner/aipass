@@ -15,8 +15,9 @@
   import { t } from "../i18n";
   import type { MaybePromise } from "../types";
   import type { ProxyProtocol, ProxyRouteConfig, ProxyRouteStrategy, ProxyStatus, ProxyTargetConfig, RetryPolicy } from "@aipass/schemas";
-  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, newProxyId, proxySupportedEntry, reorderItems } from "@aipass/schemas";
+  import { apiBaseUrl, buildRouteTarget, defaultRetryPolicy, mergeRouteTargets, newProxyId, proxySupportedEntry, reorderItems, nativeProtocolForEntry } from "@aipass/schemas";
   import Card from "./Card.svelte";
+  import ProviderIcon from "./ProviderIcon.svelte";
 
   export let route: ProxyRouteConfig | undefined = undefined;
   export let entries: ProviderEntry[] = [];
@@ -29,12 +30,14 @@
     (entry, secret) => Boolean(secret.endpoint ?? apiBaseUrl(entry)) && proxySupportedEntry(entry, secret);
   export let createTarget = buildRouteTarget;
 
-  type Member = { targetId?: string; entry: ProviderEntry; secret: SecretRef; weight: number; enabled: boolean };
+  type Member = { targetId?: string; entry: ProviderEntry; secret: SecretRef; weight: number; enabled: boolean; model: string };
 
   let dialogOpen = true;
   let closing = false;
   let saving = false;
   let saveError = "";
+  const routeId = route?.id ?? newProxyId();
+  let bindModels = route?.targets.some(target => Boolean(target.model)) ?? false;
   let name = route?.name ?? "";
   let strategy: ProxyRouteStrategy = route?.strategy ?? "fallback";
   let protocol: ProxyProtocol = route?.inboundProtocol ?? "open_ai_responses";
@@ -55,7 +58,7 @@
     const entry = entries.find((item) => item.id === target.providerEntryId);
     const secret = entry?.secretRefs.find((item) => item.id === target.secretId);
     if (entry && secret) {
-      members.push({ targetId: target.id, entry, secret, weight: Math.max(1, target.weight || 1), enabled: target.enabled !== false });
+      members.push({ targetId: target.id, entry, secret, weight: Math.max(1, target.weight || 1), enabled: target.enabled !== false, model: target.model ?? secret.defaultModel ?? entry.defaultModel ?? "" });
     } else {
       missingMembers.push(target);
     }
@@ -107,7 +110,7 @@
     if (!entry || !secret) return;
     if (!credentialAvailable(entry, secret)) return;
     if (members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)) return;
-    members = [...members, { entry, secret, weight: 1, enabled: true }];
+    members = [...members, { entry, secret, weight: 1, enabled: true, model: secret.defaultModel ?? entry.defaultModel ?? "" }];
     name ||= entry.title;
   }
 
@@ -190,6 +193,10 @@
       saveError = $t("server.invalidHoldDelay");
       return;
     }
+    if (bindModels && (members.some(member => member.enabled && !member.model.trim()) || missingMembers.some(target => target.enabled && !target.model))) {
+      saveError = $t("server.memberModelsRequired");
+      return;
+    }
     const editableTargets = members.map((member, index): ProxyTargetConfig | undefined => {
       const existing = route?.targets.find(
         (target) => target.providerEntryId === member.entry.id && target.secretId === member.secret.id
@@ -199,7 +206,8 @@
       return {
         ...base,
         id: existing?.id ?? base.id,
-        protocol: existing?.protocol,
+        protocol: bindModels ? nativeProtocolForEntry(member.entry, member.secret) ?? existing?.protocol : existing?.protocol,
+        model: bindModels ? member.model.trim() || undefined : undefined,
         priority: index,
         weight: Math.max(1, Math.round(member.weight) || 1),
         enabled: member.enabled
@@ -207,14 +215,14 @@
     }).filter((target): target is ProxyTargetConfig => Boolean(target));
     // Unresolvable targets survive the save unchanged, re-inserted at their
     // original priority, unless the user explicitly removed their rows.
-    const targets = mergeRouteTargets(editableTargets, missingMembers);
+    const targets = mergeRouteTargets(editableTargets, bindModels ? missingMembers : missingMembers.map(target => ({ ...target, model: undefined })));
     if (targets.length === 0) return;
     const upstreamProtocol = route?.conversionEnabled
       ? route.upstreamProtocol
       : protocol;
-    // Keep an explicitly saved conversion route working, but do not infer a
-    // transform from provider metadata when editing or creating a route.
-    const conversionEnabled = route?.conversionEnabled ?? false;
+    // Fixed-model members use their own wire formats; legacy routes keep
+    // their explicitly configured protocol behavior.
+    const conversionEnabled = (route?.conversionEnabled ?? false) || (bindModels && targets.some(target => target.enabled && (target.protocol ?? upstreamProtocol) !== protocol));
     const retry: RetryPolicy = {
       ...(route?.retry ?? defaultRetryPolicy()),
       silentRetry,
@@ -236,7 +244,7 @@
           retry
         }
       : {
-        id: newProxyId(),
+        id: routeId,
         name: name.trim(),
         token: "",
         strategy,
@@ -265,7 +273,7 @@
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
     <Dialog.Overlay class="route-dialog-overlay" />
-    <Dialog.Content class="route-dialog-content">
+    <Dialog.Content class={`route-dialog-content${bindModels ? " with-member-models" : ""}`}>
       <form class="modal" novalidate on:submit|preventDefault={save}>
         <header class="modal-header">
           <Dialog.Title class="route-dialog-title">
@@ -297,6 +305,16 @@
                 options={protocolOptions}
               />
             </div>
+          </div>
+
+          <div class="form-block">
+            <SwitchField label={$t("server.bindMemberModels")} description={$t("server.bindMemberModelsDesc")} bind:checked={bindModels} disabled={saving} />
+            {#if bindModels}
+              <div class="group-model-display">
+                <span class="mono">group/{routeId}</span>
+              </div>
+              <p class="conversion-hint">{$t("server.groupModelHistoryHint")}</p>
+            {/if}
           </div>
 
           <Card title={$t("server.advancedSettings")} collapsible bind:open={advancedOpen} padded={false}>
@@ -359,6 +377,7 @@
             {#each members as member, index (`${member.entry.id}::${member.secret.id}`)}
               <div
                 class="member-row"
+                class:member-with-model={bindModels}
                 class:member-disabled={!member.enabled}
                 class:dragging={dragIndex === index}
                 role="listitem"
@@ -380,16 +399,22 @@
                 >
                   <GripVertical size={14} />
                 </span>
-                <span class="member-icon" aria-hidden="true"><KeyRound size={15} /></span>
+                <ProviderIcon title={member.entry.title} kind={member.entry.providerKind} providerId={member.entry.providerId} credentialKind={member.entry.credentialKind} />
                 <div class="member-main">
                   <div class="member-heading">
-                    <strong>{member.entry.title}</strong>
+                    <strong title={member.entry.title}>{member.entry.title}</strong>
+                    <Badge size="sm">{$t(member.entry.credentialKind === "oauth" ? "providerDetail.subscriptionType" : "providerDetail.api")}</Badge>
+                  </div>
+                  <div class="member-description">
+                    <span title={member.secret.label}>{member.secret.label}{#if !member.enabled} · {$t("server.memberDisabled")}{/if}</span>
                     {#if member.enabled && member.targetId && degradedTargetIds.has(member.targetId)}
                       <Badge tone="warning" size="sm"><AlertTriangle size={12} /> {$t("server.degraded")}</Badge>
                     {/if}
                   </div>
-                  <span>{member.secret.label}{#if !member.enabled} · {$t("server.memberDisabled")}{/if}</span>
                 </div>
+                {#if bindModels}
+                  <input class="member-model" aria-label={`${member.entry.title}: ${$t("server.memberModel")}`} placeholder={$t("server.memberModel")} maxlength="256" bind:value={member.model} disabled={saving || !member.enabled} />
+                {/if}
                 <div class="member-controls">
                   {#if strategy === "round_robin"}
                     <label class="member-weight">
@@ -479,7 +504,7 @@
     left: 50%;
     z-index: 201;
     transform: translate(-50%, -50%);
-    width: min(600px, calc(100vw - 32px));
+    width: min(640px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);
     background: var(--surface);
     border: 1px solid var(--border);
@@ -487,6 +512,7 @@
     box-shadow: var(--shadow-modal);
     overflow: hidden;
     animation: dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: width 200ms ease;
   }
 
   :global(.route-dialog-content[data-state="closed"]) {
@@ -604,14 +630,30 @@
     gap: 12px;
   }
 
-  .conversion-hint {
-    margin: 0;
-    color: var(--text-tertiary);
-    font-size: 12px;
-    line-height: 1.4;
+  :global(.route-dialog-content.with-member-models) {
+    width: min(840px, calc(100vw - 32px));
   }
 
-  .member-weight input {
+  .member-model {
+    width: 100%;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .conversion-hint {
+    margin: 12px 0 0 0;
+    padding: 10px 12px;
+    background: var(--surface-raised);
+    border-left: 2px solid var(--accent-soft);
+    border-radius: 4px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .member-weight input,
+  .member-model {
     width: 100%;
     min-height: 34px;
     padding: 7px 9px;
@@ -664,6 +706,12 @@
     border-radius: var(--radius);
     transition: opacity 120ms ease, border-color 120ms ease;
 
+    &.member-with-model {
+      grid-template-columns: auto 32px minmax(140px, 200px) minmax(0, 1fr) auto;
+      min-height: 64px;
+      gap: 14px;
+    }
+
     &.dragging {
       opacity: 0.55;
       border-color: var(--accent);
@@ -678,6 +726,7 @@
 
     &.member-missing {
       border-style: dashed;
+      border-color: color-mix(in oklab, var(--border) 80%, var(--warning));
 
       .member-icon,
       .member-main {
@@ -695,6 +744,22 @@
   }
 
   .mono {
+    font-family: var(--font-mono);
+  }
+
+  .group-model-display {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .group-model-display .mono {
     font-family: var(--font-mono);
   }
 
@@ -758,11 +823,17 @@
     color: var(--text-secondary);
   }
 
-  .member-heading {
+  .member-heading,
+  .member-description {
     display: flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
+  }
+
+  .member-heading :global(.badge),
+  .member-description :global(.badge) {
+    flex-shrink: 0;
   }
 
   .member-main {
@@ -779,7 +850,8 @@
       font-weight: 600;
     }
 
-    span {
+    > span,
+    .member-description > span {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;

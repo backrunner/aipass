@@ -33,6 +33,7 @@ fn test_route(base_url: String) -> ResolvedRoute {
             enabled: true,
             protocol: None,
             prefer_ws: false,
+            model: None,
         },
         api_key: UPSTREAM_KEY.into(),
     };

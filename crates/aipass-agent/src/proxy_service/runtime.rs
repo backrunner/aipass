@@ -111,7 +111,12 @@ impl ProxyService {
                         ) {
                             aipass_proxy::Protocol::OpenAiChatCompletions
                         } else {
-                            target.protocol.unwrap_or(route.upstream_protocol)
+                            if target.model.is_some() {
+                                key_upstream_protocol(interface, &entry)
+                                    .unwrap_or(route.upstream_protocol)
+                            } else {
+                                target.protocol.unwrap_or(route.upstream_protocol)
+                            }
                         };
                     let mut credentials = vault
                         .runtime_provider_credentials(target.provider_entry_id, &target.secret_id)
@@ -196,7 +201,7 @@ impl ProxyService {
                             account_quota(&entry)
                         },
                         profile: provider_profile(&entry),
-                        model_override: None,
+                        model_override: target_config.model.clone(),
                         max_concurrent_requests: entry.max_concurrent_requests,
                         supports_websockets: entry.supports_websockets.unwrap_or(true)
                             && provider_proxy.is_none()

@@ -263,6 +263,11 @@ pub(crate) fn ordered_route_targets_for_model(
     model: Option<&str>,
 ) -> Vec<ResolvedTarget> {
     let mut targets = route.targets.clone();
+    for target in &mut targets {
+        if target.config.model.is_some() {
+            target.model_override.clone_from(&target.config.model);
+        }
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

@@ -9,7 +9,7 @@ fn server(c: &Context) -> Result<String> {
     }
     Ok(s.trim_end_matches('/').into())
 }
-fn native() -> Result<Value> {
+fn native(source: &Value) -> Result<Value> {
     let root = if cfg!(windows) {
         std::env::var_os("APPDATA")
             .map(std::path::PathBuf::from)
@@ -19,7 +19,9 @@ fn native() -> Result<Value> {
             .map(std::path::PathBuf::from)
             .unwrap_or(home()?.join(".local/share"))
     };
-    let path = root.join("devin/credentials.toml");
+    let path = native_import::root(source)
+        .unwrap_or_else(|| root.join("devin"))
+        .join("credentials.toml");
     let raw = zeroize::Zeroizing::new(
         std::fs::read_to_string(path).map_err(|_| "Devin CLI is not signed in")?,
     );
@@ -38,7 +40,7 @@ fn native() -> Result<Value> {
 }
 pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
     if method == 1 {
-        return native();
+        return native(&c.auth);
     }
     let cb = loopback::Loopback::bind(&[0]).await?;
     let redirect = format!("http://127.0.0.1:{}/callback", cb.port);
@@ -78,7 +80,25 @@ pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
         .ok_or("Devin returned no session token")?;
     Ok(json!({"type":"api","key":key,"metadata":{"server":SERVER}}))
 }
-pub(super) async fn fresh(_: &mut Context) -> Result<()> {
+pub(super) async fn fresh(c: &mut Context) -> Result<()> {
+    if let Ok(source) = serde_json::from_value::<aipass_agent_protocol::SubscriptionImportSource>(
+        c.auth["nativeSource"].clone(),
+    ) {
+        let mut local = native(&c.auth)?;
+        let changed = local["key"] != c.auth["key"];
+        native_import::erase(&mut local);
+        if changed {
+            let secret = native_import::read(
+                &source,
+                c.outbound
+                    .as_ref()
+                    .unwrap_or(&UpstreamProxyConfig::default()),
+            )
+            .await?;
+            c.save(serde_json::from_str(secret.expose()).map_err(|_| "invalid Devin account")?)
+                .await?;
+        }
+    }
     Ok(())
 }
 fn executable() -> Result<std::path::PathBuf> {

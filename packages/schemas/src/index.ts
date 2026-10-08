@@ -1,6 +1,7 @@
 export type ProviderKind = "official" | "third_party" | "self_hosted" | "unknown";
 
 export * from "./provider-icons.js";
+export * from "./subscription-import.js";
 
 export type InterfaceType =
   | "openai_compatible"

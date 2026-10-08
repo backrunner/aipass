@@ -496,6 +496,14 @@ pub enum SecretCommand {
 
 #[derive(Subcommand)]
 pub enum AccountsCommand {
+    /// Connect supported subscriptions from this device's existing vendor stores.
+    Import {
+        #[arg(long = "provider")]
+        provider_ids: Vec<String>,
+        /// Provider configuration directory; requires exactly one --provider.
+        #[arg(long)]
+        directory: Option<PathBuf>,
+    },
     Refresh {
         #[arg(long = "provider")]
         provider_ids: Vec<String>,

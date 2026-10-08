@@ -79,6 +79,7 @@ fn websocket_capability_survives_lock_stop_retry_and_vault_reopen() {
             enabled: true,
             protocol: None,
             prefer_ws: false,
+            model: None,
         }];
         service.save_config(&vault).unwrap();
         let status = service.start(&vault).unwrap();
@@ -221,6 +222,7 @@ fn config_accepts_every_resolvable_auth_scheme_and_rejects_unknown_schemes() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     });
     for auth in [
         AuthScheme::Bearer,
@@ -382,6 +384,7 @@ fn start_if_enabled_restores_persisted_proxy_runtime() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     }];
     config.enabled = true;
 
@@ -480,6 +483,7 @@ fn locking_session_keeps_runtime_credentials_available_to_proxy() {
                 enabled: true,
                 protocol: None,
                 prefer_ws: false,
+                model: None,
             },
             api_key: upstream_api_key.into(),
         }],
@@ -547,6 +551,7 @@ fn inactive_targets_do_not_interrupt_live_refresh_or_capability_persistence() {
                 enabled: true,
                 protocol: None,
                 prefer_ws: false,
+                model: None,
             });
         }
         service.save_config(&vault).unwrap();
@@ -670,6 +675,7 @@ fn provider_update_refreshes_running_credentials_and_headers() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     }];
     service
         .save_config(&creation.vault)
@@ -799,6 +805,7 @@ fn failed_provider_refresh_stops_the_stale_runtime() {
         enabled: true,
         protocol: None,
         prefer_ws: false,
+        model: None,
     }];
     service
         .save_config(&creation.vault)

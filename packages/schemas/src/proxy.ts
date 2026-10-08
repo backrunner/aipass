@@ -29,6 +29,7 @@ export type ProxyTargetConfig = {
   enabled: boolean;
   protocol?: ProxyProtocol;
   preferWs?: boolean;
+  model?: string;
 };
 
 export type ProxyRouteStrategy = "fallback" | "round_robin" | "quota_aware";
@@ -231,4 +232,9 @@ export function mergeRouteTargets(
     combined.splice(Math.min(Math.max(0, target.priority), combined.length), 0, target);
   }
   return combined.map((target, index) => ({ ...target, priority: index }));
+}
+
+/** Stable public model name for routes whose enabled members bind actual models. */
+export function proxyGroupModel(route: Pick<ProxyRouteConfig, "id" | "targets">): string | undefined {
+  return route.targets.some(target => target.enabled && target.model) ? `group/${route.id}` : undefined;
 }

@@ -50,7 +50,7 @@ pub(super) fn snapshot(state: &Arc<AgentState>) -> ServiceResult<Value> {
             "targets":route.targets.iter().map(|target| json!({
                 "id":target.id,"label":target.label,"providerEntryId":target.provider_entry_id,
                 "secretId":target.secret_id,"enabled":target.enabled,"priority":target.priority,
-                "weight":target.weight,"preferWs":target.prefer_ws,"protocol":target.protocol,
+                "weight":target.weight,"preferWs":target.prefer_ws,"protocol":target.protocol,"model":target.model,
             })).collect::<Vec<_>>()
         })).collect();
         let mut logs =
@@ -235,11 +235,15 @@ fn perform(
                             enabled: draft.enabled,
                             protocol: None,
                             prefer_ws: false,
+                            model: None,
                         }
                     };
                     target.priority = draft.priority;
                     target.weight = draft.weight;
                     target.enabled = draft.enabled;
+                    if let Some(model) = &draft.model {
+                        target.model.clone_from(model);
+                    }
                     Ok(target)
                 })
                 .collect::<ServiceResult<Vec<_>>>()?;

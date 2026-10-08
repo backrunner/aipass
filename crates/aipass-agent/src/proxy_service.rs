@@ -296,6 +296,7 @@ impl ProxyService {
     ) -> ServiceResult<ProxyConfig> {
         self.load_config(vault)?;
         let _ = ensure_route_tokens(&mut config);
+        config::resolve_model_bindings(vault, &mut config)?;
         validate_config(&config)?;
         let previous = std::mem::replace(&mut self.config, config);
         let was_running = self

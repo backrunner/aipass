@@ -27,6 +27,52 @@ fn references_contain_no_grants_and_pin_workspace() {
     assert!(reference.get("refresh").is_none());
     assert!(reference.get("access").is_none());
 }
+
+#[test]
+fn official_imports_read_explicit_provider_roots_and_export_only_references() {
+    let temp = tempfile::tempdir().unwrap();
+    for (provider, file, auth, expected) in [
+        (
+            "codex",
+            "auth.json",
+            json!({"tokens":{"id_token":"x.eyJzdWIiOiJhbGljZSJ9.x","access_token":"fixture-private","refresh_token":"fixture-refresh","account_id":"workspace-a"}}),
+            "alice:workspace-a",
+        ),
+        (
+            "grok",
+            "auth.json",
+            json!({"https://auth.x.ai":{"key":"fixture-private","email":"alice@example.test","expires_at":"2040-01-01T00:00:00Z"}}),
+            "alice@example.test",
+        ),
+        (
+            "copilot",
+            "config.json",
+            json!({"lastLoggedInUser":{"login":"alice","host":"https://github.com"},"copilotTokens":{"https://github.com:alice":"fixture-private"}}),
+            "alice",
+        ),
+        (
+            "gemini-cli",
+            ".gemini/oauth_creds.json",
+            json!({"access_token":"fixture-private","refresh_token":"fixture-refresh","expiry_date":2208988800000_u64}),
+            "alice@example.test",
+        ),
+    ] {
+        let root = temp.path().join(provider);
+        std::fs::create_dir_all(root.join(".gemini")).unwrap();
+        std::fs::write(root.join(file), auth.to_string()).unwrap();
+        if provider == "gemini-cli" {
+            std::fs::write(
+                root.join(".gemini/google_accounts.json"),
+                json!({"active":expected}).to_string(),
+            )
+            .unwrap();
+        }
+        let reference = import_reference(provider, &root).unwrap();
+        assert_eq!(reference["accountId"], expected);
+        assert_eq!(reference["nativeHome"], root.to_str().unwrap());
+        assert!(!reference.to_string().contains("fixture-"));
+    }
+}
 #[tokio::test]
 async fn credentials_are_reread_but_account_and_device_changes_fail_closed() {
     let dir = tempfile::tempdir().unwrap();

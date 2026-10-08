@@ -65,6 +65,58 @@ pub(super) fn context(client: Client) -> (Context, mpsc::Sender<Value>, mpsc::Re
 }
 
 #[tokio::test]
+async fn native_workbuddy_rereads_the_explicit_source_and_preserves_it_through_ack() {
+    let temp = tempfile::tempdir().unwrap();
+    let write = |uid: &str, token: &str| {
+        std::fs::write(
+            temp.path().join("workbuddy-desktop.info"),
+            json!({"auth":{"accessToken":token},"account":{"uid":uid}}).to_string(),
+        )
+        .unwrap()
+    };
+    write("alice", "first");
+    let source = aipass_agent_protocol::SubscriptionImportSource {
+        provider: "workbuddy".into(),
+        root: temp.path().to_owned(),
+        selector: String::new(),
+    };
+    let auth = native_import::read(&source, &Default::default())
+        .await
+        .unwrap();
+    let (mut c, input, mut output) = context(Client::new());
+    c.provider = "workbuddy".into();
+    c.auth = serde_json::from_str(auth.expose()).unwrap();
+    write("alice", "rotated");
+    let peer = tokio::spawn(async move {
+        let frame = output.recv().await.unwrap();
+        assert_eq!(frame["value"]["access"], "rotated");
+        assert_eq!(
+            frame["value"]["nativeSource"]["root"],
+            temp.path().to_str().unwrap()
+        );
+        assert_eq!(frame["value"]["nativeDevice"], "local-test-device");
+        input
+            .send(json!({"type":"ack","id":frame["id"],"ok":true}))
+            .await
+            .unwrap();
+        temp
+    });
+    workbuddy::fresh(&mut c).await.unwrap();
+    let temp = peer.await.unwrap();
+    assert_eq!(c.auth["access"], "rotated");
+    std::fs::write(
+        temp.path().join("workbuddy-desktop.info"),
+        json!({"auth":{"accessToken":"foreign"},"account":{"uid":"bob"}}).to_string(),
+    )
+    .unwrap();
+    assert!(workbuddy::fresh(&mut c)
+        .await
+        .unwrap_err()
+        .contains("ownership changed"));
+    assert_eq!(c.auth["access"], "rotated");
+}
+
+#[tokio::test]
 async fn canceled_request_keeps_an_inflight_rotation_until_its_durable_ack() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

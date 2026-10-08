@@ -39,6 +39,7 @@ struct Run {
     owner: Uuid,
     fingerprint: [u8; 32],
     context: [u8; 32],
+    model_binding: Option<String>,
     session: Option<String>,
     history: [u8; 32],
     history_messages: Vec<Value>,
@@ -430,6 +431,7 @@ impl ClaudeBridge {
             owner: target.config.id,
             fingerprint,
             context,
+            model_binding: target.config.model.clone(),
             session,
             history: history_hash(messages),
             history_messages: messages.clone(),
@@ -500,7 +502,7 @@ impl SubscriptionBackend for ClaudeBridge {
                     return false;
                 };
                 let fingerprint: [u8; 32] = Sha256::digest(target.api_key.as_bytes()).into();
-                run.fingerprint == fingerprint
+                run.fingerprint == fingerprint && run.model_binding == target.config.model
             });
         }
         Vec::new()

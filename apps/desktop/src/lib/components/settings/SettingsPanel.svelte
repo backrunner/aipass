@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CcSwitchImportPanel from "./CcSwitchImportPanel.svelte";
   import ControlPanelSettings from "./ControlPanelSettings.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getVersion } from "@tauri-apps/api/app";
@@ -51,6 +52,7 @@
   export let conflictBusy = "";
   export let browserExtensionStatus: BrowserExtensionStatus | undefined;
   export let browserExtensionBusy = "";
+  export let onImportCcSwitch: () => MaybePromise = () => {};
   export let officialAccountsImport = false;
   export let ccSwitchDetection: CcSwitchDetection | undefined;
   export let securityBusy = "";
@@ -561,40 +563,8 @@
               </div>
             </Card>
 
-            <Card title={$t("settings.officialAccountsImport")}>
-              <span slot="actions">
-                <button type="button" class="link" on:click={() => onDetectCcSwitch()}>
-                  {$t("settings.refresh")}
-                </button>
-              </span>
-              <div class="rows">
-                <p class="hint">{$t("settings.officialAccountsImportDesc")}</p>
-                <div class="row">
-                  <div class="row-text">
-                    <span class="row-label">{$t("settings.ccSwitchStatus")}</span>
-                    {#if ccSwitchDetection?.configPath}
-                      <span class="row-desc">{ccSwitchDetection.configPath}</span>
-                    {/if}
-                  </div>
-                  <span class="row-desc">
-                    {#if ccSwitchDetection}
-                      {ccSwitchDetection.configExists || ccSwitchDetection.appInstalled
-                        ? $t("settings.ccSwitchDetected")
-                        : $t("settings.ccSwitchNotDetected")}
-                    {:else}
-                      {$t("common.loading")}
-                    {/if}
-                  </span>
-                </div>
-                <SwitchField
-                  label={$t("settings.officialAccountsImportEnable")}
-                  description={$t("settings.officialAccountsImportEnableDesc")}
-                  bind:checked={officialAccountsImport}
-                  disabled={ccSwitchToggling}
-                  onCheckedChange={(value) => void onOfficialAccountsImportChange(value)}
-                />
-              </div>
-            </Card>
+            <CcSwitchImportPanel bind:enabled={officialAccountsImport} toggling={ccSwitchToggling} detection={ccSwitchDetection}
+              onDetect={onDetectCcSwitch} onChange={onOfficialAccountsImportChange} onImport={onImportCcSwitch} />
           </Tabs.Content>
 
           <Tabs.Content value="security" class="tab-panel">

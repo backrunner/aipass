@@ -33,6 +33,18 @@ fn dispatch_request(
     request: AgentRequest,
 ) -> ServiceResult<AgentResponse> {
     match request {
+        AgentRequest::SubscriptionImportStart { input } => state
+            .subscription_imports
+            .start(state, input)
+            .map(AgentResponse::success),
+        AgentRequest::SubscriptionImportPoll { ticket } => state
+            .subscription_imports
+            .poll(state, ticket)
+            .map(AgentResponse::success),
+        AgentRequest::SubscriptionImportCancel { ticket } => state
+            .subscription_imports
+            .cancel(state, ticket)
+            .map(AgentResponse::success),
         request @ (AgentRequest::SubscriptionCliStatus { .. }
         | AgentRequest::ClaudeCliStatus
         | AgentRequest::ClaudeLoginStart
@@ -1009,35 +1021,8 @@ fn dispatch_request(
             .map(|_| AgentResponse::empty())
         }
         AgentRequest::OfficialAccountsRefresh { provider_ids } => {
-            // Cheap unlocked pre-check: discovery spawns subprocesses and does
-            // blocking network I/O, so a locked vault must fail before any of
-            // that work (or any keychain/network access) starts.
-            if session_status(state)?.locked {
-                return Err(ServiceError::new(AgentErrorCode::Locked, "vault is locked"));
-            }
-            // Discovery and usage refresh spawn subprocesses and do blocking
-            // network I/O; run them before taking the session lock so other
-            // requests are not stalled for the duration.
-            let collected = crate::official_accounts::collect_official_accounts(&provider_ids);
-            with_vault(state, false, |vault| {
-                let persisted =
-                    crate::official_accounts::persist_official_accounts(vault, collected)
-                        .map_err(ServiceError::internal)?;
-                // Like the other credential-mutating handlers, reload the
-                // rotated secrets into a running proxy after the vault writes.
-                for (result, entry_id) in &persisted {
-                    if let Some(entry_id) = entry_id {
-                        if matches!(result.status.as_str(), "imported" | "refreshed") {
-                            refresh_proxy_provider_credentials(state, vault, *entry_id)?;
-                        }
-                    }
-                }
-                Ok(persisted
-                    .into_iter()
-                    .map(|(result, _)| result)
-                    .collect::<Vec<_>>())
-            })
-            .map(AgentResponse::success)
+            crate::subscription_import::refresh_compat(state, provider_ids)
+                .map(AgentResponse::success)
         }
         AgentRequest::CcSwitchDetect => {
             Ok(AgentResponse::success(crate::ccswitch::detect_ccswitch()))

@@ -28,6 +28,7 @@ mod kiro;
 mod loopback;
 mod mimo;
 mod native_cli;
+pub(crate) mod native_import;
 mod qoder;
 #[cfg(test)]
 mod tests;
@@ -227,10 +228,15 @@ impl Context {
         }
         Ok(())
     }
-    async fn save(&mut self, auth: Value) -> Result<()> {
+    async fn save(&mut self, mut auth: Value) -> Result<()> {
+        if auth["nativeSource"].is_null() && !self.auth["nativeSource"].is_null() {
+            auth["nativeSource"] = self.auth["nativeSource"].clone();
+            auth["nativeDevice"] = self.auth["nativeDevice"].clone();
+        }
         super::community::ensure_owner(&self.auth, &auth)?;
         self.acknowledged(json!({"type":"auth","value":auth}))
             .await?;
+        native_import::erase(&mut self.auth);
         self.auth = auth;
         if *self.cancellation.borrow() {
             Err("subscription operation cancelled".into())
@@ -342,6 +348,11 @@ impl Context {
             .and_then(|a| a.iter().find(|p| p["id"] == self.provider))
             .ok_or("unknown subscription provider")?;
         self.auth = initial["auth"].clone();
+        if !self.auth["nativeSource"].is_null()
+            && self.auth["nativeDevice"] != cli_accounts::device()?
+        {
+            return Err("Native account belongs to another device; reconnect locally".into());
+        }
         self.models = if initial["models"].as_object().is_some_and(|m| !m.is_empty()) {
             initial["models"].clone()
         } else {
@@ -632,8 +643,13 @@ fn home() -> Result<std::path::PathBuf> {
 }
 fn read_json(path: &std::path::Path) -> Result<Value> {
     use std::io::Read;
-    let file = std::fs::File::open(path)
-        .map_err(|_| "native sign-in not found; sign in to the provider application first")?;
+    let file = std::fs::File::open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            "native sign-in permission denied"
+        } else {
+            "native sign-in not found; sign in to the provider application first"
+        }
+    })?;
     let mut bytes = zeroize::Zeroizing::new(Vec::new());
     file.take(LIMIT as u64 + 1)
         .read_to_end(&mut bytes)

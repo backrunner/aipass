@@ -45,6 +45,8 @@ CLI subscriptions use the existing Rust subscription backend and model-specific
 wire codecs. Add their provider entry's retained secret ID to a local proxy group
 as usual. Local OpenAI Chat/Responses and Anthropic Messages routes can dispatch
 to these subscriptions, including streaming and tool conversions.
+For groups mixing brands or different model names, bind each member's actual model
+and use the public group model. See [cross-brand routing](proxy-routing.md).
 Direct tool configuration rejects subscription references; configure the local
 proxy route instead, so an account reference never becomes a tool's API key.
 WebSockets are disabled for the subscription backend. Gemini's Code Assist response envelope
@@ -87,10 +89,13 @@ pnpm --filter @aipass/control-panel build
 pnpm --filter @aipass/desktop build
 ```
 
-Protocol 15 includes explicit `subscription.cli.status` and the retained Claude
+Protocol 16 includes explicit `subscription.cli.status`, local subscription import tasks and the retained Claude
 operation tags. Regression fixtures cover handoff identity and stable IDs,
 credential rereads, account/device changes, CLI RPC, quota scopes, Code Assist
 envelopes, login cancellation and lock/unmount. Browser fixtures cover 960×640 in
 English/Chinese and light/dark. Help/version probes do not sign in, read existing
 credentials or generate content. Real authorization, live quota and paid-model
 requests still require opt-in account validation.
+
+See [local account import](local-account-import.md) for batch discovery, custom
+directories, result recovery, and the CLI/IPC contract.

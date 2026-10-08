@@ -1,7 +1,6 @@
 //! CLI-owned subscriptions: discovery saves references, never OAuth grants.
 use crate::session::{map_vault_error, with_vault, AgentState, ServiceError, ServiceResult};
 use crate::subscriptions::cli_accounts;
-use aipass_agent_protocol::OfficialAccountRefreshResult;
 use aipass_crypto::SecretString;
 use aipass_provider_registry::{
     AuthScheme, CredentialKind, InterfaceType, ProviderEndpoint, ProviderKind, SubscriptionSnapshot,
@@ -11,88 +10,6 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-pub(crate) struct CollectedAccount {
-    provider: &'static str,
-    auth: Result<Value, String>,
-    claude: Option<crate::claude_cli::NativeAccount>,
-}
-pub(crate) fn collect_official_accounts(ids: &[String]) -> Vec<CollectedAccount> {
-    let mut out = Vec::new();
-    for (provider, alias) in [
-        ("codex", "openai"),
-        ("grok", "xai"),
-        ("copilot", "copilot"),
-        ("gemini-cli", "gemini"),
-    ] {
-        if !ids.is_empty() && !ids.iter().any(|s| s == provider || s == alias) {
-            continue;
-        }
-        let auth = cli_accounts::default_home(provider)
-            .and_then(|p| cli_accounts::reference(provider, &p));
-        out.push(CollectedAccount {
-            provider,
-            auth,
-            claude: None,
-        });
-    }
-    if ids.is_empty() || ids.iter().any(|s| s == "anthropic" || s == "claude") {
-        let native = crate::claude_cli::local_account(&claude_home());
-        out.push(match native {
-            Ok(account) => CollectedAccount {
-                provider: "anthropic",
-                auth: Ok(json!({"nativeHome":account.home,"accountId":account.identity})),
-                claude: Some(account),
-            },
-            Err(e) => CollectedAccount {
-                provider: "anthropic",
-                auth: Err(e),
-                claude: None,
-            },
-        });
-    }
-    out
-}
-pub(crate) fn persist_official_accounts(
-    vault: &Vault,
-    items: Vec<CollectedAccount>,
-) -> anyhow::Result<Vec<(OfficialAccountRefreshResult, Option<Uuid>)>> {
-    let mut out = Vec::new();
-    for item in items {
-        let (id, identity, error) = match item.auth {
-            Ok(auth) => {
-                let identity = auth["accountId"].as_str().map(str::to_owned);
-                let result = if let Some(native) = item.claude {
-                    persist_claude_login(vault, &native)
-                } else {
-                    crate::community::register_cli(vault, item.provider, auth)
-                        .map_err(|e| anyhow::anyhow!(e.message))
-                };
-                match result {
-                    Ok(id) => (Some(id), identity, None),
-                    Err(e) => (None, identity, Some(e.to_string())),
-                }
-            }
-            Err(e) => (None, None, Some(e)),
-        };
-        out.push((
-            OfficialAccountRefreshResult {
-                provider_id: item.provider.into(),
-                account_identity: identity,
-                credential_kind: CredentialKind::OAuth,
-                snapshot: None,
-                status: if id.is_some() {
-                    "imported"
-                } else {
-                    "unavailable"
-                }
-                .into(),
-                error,
-            },
-            id,
-        ));
-    }
-    Ok(out)
-}
 pub(crate) fn persist_claude_login(
     vault: &Vault,
     native: &crate::claude_cli::NativeAccount,

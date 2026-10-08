@@ -56,7 +56,7 @@
     ...route, token: "", inboundProtocol: route.inboundProtocol ?? route.protocol,
     upstreamProtocol: route.upstreamProtocol ?? route.protocol,
     conversionEnabled: route.conversionEnabled ?? false, retry: route.retry ?? defaultRetryPolicy(),
-    targets: route.targets.map(target => ({ ...target, baseUrl: "", authScheme: "" })),
+    targets: route.targets.map(target => ({ ...target, model: target.model ?? undefined, baseUrl: "", authScheme: "" })),
   })) ?? []);
   const proxyStatus = $derived<ProxyStatus>(data ? { ...data.proxy, enabled: true,
     activeRoutes: data.routes.filter(route => route.enabled).length, successRateBps: data.proxy.successRateBps ?? 0,
@@ -98,7 +98,7 @@
       await request("/api/action", { type: "route_save", revision: editorRevision, route: {
         id: route.id, name: route.name, enabled: route.enabled, strategy: route.strategy,
         inboundProtocol: route.inboundProtocol, retry: route.retry,
-        targets: route.targets.map(({ id, providerEntryId, secretId, enabled, priority, weight }) => ({ id, providerEntryId, secretId, enabled, priority, weight })),
+        targets: route.targets.map(({ id, providerEntryId, secretId, enabled, priority, weight, model }) => ({ id, providerEntryId, secretId, enabled, priority, weight, model: model ?? null })),
       } }, data.csrf);
       await refreshAfterMutation(); if (data) selectedRouteId = route.id;
       return true;

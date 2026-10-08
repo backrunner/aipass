@@ -23,6 +23,7 @@ export interface Target {
   weight: number;
   preferWs: boolean;
   protocol?: ProxyProtocol;
+  model?: string | null;
 }
 export interface Route {
   id: string;

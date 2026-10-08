@@ -531,6 +531,7 @@ impl ProxyMcpServer {
             enabled: true,
             protocol: None,
             prefer_ws: entry.supports_websockets.unwrap_or(false),
+            model: None,
         };
 
         let target_id = target.id;
