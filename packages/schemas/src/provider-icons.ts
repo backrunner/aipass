@@ -1,9 +1,36 @@
 /**
  * Provider icon mappings and built-in icon registry
- * Based on Magpie's icon system review
+ * Shared local brand identity for provider records and subscription accounts.
  */
 
 export type ProviderIconName =
+  | "grok"
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "copilot"
+  | "cursor"
+  | "kiro"
+  | "qoder"
+  | "devin"
+  | "zai"
+  | "mimo"
+  | "commandcode"
+  | "azure"
+  | "bedrock"
+  | "nvidia"
+  | "novita"
+  | "minimax"
+  | "huggingface"
+  | "cerebras"
+  | "volcengine"
+  | "qwen"
+  | "zhipu"
+  | "newapi"
+  | "factory"
+  | "workbuddy"
+  | "zed"
+
   // Official providers
   | "openai"
   | "anthropic"
@@ -21,7 +48,6 @@ export type ProviderIconName =
   | "together"
   | "fireworks"
   | "anyscale"
-  | "octoai"
   | "replicate"
   | "siliconflow"
   | "moonshot"
@@ -31,21 +57,66 @@ export type ProviderIconName =
   | "lmstudio"
   | "vllm"
   | "localai"
-  | "textgen"
-  | "koboldcpp";
+;
 
 /**
  * Map provider IDs or domains to built-in icon names
  */
 export const PROVIDER_ICON_MAP: Record<string, ProviderIconName> = {
+  // Native subscriptions and additional provider brands
+  "claude": "claude",
+  "codex": "codex",
+  "copilot": "copilot",
+  "cursor": "cursor",
+  "kiro": "kiro",
+  "qoder": "qoder",
+  "devin": "devin",
+  "zai": "zai",
+  "mimo": "mimo",
+  "commandcode": "commandcode",
+  "azure": "azure",
+  "bedrock": "bedrock",
+  "nvidia": "nvidia",
+  "novita": "novita",
+  "minimax": "minimax",
+  "huggingface": "huggingface",
+  "cerebras": "cerebras",
+  "volcengine": "volcengine",
+  "qwen": "qwen",
+  "zhipu": "zhipu",
+  "newapi": "newapi",
+  "factory": "factory",
+  "workbuddy": "workbuddy",
+  "zed": "zed",
+  "claude-code": "claude",
+  "gemini-cli": "gemini",
+  "grok": "grok",
+  "grok-build": "grok",
+  "zcode": "zai",
+  "qoder-cn": "qoder",
+  "commandcode-plan": "commandcode",
+  "mimo-app": "mimo",
+  "workbuddy-ai": "workbuddy",
+  "azure_openai": "azure",
+  "new_api": "newapi",
+  "chatgpt.com": "openai",
+  "github.com": "copilot",
+  "githubcopilot.com": "copilot",
+  "api.githubcopilot.com": "copilot",
+  "api.minimaxi.com": "minimax",
+  "api.z.ai": "zai",
+  "api.cerebras.ai": "cerebras",
+  "api.novita.ai": "novita",
+  "integrate.api.nvidia.com": "nvidia",
+
   // Official providers
   openai: "openai",
   "api.openai.com": "openai",
   anthropic: "anthropic",
   "api.anthropic.com": "anthropic",
   google: "google",
-  gemini: "google",
-  "generativelanguage.googleapis.com": "google",
+  gemini: "gemini",
+  "generativelanguage.googleapis.com": "gemini",
   deepseek: "deepseek",
   "api.deepseek.com": "deepseek",
   cohere: "cohere",
@@ -72,8 +143,6 @@ export const PROVIDER_ICON_MAP: Record<string, ProviderIconName> = {
   "api.fireworks.ai": "fireworks",
   anyscale: "anyscale",
   "api.endpoints.anyscale.com": "anyscale",
-  octoai: "octoai",
-  "api.octo.ai": "octoai",
   replicate: "replicate",
   "api.replicate.com": "replicate",
   siliconflow: "siliconflow",
@@ -91,18 +160,19 @@ export const PROVIDER_ICON_MAP: Record<string, ProviderIconName> = {
   vllm: "vllm",
   localai: "localai",
   "local-ai": "localai",
-  textgen: "textgen",
-  "text-generation-webui": "textgen",
-  koboldcpp: "koboldcpp",
-  "kobold-cpp": "koboldcpp"
 };
 
 /**
  * Get built-in icon name for a provider
  */
-export function getProviderIcon(providerId: string, domain?: string): ProviderIconName | undefined {
+export function getProviderIcon(providerId: string, domain?: string, credentialKind?: "api" | "oauth"): ProviderIconName | undefined {
+  const id = providerId.toLowerCase();
+  if (credentialKind === "oauth") {
+    const subscriptionBrands: Record<string, ProviderIconName> = { anthropic: "claude", openai: "codex", xai: "grok", google: "gemini" };
+    if (subscriptionBrands[id]) return subscriptionBrands[id];
+  }
   // Try provider ID first
-  const byId = PROVIDER_ICON_MAP[providerId.toLowerCase()];
+  const byId = PROVIDER_ICON_MAP[id];
   if (byId) return byId;
 
   // Try domain extraction from endpoints

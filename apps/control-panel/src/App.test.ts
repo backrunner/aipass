@@ -135,6 +135,8 @@ test("login clears the code field and sends only the independent panel access co
 test("target saves carry the captured revision and only editable fields", async () => {
   app = mount(App, { target: document.body });
   await settle(() => expect(button("Edit upstream")).toBeTruthy());
+  expect(document.querySelector(".target-identity .initials")).toBeNull();
+  expect(document.querySelector(".target-identity .monochrome-icon")).not.toBeNull();
   const trigger = button("Edit upstream");
   trigger.focus(); trigger.click();
   flushSync();

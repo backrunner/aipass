@@ -306,7 +306,7 @@
             <div class="target-columns" aria-hidden="true"><span>{tr("上游凭据", "Upstream credential")}</span><span>{tr("优先级", "Priority")}</span><span>{tr("权重", "Weight")}</span><span>{tr("状态", "Status")}</span><span></span></div>
             {#each route.targets as target (target.id)}
               <div class="target-row">
-                <div class="target-identity"><ProviderIcon title={providerTitle(target)} size="md" /><div class="target-text"><strong>{target.label || providerTitle(target)}</strong><p class="subtle">{keyLabel(target)}{target.preferWs ? " · WS" : ""}</p></div></div>
+                <div class="target-identity"><ProviderIcon title={providerTitle(target)} providerId={data?.providers.find(p => p.id === target.providerEntryId)?.providerId ?? undefined} credentialKind={data?.providers.find(p => p.id === target.providerEntryId)?.credentialKind} size="md" /><div class="target-text"><strong>{target.label || providerTitle(target)}</strong><p class="subtle">{keyLabel(target)}{target.preferWs ? " · WS" : ""}</p></div></div>
                 <span class="numeric target-priority"><span class="mobile-label">{tr("优先级", "Priority")}</span>{target.priority}</span><span class="numeric target-weight"><span class="mobile-label">{tr("权重", "Weight")}</span>{target.weight}</span>
                 <span class="target-state" class:enabled={target.enabled}><span class="dot"></span>{target.enabled ? tr("已启用", "Enabled") : tr("已停用", "Disabled")}</span>
                 <Button variant="ghost" size="sm" class="edit-target" disabled={!!busy} on:click={event => { editTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined; editing = { routeId: route.id, revision: data!.revision, target: { ...target } }; }}><Pencil size={12} />{tr("编辑上游", "Edit upstream")}</Button>
@@ -320,7 +320,7 @@
     {:else}
         <section use:scrollMask class="credential-detail">
           {#if selected}
-            <div class="credential-identity"><ProviderIcon title={selected.title} kind={selected.providerKind ?? "unknown"} providerId={selected.providerId ?? undefined} size="lg" /><div><h2>{selected.title}</h2><span class="subtle">{selected.providerId ?? selected.interfaceType}</span></div><span class="badge">{selected.credentialKind === "oauth" ? "OAuth" : "API Key"}</span></div>
+            <div class="credential-identity"><ProviderIcon title={selected.title} kind={selected.providerKind ?? "unknown"} providerId={selected.providerId ?? undefined} credentialKind={selected.credentialKind} size="lg" /><div><h2>{selected.title}</h2><span class="subtle">{selected.providerId ?? selected.interfaceType}</span></div><span class="badge">{selected.credentialKind === "oauth" ? "OAuth" : "API Key"}</span></div>
             <section class="detail-card"><div class="card-heading"><KeyRound size={14} /><h3>{tr("密钥", "Keys")}</h3><span class="section-count">{selected.secrets.length}</span></div>
               <div class="secret-list">{#each selected.secrets as secret}<div><span title={secret.label}>{secret.label}</span><code>{secret.masked}</code><ShieldCheck size={14} /></div>{/each}</div>
             </section>

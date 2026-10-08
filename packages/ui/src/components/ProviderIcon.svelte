@@ -9,6 +9,7 @@
   export let kind: ProviderKind = "unknown";
   export let faviconUrl: string | undefined = undefined;
   export let providerId: string | undefined = undefined;
+  export let credentialKind: "api" | "oauth" | undefined = undefined;
   export let domain: string | undefined = undefined;
   export let size: "sm" | "md" | "lg" = "md";
 
@@ -21,7 +22,7 @@
   }
 
   // Try built-in icon first, then cached favicon, then fallback to initials
-  $: builtInIcon = providerId || domain ? getProviderIcon(providerId || "", domain) : undefined;
+  $: builtInIcon = providerId || domain ? getProviderIcon(providerId || "", domain, credentialKind) : undefined;
   $: builtInIconUrl = builtInIcon ? builtInProviderIcons[builtInIcon] : undefined;
   $: monochrome = builtInIcon ? monochromeProviderIcons.has(builtInIcon) : false;
   $: cachedFaviconUrl = faviconUrl?.startsWith("data:image/") ? faviconUrl : undefined;

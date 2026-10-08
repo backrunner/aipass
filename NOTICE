@@ -4,8 +4,11 @@ Copyright 2026 AIPass contributors
 This product includes software developed by AIPass contributors under
 the Apache License, Version 2.0.
 
-Tool brand icon paths are adapted from Lobe Icons
+Bundled tool and provider brand icon paths are adapted from Lobe Icons
 (https://github.com/lobehub/lobe-icons), distributed under the MIT License.
+The LocalAI brand asset comes from mudler/LocalAI under the MIT License, retained
+in packages/ui/src/assets/provider-icons/LICENSE-LOCALAI. Other vendor brand
+assets and their source URLs are documented in that directory's SOURCES.md.
 
 Native Rust subscription transports and protocol codecs in
 crates/aipass-agent/src/subscriptions and crates/aipass-proxy-conversion/src/providers

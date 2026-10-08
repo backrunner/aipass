@@ -38,6 +38,7 @@
     title={entry.title}
     kind={entry.providerKind}
     providerId={entry.providerId}
+    credentialKind={entry.credentialKind}
     domain={entry.domains[0]}
     faviconUrl={entry.faviconUrl}
     size={compact ? "sm" : "md"}
