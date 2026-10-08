@@ -243,6 +243,17 @@ pub fn unlock_with_password(
 
 /// Shared post-unlock lifecycle for local passwords and explicitly granted remote codes.
 pub(crate) fn complete_unlock(state: &Arc<AgentState>) {
+    if with_vault(state, false, |vault| {
+        crate::official_accounts::migrate(vault)
+    })
+    .is_err()
+    {
+        crate::logging::write_component_log(
+            crate::logging::AGENT_LOG,
+            "WARN",
+            "event=subscription.cli_handoff.failed",
+        );
+    }
     clear_last_lock_reason(state);
     restore_proxy_if_enabled(state);
     state.session_changed.notify_all();
@@ -550,7 +561,7 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
         }
         *session = SessionState::Locked;
     }
-    crate::oauth::oauth_manager().clear();
+    crate::claude_cli::logins().clear();
     state.session_changed.notify_all();
     // Transition the session first. Any vault operation already in flight must
     // finish before this lock is acquired, and no new one can start after it.

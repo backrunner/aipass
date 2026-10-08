@@ -60,6 +60,45 @@ async fn open_url(url: url::Url) -> Result<(), String> {
     .await
 }
 
+#[tauri::command]
+pub(crate) async fn claude_open_verification(
+    app: tauri::AppHandle,
+    ticket: uuid::Uuid,
+) -> Result<(), String> {
+    let status: aipass_agent_protocol::ClaudeLoginStatus =
+        crate::commands::agent_request_no_unlock_async(
+            app,
+            aipass_agent_protocol::AgentRequest::ClaudeLoginPoll { ticket },
+        )
+        .await?;
+    if status.status != "pending" {
+        return Err("Claude sign-in is no longer pending".into());
+    }
+    let uri = status.url.ok_or("Claude sign-in has no browser link")?;
+    let url = url::Url::parse(&uri).map_err(|_| "invalid Claude authorization URL")?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port_or_known_default() != Some(443)
+        || !matches!(
+            url.host_str(),
+            Some("claude.ai" | "console.anthropic.com" | "platform.claude.com")
+        )
+    {
+        return Err("unsupported Claude authorization URL".into());
+    }
+    open_url(url).await
+}
+
+#[tauri::command]
+pub(crate) async fn claude_open_install() -> Result<(), String> {
+    open_url(
+        url::Url::parse("https://code.claude.com/docs/en/setup")
+            .map_err(|_| "invalid installation URL")?,
+    )
+    .await
+}
+
 fn verification_url(uri: &str) -> Result<url::Url, String> {
     let url = url::Url::parse(uri).map_err(|_| "invalid authorization URL".to_string())?;
     let host = url.host_str().unwrap_or_default();
@@ -115,4 +154,16 @@ mod tests {
             assert!(verification_url(uri).is_err());
         }
     }
+}
+
+#[tauri::command]
+pub(crate) async fn subscription_open_install(provider: String) -> Result<(), String> {
+    let uri = match provider.as_str() {
+        "codex" => "https://developers.openai.com/codex/cli/",
+        "grok" => "https://github.com/xai-org/grok-build",
+        "copilot" => "https://docs.github.com/en/copilot/how-tos/copilot-cli/install-copilot-cli",
+        "gemini-cli" => "https://geminicli.com/docs/get-started/installation/",
+        _ => return Err("unsupported subscription CLI".into()),
+    };
+    open_url(url::Url::parse(uri).map_err(|_| "invalid CLI installation URL")?).await
 }

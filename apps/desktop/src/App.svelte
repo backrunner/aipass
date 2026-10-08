@@ -63,7 +63,6 @@
     AipassProviderLink,
     PendingDeepLink,
     OfficialAccountRefreshResult,
-    OAuthAccountSummary,
     SyncConflict,
     SyncSettings,
     SyncMode,
@@ -1419,33 +1418,14 @@
     showOAuthConnect = true;
   }
 
-  async function onOAuthConnected(account: OAuthAccountSummary) {
-    showOAuthConnect = false;
-    // The new entry must be visible and selected; a filtered/archived/search
-    // view would hide it or select the wrong row.
+  async function onSubscriptionConnected(entryId: string) {
+    showOAuthConnect = showCommunityConnect = false;
     resetProviderListView();
     await loadEntries();
-    if (account.entryId) {
-      selectProvider(account.entryId);
-    }
-    notice = localizedMessage("oauthConnect.connected", {
-      provider:
-        account.accountIdentity ||
-        $t(account.provider === "codex" ? "oauthConnect.providerCodex" : "oauthConnect.providerGrok")
-    });
+    await loadServer();
+    selectProvider(entryId);
+    notice = localizedMessage("oauthConnect.connected", { provider: entries.find(e => e.id === entryId)?.title ?? "Subscription" });
     setTimeout(() => (notice = ""), 2200);
-  }
-
-  async function onOAuthAccountsChanged() {
-    // Removing an OAuth account can trash the linked provider entry and strip
-    // it from proxy routes agent-side, so both views need a refresh.
-    try {
-      await loadEntries();
-      await loadServer();
-      await loadArchivedEntries();
-    } catch (err) {
-      console.warn("refresh after OAuth account change failed", err);
-    }
   }
 
   async function openEdit(entry: ProviderEntry) {
@@ -3606,15 +3586,14 @@
   <OAuthConnectDialog
     {invokeTauri}
     onClose={() => { showOAuthConnect = false; }}
-    onConnected={onOAuthConnected}
+    onConnected={onSubscriptionConnected}
     onCommunity={() => { showOAuthConnect = false; showCommunityConnect = true; }}
-    onAccountsChanged={onOAuthAccountsChanged}
     onImportCli={refreshOfficialAccounts}
   />
 {/if}
 
 {#if showCommunityConnect && showWorkspace && !showAuthScreen && !lockTransitioning}
-  <CommunityConnectDialog {invokeTauri} onClose={() => { showCommunityConnect = false; }} onConnected={async () => { await onOAuthAccountsChanged(); }} />
+  <CommunityConnectDialog {invokeTauri} onClose={() => { showCommunityConnect = false; }} onConnected={onSubscriptionConnected} />
 {/if}
 
 {#if unlockTransitioning}

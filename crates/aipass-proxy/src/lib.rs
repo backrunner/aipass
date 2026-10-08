@@ -88,3 +88,9 @@ pub(crate) use zeroize::Zeroize;
 
 #[cfg(test)]
 mod tests;
+
+/// Reuse the same subscription contract for CLI-owned account transports.
+pub fn prepare_codex_subscription(body: serde_json::Value) -> Result<serde_json::Value, String> {
+    let bytes = codex::prepare(bytes::Bytes::from(body.to_string()))?;
+    serde_json::from_slice(&bytes).map_err(|_| "invalid Codex request".into())
+}

@@ -357,13 +357,15 @@
           compatibleToolsFor(integrationEntry(selected!, secret)).some(item => item.id === tool.id))))
       .map((tool) => ({
         ...tool,
-        disabledReason: integrationSecret && providerIntegrationAvailability(tool, integrationEntry(selected!, integrationSecret)) === "default-model"
+        disabledReason: isOfficialOauth && ["anthropic", "codex", "openai", "grok", "xai", "copilot", "gemini-cli"].includes(selected?.providerId ?? "")
+          ? $t("integration.subscriptionRouteRequired")
+          : integrationSecret && providerIntegrationAvailability(tool, integrationEntry(selected!, integrationSecret)) === "default-model"
           ? $t("integration.providerDefaultModelRequired")
           : undefined
       }))
     : [];
-  // Official OAuth accounts only support the tool's own credential store;
-  // API credentials keep the previous write-mode choices.
+  // CLI-owned subscriptions are configured through local proxy groups.
+  // API credentials keep their direct tool configuration choices.
   $: keyFormats = selected ? [...new Set(selected.secretRefs.map(secret => secret.interfaceType ?? selected!.interfaceType))] : [];
   $: isOfficialOauth = selected?.credentialKind === "oauth" && selected?.providerKind === "official";
   $: codexIntegrationModeOptions = isOfficialOauth
@@ -1051,7 +1053,7 @@
               <div class="kv-row"><span class="kv-label">{window.label}</span><span class="kv-value"><strong>{typeof window.usedPercent === "number" ? `${window.usedPercent.toFixed(1)}%` : "—"}</strong>{#if window.resetsAt}<span class="text-tertiary"> · {formatDateTime(window.resetsAt)}</span>{/if}</span><span></span></div>
             {/each}
             <div class="snapshot-source">{$t("providerDetail.snapshotSource", { source: selected.subscription?.source ?? "" })} · {formatDateTime(selected.subscription?.observedAt)}{#if selected.subscription?.stale} · <span class="probe-error">{$t("providerDetail.snapshotStale")}</span>{/if}</div>
-            {#if selected.subscription?.source.startsWith("community:")}<Button variant="secondary" size="sm" disabled={communityRefreshing} on:click={refreshCommunity}>{communityRefreshing ? $t("common.loading") : $t("communityConnect.refresh")}</Button>{#if communityError}<div class="probe-error">{communityError}</div>{/if}{/if}
+            {#if selected.subscription?.source.startsWith("community:") || selected.subscription?.source === "claude-cli"}<Button variant="secondary" size="sm" disabled={communityRefreshing} on:click={refreshCommunity}>{communityRefreshing ? $t("common.loading") : $t("communityConnect.refresh")}</Button>{#if communityError}<div class="probe-error">{communityError}</div>{/if}{/if}
             {#if selected.subscription?.error}<div class="probe-error">{selected.subscription.error}</div>{/if}
           </Card>
         {/if}

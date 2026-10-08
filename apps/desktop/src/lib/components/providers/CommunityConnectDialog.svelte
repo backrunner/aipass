@@ -2,15 +2,21 @@
   import { onMount, onDestroy } from "svelte";
   import { Dialog } from "bits-ui";
   import { scrollMask, Banner, Button, Field, IconButton, ProviderIcon, SelectField } from "@aipass/ui";
-  import { ArrowRight, Check, ExternalLink, Globe, KeyRound, Search, ShieldCheck, Terminal, X } from "lucide-svelte";
+  import { ArrowLeft, ArrowRight, Check, ExternalLink, Globe, KeyRound, Search, ShieldCheck, Terminal, X } from "lucide-svelte";
   import { t } from "../../stores/i18n";
   type Prompt = { key: string; type: string; message: string; placeholder?: string; options?: { label: string; value: string }[] };
   type Method = { index: number; type: string; label: string; native: boolean; prompts: Prompt[] };
   type Provider = { id: string; name: string; methods: Method[] };
-  type Login = { ticket: string; status: string; url?: string; instructions?: string; method?: string; entryId?: string; error?: string };
+  type Login = { ticket: string; status: string; url?: string; instructions?: string; userCode?: string; method?: string; entryId?: string; error?: string };
   export let invokeTauri: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+  export let initialProvider = "";
+  export let onBack: (() => void) | undefined = undefined;
   export let onClose: () => void;
   export let onConnected: (id: string) => void | Promise<void>;
+  let cliStatus: { available: boolean; reason?: string; version?: string } | null = null;
+  let checkingCli = false;
+  let statusEpoch = 0;
+  $: cliOwned = ["codex", "grok", "copilot", "gemini-cli"].includes(providerId);
   let providers: Provider[] = [];
   let query = "";
   $: filteredProviders = providers.filter(p => p.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -29,14 +35,25 @@
   $: provider = providers.find(p => p.id === providerId);
   $: method = provider?.methods.find(m => m.index === methodIndex);
   onMount(() => { void load(); });
-  onDestroy(() => { destroyed = true; epoch++; if (timer) clearTimeout(timer); if (login?.status === "pending") void invokeTauri("community_login_cancel", { ticket: login.ticket }).catch(() => {}); apiKey = code = ""; inputs = {}; });
+  onDestroy(() => { destroyed = true; epoch++; if (timer) clearTimeout(timer); if (login?.status === "pending") void invokeTauri("community_login_cancel", { ticket: login.ticket }).catch(() => {}); for (const key of Object.keys(inputs)) delete inputs[key]; });
   async function load() {
     loading = true; error = "";
-    try { const result = await invokeTauri<Provider[]>("community_catalog"); if (!destroyed) { providers = result; providerId = result[0]?.id ?? ""; choose(); } }
+    try { const result = await invokeTauri<Provider[]>("community_catalog"); if (!destroyed) { providers = result; providerId = result.some(p => p.id === initialProvider) ? initialProvider : result[0]?.id ?? ""; choose(); } }
     catch (e) { if (!destroyed) error = String(e); }
     finally { if (!destroyed) loading = false; }
   }
-  function choose() { methodIndex = providers.find(p => p.id === providerId)?.methods[0]?.index ?? 0; apiKey = ""; inputs = {}; }
+  function choose() { methodIndex = providers.find(p => p.id === providerId)?.methods[0]?.index ?? 0; apiKey = ""; inputs = {}; void checkCli(); }
+  async function checkCli() {
+    const current = ++statusEpoch;
+    cliStatus = null;
+    const id = providerId;
+    if (!["codex", "grok", "copilot", "gemini-cli"].includes(id)) { checkingCli = false; return; }
+    checkingCli = true;
+    try { const result = await invokeTauri<typeof cliStatus>("subscription_cli_status", { provider: id }); if (!destroyed && current === statusEpoch) cliStatus = result; }
+    catch (e) { if (!destroyed && current === statusEpoch) error = String(e); }
+    finally { if (!destroyed && current === statusEpoch) checkingCli = false; }
+  }
+  async function install() { try { await invokeTauri("subscription_open_install", { provider: providerId }); } catch (e) { error = String(e); } }
   async function poll(ticket: string, requestEpoch: number) {
     try {
       const result = await invokeTauri<Login>("community_login_poll", { ticket });
@@ -48,7 +65,7 @@
     } catch (e) { if (!destroyed && requestEpoch === epoch) { error = String(e); busy = false; void invokeTauri("community_login_cancel", { ticket }).catch(() => {}); login = null; } }
   }
   async function start() {
-    if (!method || busy) return;
+    if (!method || busy || (cliOwned && (!cliStatus?.available || checkingCli))) return;
     busy = true; error = "";
     const requestEpoch = ++epoch;
     const values = { ...inputs };
@@ -87,7 +104,7 @@
         <div class="dialog-heading">
           <span class="heading-icon"><KeyRound size={18} /></span>
           <div>
-            <Dialog.Title class="provider-dialog-title">{$t("communityConnect.title")}</Dialog.Title>
+            <Dialog.Title class="provider-dialog-title">{$t(initialProvider ? "oauthConnect.title" : "communityConnect.title")}</Dialog.Title>
             <Dialog.Description class="dialog-description">{$t("communityConnect.description")}</Dialog.Description>
           </div>
         </div>
@@ -105,8 +122,8 @@
             <nav use:scrollMask class="provider-list" aria-label={$t("communityConnect.provider")}>
               {#each filteredProviders as p}
                 <button type="button" class="provider-option" class:active={providerId === p.id} aria-pressed={providerId === p.id} disabled={busy}
-                  on:click={() => { providerId = p.id; methodIndex = p.methods[0]?.index ?? 0; apiKey = ""; inputs = {}; }}>
-                  <ProviderIcon title={p.name} kind="official" size="sm" />
+                  on:click={() => { providerId = p.id; error = ""; login = null; choose(); }}>
+                  <ProviderIcon title={p.name} providerId={p.id} kind="official" size="sm" />
                   <span>{p.name}</span>
                   {#if providerId === p.id}<Check size={14} />{/if}
                 </button>
@@ -116,21 +133,29 @@
             <span class="catalog-count">{$t("communityConnect.providerCount", { count: providers.length })}</span>
           </aside>
           <div use:scrollMask class="connection-body">
+            {#if onBack}<button type="button" disabled={busy} class="back" on:click={onBack}><ArrowLeft size={14} />{$t("oauthConnect.changeProvider")}</button>{/if}
             {#if error}<Banner tone="danger">{error}</Banner>{/if}
             {#if provider}
               <div class="selected-provider">
-                <ProviderIcon title={provider.name} kind="official" size="lg" />
+                <ProviderIcon title={provider.name} providerId={provider.id} kind="official" size="lg" />
                 <div><h2>{provider.name}</h2></div>
               </div>
             {/if}
+            {#if cliOwned}
+              {#if checkingCli}<p role="status">{$t("subscriptionCli.checking")}</p>
+              {:else if cliStatus && !cliStatus.available}
+                <Banner tone="warning">{$t(cliStatus.reason === "missing" ? "subscriptionCli.missing" : cliStatus.reason === "unsupported" ? "subscriptionCli.unsupported" : "subscriptionCli.unusable")}</Banner>
+                <div class="cli-actions"><Button on:click={install}><ExternalLink size={14} />{$t("subscriptionCli.install")}</Button><Button on:click={checkCli}>{$t("subscriptionCli.recheck")}</Button></div>
+              {:else if !cliStatus}<Button on:click={checkCli}>{$t("subscriptionCli.recheck")}</Button>{/if}
+            {/if}
             <fieldset disabled={busy}>
               <SelectField label={$t("communityConnect.method")} value={String(methodIndex)} disabled={busy}
-                options={(provider?.methods ?? []).map(m => ({ value: String(m.index), label: m.label }))}
+                options={(provider?.methods ?? []).map(m => ({ value: String(m.index), label: cliOwned ? $t(m.index === 0 ? "subscriptionCli.signIn" : "subscriptionCli.existing") : m.label }))}
                 onValueChange={(value) => { methodIndex = Number(value); inputs = {}; apiKey = ""; }} />
               {#if method}
                 <div class="method-note">
                   {#if method.type === "api"}<KeyRound size={16} />{:else if method.native}<Terminal size={16} />{:else}<Globe size={16} />{/if}
-                  <p>{$t(method.type === "api" ? "communityConnect.apiHint" : method.native ? "communityConnect.cliHint" : "communityConnect.browserHint")}</p>
+                  <p>{$t(cliOwned ? "subscriptionCli.hint" : method.type === "api" ? "communityConnect.apiHint" : method.native ? "communityConnect.cliHint" : "communityConnect.browserHint")}</p>
                 </div>
               {/if}
               {#each method?.prompts ?? [] as prompt}
@@ -146,7 +171,7 @@
             {#if login?.status === "pending"}
               <section class="login-status" aria-live="polite">
                 <span class="status-label"><span class="status-dot"></span>{$t("communityConnect.authorizing")}</span>
-                <p>{login.instructions || $t("communityConnect.waiting")}</p>
+                <p>{cliOwned ? (login.userCode ? $t("subscriptionCli.enterCode", { code: login.userCode }) : $t("subscriptionCli.waiting")) : login.instructions || $t("communityConnect.waiting")}</p>
                 {#if login.url}<Button variant="secondary" on:click={open}><ExternalLink size={14} />{$t("communityConnect.open")}</Button>{/if}
                 {#if login.method === "code"}<Field label={$t("communityConnect.code")}><input bind:value={code} autocomplete="one-time-code" /></Field><Button variant="primary" disabled={!code.trim()} on:click={submitCode}>{$t("communityConnect.submit")}</Button>{/if}
               </section>
@@ -157,10 +182,10 @@
         <div class="loading-state">{#if error}<Banner tone="danger">{error}</Banner>{/if}<Button on:click={load}>{$t("providerRuntime.retry")}</Button></div>
       {/if}
       <footer class="modal-footer">
-        <span class="security-note"><ShieldCheck size={14} />{$t("oauthConnect.secureNote")}</span>
+        <span class="security-note"><ShieldCheck size={14} />{$t(cliOwned ? "subscriptionCli.localNote" : "oauthConnect.secureNote")}</span>
         {#if busy && !login}<Button variant="primary" loading>{$t("communityConnect.waiting")}</Button>
         {:else if busy}<Button variant="secondary" on:click={cancel}>{$t("common.cancel")}</Button>
-        {:else}<Button variant="primary" disabled={loading || !method || (method.type === "api" && !apiKey.trim())} on:click={start}>{$t("oauthConnect.continue")}<ArrowRight size={14} /></Button>{/if}
+        {:else}<Button variant="primary" disabled={loading || !method || (cliOwned && (checkingCli || !cliStatus?.available)) || (method.type === "api" && !apiKey.trim())} on:click={start}>{$t("oauthConnect.continue")}<ArrowRight size={14} /></Button>{/if}
       </footer>
     </Dialog.Content>
   </Dialog.Portal>
@@ -202,5 +227,7 @@
   .modal-footer { padding: 14px 24px; border-top: 1px solid var(--divider); }
   .security-note { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-tertiary); }
   .loading-state { min-height: 240px; display: grid; align-content: center; justify-items: center; gap: 16px; padding: 24px; color: var(--text-tertiary); font-size: 13px; }
+  .back, .cli-actions { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .back { align-self: flex-start; color: var(--text-secondary); }
   .empty-search { padding: 12px 8px; font-size: 11px; }
 </style>

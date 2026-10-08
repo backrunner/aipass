@@ -25,6 +25,9 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    if aipass_agent::claude_cli::capture_opened_url() {
+        return Ok(());
+    }
     let cli = Cli::parse();
     if cli.claude_mcp_helper {
         return aipass_agent::claude_bridge::run_mcp_helper(

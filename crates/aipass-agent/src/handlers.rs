@@ -1,10 +1,10 @@
 use super::*;
 use crate::paths::cloud_sync_dir;
-use aipass_agent_protocol::{
-    endpoint_url, OAuthAccountSummary, OAuthDeviceStart, OAuthLoginPoll, OAuthLoginStatus,
-};
-use aipass_provider_registry::{primary_secret_ref, OAuthProvider};
+use aipass_agent_protocol::{endpoint_url, OAuthAccountSummary};
 use aipass_vault::ManagedOAuthAccount;
+
+#[path = "handlers/subscriptions.rs"]
+mod subscriptions;
 
 const BROWSER_FILL_GRANT_LIMIT: usize = 5;
 
@@ -33,6 +33,18 @@ fn dispatch_request(
     request: AgentRequest,
 ) -> ServiceResult<AgentResponse> {
     match request {
+        request @ (AgentRequest::SubscriptionCliStatus { .. }
+        | AgentRequest::ClaudeCliStatus
+        | AgentRequest::ClaudeLoginStart
+        | AgentRequest::ClaudeLoginPoll { .. }
+        | AgentRequest::ClaudeLoginCode { .. }
+        | AgentRequest::ClaudeLoginCancel { .. }
+        | AgentRequest::CommunityRefresh { .. }
+        | AgentRequest::ClaudeNativeRead { .. }
+        | AgentRequest::ClaudeNativeWrite { .. }
+        | AgentRequest::OAuthLoginStart { .. }
+        | AgentRequest::OAuthLoginPoll { .. }
+        | AgentRequest::OAuthLoginCancel { .. }) => subscriptions::handle(state, request),
         AgentRequest::CommunityAccountRead { entry_id, marker } => {
             with_vault(state, false, |vault| {
                 crate::community::read(vault, entry_id, marker.expose())
@@ -48,9 +60,6 @@ fn dispatch_request(
             crate::community::write(vault, entry_id, marker.expose(), revision, bundle.expose())
         })
         .map(|()| AgentResponse::empty()),
-        AgentRequest::CommunityRefresh { entry_id } => {
-            crate::community::refresh(state, entry_id).map(AgentResponse::success)
-        }
         request @ (AgentRequest::CommunityCatalog
         | AgentRequest::CommunityLoginStart { .. }
         | AgentRequest::CommunityLoginPoll { .. }
@@ -90,38 +99,6 @@ fn dispatch_request(
                 _ => unreachable!(),
             }
         }
-        AgentRequest::ClaudeNativeRead {
-            entry_id,
-            access_token,
-        } => with_vault(state, false, |vault| {
-            crate::claude_bridge::validate_account(vault, entry_id, access_token.expose())?;
-            let grant = vault
-                .provider_runtime_extension(entry_id, "claude_native")
-                .map_err(map_vault_error)?;
-            Ok(AgentResponse::success(
-                grant.map(|v| SensitiveString::new(v.expose())),
-            ))
-        }),
-        AgentRequest::ClaudeNativeWrite {
-            entry_id,
-            previous_token,
-            previous_grant_hash,
-            credentials,
-        } => with_vault(state, false, |vault| {
-            crate::claude_bridge::persist_native_account(
-                vault,
-                entry_id,
-                previous_token.expose(),
-                previous_grant_hash,
-                credentials.expose(),
-            )?;
-            state
-                .proxy
-                .lock()
-                .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy lock poisoned")))?
-                .refresh_provider_credentials(vault, entry_id)?;
-            Ok(AgentResponse::empty())
-        }),
         AgentRequest::ClaudeBridgeMcp {
             capability,
             request,
@@ -1074,96 +1051,6 @@ fn dispatch_request(
             Ok(results)
         })
         .map(AgentResponse::success),
-        AgentRequest::OAuthLoginStart { provider } => {
-            with_vault(state, true, |_| Ok(()))?;
-            let challenge = crate::oauth::oauth_manager()
-                .start(provider)
-                .map_err(|err| ServiceError::new(AgentErrorCode::Internal, err.to_string()))?;
-            if let Err(err) = with_vault(state, false, |_| Ok(())) {
-                crate::oauth::oauth_manager().cancel(&challenge.device_code);
-                return Err(err);
-            }
-            Ok(AgentResponse::success(OAuthDeviceStart {
-                device_code: challenge.device_code,
-                user_code: challenge.user_code,
-                verification_uri: challenge.verification_uri,
-                verification_uri_complete: challenge.verification_uri_complete,
-                expires_in: challenge.expires_in,
-                interval: challenge.interval,
-            }))
-        }
-        AgentRequest::OAuthLoginPoll {
-            provider,
-            device_code,
-        } => {
-            with_vault(state, true, |_| Ok(()))?;
-            match crate::oauth::oauth_manager().poll(provider, &device_code) {
-                Ok(outcome) => match outcome.bundle {
-                    None => Ok(AgentResponse::success(OAuthLoginPoll {
-                        status: OAuthLoginStatus::Pending,
-                        account: None,
-                        message: None,
-                        interval_secs: Some(outcome.interval_secs),
-                    })),
-                    Some(bundle) => {
-                        let Some(result) =
-                            crate::oauth::oauth_manager().complete(&device_code, |expires_at_ms| {
-                                complete_oauth_login(state, provider, bundle, expires_at_ms)
-                            })
-                        else {
-                            return Ok(AgentResponse::success(OAuthLoginPoll {
-                                status: OAuthLoginStatus::Expired,
-                                account: None,
-                                message: None,
-                                interval_secs: None,
-                            }));
-                        };
-                        let account = match result {
-                            Ok(account) => account,
-                            Err(err) => {
-                                return Ok(AgentResponse::success(OAuthLoginPoll {
-                                    status: OAuthLoginStatus::Pending,
-                                    account: None,
-                                    message: Some(err.message),
-                                    interval_secs: Some(outcome.interval_secs),
-                                }))
-                            }
-                        };
-                        Ok(AgentResponse::success(OAuthLoginPoll {
-                            status: OAuthLoginStatus::Authorized,
-                            account: Some(account),
-                            message: None,
-                            interval_secs: None,
-                        }))
-                    }
-                },
-                Err(crate::oauth::OAuthError::ExpiredDeviceCode) => {
-                    Ok(AgentResponse::success(OAuthLoginPoll {
-                        status: OAuthLoginStatus::Expired,
-                        account: None,
-                        message: None,
-                        interval_secs: None,
-                    }))
-                }
-                // Transient failures (network, 5xx) must not kill the login: report
-                // pending with a sanitized warning and let the client keep polling.
-                Err(err) if err.is_retryable() => Ok(AgentResponse::success(OAuthLoginPoll {
-                    status: OAuthLoginStatus::Pending,
-                    account: None,
-                    message: Some(err.to_string()),
-                    interval_secs: crate::oauth::oauth_manager().current_interval(&device_code),
-                })),
-                Err(err) => Ok(AgentResponse::success(OAuthLoginPoll {
-                    status: OAuthLoginStatus::Error,
-                    account: None,
-                    message: Some(err.to_string()),
-                    interval_secs: None,
-                })),
-            }
-        }
-        AgentRequest::OAuthLoginCancel { device_code, .. } => Ok(AgentResponse::success(
-            crate::oauth::oauth_manager().cancel(&device_code),
-        )),
         AgentRequest::OAuthAccountsList { provider } => with_vault(state, false, |vault| {
             let accounts = vault
                 .list_oauth_accounts(provider)
@@ -1810,7 +1697,13 @@ fn reload_running_proxy(state: &Arc<AgentState>, vault: &Vault) -> ServiceResult
 
 fn oauth_account_summary(account: &ManagedOAuthAccount) -> OAuthAccountSummary {
     let credential_expires_at = if account.expires_at_ms > 0 {
-        let formatted = crate::oauth::native_write::ms_to_rfc3339(account.expires_at_ms);
+        let formatted = time::OffsetDateTime::from_unix_timestamp(account.expires_at_ms / 1000)
+            .ok()
+            .and_then(|t| {
+                t.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            })
+            .unwrap_or_default();
         if formatted.is_empty() {
             None
         } else {
@@ -1832,186 +1725,6 @@ fn oauth_account_summary(account: &ManagedOAuthAccount) -> OAuthAccountSummary {
     }
 }
 
-/// Persist a freshly authorized device-code login: create/refresh the provider
-/// entry, store the refreshable token bundle, write it back to the native CLI
-/// credential file, and push the access token into the running proxy.
-fn complete_oauth_login(
-    state: &Arc<AgentState>,
-    provider: OAuthProvider,
-    bundle: crate::oauth::OAuthTokenBundle,
-    expires_at_ms: i64,
-) -> ServiceResult<OAuthAccountSummary> {
-    use crate::oauth::native_write::{self, NativeSyncOutcome};
-    complete_oauth_login_with(state, provider, bundle, expires_at_ms, |vault, account| {
-        match provider {
-            OAuthProvider::Codex => native_write::sync_codex_auth_json(
-                &vault.config_backup_key(),
-                &account.access_token,
-                &account.refresh_token,
-                account.id_token.as_deref(),
-                account.chatgpt_account_id.as_deref().unwrap_or_default(),
-                None,
-                account.last_refresh_ms,
-            ),
-            OAuthProvider::Grok => native_write::sync_grok_auth_json(
-                &vault.config_backup_key(),
-                &account.access_token,
-                &account.refresh_token,
-                None,
-                account.expires_at_ms,
-                account.account_identity.as_deref(),
-            ),
-        }
-        .unwrap_or_else(|err| {
-            write_component_log(
-                AGENT_LOG,
-                "WARN",
-                &format!("oauth native write-back failed: {err}"),
-            );
-            NativeSyncOutcome::Skipped("native credential file could not be updated".into())
-        })
-    })
-}
-
-fn complete_oauth_login_with(
-    state: &Arc<AgentState>,
-    provider: OAuthProvider,
-    bundle: crate::oauth::OAuthTokenBundle,
-    expires_at_ms: i64,
-    sync_native: impl FnOnce(
-        &Vault,
-        &ManagedOAuthAccount,
-    ) -> crate::oauth::native_write::NativeSyncOutcome,
-) -> ServiceResult<OAuthAccountSummary> {
-    use crate::oauth::native_write::{self, NativeSyncOutcome};
-    let now = crate::oauth::now_ms();
-    let credential_expires_at = native_write::ms_to_rfc3339(expires_at_ms);
-    with_vault(state, true, |vault| {
-        let entry_id = crate::official_accounts::persist_login_account(
-            vault,
-            provider.provider_id(),
-            bundle.account_identity.clone(),
-            bundle.chatgpt_account_id.clone(),
-            bundle.access_token.clone(),
-            Some(credential_expires_at),
-        )
-        .map_err(ServiceError::internal)?;
-        let provider_accounts = vault
-            .list_oauth_accounts(Some(provider))
-            .map_err(map_vault_error)?;
-        // Re-authenticating the same identity reuses the same provider entry, so
-        // update the existing managed account instead of creating a duplicate.
-        let existing = provider_accounts
-            .iter()
-            .find(|account| account.entry_id == Some(entry_id));
-        let is_update = existing.is_some();
-        let is_default = match existing {
-            Some(account) => account.is_default,
-            None => provider_accounts.is_empty(),
-        };
-        let account_id = existing
-            .map(|account| account.id)
-            .unwrap_or_else(Uuid::new_v4);
-        let mut account = ManagedOAuthAccount {
-            id: account_id,
-            provider,
-            account_identity: bundle.account_identity.clone(),
-            chatgpt_account_id: bundle.chatgpt_account_id.clone(),
-            access_token: bundle.access_token.clone(),
-            refresh_token: bundle.refresh_token.clone(),
-            id_token: bundle.id_token.clone(),
-            expires_at_ms,
-            last_refresh_ms: now,
-            entry_id: Some(entry_id),
-            is_default,
-            requires_reauth: false,
-            authenticated_at: OffsetDateTime::now_utc(),
-        };
-        // Store the complete one-use grant before optional native files. A
-        // mirror failure must leave a durable refreshable account in the vault.
-        if is_update {
-            vault
-                .update_oauth_account(account.clone())
-                .map_err(map_vault_error)?;
-        } else {
-            vault
-                .add_oauth_account(account.clone())
-                .map_err(map_vault_error)?;
-        }
-        let outcome = sync_native(vault, &account);
-        match outcome {
-            NativeSyncOutcome::Adopted {
-                access_token,
-                refresh_token,
-                id_token,
-                last_refresh_ms,
-                expires_at_ms: adopted_expires_at_ms,
-            } => {
-                // The CLI already had a newer generation; keep it and mirror the
-                // adopted access token into the entry secret the proxy reads.
-                let durable_account = account.clone();
-                account.refresh_token = refresh_token;
-                if id_token.is_some() {
-                    account.id_token = id_token;
-                }
-                account.last_refresh_ms = last_refresh_ms;
-                // Keep the stored expiry describing the stored (adopted) token.
-                if let Some(adopted_expires_at_ms) = adopted_expires_at_ms {
-                    account.expires_at_ms = adopted_expires_at_ms;
-                }
-                account.access_token = access_token;
-                if vault.update_oauth_account(account.clone()).is_err() {
-                    // The login is already durable. Do not replay its original
-                    // grant over a later refresh merely to repair a CLI mirror.
-                    account = durable_account;
-                    write_component_log(
-                        AGENT_LOG,
-                        "WARN",
-                        "oauth native adoption could not be saved",
-                    );
-                }
-            }
-            NativeSyncOutcome::Skipped(reason) => {
-                write_component_log(
-                    AGENT_LOG,
-                    "WARN",
-                    &format!("oauth native write-back skipped: {reason}"),
-                );
-            }
-            NativeSyncOutcome::Written => {}
-        }
-        if let Ok(summary) = vault.get_provider_summary(entry_id) {
-            if let Some(secret) = primary_secret_ref(&summary.secret_refs) {
-                if vault
-                    .update_secret(
-                        entry_id,
-                        &secret.id,
-                        &secret.label,
-                        Some(account.access_token.clone()),
-                    )
-                    .is_err()
-                {
-                    write_component_log(
-                        AGENT_LOG,
-                        "WARN",
-                        "oauth access-token mirror could not be saved",
-                    );
-                }
-            }
-        }
-        if refresh_proxy_provider_credentials(state, vault, entry_id).is_err() {
-            write_component_log(
-                AGENT_LOG,
-                "WARN",
-                "oauth proxy credentials could not be reloaded",
-            );
-        }
-        Ok(oauth_account_summary(&account))
-    })
-}
-
-/// One grant per stored key, so a relay entry holding a key per gateway group
-/// can be filled with any of them rather than only the first.
 fn create_browser_fill_grants(
     vault: &Vault,
     entries: &[EntrySummary],
@@ -2039,69 +1752,4 @@ fn create_browser_fill_grants(
         grants.extend(issued);
     }
     Ok(grants)
-}
-
-#[cfg(test)]
-mod oauth_login_tests {
-    use super::*;
-
-    #[test]
-    fn login_grant_is_durable_before_native_mirrors_and_keeps_received_expiry() {
-        let dir = tempfile::tempdir().unwrap();
-        let vault_dir = dir.path().join("vault");
-        let password = aipass_crypto::SecretString::new("login test password");
-        let creation = Vault::create(&vault_dir, &password).unwrap();
-        let state = crate::server::tests::sync_test_state(vault_dir.clone());
-        crate::session::set_session_vault(&state, creation.vault);
-        let received_expiry = crate::oauth::now_ms() - 1000;
-        let mut prior_id = None;
-        for refresh in ["first-refresh", "reauthorized-refresh"] {
-            let bundle = crate::oauth::OAuthTokenBundle {
-                access_token: "login-access".into(),
-                refresh_token: refresh.into(),
-                id_token: None,
-                chatgpt_account_id: Some("workspace".into()),
-                account_identity: Some("alice".into()),
-                expires_in: 3600,
-            };
-            let summary = complete_oauth_login_with(
-                &state,
-                OAuthProvider::Codex,
-                bundle,
-                received_expiry,
-                |vault, account| {
-                    let saved = vault.get_oauth_account(account.id).unwrap();
-                    assert_eq!(saved.refresh_token, refresh);
-                    assert_eq!(saved.expires_at_ms, received_expiry);
-                    let disk = Vault::open(&vault_dir, &password).unwrap();
-                    assert_eq!(
-                        disk.get_oauth_account(account.id).unwrap().refresh_token,
-                        refresh
-                    );
-                    if refresh == "reauthorized-refresh" {
-                        let state = state.clone();
-                        assert!(std::thread::spawn(move || {
-                            let _guard = state.proxy.lock().unwrap();
-                            panic!("fixture proxy reload failure");
-                        })
-                        .join()
-                        .is_err());
-                    }
-                    crate::oauth::native_write::NativeSyncOutcome::Skipped(
-                        "fixture mirror failure".into(),
-                    )
-                },
-            )
-            .unwrap();
-            if let Some(id) = prior_id {
-                assert_eq!(summary.id, id);
-            }
-            prior_id = Some(summary.id);
-            let disk = Vault::open(&vault_dir, &password).unwrap();
-            let saved = disk.get_oauth_account(summary.id).unwrap();
-            assert_eq!(saved.refresh_token, refresh);
-            assert_eq!(saved.expires_at_ms, received_expiry);
-            assert_eq!(disk.list_oauth_accounts(None).unwrap().len(), 1);
-        }
-    }
 }

@@ -700,6 +700,38 @@ pub(crate) async fn oauth_login_start(
 }
 
 #[tauri::command]
+pub(crate) async fn claude_cli_status(
+    app: AppHandle,
+) -> Result<aipass_agent_protocol::ClaudeCliStatus, String> {
+    agent_request_no_unlock_async(app, AgentRequest::ClaudeCliStatus).await
+}
+#[tauri::command]
+pub(crate) async fn claude_login_start(
+    app: AppHandle,
+) -> Result<aipass_agent_protocol::ClaudeLoginStatus, String> {
+    agent_request_no_unlock_async(app, AgentRequest::ClaudeLoginStart).await
+}
+#[tauri::command]
+pub(crate) async fn claude_login_poll(
+    app: AppHandle,
+    ticket: Uuid,
+) -> Result<aipass_agent_protocol::ClaudeLoginStatus, String> {
+    agent_request_no_unlock_async(app, AgentRequest::ClaudeLoginPoll { ticket }).await
+}
+#[tauri::command]
+pub(crate) async fn claude_login_code(
+    app: AppHandle,
+    ticket: Uuid,
+    code: SensitiveString,
+) -> Result<(), String> {
+    agent_request_no_unlock_async(app, AgentRequest::ClaudeLoginCode { ticket, code }).await
+}
+#[tauri::command]
+pub(crate) async fn claude_login_cancel(app: AppHandle, ticket: Uuid) -> Result<bool, String> {
+    agent_request_no_unlock_async(app, AgentRequest::ClaudeLoginCancel { ticket }).await
+}
+
+#[tauri::command]
 pub(crate) async fn oauth_login_poll(
     app: AppHandle,
     provider: OAuthProvider,
@@ -1375,4 +1407,12 @@ pub(crate) async fn provider_webhook_test(
     webhook_id: Uuid,
 ) -> Result<(), String> {
     agent_request_async(app, AgentRequest::ProviderWebhookTest { id, webhook_id }).await
+}
+
+#[tauri::command]
+pub(crate) async fn subscription_cli_status(
+    app: AppHandle,
+    provider: String,
+) -> Result<aipass_agent_protocol::ClaudeCliStatus, String> {
+    agent_request_no_unlock_async(app, AgentRequest::SubscriptionCliStatus { provider }).await
 }

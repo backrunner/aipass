@@ -1,5 +1,7 @@
 pub use aipass_config_writers::ToolId;
 mod community;
+mod subscription_cli;
+pub use subscription_cli::*;
 mod control_panel;
 mod provider_runtime;
 pub use community::*;
@@ -38,7 +40,9 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 11 adds explicitly granted remote unlock and local grant revocation.
 // Version 12 binds tool configurations and helper reads to an exact credential.
 // Version 13 adds subscription bridges and encrypted provider runtime management.
-pub const AGENT_PROTOCOL_VERSION: u32 = 13;
+// Version 14 adds genuine Claude Code login and usage operations.
+// Version 15 delegates official subscription ownership to local vendor CLIs.
+pub const AGENT_PROTOCOL_VERSION: u32 = 15;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
@@ -889,6 +893,18 @@ pub enum AgentRequest {
         #[serde(default)]
         provider_ids: Vec<String>,
     },
+    #[serde(rename = "subscription.cli.status")]
+    SubscriptionCliStatus { provider: String },
+    #[serde(rename = "claude.cli.status")]
+    ClaudeCliStatus,
+    #[serde(rename = "claude.login.start")]
+    ClaudeLoginStart,
+    #[serde(rename = "claude.login.poll")]
+    ClaudeLoginPoll { ticket: Uuid },
+    #[serde(rename = "claude.login.code")]
+    ClaudeLoginCode { ticket: Uuid, code: SensitiveString },
+    #[serde(rename = "claude.login.cancel")]
+    ClaudeLoginCancel { ticket: Uuid },
     /// Detect whether CC Switch is installed and its config file exists.
     #[serde(rename = "ccswitch.detect")]
     CcSwitchDetect,
@@ -1175,6 +1191,12 @@ impl AgentRequest {
             Self::CommunityAccountRead { .. } => "community.account.read",
             Self::CommunityAccountWrite { .. } => "community.account.write",
             Self::OfficialAccountsRefresh { .. } => "official_accounts.refresh",
+            Self::SubscriptionCliStatus { .. } => "subscription.cli.status",
+            Self::ClaudeCliStatus => "claude.cli.status",
+            Self::ClaudeLoginStart => "claude.login.start",
+            Self::ClaudeLoginPoll { .. } => "claude.login.poll",
+            Self::ClaudeLoginCode { .. } => "claude.login.code",
+            Self::ClaudeLoginCancel { .. } => "claude.login.cancel",
             Self::CcSwitchDetect => "ccswitch.detect",
             Self::CcSwitchImport => "ccswitch.import",
             Self::OAuthLoginStart { .. } => "oauth.login.start",
@@ -1274,6 +1296,10 @@ impl AgentRequest {
             | Self::SyncConflicts { .. }
             | Self::ProviderFaviconBackfill { .. }
             | Self::OfficialAccountsRefresh { .. }
+            | Self::SubscriptionCliStatus { .. }
+            | Self::ClaudeCliStatus
+            | Self::ClaudeLoginStart
+            | Self::ClaudeLoginPoll { .. }
             | Self::CommunityCatalog
             | Self::CommunityLoginStart { .. }
             | Self::CommunityRefresh { .. }
@@ -1583,6 +1609,17 @@ mod tests {
             AgentRequest::OfficialAccountsRefresh {
                 provider_ids: vec![],
             },
+            AgentRequest::SubscriptionCliStatus {
+                provider: "codex".into(),
+            },
+            AgentRequest::ClaudeCliStatus,
+            AgentRequest::ClaudeLoginStart,
+            AgentRequest::ClaudeLoginPoll { ticket: id },
+            AgentRequest::ClaudeLoginCode {
+                ticket: id,
+                code: secret(),
+            },
+            AgentRequest::ClaudeLoginCancel { ticket: id },
             AgentRequest::CommunityCatalog,
             AgentRequest::CommunityLoginStart {
                 input: CommunityLoginInput {

@@ -1350,6 +1350,45 @@ impl Vault {
         Ok(())
     }
 
+    /// Switch an existing subscription to a CLI-owned reference in one record
+    /// write, retaining its stable entry/secret IDs and configured routes.
+    pub fn bind_cli_subscription(
+        &self,
+        id: Uuid,
+        provider: &str,
+        identity: &str,
+        marker: &str,
+        extension_key: &str,
+        reference: &SecretString,
+    ) -> Result<(), VaultError> {
+        let mut record = self.decrypt_provider_path(&self.record_path(id))?;
+        let secret = record
+            .entry
+            .secret_refs
+            .first_mut()
+            .ok_or(VaultError::RecordNotFound)?;
+        if let Some(mut previous) = record.secrets.insert(secret.id.clone(), marker.to_owned()) {
+            previous.zeroize();
+        }
+        secret.masked = mask_secret(marker);
+        secret.fingerprint = hmac_fingerprint(&self.index_key, marker);
+        record.entry.provider_id = Some(provider.to_owned());
+        record.entry.credential_kind = CredentialKind::OAuth;
+        record.entry.account_identity = Some(identity.to_owned());
+        record.entry.supports_websockets = Some(false);
+        for key in ["claude_native", "copilot_auth_v1", extension_key] {
+            if let Some(mut previous) = record.runtime_extensions.remove(key) {
+                previous.zeroize();
+            }
+        }
+        record
+            .runtime_extensions
+            .insert(extension_key.to_owned(), reference.expose().to_owned());
+        record.entry.updated_at = OffsetDateTime::now_utc();
+        self.write_provider_record(id, &record)?;
+        self.audit("provider.cli.bind", Some(id), None)
+    }
+
     pub fn provider_runtime_extension(
         &self,
         id: Uuid,

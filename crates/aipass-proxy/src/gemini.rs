@@ -356,6 +356,7 @@ fn response_with_history(
     next_tool: &mut u64,
     history: &NativeTurn,
 ) -> Result<Value, String> {
+    let value = value.get("response").cloned().unwrap_or(value);
     if let Some(parts) = value
         .pointer("/candidates/0/content/parts")
         .and_then(Value::as_array)
@@ -585,6 +586,18 @@ pub(crate) fn models(payload: Bytes) -> Result<Bytes, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn code_assist_envelope_retains_tool_signatures_and_usage() {
+        let mut ledger = SignatureLedger::default();
+        let native = json!({"response":{"responseId":"r","modelVersion":"gemini-3","candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"city":"Paris"}},"thoughtSignature":"signed-state"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":30,"candidatesTokenCount":5}},"traceId":"private-trace"});
+        let chat = response(native, Uuid::new_v4(), &mut ledger, false, &mut 0).unwrap();
+        assert_eq!(chat["usage"]["prompt_tokens"], 30);
+        assert_eq!(
+            chat["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            "lookup"
+        );
+        assert!(!chat.to_string().contains("private-trace"));
+    }
     #[test]
     fn tool_roundtrip_restores_exact_signature_only_for_its_owner() {
         let mut ledger = SignatureLedger::default();

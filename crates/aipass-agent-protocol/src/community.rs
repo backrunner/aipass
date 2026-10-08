@@ -19,6 +19,8 @@ pub struct CommunityLoginStatus {
     pub status: String,
     pub url: Option<String>,
     pub instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<String>,
     pub method: Option<String>,
     pub entry_id: Option<Uuid>,
     pub error: Option<String>,

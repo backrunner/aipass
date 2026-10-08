@@ -53,6 +53,8 @@ pub(super) fn context(client: Client) -> (Context, mpsc::Sender<Value>, mpsc::Re
             auth: json!({"type":"oauth","access":"test-access","accountId":"alice"}),
             models: json!({}),
             session: "test-session".into(),
+            native_token: None,
+            native_workspace: String::new(),
             sequence: 0,
             cancellation,
             refreshing,

@@ -60,6 +60,8 @@ cbc = "0.1"
 md5 = "0.8"
 rusqlite.workspace = true
 regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10"
 
 [build-dependencies]
 sha2.workspace = true

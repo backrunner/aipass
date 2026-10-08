@@ -91,8 +91,8 @@ aee9eb05ecc931af04b784f4dd2e589de8f573fd90ad3f8c53de1c480d3bf186 ../../packages/
 f32b22b84b182859220ec87c2a1d06654d043774500151bc7c9c39dd606a2dc0 ../../packages/ui/src/index.test.ts
 30140eb1e0885a34c7b2504eb68d865ee0b3e82b5e25f289c314583843edfd07 ../../packages/ui/src/index.ts
 e869bc56c5048b80726d1c251a9868e5c36f96c4a6afdc7543b09478e77fe977 ../../packages/ui/src/locales/aliases.json
-dd474e86550485c884284d1f298761e8ce49e2be7cda1005faa52afed7a475cb ../../packages/ui/src/locales/en.json
-096b736cb535dfdbd80fc8c7b46c32fe1239ae6b0de18a310e71563b13e5c105 ../../packages/ui/src/locales/zh-CN.json
+01ff5f261063f7c76584535f9741c12c21c5893144c3a052cd289e39c0d336a4 ../../packages/ui/src/locales/en.json
+b6959270b1305e0b8b054a387c587f1fe845c327c9bed82d431a8601a59f14aa ../../packages/ui/src/locales/zh-CN.json
 14ed48d0e16cad6ffd70519c4e5f9fcdf07f29baa91c393d63cbfb8f01cdbaeb ../../packages/ui/src/provider-icons.ts
 2bbbbb6db9e1bf409e9f5a494d64bfec326689f1bc69b2632485df8514695d61 ../../packages/ui/src/styles/base.scss
 b324d7c8d1f94e41888ce20da7fdfc5eb9b0c5a9c68b04f7a88db07d3e45f01b ../../packages/ui/src/types.ts

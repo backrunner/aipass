@@ -1,6 +1,7 @@
 pub mod autostart;
 pub(crate) mod ccswitch;
 pub mod claude_bridge;
+pub mod claude_cli;
 pub mod client;
 pub mod cloudkit;
 mod community;

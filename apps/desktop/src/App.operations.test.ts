@@ -1,6 +1,6 @@
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
-import type { EntrySummary, OAuthAccountSummary, ProxyConfig } from "./lib/types";
+import type { EntrySummary, ProxyConfig } from "./lib/types";
 import { defaultRetryPolicy } from "./lib/utils/server";
 
 const { invoke, listeners } = vi.hoisted(() => ({ invoke: vi.fn(), listeners: new Map<string, (event?: any) => void>() }));
@@ -152,32 +152,27 @@ test("repeated provider submissions share one write and a failure preserves the 
   await vi.waitFor(() => { flushSync(); expect(document.querySelector(".provider-dialog-content")).toBeNull(); });
 });
 
-test.each([false, true])("lock unmounts the OAuth account dialog, with accounts already loaded=%s", async (alreadyLoaded) => {
+test.each([false, true])("lock unmounts CLI subscription sign-in with status already loaded=%s", async (alreadyLoaded) => {
   let locked = false;
-  let finish!: (accounts: unknown[]) => void;
-  const accounts: OAuthAccountSummary[] = [{ id: "account", provider: "codex", accountIdentity: "private@fixture.test", isDefault: true, authenticatedAt: 0, requiresReauth: false }];
+  let finish!: (value: unknown) => void;
   await render({
-    vault_status: () => ({ exists: true, locked }),
-    oauth_accounts_list: () => alreadyLoaded ? accounts : new Promise(resolve => { finish = resolve; })
+    vault_status: () => ({exists: true, locked}),
+    community_catalog: () => [{id: "codex", name: "ChatGPT (Codex)", methods: [{index: 0, type: "oauth", label: "Sign in", native: false, prompts: []}]}],
+    subscription_cli_status: () => alreadyLoaded ? {available: true} : new Promise(resolve => {finish = resolve;})
   });
-  document.querySelector<HTMLButtonElement>('button[aria-label="OAuth accounts"]')!.click();
-  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".oauth-dialog")).toBeTruthy(); });
+  document.querySelector<HTMLButtonElement>('button[aria-label="Subscription accounts"]')!.click();
+  await vi.waitFor(() => {flushSync(); expect(document.querySelector(".subscription-dialog")).toBeTruthy();});
+  [...document.querySelectorAll<HTMLButtonElement>(".provider")].find(b => b.querySelector("strong")?.textContent === "ChatGPT (Codex)")!.click();
+  await vi.waitFor(() => {flushSync(); expect(document.querySelector(".community-dialog")).toBeTruthy();});
   if (!alreadyLoaded) await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
-  if (alreadyLoaded) {
-    await Promise.resolve(); flushSync();
-    [...document.querySelectorAll<HTMLButtonElement>(".oauth-dialog button")].find(b => b.textContent?.trim().startsWith("Connected accounts"))!.click();
-    await vi.waitFor(() => { flushSync(); expect(document.querySelector(".oauth-dialog")?.textContent).toContain("private@fixture.test"); });
-  }
-  locked = true;
-  listeners.get("vault-status-changed")!();
-  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".oauth-dialog")).toBeNull(); });
-  if (!alreadyLoaded) finish(accounts);
+  locked = true; listeners.get("vault-status-changed")!();
+  await vi.waitFor(() => {flushSync(); expect(document.querySelector(".provider-dialog-content")).toBeNull();});
+  if (!alreadyLoaded) finish({available: true});
   await Promise.resolve(); flushSync();
-  expect(document.body.textContent).not.toContain("private@fixture.test");
-  locked = false;
-  listeners.get("vault-status-changed")!();
-  await vi.waitFor(() => { flushSync(); expect(button("Edit")).toBeTruthy(); });
-  expect(document.querySelector(".oauth-dialog")).toBeNull();
+  expect(document.querySelector(".provider-dialog-content")).toBeNull();
+  locked = false; listeners.get("vault-status-changed")!();
+  await vi.waitFor(() => {flushSync(); expect(button("Edit")).toBeTruthy();});
+  expect(document.querySelector(".provider-dialog-content")).toBeNull();
 });
 
 test("settings save and close failures remain visible inside the drawer with the draft intact", async () => {

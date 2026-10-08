@@ -1,107 +1,28 @@
 use super::*;
 const BASE: &str = "https://cli-chat-proxy.grok.com/v1";
-fn cli_home() -> Result<std::path::PathBuf> {
-    Ok(std::env::var_os("GROK_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or(home()?.join(".grok")))
-}
-fn executable() -> Result<std::path::PathBuf> {
-    let name = if cfg!(windows) { "grok.exe" } else { "grok" };
-    let mut dirs = vec![cli_home()?.join("bin"), home()?.join(".grok/bin")];
-    if let Some(p) = std::env::var_os("GROK_BIN_DIR") {
-        dirs.insert(0, p.into());
-    }
-    for dir in dirs {
-        let p = dir.join(name);
-        if p.is_absolute() && p.is_file() {
-            return Ok(p);
-        }
-    }
-    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        let p = dir.join(name);
-        if std::fs::canonicalize(&p)
-            .is_ok_and(|p| p.to_string_lossy().replace('\\', "/").contains("/.grok/"))
-        {
-            return Ok(p);
-        }
-    }
-    Err("Install Grok Build and sign in before connecting this account".into())
-}
-fn credential(bundle: &Value) -> Result<Value> {
-    let item = bundle
-        .as_object()
-        .into_iter()
-        .flatten()
-        .find_map(|(_, v)| (!s(v, "key").is_empty()).then_some(v))
-        .ok_or("Grok Build is not signed in")?;
-    let expiry = item["expires_at"]
-        .as_str()
-        .and_then(|s| {
-            time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
-        })
-        .map(|t| t.unix_timestamp().max(0) as u64 * 1000)
-        .unwrap_or(0);
-    Ok(
-        json!({"type":"oauth","refresh":"native-owned","access":item["key"],"expires":expiry,"accountId":item["email"],"aipassNativeBundle":bundle.to_string()}),
-    )
-}
 pub(super) async fn login(c: &mut Context, method: usize) -> Result<Value> {
-    if method == 1 {
-        return credential(&read_json(&cli_home()?.join("auth.json"))?);
-    }
-    let temp = tempfile::Builder::new()
-        .prefix("aipass-grok-auth-")
-        .tempdir()
-        .map_err(|_| "cannot create private Grok workspace")?;
-    let mut cmd = native_cli::command(&executable()?, c);
-    cmd.args(["login", "--device-auth"])
-        .env("GROK_HOME", temp.path())
-        .current_dir(temp.path());
-    native_cli::login(cmd, c).await?;
-    credential(&read_json(&temp.path().join("auth.json"))?)
+    cli_accounts::login(c, method).await
 }
 pub(super) async fn fresh(c: &mut Context) -> Result<()> {
-    if c.auth["expires"].as_u64().unwrap_or(0) > now() + 300000 {
-        return Ok(());
+    if s(&c.auth, "nativeHome").is_empty() {
+        // One-time upgrade of existing complete grants into a CLI-owned home.
+        let bundle = s(&c.auth, "aipassNativeBundle");
+        if bundle.is_empty() {
+            return Err("Reconnect Grok with the official Grok Build CLI".into());
+        }
+        let ambient = cli_accounts::default_home("grok")?;
+        if let Ok(reference) = cli_accounts::reference("grok", &ambient) {
+            if reference["accountId"] == c.auth["accountId"] {
+                c.save(reference).await?;
+                return cli_accounts::fresh(c).await;
+            }
+        }
+        let path = cli_accounts::new_home("grok")?;
+        crate::claude_bridge::write_private(&path.join("auth.json"), bundle.as_bytes())?;
+        let reference = cli_accounts::reference("grok", &path)?;
+        c.save(reference).await?;
     }
-    let _refresh = c.refresh_guard()?;
-    let bundle = s(&c.auth, "aipassNativeBundle");
-    if bundle.is_empty() {
-        return Err("Reconnect Grok to import its account-owned refresh grant".into());
-    }
-    let temp = tempfile::Builder::new()
-        .prefix("aipass-grok-auth-")
-        .tempdir()
-        .map_err(|_| "cannot create private Grok workspace")?;
-    let path = temp.path().join("auth.json");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    use std::io::Write;
-    options
-        .open(&path)
-        .and_then(|mut f| f.write_all(bundle.as_bytes()))
-        .map_err(|_| "cannot stage Grok credentials")?;
-    let mut cmd = native_cli::command(&executable()?, c);
-    cmd.arg("models")
-        .env("GROK_HOME", temp.path())
-        .current_dir(temp.path());
-    native_cli::run(cmd, 30).await?;
-    let next = credential(&read_json(&path)?)?;
-    if s(&next, "accountId").is_empty() || next["accountId"] != c.auth["accountId"] {
-        return Err("Grok account ownership changed".into());
-    }
-    if next["expires"]
-        .as_u64()
-        .is_some_and(|at| at > 0 && at <= now())
-    {
-        return Err("Grok Build token remains expired; reconnect the account".into());
-    }
-    c.save(next).await
+    cli_accounts::fresh(c).await
 }
 fn sign(c: &Context, r: RequestBuilder) -> Result<RequestBuilder> {
     Ok(r.bearer_auth(c.token()?)

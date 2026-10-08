@@ -18,6 +18,7 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
+pub(crate) mod cli_accounts;
 mod commandcode;
 mod cursor;
 mod devin;
@@ -103,6 +104,8 @@ impl Adapter {
                         output: tx.clone(),
                         provider: String::new(),
                         auth: Value::Null,
+                        native_token: None,
+                        native_workspace: String::new(),
                         models: json!({}),
                         session: String::new(),
                         sequence: 0,
@@ -154,6 +157,8 @@ struct Context {
     output: mpsc::Sender<Value>,
     provider: String,
     auth: Value,
+    native_token: Option<aipass_agent_protocol::SensitiveString>,
+    native_workspace: String,
     models: Value,
     session: String,
     sequence: u64,
@@ -245,7 +250,12 @@ impl Context {
                 return Err("invalid sign-in URL".into());
             }
         }
-        self.emit(json!({"type":"challenge","value":{"url":url,"instructions":instructions,"method":if manual {"code"} else {"auto"}}})).await?;
+        let user_code = if matches!(self.provider.as_str(), "grok" | "copilot") && !manual {
+            native_cli::device_user_code(instructions)
+        } else {
+            None
+        };
+        self.emit(json!({"type":"challenge","value":{"url":url,"instructions":instructions,"userCode":user_code,"method":if manual {"code"} else {"auto"}}})).await?;
         if !manual {
             return Ok(None);
         }
@@ -256,6 +266,9 @@ impl Context {
         Ok(Some(s(&frame, "code").to_owned()))
     }
     fn token(&self) -> Result<&str> {
+        if let Some(token) = &self.native_token {
+            return Ok(token.expose());
+        }
         self.auth["access"]
             .as_str()
             .or(self.auth["key"].as_str())
@@ -267,6 +280,7 @@ impl Context {
             "workbuddy" | "workbuddy-ai" => workbuddy::models(self).await,
             "zcode" => zcode::models(self).await,
             "grok" => grok::models(self).await,
+            "codex" | "copilot" | "gemini-cli" => cli_accounts::models(self).await,
             "commandcode-plan" => commandcode::models(self).await,
             "zed" => zed::models(self).await,
             "kiro" => kiro::models(self).await,
@@ -295,6 +309,7 @@ impl Context {
             "mimo-app" => mimo::fresh(self).await,
             "zcode" => zcode::fresh(self).await,
             "grok" => grok::fresh(self).await,
+            "codex" | "copilot" | "gemini-cli" => cli_accounts::fresh(self).await,
             "commandcode-plan" => commandcode::fresh(self).await,
             "zed" => zed::fresh(self).await,
             "kiro" => kiro::fresh(self).await,
@@ -381,6 +396,7 @@ impl Context {
                     "mimo-app" => mimo::login(self, method).await?,
                     "zcode" => zcode::login(self, method).await?,
                     "grok" => grok::login(self, method).await?,
+                    "codex" | "copilot" | "gemini-cli" => cli_accounts::login(self, method).await?,
                     "commandcode-plan" => commandcode::login(self, method).await?,
                     "zed" => zed::login(self, method).await?,
                     "kiro" => kiro::login(self, method).await?,
@@ -404,6 +420,7 @@ impl Context {
                 "mimo-app" => mimo::usage(self).await?,
                 "zcode" => zcode::usage(self).await?,
                 "grok" => grok::usage(self).await?,
+                "codex" | "copilot" | "gemini-cli" => cli_accounts::usage(self).await?,
                 "commandcode-plan" => commandcode::usage(self).await?,
                 "zed" => zed::usage(self).await?,
                 "kiro" => kiro::usage(self).await?,
@@ -438,6 +455,7 @@ impl Context {
             "mimo-app" => mimo::generate(self, &model, body).await,
             "zcode" => zcode::generate(self, &model, body).await,
             "grok" => grok::generate(self, &model, body).await,
+            "codex" | "copilot" | "gemini-cli" => cli_accounts::generate(self, &model, body).await,
             "commandcode-plan" => commandcode::generate(self, &model, body).await,
             "zed" => zed::generate(self, &model, body).await,
             "kiro" => kiro::generate(self, &model, body).await,
@@ -623,7 +641,12 @@ fn read_json(path: &std::path::Path) -> Result<Value> {
     if bytes.len() > LIMIT {
         return Err("native sign-in exceeds limit".into());
     }
-    serde_json::from_slice(&bytes).map_err(|_| "invalid native sign-in".into())
+    serde_json::from_slice(&bytes)
+        .or_else(|_| {
+            let text = std::str::from_utf8(&bytes).map_err(|_| ())?;
+            json5::from_str(text).map_err(|_| ())
+        })
+        .map_err(|_| "invalid native sign-in".into())
 }
 fn model(id: &str, name: &str, wire: &str, base: &str, context: u64, output: u64) -> Value {
     json!({"id":id,"name":name,"wire":wire,"api":{"id":id,"url":base},"limit":{"context":context,"output":output},"tool_call":true})

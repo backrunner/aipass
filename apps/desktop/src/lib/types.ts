@@ -278,6 +278,19 @@ export type VaultAuthTaskStatus = {
 
 export type OAuthProvider = "codex" | "grok";
 
+export type ClaudeCliStatus = {
+  available: boolean;
+  reason?: "missing" | "unusable" | "unsupported" | null;
+  version?: string | null;
+};
+export type ClaudeLoginStatus = {
+  ticket: string;
+  status: "pending" | "authorized" | "expired" | "error";
+  url?: string | null;
+  entryId?: string | null;
+  message?: string | null;
+};
+
 export type OAuthDeviceStart = {
   deviceCode: string;
   userCode: string;

@@ -1,5 +1,121 @@
 [
   {
+    "id": "gemini-cli",
+    "name": "Gemini CLI",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with the official Gemini CLI",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "Connect the CLI's current account",
+        "prompts": [],
+        "native": true
+      }
+    ],
+    "models": {
+      "gemini-3.1-pro-preview": {
+        "id": "gemini-3.1-pro-preview",
+        "name": "gemini-3.1-pro-preview",
+        "providerID": "gemini-cli",
+        "api": {
+          "id": "gemini-3.1-pro-preview",
+          "url": "https://cloudcode-pa.googleapis.com/v1internal"
+        },
+        "wire": "gemini"
+      },
+      "gemini-3-flash-preview": {
+        "id": "gemini-3-flash-preview",
+        "name": "gemini-3-flash-preview",
+        "providerID": "gemini-cli",
+        "api": {
+          "id": "gemini-3-flash-preview",
+          "url": "https://cloudcode-pa.googleapis.com/v1internal"
+        },
+        "wire": "gemini"
+      }
+    }
+  },
+  {
+    "id": "copilot",
+    "name": "GitHub Copilot",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with the official GitHub Copilot CLI",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "Connect the CLI's current account",
+        "prompts": [],
+        "native": true
+      }
+    ],
+    "models": {
+      "gpt-5.3-codex": {
+        "id": "gpt-5.3-codex",
+        "name": "gpt-5.3-codex",
+        "providerID": "copilot",
+        "api": {
+          "id": "gpt-5.3-codex",
+          "url": "https://api.githubcopilot.com"
+        },
+        "wire": "chat"
+      },
+      "claude-sonnet-4.6": {
+        "id": "claude-sonnet-4.6",
+        "name": "claude-sonnet-4.6",
+        "providerID": "copilot",
+        "api": {
+          "id": "claude-sonnet-4.6",
+          "url": "https://api.githubcopilot.com"
+        },
+        "wire": "chat"
+      }
+    }
+  },
+  {
+    "id": "codex",
+    "name": "Codex",
+    "methods": [
+      {
+        "index": 0,
+        "type": "oauth",
+        "label": "Sign in with the official Codex CLI",
+        "prompts": [],
+        "native": false
+      },
+      {
+        "index": 1,
+        "type": "oauth",
+        "label": "Connect the CLI's current account",
+        "prompts": [],
+        "native": true
+      }
+    ],
+    "models": {
+      "gpt-5.3-codex": {
+        "id": "gpt-5.3-codex",
+        "name": "gpt-5.3-codex",
+        "providerID": "codex",
+        "api": {
+          "id": "gpt-5.3-codex",
+          "url": "https://chatgpt.com/backend-api/codex"
+        },
+        "wire": "responses"
+      }
+    }
+  },
+  {
     "id": "zcode",
     "name": "ZCode",
     "methods": [
@@ -5674,12 +5790,12 @@
   },
   {
     "id": "grok",
-    "name": "Grok (SuperGrok)",
+    "name": "Grok Build",
     "methods": [
       {
         "index": 0,
         "type": "oauth",
-        "label": "Sign in with Grok Build (device code)",
+        "label": "Sign in with the official Grok Build CLI",
         "prompts": [],
         "native": false
       },
