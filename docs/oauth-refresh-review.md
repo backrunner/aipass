@@ -1,12 +1,9 @@
 # OAuth 刷新复核（2026-10-03）
 
-本次核对当前支持的官方账号和 13 个订阅 provider，修复实际发现的刷新缺口。认证、持久化和转换仍由 Rust 实现，没有接入 community JavaScript 包。
+本文记录早期刷新实现及其测试；Claude、Codex、Grok Build、Copilot CLI 与 Gemini CLI
+当前使用官方 CLI 管理凭据，见 [本机订阅管理](native-subscriptions.md)。
 
-## 对照版本
-
-- Magpie：`2d5f9c748ed83232c10bfa7f6204d6abfd1194a3`，通过远程 HEAD 和源码核对。
-- Community：`873449a2f40379014a9bed31b4abd556d70010d0`，通过远程 HEAD 和源码核对。
-- 主要参考：[官方账号与 Copilot 会话](https://github.com/yetone/magpie/blob/2d5f9c748ed83232c10bfa7f6204d6abfd1194a3/internal/provider/account.go)、[Factory 刷新](https://github.com/yetone/magpie/blob/2d5f9c748ed83232c10bfa7f6204d6abfd1194a3/internal/provider/factory.go)、[Kiro 原生凭据](https://github.com/yetone/magpie/blob/2d5f9c748ed83232c10bfa7f6204d6abfd1194a3/internal/provider/kiro.go)。Community 逐包核对 `packages/*/index.mjs`，尤其是 [Qoder](https://github.com/magpie-community/plugins/blob/873449a2f40379014a9bed31b4abd556d70010d0/packages/qoder/index.mjs)、[WorkBuddy](https://github.com/magpie-community/plugins/blob/873449a2f40379014a9bed31b4abd556d70010d0/packages/workbuddy/index.mjs)、[Factory](https://github.com/magpie-community/plugins/blob/873449a2f40379014a9bed31b4abd556d70010d0/packages/factory/index.mjs) 和 [Cursor](https://github.com/magpie-community/plugins/blob/873449a2f40379014a9bed31b4abd556d70010d0/packages/cursor/index.mjs)。
+本次核对当前支持的官方账号和 13 个订阅 provider，修复实际发现的刷新缺口。认证、持久化和转换仍由 Rust 实现，订阅适配器与协议转换均在 AIPass 的 Rust crates 内维护。
 
 ## 已修复的缺口
 
@@ -39,7 +36,7 @@
 | WorkBuddy、WorkBuddy AI | `X-Refresh-Token` 刷新；保留未返回的字段，检查 access/refresh 两类有效期 |
 | Kiro | Social、Identity Center、external IdP 各用对应 grant/endpoint；CLI 优先、完整读取、身份校验及 CAS 写回 |
 | Grok Build | 官方 CLI 在账号独立的临时 home 中刷新完整 bundle；保存后才用于代理 |
-| Cursor | CLI 用 `status` 刷新并重读；API key 交换 access；浏览器 session 到期要求重新登录，community 同样未定义其 refresh grant API |
+| Cursor | CLI 用 `status` 刷新并重读；API key 交换 access；浏览器 session 到期要求重新登录，没有已实现的浏览器 refresh grant API |
 | MiMo App | 用已保存的小米账号凭据重新建立 cookie session，并核对 userId |
 | ZCode | 原生凭据重读并核对身份；组织 key 与 Start Plan JWT 分开，过期 JWT 提示重新登录 |
 | Zed | 按请求从账号凭据取得短期 LLM token；不把其持久账号凭据当作标准 OAuth refresh token |
@@ -53,10 +50,9 @@
 - Copilot 并发交换、账号隔离、提前刷新和过期结果测试通过。
 - Agent/Proxy `clippy --all-targets --no-deps -- -D warnings` 通过；修改的 Rust 文件格式检查及 `git diff --check` 通过。
 - 按 build.rs 的源码哈希检查重建内嵌 control panel，避免上一轮共享 UI 文案变化使 Cargo 构建嵌入过期资源。
-- 日志：`/tmp/aipass-oauth-magpie-final-tests.log`、`/tmp/aipass-oauth-focused-final.log`、`/tmp/aipass-oauth-copilot-final.log`、`/tmp/aipass-oauth-magpie-clippy.log`。
 
 ## 验证边界
 
-未使用真实账号完成线上登录、refresh token 轮换或付费生成；未发布生产桌面 artifact。以上是源码对照、模拟上游、加密持久化故障和 macOS 自动化测试证据。提交前另行执行完整 workspace、Node 与 macOS bundle/runtime gate，远程 CI 结果以对应提交的 GitHub Actions 为准。
+未使用真实账号完成线上登录、refresh token 轮换或付费生成；未发布生产桌面 artifact。以上是实现审查、模拟上游、加密持久化故障和 macOS 自动化测试证据。提交前另行执行完整 workspace、Node 与 macOS bundle/runtime gate，远程 CI 结果以对应提交的 GitHub Actions 为准。
 
 服务商撤销授权、刷新响应在网络中丢失，以及锁库/退出跨越上游轮换时，可能需要重新登录。恢复缓存只在授权的解锁会话内有效，不绕过锁库保存秘密。独立运行的官方 CLI 没有与 AIPass 共享全程跨进程 OAuth 锁；原生重新读取、CLI 优先刷新和 CAS 写回缩小竞态并拒绝错误身份，不能据此承诺服务商或外部进程永远无故障。

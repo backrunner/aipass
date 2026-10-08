@@ -1,0 +1,141 @@
+{
+  "production": 1000,
+  "tests": 1500,
+  "legacy": {
+    "apps/desktop/src-tauri/src/commands.rs": {
+      "maxLines": 1418,
+      "owner": "apps/desktop",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/desktop/src-tauri/src/lib.rs": {
+      "maxLines": 2882,
+      "owner": "apps/desktop",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/desktop/src-tauri/src/tray.rs": {
+      "maxLines": 1417,
+      "owner": "apps/desktop",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/desktop/src/App.svelte": {
+      "maxLines": 3772,
+      "owner": "apps/desktop",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/desktop/src/lib/components/providers/ProviderDetailPane.svelte": {
+      "maxLines": 1873,
+      "owner": "apps/desktop",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/desktop/src/lib/components/settings/SettingsPanel.svelte": {
+      "maxLines": 1598,
+      "owner": "apps/desktop",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/extension/src/content/detector.test.ts": {
+      "maxLines": 1658,
+      "owner": "apps/extension",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/extension/src/content/detector.ts": {
+      "maxLines": 2131,
+      "owner": "apps/extension",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/extension/src/popup/Popup.svelte": {
+      "maxLines": 2785,
+      "owner": "apps/extension",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/extension/src/service-worker.test.ts": {
+      "maxLines": 1553,
+      "owner": "apps/extension",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "apps/extension/src/service-worker.ts": {
+      "maxLines": 1342,
+      "owner": "apps/extension",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-agent-protocol/src/lib.rs": {
+      "maxLines": 1993,
+      "owner": "crates/aipass-agent-protocol",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-agent/src/autostart.rs": {
+      "maxLines": 1472,
+      "owner": "crates/aipass-agent",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-agent/src/handlers.rs": {
+      "maxLines": 1755,
+      "owner": "crates/aipass-agent",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-agent/src/pricing.rs": {
+      "maxLines": 1132,
+      "owner": "crates/aipass-agent",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-agent/src/session.rs": {
+      "maxLines": 1539,
+      "owner": "crates/aipass-agent",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-agent/src/vault_sync.rs": {
+      "maxLines": 2282,
+      "owner": "crates/aipass-agent",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-config-writers/src/lib.rs": {
+      "maxLines": 1206,
+      "owner": "crates/aipass-config-writers",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-config-writers/src/plan.rs": {
+      "maxLines": 1534,
+      "owner": "crates/aipass-config-writers",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-native-host/src/lib.rs": {
+      "maxLines": 1052,
+      "owner": "crates/aipass-native-host",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-provider-registry/src/lib.rs": {
+      "maxLines": 1079,
+      "owner": "crates/aipass-provider-registry",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-proxy-conversion/src/request.rs": {
+      "maxLines": 1451,
+      "owner": "crates/aipass-proxy-conversion",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-proxy-conversion/src/stream.rs": {
+      "maxLines": 1534,
+      "owner": "crates/aipass-proxy-conversion",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-proxy/src/forward.rs": {
+      "maxLines": 1596,
+      "owner": "crates/aipass-proxy",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-proxy/src/images.rs": {
+      "maxLines": 1023,
+      "owner": "crates/aipass-proxy",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-proxy/src/tests.rs": {
+      "maxLines": 4343,
+      "owner": "crates/aipass-proxy",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    },
+    "crates/aipass-vault/src/lib.rs": {
+      "maxLines": 4186,
+      "owner": "crates/aipass-vault",
+      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
+    }
+  }
+}

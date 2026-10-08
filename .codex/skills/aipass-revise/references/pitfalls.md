@@ -481,6 +481,13 @@ Newest entries last within each section.
 
 ## OAuth lifecycle and native credential reconciliation
 
+### Claude subscriptions must use the installed vendor CLI throughout
+- **Symptom**: Claude subscriptions could only be imported; usage called Anthropic HTTP directly even though generation used real Claude Code. Missing or incompatible CLI installations were discovered only when a request failed.
+- **Root cause**: `official_accounts.rs::claude_usage` had a separate token HTTP transport, while the connect dialog only offered Codex/Grok device flows and `claude_bridge::claude_binary` accepted any file.
+- **Fix**: Agent-owned isolated `claude auth login --claudeai`, capability detection shared with generation, and account-scoped `claude -p /usage`; preserve CLI rotations even after a failed usage read, serialize identical grants, retain rotation receipts/recovery until lock, and CAS background updates against the complete source grant.
+- **Guardrail**: never fallback to direct Anthropic auth/usage HTTP or an unrelated native account. Reject missing/unusable/unsupported CLI installations with install/update and recheck actions. Test canceled/locked/late logins, failed save retries, grant-only rotations, timeout cleanup, unknown output, model windows, IANA dates and year rollover; verify both locales/themes at 960×640. Preserve old quota windows as stale on CLI errors.
+- **Watch points**: `claude_cli.rs`, `claude_bridge.rs`, `official_accounts.rs`, typed protocol, session lock, Tauri browser helper, `ClaudeConnectPane` and `OAuthConnectDialog`.
+
 ### Canceled device flows and failed persistence reused one-shot exchanges
 - **Symptom**: closing/canceling during an in-flight start or poll could reconnect later; a failed vault write spent the authorization code again on retry.
 - **Root cause**: `oauth/mod.rs` retained only device metadata, while `handlers.rs` consumed after persistence without caching tokens or serializing cancellation. `OAuthConnectDialog.svelte` invalidated cancellation only after IPC completed and accepted late start responses.
@@ -508,7 +515,7 @@ Newest entries last within each section.
 - **Root cause**: native adapter cancellation covered credential rotation; official refresh wrote a CLI mirror before vault authority; persistence failures had no generation-bound recovery and proxy reads trusted the secondary secret.
 - **Fix**: shield bounded refresh/ACK, preserve failed saves in Agent recovery caches with lock revocation, read managed OAuth authority for the linked primary key, reconcile mirrors idempotently, classify explicit grant rejection and keep original token expiry. Prefer Kiro CLI-owned rotation and bind its previous native generation to both tokens; retry unsaved Claude native grants before session expiry.
 - **Guardrail**: test canceled upstream rotation, failed/ambiguous ACK, read-only vault IO, new-login/revision conflicts, omitted tokens, unchanged cached access with a rotated refresh token, expiry after delayed persistence, and concurrent Copilot exchange. Do not fallback after a rotated grant's save fails or extend its lifetime on retry.
-- **Watch points**: `oauth/mod.rs`, `oauth/refresh_loop.rs`, `community.rs`, native subscription fresh/organization repair paths, `claude_bridge.rs`, `proxy_service.rs`, proxy `copilot.rs`. See `docs/oauth-refresh-magpie-review.md`.
+- **Watch points**: `oauth/mod.rs`, `community.rs`, native subscription fresh/organization repair paths, `claude_bridge.rs`, `proxy_service.rs`, proxy `copilot.rs`. See `docs/oauth-refresh-review.md`.
 
 ### Native rotation may change only the refresh token
 - **Symptom**: Claude skipped saving a refreshed native grant when access was unchanged; Kiro ignored a valid native rotation with equal expiry. A stale Claude process could overwrite another process's refresh-only rotation.
@@ -676,10 +683,10 @@ Newest entries last within each section.
 - **Watch points**: Native-file rereads/writeback, login cancellation versus account commit, credential refresh and target retention, model overrides, advisory quota windows, HTTP/WS conversion.
 
 ### Subscription converters belong in Rust
-- **Symptom**: Referencing Magpie community implementations introduced an unnecessary Node runtime and embedded plugin loader in the desktop distribution.
-- **Root cause**: Confusing reference protocol implementations with production dependencies.
-- **Fix**: Port provider auth/transport to `aipass-agent/src/subscriptions`, and pure request/SSE/Connect/AWS codecs to `aipass-proxy-conversion/src/providers`; remove the Node worker, loader and vendored JavaScript.
-- **Guardrail**: Community is a source of protocol contracts, not a runtime extension point. Verify HTTP/2 duplex, early quota failures, incomplete streams, bounded buffers, cancellation and durable credential acknowledgements in Rust. Vendor authentication CLIs are distinct from converter runtimes.
+- **Symptom**: External subscription adapters introduced an unnecessary Node runtime and embedded plugin loader in the desktop distribution.
+- **Root cause**: Letting external adapter packages define implementation ownership and runtime architecture.
+- **Fix**: Implement provider auth/transport in `aipass-agent/src/subscriptions`, and pure request/SSE/Connect/AWS codecs in `aipass-proxy-conversion/src/providers`; remove the Node worker, loader and vendored JavaScript.
+- **Guardrail**: Base compatibility on vendor protocols and official CLI behavior; keep implementation and architecture in AIPass. Verify HTTP/2 duplex, early quota failures, incomplete streams, bounded buffers, cancellation and durable credential acknowledgements in Rust. Vendor authentication CLIs are distinct from converter runtimes.
 - **Watch points**: Model-specific wire selection, API/region headers, one-use refresh grants, signed reasoning, native-file ownership and model-scoped quota.
 
 ### Stream retry safety must not depend on network chunk boundaries
@@ -717,3 +724,25 @@ Newest entries last within each section.
 - **Fix**: Share `packages/ui/src/components/Collapsible.svelte`; retain mounted content behind `inert` and `aria-hidden`, bind expansion state, and place header actions outside the toggle button.
 - **Guardrail**: Preserve file selections and drafts across collapse; verify external closure restores focus, unique content IDs, disabled toggles, independent actions, and runtime-panel lazy loading. Keep legacy slot forwarding snippets scoped to the component rather than hoisted callbacks.
 - **Watch points**: Desktop `Card`, `ControlPanelSettings`, provider advanced fields, credential billing, OAuth diagnostics and pricing history; `Collapsible.test.ts` and certificate/billing draft regressions.
+
+
+### Native subscription references must invalidate cached credential bindings
+- **Symptom**: A CLI account/home switch could reuse a cached Claude process, legacy managed OAuth could still forward, and quota scope could exhaust unrelated Copilot models.
+- **Root cause**: Stable routing markers did not encode a changed native binding; proxy fallback still selected managed grants; premium billing scopes were missing from model metadata.
+- **Fix**: Let official CLIs own the five native subscriptions, store device/account/home references, rotate markers only on changed bindings, block legacy grant forwarding, and scope premium quota using explicit model billing multipliers. Keep CLI renewal noninteractive and bounded.
+- **Guardrail**: Preserve entry/secret IDs during handoff; prefer matching CLI stores and reject foreign populated homes. Test reconnect generations, native rereads, device/workspace changes, CLI RPC, and every new IPC wire tag. Status insertion must preserve the adjacent Claude serde tag.
+- **Watch points**: `official_accounts`, `subscriptions/cli_accounts`, `community`, `claude_bridge`, `Vault::bind_cli_subscription`, `subscription.cli.status`, local proxy route restoration and 960×640 subscription dialogs.
+
+### Provider identity must reach every shared brand icon
+- **Symptom**: Subscription picker cards and proxy target rows showed initials even though a built-in brand asset existed.
+- **Root cause**: Callers passed editable account titles but omitted `providerId`; the shared resolver intentionally does not infer identity from titles. CLI aliases and additional subscription brands were also absent from the registry.
+- **Fix**: Pass canonical identity through picker, connection, list/detail and control-panel target rows; bundle local brand assets and explicit aliases in the shared registry.
+- **Guardrail**: Test all subscription catalog IDs with custom account titles, as well as picker cards and connection views. Keep assets local and monochrome masks theme-aware. Rebuild schemas before consumer checks and rebuild the embedded panel after shared source changes.
+- **Watch points**: Shared `ProviderIcon`, schema icon map, subscription dialogs, desktop lists/details and control-panel target rows.
+
+### CLI ownership includes default vendor stores and child process lifetime
+- **Symptom**: A default Claude account could become invisible after setting its config home; Claude inference omitted the global proxy; a pending code submission disabled a later login. A Factory icon also contained markup outside its SVG root.
+- **Root cause**: Default and custom Claude homes use different macOS Keychain names; the process-backed transport bypassed HTTP proxy defaults; abandoned UI generations retained busy flags; icon presence tests did not verify asset structure. Reaped child PIDs were also signaled again during cleanup.
+- **Fix**: Preserve the default secure-store selector, use CLI status instead of reading Claude grants, discover NVM binaries and provide their Node PATH, inherit or override outbound proxy for both inference and quota, reset abandoned login flags, and skip signals for reaped children. Remove retired grant persistence code, repair the SVG, and separate CLI IPC handlers/types.
+- **Guardrail**: Verify default/custom command environments, credential-free account discovery, pending-submit/restart, reconnect capability revocation, proxy precedence and HTTP-only subscription transport. Parse bundled SVGs and test root/clipping integrity. Rebuild the embedded panel after shared asset/locale changes. The native Rust gate must also reject TS, Python and shell subscription implementations.
+- **Watch points**: `claude_cli::{account_environment,configure}`, `claude_bridge::Run`, `subscriptions::native_cli::Running`, proxy runtime resolution, CLI IPC handlers, `ClaudeConnectPane`, brand SVG assets and `repo-health.mjs`.

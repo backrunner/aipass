@@ -145,4 +145,4 @@ pnpm test src/lib/components/providers/ProviderIcon.test.ts
 - Add balance refresh action to provider detail pane
 - Support quota tracking across multiple credentials
 
-See `docs/magpie-review.md` for full implementation roadmap.
+See `.agents/06-roadmap.md` for the product roadmap and `docs/provider-engineering.md` for provider implementation ownership.

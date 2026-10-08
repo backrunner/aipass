@@ -1,9 +1,32 @@
 # Subscription and local proxy review / 订阅与本地代理审查
 
+Current account ownership is documented in [native subscriptions](native-subscriptions.md)
+and [Claude subscriptions](claude-subscriptions.md). The dated review below records
+the earlier implementation; its managed-grant behavior has since been retired for
+Claude, Codex, Grok Build, Copilot CLI and Gemini CLI.
+
+## 2026-10-08 全部当前改动复查
+
+本轮逐项审查当前未提交的订阅管理、路由、图标和模块拆分改动，并修复以下问题：
+
+- Claude 默认 macOS Keychain 与自定义配置目录的服务名不同；保留默认账号存储，并通过 CLI 状态发现账号，不读取或复制 Claude OAuth grant。补齐 NVM 安装和 GUI 子进程的 Node PATH。
+- Claude 子进程推理遗漏全局出站代理；现在与额度查询共用 provider 覆盖或全局设置，订阅桥强制使用 HTTP。
+- 旧授权码提交尚未结束时重试会遗留 busy 状态；取消旧代次时清除状态与轮询计时器，迟到结果不能影响新登录。
+- 清理已回收的子进程再次发送进程组信号；现在先检查进程状态，避免误用可复用的 PID。
+- 移除退役的 Claude grant 读取/回写实现，兼容 IPC 拒绝凭据写入；纠正 macOS-only helper 的条件导出，拆出 CLI IPC handler/result 模块。
+- 修复 Factory SVG 根节点外的样式和无定义裁剪引用；资源测试覆盖根节点与裁剪引用。Rust-only 依赖门禁补齐 TS、Python、shell 等源文件检测。
+
+最终 macOS 验证：Rust 工作区格式、Clippy、803 项测试和构建通过；另外 2 项真实本机 CLI help/version 探测通过。
+Node 26 的 lint、typecheck、511 项测试与工作区生产构建通过；许可证审计 355 个包通过。
+保留原有测试 teardown 的 Svelte `derived_inert` 提示及生产 chunk-size 提示，不能把测试通过描述成日志完全无警告。
+960×640 下中英文/明暗主题共 40 个界面场景通过，浏览器异常和溢出均为 0；49 个 SVG 通过 XML 解析和浏览器实际加载。
+依赖/模块体积门禁与 `git diff --check` 通过，未增加旧大文件上限。
+
+原始记录：`/tmp/aipass-review-rust-final.log`、`/tmp/aipass-review-node-final.log`、
+`/tmp/aipass-review-ui-final.log`；截图和结构化结果在 `/tmp/aipass-review-ui-20261008/`。
+真实账号授权、实时额度、付费推理及 DMG/updater 发布门禁未执行；没有提交、推送或发布。
+
 Reviewed on 2026-10-03. AIPass baseline: `7988262`.
-References: [Magpie main](https://github.com/yetone/magpie/tree/0f42934c1f8ec109921d522c76956bc4303ed961),
-[Copilot CLI follow-up](https://github.com/yetone/magpie/tree/c9b7f95f904bc972bef4d7bdb382633b649bc695)
-and [community adapters](https://github.com/magpie-community/plugins/tree/6fd444cf5b0a30c4046682b80d5ddc3a183bfac9).
 
 ## 本次落地的修复
 
@@ -18,11 +41,11 @@ and [community adapters](https://github.com/magpie-community/plugins/tree/6fd444
 | API provider 差异 | 显式可信 provider profile 处理 OpenAI、DeepSeek、Kimi、Mistral、Gemini-compatible 的采样、token、thinking 和推理回放契约。Kimi K3 effort、K2.7-code 常开推理和 K2.6 开关分别处理。 |
 | 额度路由 | 新增 quota-aware 策略；仅使用 300 秒内可信窗口。未知/过期值保持中性，按实际模型匹配 models/notModels，aside 展示窗口不参加路由。429 Retry-After 与额度耗尽分开；粘性只选择仍然可用的目标。 |
 | 运行时管理 | 详情页实际接入 typed IPC → Agent → 加密 vault → 代理配置刷新。支持额度开关/间隔、单 provider 出站代理、余额 HTTP 请求/JSON 路径、被动健康和显式 webhook 测试；读取不回传已保存的秘密。 |
-| Rust 订阅适配 | 参考下表服务的协议，在 Rust 实现登录/取消/验证码、模型发现、转换、刷新和用量链路。轮换凭据经 Agent 的账号代次、所有权及 revision CAS 确认后才启用。 |
+| Rust 订阅适配 | 按下表服务的协议，在 Rust 实现登录/取消/验证码、模型发现、转换、刷新和用量链路。轮换凭据经 Agent 的账号代次、所有权及 revision CAS 确认后才启用。 |
 
 ## 社区 provider 覆盖
 
-参考注册表共 11 个包、13 个 provider ID。它们仅作为协议参考，生产代码不接入这些包。
+本节记录 13 个订阅 provider ID 的 Rust 实现。当前已扩展的官方 CLI 订阅入口见 [本机订阅管理](native-subscriptions.md)。
 
 - `aipass-proxy-conversion/src/providers`：纯 Rust 请求、SSE、Connect/protobuf、AWS eventstream 转换。
 - `aipass-agent/src/subscriptions`：原生异步 HTTP、登录、模型与用量发现、凭据轮换及取消。
@@ -82,7 +105,7 @@ and [community adapters](https://github.com/magpie-community/plugins/tree/6fd444
 
 ## 验证记录
 
-当前 Rust 移植的 macOS 验证结果在本节单独记录。此前 Node worker 和上游 JavaScript 测试的结果不作为 Rust 实现通过的依据。
+Rust 实现的 macOS 验证结果在本节单独记录。验证以本仓库的 Rust 测试、构建和运行结果为准。
 
 - Rust 转换单元测试：工具与多模态历史、推理、原生签名、late usage、AWS CRC、Connect protobuf、Qoder XML、异常 EOF。
 - Rust 集成测试：Cursor HTTP/2 同时上传/下载与 blob 回复、明确出站代理、凭据 ACK 拒绝、数据背压、取消、账号 UID/profile 不变性、HTTP 200 内额度错误映射为 429。
@@ -99,9 +122,10 @@ and [community adapters](https://github.com/magpie-community/plugins/tree/6fd444
 
 ## English summary
 
-The 13 referenced community provider IDs are implemented as native Rust adapters.
-Magpie community implementations supply protocol references and static metadata,
-not runtime packages. The Rust Agent owns authentication, HTTP, model discovery,
+Subscription provider adapters and the static catalog are maintained in this
+repository as native Rust implementations, with vendor-specific wire contracts.
+There is no source checkout, build-time download, package or runtime dependency.
+The Rust Agent owns authentication, HTTP, model discovery,
 usage, cancellation and encrypted credential rotation. Pure protocol conversion
 lives in `aipass-proxy-conversion`. Tauri remains the UI/IPC layer.
 
@@ -109,6 +133,5 @@ There is no Node converter process or dynamic plugin loading. Genuine vendor CLI
 remain where their own authentication or model discovery requires them. All native
 HTTP requests share the configured outbound proxy. Unsupported cross-protocol
 semantics fail explicitly; ambiguous submitted generations are never replayed.
-The original MIT attributions are preserved in `NOTICE` and the conversion crate's
-`third-party` directory. Tests use synthetic accounts and local fixtures; live
+Tests use synthetic accounts and local fixtures; live
 subscription eligibility, billing and all remote login flows remain unverified.

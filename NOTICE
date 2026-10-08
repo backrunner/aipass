@@ -10,12 +10,5 @@ The LocalAI brand asset comes from mudler/LocalAI under the MIT License, retaine
 in packages/ui/src/assets/provider-icons/LICENSE-LOCALAI. Other vendor brand
 assets and their source URLs are documented in that directory's SOURCES.md.
 
-Native Rust subscription transports and protocol codecs in
-crates/aipass-agent/src/subscriptions and crates/aipass-proxy-conversion/src/providers
-are derived from protocol implementations and metadata in magpie-community/plugins
-(https://github.com/magpie-community/plugins), commit
-6fd444cf5b0a30c4046682b80d5ddc3a183bfac9, under the MIT License. No community package
-or JavaScript runtime is bundled or loaded. The original notice is retained in
-crates/aipass-proxy-conversion/third-party/LICENSE-MAGPIE-COMMUNITY. Qoder's codec
-includes MIT-licensed work from CLIProxyAPI; its notice is retained alongside it
-in LICENSE-CLIProxyAPI. See docs/subscription-proxy-review.md for the Rust design.
+Qoder's codec includes MIT-licensed work from CLIProxyAPI; its notice is retained
+in crates/aipass-proxy-conversion/third-party/LICENSE-CLIProxyAPI.

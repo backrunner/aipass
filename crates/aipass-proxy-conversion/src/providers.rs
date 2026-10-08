@@ -1,6 +1,5 @@
 //! Provider-specific wire normalization. Pure Rust, with no account access or IO.
-//! Protocol behavior is independently ported from the pinned Magpie references
-//! listed in the repository NOTICE.
+//! Wire contracts are maintained in this crate, with no external plugin loader.
 use serde_json::{json, Value};
 pub mod commandcode;
 pub mod connect;

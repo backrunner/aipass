@@ -542,7 +542,7 @@ async function mockTestWebhook(id: string) {
 
 ## Summary
 
-Phase 4 completes the Magpie-inspired feature set with advanced configuration options:
+Phase 4 adds advanced configuration options to AIPass:
 
 ✅ **Custom Balance Endpoints** - JSONPath-based balance extraction from any API  
 ✅ **Per-Provider Proxies** - Corporate proxy support with bypass rules  

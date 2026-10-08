@@ -11,7 +11,7 @@ header and route editors remain the corresponding management surfaces; unused
 prototype components are not evidence of another implemented feature.
 
 `CommunityConnectDialog` is mounted from the subscription connection flow. It
-lists native Rust adapters for all 13 referenced providers and supports provider-defined login
+lists the 13 native Rust subscription adapters reviewed at that date and supports provider-defined login
 methods, pending authorization, manual codes and cancellation. Login completion
 reloads the actual provider list. Provider details can refresh community models
 and usage. Credentials and rotated native bundles are encrypted by the Agent.

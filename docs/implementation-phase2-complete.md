@@ -41,7 +41,7 @@ Created comprehensive credential management UI at `apps/desktop/src/lib/componen
 ### 2. RoutingStrategyConfig Component
 Created routing strategy configuration at `apps/desktop/src/lib/components/providers/RoutingStrategyConfig.svelte`
 
-**Routing Strategies (Magpie-inspired):**
+**Routing Strategies:**
 
 1. **Smart** (Default)
    - Use first credential while it has quota

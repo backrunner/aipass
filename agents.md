@@ -1,5 +1,12 @@
 # Commit Convention
 
+## Source ownership and module size
+
+- Subscription authentication, quota and protocol conversion belong to AIPass's Rust crates. Define behavior against vendor protocols and the official CLIs; maintain the implementation and architecture in this repository. Do not import third-party provider engines, source checkouts, generated adapter downloads or runtime plugin loaders. Keep required third-party license notices accurate.
+- Run `pnpm repo:check` after structural or dependency changes. `pnpm lint` and CI run the same gate.
+- Keep new production source files at or below 1,000 lines and test files at or below 1,500 lines. Split by responsibility using real modules, not `include!` fragments or generated concatenation.
+- Existing oversized files are tracked with owner, reason and a no-growth limit in `scripts/source-size-policy.json`. Split the affected responsibility before expanding them; remove stale entries when a file falls below the limit. Do not increase a limit merely to make a check pass.
+
 ## Desktop UI Validation
 
 - The desktop UI is shipped inside Tauri. The authoritative minimum viewport is `960x640`, from `apps/desktop/src-tauri/tauri.conf.json` and `tauri.dev.conf.json`.

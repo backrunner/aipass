@@ -12,6 +12,8 @@
 - [06-roadmap.md](./06-roadmap.md): 1.0 milestone 需求拆解，包含阶段、需求编号、验收标准、依赖、release gate 和 1.0 范围边界。
 - [07-security-e2ee-model.md](./07-security-e2ee-model.md): P0 端到端加密安全模型，定义 vault、同步、备份、索引、CLI 写配置的不可泄露约束。
 - [08-implementation-status.md](./08-implementation-status.md): 当前 1.0 实现矩阵、release gate 对照、验证命令和剩余发布工程事项。
+- [Provider engineering](../docs/provider-engineering.md): AIPass 原生 provider 实现边界、模块体积门禁和品牌图标管理。
+- [Native subscriptions](../docs/native-subscriptions.md): 官方 CLI 的账号生命周期、本机引用、额度查询和代理分发契约。
 
 ## 当前建议的核心决策
 

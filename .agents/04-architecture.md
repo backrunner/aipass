@@ -26,6 +26,8 @@ flowchart LR
 - 同步层只处理密文对象。
 - Vault 文件、同步对象、备份、磁盘索引和日志都不能成为 secrets 的等价物；没有 master password 或已授权解锁会话时，复制这些文件不能恢复 API secrets。
 - Provider registry 和 schemas 在 TS/Rust 间共享生成。
+- 订阅认证、额度和协议适配由 AIPass 的 Rust crates 维护；兼容性以厂商协议和官方 CLI 行为为准。实现结构与设计决策由本仓库定义，不引入第三方 provider 引擎、源码下载生成器或运行时插件加载器。
+- Claude、Codex、Grok Build、Copilot CLI 和 Gemini CLI 的登录与续期归官方 CLI 管理；Agent 保存本机账号引用并分发本地代理请求。具体契约见 [本机订阅管理](../docs/native-subscriptions.md) 和 [工程边界](../docs/provider-engineering.md)。
 
 ## 2. Monorepo 结构
 
