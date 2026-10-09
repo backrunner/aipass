@@ -234,20 +234,15 @@ pub(super) fn read(provider: &str, root: &Path) -> Result<PrivateJson> {
             let token = config["copilotTokens"][&key]
                 .as_str()
                 .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .or_else(|| {
-                    #[cfg(target_os = "macos")]
-                    {
-                        crate::official_accounts::read_keychain_bytes("copilot-cli", Some(&key))
-                            .ok()
-                            .and_then(|v| std::str::from_utf8(&v).ok().map(str::to_owned))
-                            .map(|v| v.trim().to_owned())
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        None
-                    }
-                })
+                .map(str::to_owned);
+            #[cfg(target_os = "macos")]
+            let token = token.or_else(|| {
+                crate::official_accounts::read_keychain_bytes("copilot-cli", Some(&key))
+                    .ok()
+                    .and_then(|v| std::str::from_utf8(&v).ok().map(str::to_owned))
+                    .map(|v| v.trim().to_owned())
+            });
+            let token = token
                 .filter(|v| !v.is_empty())
                 .ok_or("Copilot CLI credential store is unavailable; sign in again")?;
             Ok(json!({"access":token,"accountId":login}))
