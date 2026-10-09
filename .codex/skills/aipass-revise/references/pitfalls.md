@@ -624,6 +624,13 @@ Newest entries last within each section.
 - **Guardrail**: keep the CI embedded-output comparison enabled and verify both JS and CSS when changing shared component compilation. Never patch only the generated scope identifiers or accept machine-specific output. Resolve shared schemas directly to the fingerprinted source instead of an ignored, possibly stale `dist` directory.
 - **Watch points**: control-panel Vite config, shared UI components, `scripts/stamp.mjs`, Agent `build.rs`, and the Node CI reproducibility step.
 
+### Embedded fingerprints require LF rules for every shared source
+- **Symptom**: Windows CLI releases failed with a stale-panel assertion while macOS and Linux passed.
+- **Root cause**: `apps/control-panel/scripts/stamp.mjs` added schemas inputs, but `.gitattributes` only protected panel and UI sources. Windows converted schemas files to CRLF, changing the raw hashes checked by `crates/aipass-agent/build.rs`.
+- **Fix**: protect schemas sources and package metadata with `text eol=lf`. The repository gate checks Git attributes for every fingerprinted text input, with a regression for missing shared-source rules.
+- **Guardrail**: add LF checkout rules whenever adding fingerprinted text inputs. Run `pnpm repo:check` and verify hashes in an `autocrlf=true` checkout; keep binary assets exempt and retain Cargo's stale-asset rejection.
+- **Watch points**: `.gitattributes`, panel stamp inputs, Agent build inputs, `scripts/repo-health.mjs`, and Windows CLI release builds.
+
 ## LAN control panel
 
 ### Credential navigation must share desktop categories and scope selection

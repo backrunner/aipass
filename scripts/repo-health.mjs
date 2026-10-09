@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 
 export function isSource(path) {
   return /^(apps|crates|packages)\//.test(path)
@@ -64,6 +64,25 @@ export function auditFileSizes(files, policy) {
   return failures;
 }
 
+export function auditEmbeddedLineEndings(root) {
+  const panel = resolve(root, "apps/control-panel");
+  const paths = readFileSync(resolve(panel, "embedded/source.sha256"), "utf8")
+    .trim().split("\n")
+    .map(line => resolve(panel, line.slice(line.indexOf(" ") + 1)))
+    // Git treats files containing NUL bytes as binary; images need no EOL rule.
+    .filter(path => !readFileSync(path).subarray(0, 8000).includes(0))
+    .map(path => relative(root, path).split(sep).join("/"));
+  const attributes = execFileSync("git", ["check-attr", "--stdin", "-z", "text", "eol"], {
+    cwd: root, encoding: "utf8", input: `${paths.join("\0")}\0`,
+  }).split("\0");
+  const byPath = new Map(paths.map(path => [path, {}]));
+  for (let i = 0; i + 2 < attributes.length; i += 3) {
+    byPath.get(attributes[i])[attributes[i + 1]] = attributes[i + 2];
+  }
+  return paths.filter(path => byPath.get(path).eol !== "lf" || byPath.get(path).text === "unset")
+    .map(path => `${path}: embedded source fingerprints require text eol=lf in .gitattributes`);
+}
+
 export function run(root) {
   const paths = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: root, encoding: "utf8" })
     .split("\0").filter(Boolean);
@@ -71,7 +90,7 @@ export function run(root) {
     .filter(path => isSource(path) || isDependencyInput(path))
     .map(path => ({ path, content: readFileSync(resolve(root, path), "utf8") }));
   const policy = JSON.parse(readFileSync(resolve(root, "scripts/source-size-policy.json"), "utf8"));
-  const failures = [...auditDependencies(files), ...auditFileSizes(files, policy)];
+  const failures = [...auditDependencies(files), ...auditFileSizes(files, policy), ...auditEmbeddedLineEndings(root)];
   if (failures.length) throw new Error(failures.join("\n"));
   console.log(`Repository checks passed: no external subscription package/source dependency; ${files.filter(f => isSource(f.path)).length} source files checked for size.`);
   console.log(`${Object.keys(policy.legacy).length} existing oversized files are tracked with owner, reason and a no-growth limit.`);

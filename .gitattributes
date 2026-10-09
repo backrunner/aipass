@@ -2,5 +2,7 @@
 apps/control-panel/** text eol=lf
 packages/ui/src/** text eol=lf
 packages/ui/package.json text eol=lf
+packages/schemas/src/** text eol=lf
+packages/schemas/package.json text eol=lf
 # Minification preserves a Svelte whitespace literal across a template-string line.
 apps/control-panel/embedded/panel.js whitespace=-blank-at-eol linguist-generated=true
