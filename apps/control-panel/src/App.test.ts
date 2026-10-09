@@ -93,6 +93,66 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
+test.each([
+  ["en-US", "All items", "Favorites", "Archive", "Trash", "Secrets masked", "credentials"],
+  ["zh-CN", "全部项目", "收藏", "归档", "回收站", "密钥已隐藏", "项凭据"]
+])("credential headers follow groups and search in %s", async (locale, all, favorites, archive, trash, masked, unit) => {
+  vi.stubGlobal("navigator", { language: locale });
+  const current = structuredClone(snapshot);
+  current.providers[0].favorite = true;
+  current.providers.push({ ...current.providers[0], id: "archived", title: "Archived fixture", archivedAt: "2026-10-01T00:00:00Z" });
+  current.providers.push({ ...current.providers[0], id: "trashed", title: "Trashed fixture", deletedAt: "2026-10-01T00:00:00Z" });
+  request.mockImplementation(async () => current);
+  app = mount(App, { target: document.body });
+  await settle(() => expect(document.querySelector(".sidebar .nav")).not.toBeNull());
+  const choose = (label: string) => {
+    [...document.querySelectorAll<HTMLButtonElement>("nav button")].find(node => node.textContent?.includes(label))!.click();
+    flushSync();
+  };
+  for (const label of [all, favorites, archive, trash]) {
+    choose(label);
+    expect(document.querySelector(".credential-group-label")?.textContent).toBe(label);
+    expect(document.querySelector(".credential-count")?.textContent).toBe(`1 ${unit}`);
+    expect(document.querySelector(".read-scope")?.textContent).toBe(masked);
+  }
+  choose(all);
+  const search = document.querySelector<HTMLInputElement>('.list-pane input[type="search"]')!;
+  search.value = "no matching account";
+  search.dispatchEvent(new Event("input", { bubbles: true })); flushSync();
+  expect(document.querySelector(".credential-count")?.textContent).toBe(`0 ${unit}`);
+  expect(document.querySelector(".credential-group-label")?.textContent).toBe(all);
+});
+
+test("credential header counts follow refreshed snapshots", async () => {
+  vi.useFakeTimers();
+  let current = structuredClone(snapshot);
+  request.mockImplementation(async () => current);
+  app = mount(App, { target: document.body });
+  flushSync(); await vi.advanceTimersByTimeAsync(50); flushSync();
+  [...document.querySelectorAll<HTMLButtonElement>("nav button")].find(node => node.textContent?.includes("All items"))!.click(); flushSync();
+  expect(document.querySelector(".credential-count")?.textContent).toBe("1 credentials");
+  current = { ...current, providers: [...current.providers, { ...current.providers[0], id: "second", title: "Second fixture" }] };
+  await vi.advanceTimersByTimeAsync(5000); flushSync();
+  expect(document.querySelector(".credential-count")?.textContent).toBe("2 credentials");
+});
+
+test("credential header follows category and tag filters", async () => {
+  const current = structuredClone(snapshot);
+  current.providers[0].providerKind = "official";
+  current.providers[0].tags = ["Team fixture"];
+  request.mockImplementation(async () => current);
+  app = mount(App, { target: document.body });
+  await settle(() => expect(document.querySelector(".sidebar .nav")).not.toBeNull());
+  [...document.querySelectorAll<HTMLButtonElement>("nav button")].find(node => node.textContent?.includes("Official"))!.click(); flushSync();
+  expect(document.querySelector(".credential-group-label")?.textContent).toBe("Official");
+  document.querySelector<HTMLButtonElement>(".filter-trigger")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+  await settle(() => expect(document.querySelector(".filter-menu")).not.toBeNull());
+  const tag = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(node => node.textContent?.includes("Team fixture"))!;
+  tag.click(); flushSync();
+  expect(document.querySelector(".credential-group-label")?.textContent).toContain("Team fixture");
+  expect(document.querySelector(".credential-count")?.textContent).toBe("1 credentials");
+});
+
 test("login clears the code field and sends only the independent panel access code", async () => {
   let loggedIn = false;
   let finish!: () => void;

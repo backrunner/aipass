@@ -79,6 +79,10 @@
     && [entry.title, entry.providerId ?? "", entry.credentialKind, entry.interfaceType, ...entry.tags,
       ...entry.secretRefs.map(secret => `${secret.label} ${secret.masked}`)].join(" ").toLowerCase().includes(search.trim().toLowerCase()))
     .sort((left, right) => providerFilter === "recent" ? Date.parse(right.lastUsedAt ?? "") - Date.parse(left.lastUsedAt ?? "") : 0));
+  const filterKeys: Record<string, string> = { all: "sidebar.allItems", recent: "sidebar.recent", official: "sidebar.official", third_party: "sidebar.thirdParty", self_hosted: "sidebar.selfHosted", unknown: "sidebar.custom", oauth: "providerList.oauth", api: "providerList.api" };
+  const credentialGroupLabel = $derived(!showFavorites && !showArchived && !showTrash && providerFilter.startsWith("tag:")
+    ? $t("providerList.tag", { value: providerFilter.slice(4) })
+    : $t(showTrash ? "sidebar.trash" : showArchived ? "sidebar.archive" : showFavorites ? "sidebar.favorites" : filterKeys[providerFilter] ?? "sidebar.allItems"));
   function chooseGroup(filter: ProviderFilter, special: "favorites" | "archive" | "trash" | undefined = undefined) {
     providerFilter = filter; showFavorites = special === "favorites"; showArchived = special === "archive"; showTrash = special === "trash";
     tab = "credentials"; resetPreview();
@@ -276,16 +280,18 @@
     </section>
     {#if !loading && location.protocol === "http:"}<div class="transport-note"><ShieldAlert size={14} /><p>{tr("HTTP 连接，仅在可信局域网使用。请勿输入 Vault 主密码。", "HTTP connection. Use a trusted LAN. Never enter your vault master password.")}</p></div>{/if}
   {:else}
-    {#if tab === "proxy"}
     <header class="workspace-header">
-      <div class="page-identity"><h1><Server size={18} />{tr("本地代理", "Local proxy")}</h1><span class="bind-chip mono">{data.proxy.bindAddr}</span></div>
+      <div class="page-identity"><h1>{#if tab === "proxy"}<Server size={18} />{tr("本地代理", "Local proxy")}{:else}<KeyRound size={18} /><span class="credential-group-label" title={credentialGroupLabel}>{credentialGroupLabel}</span>{/if}</h1>
+        {#if tab === "proxy"}<span class="bind-chip mono">{data.proxy.bindAddr}</span>{:else}<span class="subtle credential-count">{visibleEntries.length} {tr("项凭据", "credentials")}</span>{/if}
+      </div>
       <div class="header-actions">
+        {#if tab === "proxy"}
         <span class="status" class:running={data.proxy.running}><span class="dot"></span>{data.proxy.running ? tr("运行中", "Running") : tr("已停止", "Stopped")}</span>
         <ProxyLogsDialog logs={data.logs} {chinese} />
         <Button variant={data.proxy.running ? "secondary" : "primary"} disabled={!!busy || (!data.proxy.running && !data.routes.some(r => r.enabled))} loading={busy === "proxy"} on:click={() => mutate({ type: data!.proxy.running ? "proxy_stop" : "proxy_start" }, "proxy")}>{#if data.proxy.running}<Square size={13} />{:else}<Play size={13} />{/if}{data.proxy.running ? tr("停止代理", "Stop proxy") : tr("启动代理", "Start proxy")}</Button>
+        {:else}<span class="read-scope"><ShieldCheck size={14} />{tr("密钥已隐藏", "Secrets masked")}</span>{/if}
       </div>
     </header>
-    {/if}
     <div use:scrollMask class="content-body" class:proxy-body={tab === "proxy"} class:credentials-body={tab === "credentials"}>
     {#if error}<div class="banner error" role="alert">{error}<IconButton label={tr("关闭提示", "Dismiss")} size="sm" on:click={() => error = ""}><X size={14} /></IconButton></div>{/if}
     {#if notice}<div class="banner" role="status"><Check size={14} />{notice}</div>{/if}

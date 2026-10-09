@@ -25,11 +25,15 @@ code, pre, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-
 
 .workspace-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--divider); min-height: 70px; flex-shrink: 0; }
 .page-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; min-width: 0; }
-.page-identity h1 { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 650; white-space: nowrap; }
+.page-identity h1 { display: inline-flex; align-items: center; gap: 9px; min-width: 0; max-width: 100%; font-size: 15px; font-weight: 650; white-space: nowrap; }
+.page-identity h1 > svg { flex-shrink: 0; }
+.credential-group-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.credential-count { white-space: nowrap; }
 .bind-chip { color: var(--text-secondary); font-size: 11px; background: var(--surface-2); border: 1px solid var(--divider); border-radius: 999px; padding: 4px 9px; }
 .status, .target-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
 .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; display: inline-block; flex-shrink: 0; }
 .status.running, .target-state.enabled { color: var(--success); }
+.read-scope { display: inline-flex; align-items: center; gap: 6px; color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
 .content-body { overflow: auto; min-height: 0; flex: 1; padding: 20px 24px 28px; overscroll-behavior: contain; }
 .section-count { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 5px; background: var(--surface-2); color: var(--text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums; }
 .proxy-body { display: flex; flex-direction: column; gap: 14px; }
