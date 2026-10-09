@@ -267,7 +267,13 @@ fn fixed_model_mapping_survives_spooled_native_requests() {
         .json(&json!({"model":alias,"input":text}))
         .send()
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}; upstream error: {:?}",
+        response.text().unwrap(),
+        _proxy.status().last_error
+    );
     let body: Value = serde_json::from_slice(&upstream.join().unwrap().1).unwrap();
     assert_eq!(body["model"], "actual-model");
     assert_eq!(body["input"], text);
