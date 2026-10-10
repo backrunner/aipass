@@ -436,9 +436,10 @@ fn locking_session_keeps_runtime_credentials_available_to_proxy() {
     let (request_tx, request_rx) = std::sync::mpsc::channel();
     let upstream_thread = std::thread::spawn(move || {
         let (mut stream, _) = upstream.accept().expect("accept proxy request");
-        let mut request = vec![0_u8; 8192];
-        let count = stream.read(&mut request).expect("read proxy request");
-        request.truncate(count);
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let request = read_http_request(&mut stream).expect("read complete proxy request");
         request_tx
             .send(String::from_utf8_lossy(&request).to_string())
             .expect("capture proxy request");
@@ -622,9 +623,10 @@ fn provider_update_refreshes_running_credentials_and_headers() {
     let upstream_thread = std::thread::spawn(move || {
         for _ in 0..2 {
             let (mut stream, _) = upstream.accept().expect("accept proxy request");
-            let mut request = vec![0_u8; 8192];
-            let count = stream.read(&mut request).expect("read proxy request");
-            request.truncate(count);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let request = read_http_request(&mut stream).expect("read complete proxy request");
             request_tx
                 .send(String::from_utf8_lossy(&request).to_string())
                 .expect("capture proxy request");

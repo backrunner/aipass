@@ -227,6 +227,13 @@ Newest entries last within each section.
 
 ## Proxy credential snapshot (proxy_service / handlers)
 
+### HTTP fixtures must consume complete requests before closing
+- **Symptom**: `provider_update_refreshes_running_credentials_and_headers` intermittently returned 502 during the full workspace run but passed alone.
+- **Root cause**: lifecycle and routing fixtures captured only one TCP read, then responded and closed with unread request-body bytes; segmented requests could lose the response to a connection reset.
+- **Fix**: a shared bounded fixture reader consumes headers and the declared body before replying; all three credential-lifecycle fixtures use it.
+- **Guardrail**: do not assume one TCP read contains a request. Run `fixture_consumes_headers_and_body_across_separate_reads` and the proxy-service suite; use read timeouts on fixture sockets.
+- **Watch points**: `proxy_service/tests.rs`, `proxy_service/tests/{lifecycle,routing}.rs`.
+
 ### Unified key editors must not resubmit a first-key snapshot
 - **Symptom**: the first key had a separate editor and could not be deleted; provider saves could overwrite an independently edited key or relabel its successor after deletion.
 - **Root cause**: `apps/desktop/src/App.svelte::openEdit` copied the first credential into the provider draft; `saveProvider` resubmitted it, while `summaryToEntry` treated an empty key list as missing legacy data.

@@ -7,6 +7,45 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
+fn read_http_request(reader: &mut impl Read) -> std::io::Result<Vec<u8>> {
+    let mut request = Vec::new();
+    let mut byte = [0];
+    while !request.ends_with(b"\r\n\r\n") {
+        if request.len() >= 64 * 1024 {
+            return Err(std::io::Error::other("fixture request headers too large"));
+        }
+        reader.read_exact(&mut byte)?;
+        request.push(byte[0]);
+    }
+    let headers = String::from_utf8_lossy(&request).to_ascii_lowercase();
+    assert!(
+        !headers.contains("transfer-encoding:"),
+        "fixture expects a fixed-length request"
+    );
+    let length = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .map(|v| v.trim().parse::<usize>())
+        .transpose()
+        .map_err(std::io::Error::other)?
+        .unwrap_or(0);
+    assert!(length <= 1024 * 1024, "fixture request body too large");
+    let offset = request.len();
+    request.resize(offset + length, 0);
+    reader.read_exact(&mut request[offset..])?;
+    Ok(request)
+}
+
+#[test]
+fn fixture_consumes_headers_and_body_across_separate_reads() {
+    let headers = b"POST /v1/responses HTTP/1.1\r\nContent-Length: 2\r\n\r\n";
+    let body = b"{}";
+    let mut reader = headers.as_slice().chain(body.as_slice());
+    let request = read_http_request(&mut reader).unwrap();
+    assert_eq!(request, [headers.as_slice(), body.as_slice()].concat());
+    assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+}
+
 fn config_with_token(token: &str) -> ProxyConfig {
     ProxyConfig {
         routes: vec![ProxyRouteConfig {
