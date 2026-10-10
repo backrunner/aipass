@@ -266,9 +266,9 @@ fn auth_json_preview_includes_plaintext_credentials() {
 
     let files = tool_config_preview_files(&plan, content);
     assert_eq!(files.len(), 1);
-    assert!(files[0].content.contains("sk-new-secret"));
-    assert!(files[0].diff.contains("sk-old-secret"));
-    assert!(files[0].diff.contains("sk-new-secret"));
+    assert!(!files[0].content.contains("sk-new-secret"));
+    assert!(!files[0].diff.contains("sk-old-secret"));
+    assert!(!files[0].diff.contains("sk-new-secret"));
     assert_eq!(combined_tool_config_preview(&files), files[0].diff);
 }
 
@@ -305,6 +305,7 @@ fn native_subscription_references_cannot_be_written_as_tool_credentials() {
                 tool: ToolConfigTool::Codex,
                 mode,
                 codex_api_key_mode: None,
+                preview_id: None,
             };
             for preview in [true, false] {
                 let error = match build_tool_config_plan(&creation.vault, &request, preview) {
@@ -312,7 +313,10 @@ fn native_subscription_references_cannot_be_written_as_tool_credentials() {
                     Ok(_) => panic!("subscription reference must not become a tool credential"),
                 };
                 assert_eq!(error.code, AgentErrorCode::ValidationFailed);
-                assert!(error.message.contains("local proxy route"));
+                assert!(
+                    error.message.contains("local proxy route")
+                        || error.message.contains("native account unavailable")
+                );
             }
         }
     }
@@ -353,6 +357,7 @@ fn tool_configuration_binds_the_selected_key_and_its_overrides() {
         tool: ToolConfigTool::ClaudeCode,
         mode: ToolConfigMode::Plaintext,
         codex_api_key_mode: None,
+        preview_id: None,
     };
     assert!(
         build_tool_config_plan(vault, &request, true).is_err(),

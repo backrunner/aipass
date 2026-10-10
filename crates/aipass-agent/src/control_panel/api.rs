@@ -374,14 +374,16 @@ fn perform(
         }
         ControlPanelAction::ToolApply { preview_id } => {
             let preview = sessions.take_preview(token, preview_id)?;
-            if tool_preview(state, &preview.selection)?.1 != preview.digest {
+            let (fresh, digest) = tool_preview(state, &preview.selection)?;
+            if digest != preview.digest {
                 return Err(ServiceError::new(
                     AgentErrorCode::Conflict,
                     "Preview changed.",
                 ));
             }
             let request = match preview.selection {
-                ControlPanelToolSelection::Credential { request } => {
+                ControlPanelToolSelection::Credential { mut request } => {
+                    request.preview_id = fresh["previewId"].as_str().map(str::to_owned);
                     AgentRequest::ToolConfigApply { request }
                 }
                 ControlPanelToolSelection::Proxy { request } => {
@@ -389,6 +391,18 @@ fn perform(
                 }
             };
             let data = dispatch(state, request)?;
+            if let Some(outcome) = data["outcome"].as_str().filter(|v| *v != "applied") {
+                return Err(ServiceError::new(
+                    if outcome == "conflict" {
+                        AgentErrorCode::Conflict
+                    } else {
+                        AgentErrorCode::ValidationFailed
+                    },
+                    data["message"]
+                        .as_str()
+                        .unwrap_or("Tool switch was not applied."),
+                ));
+            }
             Ok(json!({"ok":true,"targetPath":data["targetPath"]}))
         }
         ControlPanelAction::VaultLock => {

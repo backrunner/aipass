@@ -251,6 +251,10 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
+    Tool {
+        #[command(subcommand)]
+        command: ToolCommand,
+    },
     Rollback {
         operation_id: Uuid,
     },
@@ -574,4 +578,29 @@ pub enum BrowserArg {
     Chromium,
     Edge,
     Brave,
+}
+
+#[derive(Subcommand)]
+pub enum ToolCommand {
+    Status {
+        #[arg(value_enum)]
+        tool: ToolArg,
+    },
+    Login {
+        #[arg(value_enum)]
+        tool: ToolArg,
+        id: String,
+        #[arg(long)]
+        secret_id: Option<String>,
+    },
+    LoginPoll {
+        ticket: Uuid,
+    },
+    LoginCode {
+        ticket: Uuid,
+        code: String,
+    },
+    LoginCancel {
+        ticket: Uuid,
+    },
 }

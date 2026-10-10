@@ -64,8 +64,22 @@ impl OperationLog {
                 response.data.get("status").and_then(|v| v.as_str()),
                 Some("offline" | "auth_failed" | "server_error" | "expired" | "error")
             );
-        let successful = response.ok && !semantic_failure;
+        let tool_outcome = response
+            .data
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .filter(|v| {
+                matches!(
+                    *v,
+                    "applied" | "login_required" | "conflict" | "storage_unavailable"
+                )
+            });
+        let successful =
+            response.ok && !semantic_failure && tool_outcome.is_none_or(|v| v == "applied");
         let mut detail = format!("code={:?}", response.code);
+        if let Some(outcome) = tool_outcome {
+            detail.push_str(&format!(" tool_outcome={outcome}"));
+        }
         // Status names and counters are allowlisted; no arbitrary response text.
         if let Some(status) = response
             .data

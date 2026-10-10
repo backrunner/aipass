@@ -113,6 +113,13 @@ Newest entries last within each section.
 
 ## Tool configuration writes (aipass-agent / config-writers)
 
+### Native switches must follow the latest vendor store
+- **Symptom**: switching through API or proxy writes can leave a subscription bound to replaced active credentials, or replay an older refresh token.
+- **Root cause**: the configuration writer previously backed up files without coordinating native-store ownership and local provider references.
+- **Fix**: `tool_switch` journals file/Keychain/config/binding changes, archives the latest native grant, rebinds stable IDs, and shares transactions with local proxy integration.
+- **Guardrail**: route every Codex/Claude native configuration write through the coordinator; standalone `env` helper generation does not change native credentials or bindings. Validate the displayed preimage, back up before renewal or mutation, and restore managed accounts from their latest vendor home. Hold the switch lock across the final restore/login-continuation check and mutation; acquire account locks outside the vault lock, including `openai` aliases and crash recovery. Canonicalize archive homes before deriving Keychain IDs.
+- **Watch points**: `handlers/tools.rs`, `tool_switch/{native,restore,login,proxy}.rs`, Claude quota renewal in `official_accounts.rs`, `native_auth.rs`, `transaction.rs`, `ProviderIntegration.test.ts`, CLI `tool` commands. Acquire the coordinator before status snapshots/renewals; `status_waits_for_the_switch_before_reading_its_binding` covers an overlapping switch.
+
 ### Tool configuration and usage prices must bind an exact credential
 - **Symptom**: mixed-format site keys could write the primary key using another key's protocol; automatic price refresh could replace explicit multipliers or edited shared rules.
 - **Root cause**: tool requests selected only an entry and helpers read `api_key`; pricing inferred manual intent from a non-unit multiplier (`server::build_tool_config_plan`, `pricing::sync_newapi_pricing`).
@@ -166,7 +173,7 @@ Newest entries last within each section.
 - **Symptom**: changing a Codex provider failed with `failed to fill whole buffer`, while other tool configuration writes succeeded.
 - **Root cause**: Codex provider migration scanned session JSONL files and put each transformed file into `ConfigPlan.extra_writes`; large histories made the preview response exceed the 16 MiB agent frame limit or exhausted the agent before it could answer.
 - **Fix**: preview and apply use separate planning entry points. Preview returns configuration diffs without discovering or reading JSONL/SQLite history; apply retains migration paths/counts and performs per-file backup plus streaming rewrite in Rust.
-- **Guardrail**: never scan session/history files during preview, including direct, official and local-proxy modes. Never place history contents in an IPC frame. Keep apply-time migration and encrypted backups; test preview against unreadable history (`codex_preview_never_reads_session_history_in_any_auth_mode`).
+- **Guardrail**: never scan session/history files during preview, including direct, official and local-proxy modes. Never place history contents in an IPC frame. Legacy writer apply retains migration and encrypted backups; native transactions retain existing custom provider IDs and their preferences rather than rewriting history used by running CLI processes. Built-in IDs cannot override API routing: select the custom AIPass provider and preserve original session files. Test preview against unreadable history (`codex_preview_never_reads_session_history_in_any_auth_mode`) and native provider selection (`native_plan::tests`).
 - **Watch points**: `crates/aipass-config-writers/src/plan.rs`, `crates/aipass-config-writers/src/backup.rs`, and `crates/aipass-agent/src/handlers.rs`.
 
 ### Compact configuration diffs are not literal source
@@ -189,6 +196,13 @@ Newest entries last within each section.
 - **Fix**: invalidate request generations on context change/unmount and return a captured apply closure with each preview; show mode-specific credential access text in the dialog and correct website claims.
 - **Guardrail**: bind confirmation to the request that produced its preview. Include provider/route identity and write mode in invalidation; ignore late success and failure. Cover provider changes, mode changes and repeated confirmation in integration tests.
 - **Watch points**: provider and proxy route integrations, Codex mode selection, direct configuration versus local proxy tokens, and English/Chinese security copy.
+
+### Structured secrets must be redacted before diffing
+- **Symptom**: TOML multiline tokens appeared in full-file previews and continuation lines of diffs.
+- **Root cause**: Agent preview redaction used a regex matching only ordinary quoted values after generating a raw diff.
+- **Fix**: `preview_redaction.rs` redacts JSON/TOML values recursively; the Agent diffs already-redacted documents. Integration completion also rechecks the selected credential after every await and treats cancelled vendor logins as terminal.
+- **Guardrail**: never compute frontend diffs from raw credential documents. Redact whole Codex `auth` command objects and credential environment assignments, including custom AIPass key names. Test multiline literals, arrays/nested headers, delayed reauthentication previews, selection changes before apply, and cancelled polling (`preview_redaction::tests`, `tool_switch::tests`, `ProviderIntegration.test.ts`).
+- **Watch points**: direct and proxy preview files, API helper commands, subscription login and restore callbacks.
 
 ### Claude Code must receive an unversioned Anthropic base
 - **Symptom**: a mixed OpenAI/Anthropic provider produced a Claude Code configuration whose requests used `/v1/v1/messages`.

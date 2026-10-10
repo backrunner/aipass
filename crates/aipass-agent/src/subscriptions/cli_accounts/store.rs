@@ -170,11 +170,13 @@ pub(super) fn read(provider: &str, root: &Path) -> Result<PrivateJson> {
     let dir = config_home(provider, root);
     let value: Result<Value> = match provider {
         "codex" => {
-            let raw = PrivateJson(read_json(&dir.join("auth.json"))?);
-            if !s(&raw, "OPENAI_API_KEY").is_empty() {
+            let raw = aipass_config_writers::native_auth::NativeStore::codex(&dir)
+                .and_then(|s| s.credentials())
+                .map_err(|e| e.to_string())?;
+            if !s(&raw.0, "OPENAI_API_KEY").is_empty() {
                 return Err("Sign in to ChatGPT in Codex instead of using an API key".into());
             }
-            let tokens = &raw["tokens"];
+            let tokens = &raw.0["tokens"];
             let id = claims(s(tokens, "id_token"));
             let account = s(tokens, "account_id");
             let user = s(&id, "email");

@@ -396,6 +396,7 @@ pub(crate) fn handle_credential_command(
                 secret_id,
                 mode: mode.into(),
                 codex_api_key_mode: codex_api_key_mode.map(Into::into),
+                preview_id: None,
             };
             if !yes {
                 let plan: ToolConfigPreviewResponse =
@@ -404,16 +405,49 @@ pub(crate) fn handle_credential_command(
             }
             let result: ToolConfigApplyResponse =
                 agent.request(AgentRequest::ToolConfigApply { request })?;
+            let applied = result.outcome == aipass_agent_protocol::ToolConfigOutcome::Applied;
             output(
                 json,
                 serde_json::to_value(&result)?,
-                "Configuration applied",
-            )
+                if applied {
+                    "Configuration applied; restart the CLI"
+                } else {
+                    result
+                        .message
+                        .as_deref()
+                        .unwrap_or("Switch did not complete")
+                },
+            )?;
+            if !applied {
+                anyhow::bail!(
+                    "switch did not complete; use aipass tool login for expired subscriptions"
+                );
+            }
+            Ok(())
         }
         Command::Rollback { operation_id } => {
             let result: serde_json::Value =
                 agent.request(AgentRequest::ToolConfigRollback { operation_id })?;
-            output(json, serde_json::to_value(&result)?, "Rollback applied")
+            let succeeded = result
+                .get("outcome")
+                .and_then(|v| v.as_str())
+                .is_none_or(|v| v == "applied");
+            output(
+                json,
+                serde_json::to_value(&result)?,
+                result
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(if succeeded {
+                        "Rollback applied"
+                    } else {
+                        "Rollback requires attention"
+                    }),
+            )?;
+            if !succeeded {
+                anyhow::bail!("rollback was not applied");
+            }
+            Ok(())
         }
         Command::Sync {
             dir,

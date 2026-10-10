@@ -16,7 +16,7 @@ pub(super) use discovery::executable;
 pub(crate) use discovery::status;
 use quota::{codex_usage, copilot_usage};
 use session::{command, rpc};
-pub(super) use session::{fresh, login};
+pub(super) use session::{fresh, login, verify};
 #[cfg(test)]
 use store::config_home;
 pub(crate) use store::{

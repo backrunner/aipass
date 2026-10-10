@@ -47,7 +47,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 14 adds genuine Claude Code login and usage operations.
 // Version 15 delegates official subscription ownership to local vendor CLIs.
 // Version 16 adds cancellable, source-bound native subscription imports.
-pub const AGENT_PROTOCOL_VERSION: u32 = 16;
+// Version 17 adds native credential switching and target-bound reauthentication.
+pub const AGENT_PROTOCOL_VERSION: u32 = 17;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
@@ -313,92 +314,6 @@ pub struct SyncConflictResponse {
     pub target_summary: Option<EntrySummary>,
     #[serde(default)]
     pub snapshot_summary: Option<aipass_vault::VaultSnapshotSummary>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ToolConfigTool {
-    Codex,
-    ClaudeCode,
-    GeminiCli,
-    OpenCode,
-    Grok,
-    Pi,
-    Cursor,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolConfigMode {
-    /// Use the provider's native official OAuth/subscription credentials.
-    Official,
-    Helper,
-    Env,
-    Plaintext,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CodexApiKeyMode {
-    ExperimentalBearerToken,
-    AuthJson,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolConfigRequest {
-    pub tool: ToolConfigTool,
-    pub id: Uuid,
-    /// Stable credential id. Required when the site has multiple keys.
-    #[serde(default)]
-    pub secret_id: Option<String>,
-    pub mode: ToolConfigMode,
-    #[serde(default)]
-    pub codex_api_key_mode: Option<CodexApiKeyMode>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolConfigProxyRequest {
-    pub tool: ToolId,
-    pub route_id: Uuid,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolConfigPreviewFile {
-    pub path: String,
-    pub content: String,
-    /// Line diff between the current file and the planned content.
-    #[serde(default)]
-    pub diff: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolConfigPreviewResponse {
-    pub tool: ToolConfigTool,
-    pub mode: ToolConfigMode,
-    pub entry_id: Uuid,
-    pub entry_title: String,
-    pub target_path: String,
-    pub summary: String,
-    pub preview: String,
-    #[serde(default)]
-    pub files: Vec<ToolConfigPreviewFile>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolConfigApplyResponse {
-    pub tool: ToolConfigTool,
-    pub mode: ToolConfigMode,
-    pub entry_id: Uuid,
-    pub entry_title: String,
-    pub operation_id: Uuid,
-    pub target_path: String,
-    pub backup_path: String,
-    pub summary: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -958,6 +873,16 @@ pub enum AgentRequest {
     },
     #[serde(rename = "provider.favicon_backfill")]
     ProviderFaviconBackfill { request: FaviconBackfillRequest },
+    #[serde(rename = "tool_config.status")]
+    ToolConfigStatus { tool: ToolConfigTool },
+    #[serde(rename = "tool_config.login.start")]
+    ToolConfigLoginStart { request: ToolConfigRequest },
+    #[serde(rename = "tool_config.login.poll")]
+    ToolConfigLoginPoll { ticket: Uuid },
+    #[serde(rename = "tool_config.login.code")]
+    ToolConfigLoginCode { ticket: Uuid, code: SensitiveString },
+    #[serde(rename = "tool_config.login.cancel")]
+    ToolConfigLoginCancel { ticket: Uuid },
     #[serde(rename = "tool_config.preview")]
     ToolConfigPreview { request: ToolConfigRequest },
     #[serde(rename = "tool_config.apply")]
@@ -1138,6 +1063,11 @@ impl AgentRequest {
             Self::OAuthAccountsRemove { .. } => "oauth.accounts.remove",
             Self::OAuthAccountsSetDefault { .. } => "oauth.accounts.set_default",
             Self::ProviderFaviconBackfill { .. } => "provider.favicon_backfill",
+            Self::ToolConfigStatus { .. } => "tool_config.status",
+            Self::ToolConfigLoginStart { .. } => "tool_config.login.start",
+            Self::ToolConfigLoginPoll { .. } => "tool_config.login.poll",
+            Self::ToolConfigLoginCode { .. } => "tool_config.login.code",
+            Self::ToolConfigLoginCancel { .. } => "tool_config.login.cancel",
             Self::ToolConfigPreview { .. } => "tool_config.preview",
             Self::ToolConfigApply { .. } => "tool_config.apply",
             Self::ToolConfigProxyPreview { .. } => "tool_config.proxy_preview",
@@ -1245,6 +1175,10 @@ impl AgentRequest {
             | Self::ServerPricingGroupUpsert { .. }
             // Configuration writes may checkpoint and migrate a large Codex
             // SQLite state database before replacing the requested files.
+            | Self::ToolConfigStatus { .. }
+            | Self::ToolConfigLoginStart { .. }
+            | Self::ToolConfigLoginPoll { .. }
+            | Self::ToolConfigLoginCode { .. }
             | Self::ToolConfigPreview { .. }
             | Self::ToolConfigApply { .. }
             | Self::ToolConfigProxyPreview { .. }
@@ -1652,6 +1586,7 @@ mod tests {
                 secret_id: None,
                 mode: ToolConfigMode::Plaintext,
                 codex_api_key_mode: None,
+                preview_id: None,
             },
         };
         assert_eq!(request.response_timeout(), LONG_RESPONSE_TIMEOUT);
@@ -1923,3 +1858,6 @@ mod tests {
         assert_eq!(serde_json::to_value(request).unwrap(), value);
     }
 }
+
+mod tool_config;
+pub use tool_config::*;

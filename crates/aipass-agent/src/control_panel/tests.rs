@@ -927,7 +927,8 @@ fn tool_preview_is_redacted_bound_to_confirmation_and_writes_only_the_test_home(
     );
     let preview: Value = fixture.action(&cookie, &csrf, selection).json().unwrap();
     let apply = json!({"type":"tool_apply","previewId":preview["previewId"]});
-    assert_eq!(fixture.action(&cookie, &csrf, apply.clone()).status(), 200);
+    let applied = fixture.action(&cookie, &csrf, apply.clone());
+    assert_eq!(applied.status(), 200, "{}", applied.text().unwrap());
     assert!(std::fs::read_to_string(&auth_file)
         .unwrap()
         .contains("fake-panel-provider-secret"));

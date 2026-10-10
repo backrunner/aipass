@@ -72,7 +72,7 @@ pub(crate) static TOOL_HOME_OVERRIDES: std::sync::LazyLock<
     Mutex<std::collections::HashMap<Uuid, PathBuf>>,
 > = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-pub(super) fn home_dir(_vault: &Vault) -> ServiceResult<PathBuf> {
+pub(crate) fn home_dir(_vault: &Vault) -> ServiceResult<PathBuf> {
     #[cfg(test)]
     if let Some(home) = TOOL_HOME_OVERRIDES.lock().unwrap().get(&_vault.vault_id()) {
         return Ok(home.clone());

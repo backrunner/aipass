@@ -139,6 +139,37 @@ mod tests {
     }
 
     #[test]
+    fn native_tool_login_and_status_use_typed_tool_commands() {
+        for tool in ["codex", "claude-code"] {
+            let cli = Cli::try_parse_from([
+                "aipass",
+                "tool",
+                "login",
+                tool,
+                ENTRY_ID,
+                "--secret-id",
+                "subscription",
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Tool {
+                    command: ToolCommand::Login {
+                        secret_id: Some(_),
+                        ..
+                    }
+                }
+            ));
+            let cli = Cli::try_parse_from(["aipass", "tool", "status", tool]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Tool {
+                    command: ToolCommand::Status { .. }
+                }
+            ));
+        }
+    }
+    #[test]
     fn official_account_refresh_accepts_repeated_provider_filters() {
         let cli = Cli::try_parse_from([
             "aipass",

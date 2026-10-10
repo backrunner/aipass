@@ -25,9 +25,6 @@ pub(super) fn command(c: &Context, provider: &str, root: &Path) -> Result<tokio:
         std::env::current_exe().map_err(|_| "Agent browser helper unavailable")?,
     )
     .env("AIPASS_NATIVE_OPENED_URL", root.join(".aipass-login-url"));
-    if provider == "codex" {
-        cmd.args(["-c", "cli_auth_credentials_store=\"file\""]);
-    }
     Ok(cmd)
 }
 
@@ -47,7 +44,9 @@ pub(crate) async fn login(c: &mut Context, method: usize) -> Result<Value> {
         let mut cmd = command(c, &provider, &path)?;
         match provider.as_str() {
             "codex" => {
-                cmd.arg("login");
+                // A fresh isolated login chooses file storage explicitly; existing
+                // accounts retain their configured secure backend during renewal.
+                cmd.args(["-c", "cli_auth_credentials_store=\"file\"", "login"]);
                 native_cli::login(cmd, c).await?;
             }
             "grok" => {
@@ -204,7 +203,7 @@ pub(super) async fn rpc(
                     .map_err(|_| "CLI input interrupted")?;
             } else if message["id"] == 2 {
                 if message.get("error").is_some() {
-                    return Err("Official CLI authentication failed; sign in again".into());
+                    return Err(account_error(&message["error"]));
                 }
                 return Ok(message["result"].clone());
             }
@@ -283,4 +282,98 @@ pub(crate) async fn fresh(c: &mut Context) -> Result<()> {
     )));
     c.native_workspace = s(&value, "workspace").into();
     Ok(())
+}
+
+/// Verify and renew using only the official CLI account RPC. Model catalog and
+/// allowance outages must not be mistaken for invalid authentication.
+pub(crate) async fn verify(c: &mut Context) -> Result<()> {
+    let path = root(&c.auth)?;
+    let expected = s(&c.auth, "accountId").to_owned();
+    let current = read("codex", &path)?;
+    if s(&current, "accountId") != expected {
+        return Err("CLI account changed; reconnect explicitly".into());
+    }
+    let _guard = c.refresh_guard()?;
+    let mut cmd = command(c, "codex", &path)?;
+    cmd.arg("app-server");
+    let value = rpc(
+        cmd,
+        c,
+        "account/read",
+        json!({"refreshToken":true}),
+        false,
+        false,
+    )
+    .await?;
+    if value["account"].is_null() || value["requiresOpenaiAuth"] == false {
+        return Err("CLI sign-in expired; sign in again".into());
+    }
+    let auth = read("codex", &path)?;
+    if s(&auth, "accountId") != expected {
+        return Err("CLI account changed during renewal".into());
+    }
+    if auth["expires"]
+        .as_i64()
+        .is_some_and(|t| t <= (now() / 1000) as i64)
+    {
+        return Err("CLI sign-in expired; sign in again".into());
+    }
+    Ok(())
+}
+
+fn account_error(error: &Value) -> String {
+    let text =
+        zeroize::Zeroizing::new(error["message"].as_str().unwrap_or("").to_ascii_lowercase());
+    let code = error["code"].as_i64();
+    if code == Some(429)
+        || ["quota", "rate limit", "too many requests"]
+            .iter()
+            .any(|s| text.contains(s))
+    {
+        "CLI quota unavailable; retry later"
+    } else if code.is_some_and(|c| (500..=599).contains(&c))
+        || ["service unavailable", "internal server", "bad gateway"]
+            .iter()
+            .any(|s| text.contains(s))
+    {
+        "CLI service unavailable; retry later"
+    } else if matches!(code, Some(401 | 403))
+        || [
+            "expired",
+            "invalid_grant",
+            "invalid grant",
+            "revoked",
+            "unauthorized",
+            "not authenticated",
+            "authentication failed",
+            "refresh authentication",
+            "refresh token rejected",
+            "sign in",
+            "login required",
+        ]
+        .iter()
+        .any(|s| text.contains(s))
+    {
+        "CLI sign-in expired; sign in again"
+    } else {
+        "CLI verification unavailable; check the network and retry"
+    }
+    .into()
+}
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+    #[test]
+    fn account_rpc_errors_distinguish_authentication_from_outages_without_echoing_values() {
+        for (code, message, expected) in [
+            (401, "invalid_grant fake-private-token", "sign-in expired"),
+            (429, "limit fake-private-token", "quota"),
+            (503, "upstream fake-private-token", "service unavailable"),
+            (-32000, "socket failure fake-private-token", "network"),
+        ] {
+            let error = account_error(&json!({"code":code,"message":message}));
+            assert!(error.contains(expected));
+            assert!(!error.contains("fake-private"));
+        }
+    }
 }

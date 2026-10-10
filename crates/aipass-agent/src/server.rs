@@ -555,8 +555,9 @@ mod tools;
 use browser::*;
 use favicons::*;
 use probe::*;
+pub(crate) use sync::home_dir;
 #[cfg(test)]
 pub(crate) use sync::TOOL_HOME_OVERRIDES;
-use sync::{conflict_responses, conflict_root, home_dir};
+use sync::{conflict_responses, conflict_root};
 pub(crate) use sync::{run_sync_configured, run_sync_local, run_sync_webdav_target};
-use tools::*;
+pub(crate) use tools::*;

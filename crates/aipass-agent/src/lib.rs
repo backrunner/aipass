@@ -23,6 +23,7 @@ pub mod session;
 mod subscription_import;
 mod subscriptions;
 pub(crate) mod sync_watch;
+mod tool_switch;
 pub(crate) mod usage_probe;
 pub(crate) mod vault_sync;
 pub(crate) mod websocket_capability;

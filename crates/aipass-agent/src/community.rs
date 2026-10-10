@@ -128,7 +128,7 @@ impl CommunityBridge {
         });
         Ok(())
     }
-    fn account_lock(&self, id: Uuid) -> Result<Arc<Mutex<()>>, String> {
+    pub(crate) fn account_lock(&self, id: Uuid) -> Result<Arc<Mutex<()>>, String> {
         let mut map = self
             .inner
             .accounts
@@ -256,6 +256,15 @@ impl CommunityBridge {
         input: CommunityLoginInput,
         proxy: UpstreamProxyConfig,
     ) -> Result<CommunityLoginStatus, String> {
+        self.login_start_bound(state, input, proxy, None)
+    }
+    pub(crate) fn login_start_bound(
+        &self,
+        state: &Arc<AgentState>,
+        input: CommunityLoginInput,
+        proxy: UpstreamProxyConfig,
+        target: Option<Uuid>,
+    ) -> Result<CommunityLoginStatus, String> {
         if !PROVIDERS.contains(&input.provider.as_str()) {
             return Err("unknown community provider".into());
         }
@@ -293,7 +302,7 @@ impl CommunityBridge {
         let bridge = self.clone();
         let state = Arc::downgrade(state);
         std::thread::spawn(move || {
-            let result = bridge.login_run(&state, ticket, worker, input);
+            let result = bridge.login_run(&state, ticket, worker, input, target);
             if let Ok(mut logins) = bridge.inner.logins.lock() {
                 if let Some(login) = logins.get_mut(&ticket) {
                     if login.status.status == "pending" {
@@ -319,8 +328,9 @@ impl CommunityBridge {
         ticket: Uuid,
         mut worker: Adapter,
         input: CommunityLoginInput,
+        target: Option<Uuid>,
     ) -> Result<Uuid, String> {
-        worker.process.send(&json!({"op":"login","provider":input.provider,"method":input.method,"inputs":input.inputs,"key":input.api_key}))?;
+        worker.process.send(&json!({"op":"login","provider":input.provider,"method":input.method,"inputs":input.inputs,"key":input.api_key,"nativeVerifyOnly":target.is_some()}))?;
         let mut auth = None;
         let mut models = json!({});
         loop {
@@ -375,7 +385,15 @@ impl CommunityBridge {
                         return Err("sign-in cancelled".into());
                     }
                     let id = with_vault(&state, false, |vault| {
-                        let id = if matches!(
+                        let id = if let Some(id) = target {
+                            if account.provider != "codex" {
+                                return Err(invalid("native reauthentication requires Codex"));
+                            }
+                            let auth = serde_json::from_str(account.auth.expose())
+                                .map_err(ServiceError::internal)?;
+                            crate::tool_switch::bind_codex_login(vault, id, auth)?;
+                            id
+                        } else if matches!(
                             account.provider.as_str(),
                             "codex" | "grok" | "copilot" | "gemini-cli"
                         ) {
@@ -465,6 +483,23 @@ impl CommunityBridge {
         marker: &str,
         proxy: &UpstreamProxyConfig,
     ) -> Result<Value, String> {
+        self.account_operation(id, marker, proxy, "refresh")
+    }
+    pub(crate) fn verify_native(
+        &self,
+        id: Uuid,
+        marker: &str,
+        proxy: &UpstreamProxyConfig,
+    ) -> Result<Value, String> {
+        self.account_operation(id, marker, proxy, "native_verify")
+    }
+    fn account_operation(
+        &self,
+        id: Uuid,
+        marker: &str,
+        proxy: &UpstreamProxyConfig,
+        op: &str,
+    ) -> Result<Value, String> {
         let lock = self.account_lock(id)?;
         let _guard = lock.try_lock().map_err(|_| ACCOUNT_BUSY)?;
         let mut account = self.load(id, marker)?;
@@ -476,7 +511,7 @@ impl CommunityBridge {
             .epoch;
         let mut worker = Adapter::start(Some(proxy))?;
         self.register(&worker.process, None)?;
-        worker.process.send(&operation("refresh", &account))?;
+        worker.process.send(&operation(op, &account))?;
         loop {
             let frame = worker.next()?;
             match frame["type"].as_str() {

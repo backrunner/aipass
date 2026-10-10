@@ -108,7 +108,11 @@ printf '%s' '{"oauthAccount":{"emailAddress":"alice@example.test"}}' > .claude.j
     let challenge = manager.start_with(binary.clone(), 0).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     while manager.poll(challenge.ticket).unwrap().url.is_none() {
-        assert!(Instant::now() < deadline);
+        assert!(
+            Instant::now() < deadline,
+            "sign-in state: {:?}",
+            manager.poll(challenge.ticket).unwrap()
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(manager.code(challenge.ticket, "wrong\ncode").is_err());

@@ -137,6 +137,14 @@ pub(crate) fn refresh_claude(
     state: &std::sync::Arc<AgentState>,
     id: Uuid,
 ) -> ServiceResult<SubscriptionSnapshot> {
+    // Hold the same account lock as native switches, outside the vault mutex.
+    let lock = crate::tool_switch::native_account_lock(state, id)?;
+    let _guard = lock.try_lock().map_err(|_| {
+        ServiceError::new(
+            aipass_agent_protocol::AgentErrorCode::Conflict,
+            "Account renewal is in progress; retry",
+        )
+    })?;
     let (auth, previous, outbound) = with_vault(state, false, |vault| {
         let auth = claude_reference(vault, id)?.ok_or_else(|| {
             ServiceError::internal(anyhow::anyhow!("Connect Claude with its official CLI"))

@@ -418,9 +418,22 @@ impl Context {
                 }
             };
             self.save(auth).await?;
+            if initial["nativeVerifyOnly"] == true && self.provider == "codex" {
+                cli_accounts::verify(self).await?;
+                return self.emit(json!({"type":"result","value":{"identity":super::community::identity(&self.auth).unwrap_or_default(),"nativeMethod":method}})).await;
+            }
             self.fresh().await?;
             self.catalog().await?;
             return self.emit(json!({"type":"result","value":{"identity":super::community::identity(&self.auth).unwrap_or_default(),"nativeMethod":if descriptor["native"] == true { json!(method) } else { Value::Null }}})).await;
+        }
+        if initial["op"] == "native_verify" {
+            if self.provider != "codex" {
+                return Err("native verification requires Codex".into());
+            }
+            cli_accounts::verify(self).await?;
+            return self
+                .emit(json!({"type":"result","value":{"verified":true}}))
+                .await;
         }
         self.fresh().await?;
         if initial["op"] == "refresh" {

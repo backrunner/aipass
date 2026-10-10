@@ -1,7 +1,7 @@
 //! Tool configuration plans and proxy-route integration.
 use super::*;
 
-pub(super) fn build_tool_config_plan(
+pub(crate) fn build_tool_config_plan(
     vault: &Vault,
     request: &ToolConfigRequest,
     preview: bool,
@@ -18,18 +18,30 @@ pub(super) fn build_tool_config_plan(
     let mut entry = vault
         .get_provider_summary(request.id)
         .map_err(map_vault_error)?;
-    if crate::community::is_account(vault, entry.id)
-        || (entry.provider_kind == ProviderKind::Official
-            && entry.credential_kind == CredentialKind::OAuth
-            && matches!(
-                entry.provider_id.as_deref(),
-                Some("anthropic" | "codex" | "openai" | "grok" | "xai" | "copilot" | "gemini-cli")
-            ))
+    if !matches!(request.mode, ToolConfigMode::Official)
+        && (crate::community::is_account(vault, entry.id)
+            || (entry.provider_kind == ProviderKind::Official
+                && entry.credential_kind == CredentialKind::OAuth
+                && matches!(
+                    entry.provider_id.as_deref(),
+                    Some(
+                        "anthropic"
+                            | "codex"
+                            | "openai"
+                            | "grok"
+                            | "xai"
+                            | "copilot"
+                            | "gemini-cli"
+                    )
+                )))
     {
         return Err(ServiceError::new(
             AgentErrorCode::ValidationFailed,
             "CLI and community subscriptions must be used through a local proxy route",
         ));
+    }
+    if request.mode == ToolConfigMode::Official {
+        crate::tool_switch::validate_reference(vault, entry.id, &request.tool)?;
     }
     let secret = match request.secret_id.as_deref() {
         Some(id) => entry
@@ -71,7 +83,8 @@ pub(super) fn build_tool_config_plan(
         if expected_provider.is_empty()
             || !matches!(&entry.provider_kind, ProviderKind::Official)
             || !matches!(&entry.credential_kind, CredentialKind::OAuth)
-            || entry.provider_id.as_deref() != Some(expected_provider)
+            || !(entry.provider_id.as_deref() == Some(expected_provider)
+                || (expected_provider == "openai" && entry.provider_id.as_deref() == Some("codex")))
         {
             return Err(ServiceError::new(
                 AgentErrorCode::ValidationFailed,
@@ -133,6 +146,12 @@ pub(super) fn build_tool_config_plan(
             .or_else(|| entry.default_model.clone()),
         api_key: None,
     };
+    if matches!(request.mode, ToolConfigMode::Official)
+        && matches!(request.tool, ToolConfigTool::Codex)
+    {
+        tool_entry.provider_id = Some("openai".into());
+        tool_entry.endpoint = Some("https://chatgpt.com/backend-api/codex".into());
+    }
     if matches!(request.mode, ToolConfigMode::Plaintext) {
         tool_entry.api_key = Some(
             vault
@@ -252,6 +271,12 @@ pub(super) fn build_tool_config_plan(
             content: env_content,
         });
     }
+    let content = if request.tool == ToolConfigTool::Codex && request.mode != ToolConfigMode::Env {
+        aipass_config_writers::prepare_native_codex_plan(&mut plan, &content)
+            .map_err(ServiceError::internal)?
+    } else {
+        content
+    };
     Ok((entry, plan, content))
 }
 
@@ -282,7 +307,7 @@ pub(super) fn ensure_tool_credential(
     Ok(())
 }
 
-pub(super) fn build_tool_config_proxy_plan(
+pub(crate) fn build_tool_config_proxy_plan(
     vault: &Vault,
     state: &Arc<AgentState>,
     request: &ToolConfigProxyRequest,
@@ -364,7 +389,7 @@ pub(super) fn build_tool_config_proxy_plan(
         api_key: Some(route.token.clone()),
     };
     let home = home_dir(vault)?;
-    let (plan, content) = match request.tool {
+    let (mut plan, content) = match request.tool {
         ToolId::Codex => {
             (if preview { aipass_config_writers::preview_codex_plaintext_with_mode } else { plan_codex_plaintext_with_mode })(&home, &tool_entry, WriterCodexApiKeyMode::AuthJson).map_err(ServiceError::internal)?
         }
@@ -405,6 +430,12 @@ pub(super) fn build_tool_config_proxy_plan(
         ToolId::Cursor => {
             plan_cursor_local_plaintext(&home, &tool_entry).map_err(ServiceError::internal)?
         }
+    };
+    let content = if request.tool == ToolId::Codex {
+        aipass_config_writers::prepare_native_codex_plan(&mut plan, &content)
+            .map_err(ServiceError::internal)?
+    } else {
+        content
     };
     Ok((tool_entry, plan, content))
 }
@@ -452,27 +483,31 @@ pub(super) fn proxy_endpoint_for_tool(
     }
 }
 
-pub(super) fn tool_config_preview_files(
+pub(crate) fn tool_config_preview_files(
     plan: &ConfigPlan,
     content: &str,
 ) -> Vec<ToolConfigPreviewFile> {
-    let mut files = Vec::with_capacity(plan.extra_writes.len() + 1);
-    files.push(ToolConfigPreviewFile {
-        path: plan.target_path.display().to_string(),
-        content: content.to_string(),
-        diff: aipass_config_writers::diff_preview_for_path(&plan.target_path, content),
-    });
-    for write in &plan.extra_writes {
-        files.push(ToolConfigPreviewFile {
-            path: write.target_path.display().to_string(),
-            content: write.content.clone(),
-            diff: aipass_config_writers::diff_preview_for_path(&write.target_path, &write.content),
-        });
-    }
-    files
+    std::iter::once((&plan.target_path, content))
+        .chain(
+            plan.extra_writes
+                .iter()
+                .map(|w| (&w.target_path, w.content.as_str())),
+        )
+        .map(|(path, content)| {
+            // Redact complete structured documents before constructing line diffs.
+            let before = zeroize::Zeroizing::new(std::fs::read_to_string(path).unwrap_or_default());
+            let before = crate::tool_switch::redact_config(&before);
+            let content = crate::tool_switch::redact_config(content);
+            ToolConfigPreviewFile {
+                path: path.display().to_string(),
+                diff: aipass_config_writers::diff_preview_from(&before, &content),
+                content,
+            }
+        })
+        .collect()
 }
 
-pub(super) fn combined_tool_config_preview(files: &[ToolConfigPreviewFile]) -> String {
+pub(crate) fn combined_tool_config_preview(files: &[ToolConfigPreviewFile]) -> String {
     if files.len() == 1 {
         return files[0].diff.clone();
     }
@@ -508,13 +543,15 @@ pub(super) fn tool_config_tool_for(tool: &ToolId) -> ToolConfigTool {
     }
 }
 
-pub(super) fn tool_apply_response(
+pub(crate) fn tool_apply_response(
     request: ToolConfigRequest,
     entry: EntrySummary,
     plan: ConfigPlan,
     result: ApplyResult,
 ) -> ToolConfigApplyResponse {
     ToolConfigApplyResponse {
+        outcome: aipass_agent_protocol::ToolConfigOutcome::Applied,
+        message: None,
         tool: request.tool,
         mode: request.mode,
         entry_id: entry.id,

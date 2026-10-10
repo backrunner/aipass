@@ -244,6 +244,13 @@ pub fn unlock_with_password(
 
 /// Shared post-unlock lifecycle for local passwords and explicitly granted remote codes.
 pub(crate) fn complete_unlock(state: &Arc<AgentState>) {
+    if crate::tool_switch::recover(state).is_err() {
+        crate::logging::write_component_log(
+            crate::logging::AGENT_LOG,
+            "WARN",
+            "event=tool.switch.recovery_pending",
+        );
+    }
     if with_vault(state, false, |vault| {
         crate::official_accounts::migrate(vault)
     })

@@ -26,6 +26,7 @@ pub fn lock_session(state: &Arc<AgentState>, reason: LockReason) {
         *session = SessionState::Locked;
     }
     state.subscription_imports.clear();
+    crate::tool_switch::cancel_logins(state);
     crate::claude_cli::logins().clear();
     state.session_changed.notify_all();
     // Transition the session first. Any vault operation already in flight must
