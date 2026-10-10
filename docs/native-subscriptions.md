@@ -47,8 +47,10 @@ as usual. Local OpenAI Chat/Responses and Anthropic Messages routes can dispatch
 to these subscriptions, including streaming and tool conversions.
 For groups mixing brands or different model names, bind each member's actual model
 and use the public group model. See [cross-brand routing](proxy-routing.md).
-Direct tool configuration rejects subscription references; configure the local
-proxy route instead, so an account reference never becomes a tool's API key.
+Quick integration can select Codex and Claude Code native subscriptions in
+`official` mode or an exact API credential ID. Other subscriptions retain local
+proxy integration. Subscription references never become tool API keys. See
+[native account switching](native-tool-switching.md).
 WebSockets are disabled for the subscription backend. Gemini's Code Assist response envelope
 preserves native thought signatures and tool history. Copilot premium quota is
 scoped to models with explicit positive billing multipliers; unknown or unrelated
@@ -89,7 +91,7 @@ pnpm --filter @aipass/control-panel build
 pnpm --filter @aipass/desktop build
 ```
 
-Protocol 16 includes explicit `subscription.cli.status`, local subscription import tasks and the retained Claude
+Protocol 17 includes native tool status, bound previews and target-bound login tasks alongside `subscription.cli.status`, local subscription import tasks and the retained Claude
 operation tags. Regression fixtures cover handoff identity and stable IDs,
 credential rereads, account/device changes, CLI RPC, quota scopes, Code Assist
 envelopes, login cancellation and lock/unmount. Browser fixtures cover 960×640 in
