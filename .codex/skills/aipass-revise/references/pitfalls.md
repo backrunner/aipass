@@ -234,6 +234,13 @@ Newest entries last within each section.
 - **Guardrail**: do not assume one TCP read contains a request. Run `fixture_consumes_headers_and_body_across_separate_reads` and the proxy-service suite; use read timeouts on fixture sockets.
 - **Watch points**: `proxy_service/tests.rs`, `proxy_service/tests/{lifecycle,routing}.rs`.
 
+### WebSocket completion is not a usage persistence barrier
+- **Symptom**: a conversion test received both completed responses but immediately counted only one successful attempt in SQLite under a full workspace load.
+- **Root cause**: forwarding a terminal frame and persisting its final usage are separate async steps; client close does not await the server-side database write.
+- **Fix**: both conversion-context fixtures wait within a bounded deadline for successful usage records, then retain the exact request/attempt assertions.
+- **Guardrail**: await the observed persistence state before asserting asynchronous usage counts; never replace exact-count assertions with arbitrary sleeps.
+- **Watch points**: `websocket/tests.rs`, `websocket/tests/persistence.rs`, terminal event forwarding and usage persistence.
+
 ### Unified key editors must not resubmit a first-key snapshot
 - **Symptom**: the first key had a separate editor and could not be deleted; provider saves could overwrite an independently edited key or relabel its successor after deletion.
 - **Root cause**: `apps/desktop/src/App.svelte::openEdit` copied the first credential into the provider draft; `saveProvider` resubmitted it, while `summaryToEntry` treated an empty key list as missing legacy data.

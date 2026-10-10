@@ -4,6 +4,7 @@
 use super::*;
 
 mod diagnostics;
+mod persistence;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{accept_hdr_async, client_async, tungstenite::client::IntoClientRequest};
 
@@ -785,6 +786,7 @@ async fn websocket_converts_responses_turns_to_anthropic_sse_and_replays_lane_co
     assert!(second.iter().all(|value| value["stream_id"] == "main"));
     ws.close(None).await.unwrap();
     upstream.await.unwrap();
+    persistence::wait_for_successful_attempts(&store, 2).await;
     let summary = store.summary(|_| 0).unwrap();
     assert_eq!(summary.request_count, 2);
     assert_eq!(summary.successful_attempts, 2);
@@ -986,6 +988,7 @@ async fn websocket_conversion_preserves_tool_calls_results_and_forked_context() 
     assert!(second.iter().all(|value| value["stream_id"] == "fork"));
     assert_ne!(second.last().unwrap()["response"]["id"], completed["id"]);
     ws.close(None).await.unwrap();
+    persistence::wait_for_successful_attempts(&store, 2).await;
     assert_eq!(store.summary(|_| 0).unwrap().successful_attempts, 2);
     server.abort();
 }
