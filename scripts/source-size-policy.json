@@ -87,11 +87,6 @@
       "owner": "crates/aipass-agent",
       "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
     },
-    "crates/aipass-config-writers/src/lib.rs": {
-      "maxLines": 1206,
-      "owner": "crates/aipass-config-writers",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
     "crates/aipass-config-writers/src/plan.rs": {
       "maxLines": 1534,
       "owner": "crates/aipass-config-writers",

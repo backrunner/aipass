@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+regex = "1"
 aipass-crypto = { path = "../aipass-crypto" }
 aipass-provider-registry = { path = "../aipass-provider-registry" }
 aipass-storage = { path = "../aipass-storage" }
@@ -18,6 +19,11 @@ tempfile.workspace = true
 time.workspace = true
 toml_edit.workspace = true
 uuid.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"

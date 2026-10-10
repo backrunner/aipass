@@ -152,7 +152,7 @@ pub fn diff_preview_for_path(path: &Path, content: &str) -> String {
 /// Produce a small, line-oriented diff without exposing an entire file as a
 /// replacement. This is intentionally dependency-free because plans are also
 /// used by the native agent before any config is written.
-pub(crate) fn diff_preview_from(before: &str, after: &str) -> String {
+pub fn diff_preview_from(before: &str, after: &str) -> String {
     if before == after {
         return "(no changes)".to_string();
     }
