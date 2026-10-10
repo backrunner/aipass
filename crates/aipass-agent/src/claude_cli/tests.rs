@@ -106,7 +106,9 @@ printf '%s' '{"oauthAccount":{"emailAddress":"alice@example.test"}}' > .claude.j
         epoch: AtomicU64::new(0),
     };
     let challenge = manager.start_with(binary.clone(), 0).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // The workspace runs many Argon2 and child-process fixtures concurrently.
+    // This test checks state/commit behavior, not shell startup latency.
+    let deadline = Instant::now() + Duration::from_secs(10);
     while manager.poll(challenge.ticket).unwrap().url.is_none() {
         assert!(
             Instant::now() < deadline,
@@ -120,8 +122,13 @@ printf '%s' '{"oauthAccount":{"emailAddress":"alice@example.test"}}' > .claude.j
         .code(challenge.ticket, "http://localhost:9999/callback?code=x")
         .is_err());
     manager.code(challenge.ticket, "code#test").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
     while manager.poll(challenge.ticket).unwrap().status != "authorized" {
-        assert!(Instant::now() < deadline);
+        assert!(
+            Instant::now() < deadline,
+            "sign-in state: {:?}",
+            manager.poll(challenge.ticket).unwrap()
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(manager
