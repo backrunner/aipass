@@ -36,6 +36,18 @@ textarea,
   -webkit-user-select: text;
 }
 
+// WebKit stretches its native Caps Lock image to the input's inner height.
+// Keep it square in custom-height fields; WebKit still controls visibility.
+input[type="password"]::-webkit-caps-lock-indicator {
+  width: 16px;
+  height: 16px;
+  max-width: 16px;
+  max-height: 16px;
+  align-self: center;
+  flex: 0 0 16px;
+  margin-inline-start: 6px;
+}
+
 // Shared dialog chrome for the bits-ui provider dialogs (ProviderModal,
 // OAuthConnectDialog). Kept global because the dialog content is portalled
 // outside the component DOM subtree.

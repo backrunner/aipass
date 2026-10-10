@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { scrollMask, Banner, Brand, Button, Collapsible } from "@aipass/ui";
+  import { scrollMask, Banner, Brand, Button } from "@aipass/ui";
 
   import { t } from "../../stores/i18n";
   import type { AuthMode, MaybePromise, PasswordStrength, VaultStatus } from "../../types";
@@ -7,6 +7,7 @@
   import PasswordField from "./PasswordField.svelte";
   import PasswordStrengthMeter from "./PasswordStrengthMeter.svelte";
   import ImportVaultForm from "./ImportVaultForm.svelte";
+  import AuthErrorNotice from "./AuthErrorNotice.svelte";
   import type { VaultImportSource } from "../../types";
 
   export let status: VaultStatus;
@@ -238,16 +239,7 @@
     {/if}
 
     {#if error}
-      <Banner tone="danger">
-        <div class="error-block">
-          <span>{error}</span>
-          {#if errorDetail}
-            <Collapsible title={$t("auth.errorDetails")} variant="inline">
-              <pre use:scrollMask class="error-detail-body">{errorDetail}</pre>
-            </Collapsible>
-          {/if}
-        </div>
-      </Banner>
+      <AuthErrorNotice {error} detail={errorDetail} />
     {/if}
   </div>
 </main>
@@ -405,32 +397,6 @@
 
   .inline-error {
     color: var(--danger);
-  }
-
-  .error-block {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-    min-width: 0;
-    flex: 1;
-  }
-
-  .error-detail-body {
-    margin: 0 0 2px;
-    padding: 8px 10px;
-    max-height: 140px;
-    overflow-y: auto;
-    background: color-mix(in oklab, var(--danger) 8%, transparent);
-    border: 1px solid color-mix(in oklab, var(--danger) 22%, transparent);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    user-select: text;
-    -webkit-user-select: text;
   }
 
   .inline-ok {
