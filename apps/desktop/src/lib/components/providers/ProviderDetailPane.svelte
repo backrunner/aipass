@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import SubscriptionAccountCard from "./SubscriptionAccountCard.svelte";
   import ProviderRuntimePanel from "./ProviderRuntimePanel.svelte";
   import { ProviderEmptyState } from "@aipass/ui";
-  import CredentialPicker from "./CredentialPicker.svelte";
+  import ProviderIntegration from "../integration/ProviderIntegration.svelte";
   import CredentialTags from "./CredentialTags.svelte";
   import type { InterfaceType, ProviderEntry, ProviderKind, SecretRef } from "@aipass/schemas";
   import {
@@ -55,16 +56,10 @@
     UsageProbeResult
   } from "../../types";
   import { localizedMessage, t } from "../../stores/i18n";
-  import {
-    compatibleToolsFor,
-    integrationToolDefinitions,
-    providerIntegrationAvailability,
-    type IntegrationToolDefinition
-  } from "../../utils/integrations";
+
   import { secretAuthScheme, secretInterfaceType } from "@aipass/schemas";
   import { usageSourceLabelKey } from "../../utils/usageProbe";
   import { Card } from "@aipass/ui";
-  import IntegrationCard from "../integration/IntegrationCard.svelte";
   import CredentialPricingDialog from "../pricing/CredentialPricingDialog.svelte";
   import PricingGroupDialog from "../pricing/PricingGroupDialog.svelte";
   import ProviderUsageProbeDialog from "./ProviderUsageProbeDialog.svelte";
@@ -184,11 +179,7 @@
   let secretEditGeneration = 0;
   let startingEdit = false;
   let usageDialogOpen = false;
-  type CodexIntegrationMode = CodexApiKeyMode;
-  let codexIntegrationMode: CodexIntegrationMode = "auth_json";
-  let codexIntegrationModeOptions: Array<{ value: CodexIntegrationMode; label: string }> = [];
-  let lastIntegrationEntryId = "";
-  let integrationSecretId = "";
+
   let lastDialogEntryId = "";
   onDestroy(cancelSecretEdit);
   let pricingSecretId = "";
@@ -345,47 +336,10 @@
     catch (error) { if (selected?.id === id) communityError = String(error); }
     finally { communityRefreshing = false; }
   }
+  $: isSubscription = selected?.credentialKind === "oauth";
   $: hasSubscription = Boolean(selected?.subscription);
-  function integrationEntry(entry: ProviderEntry, secret: SecretRef) {
-    return { ...entry, defaultModel: secret.defaultModel ?? entry.defaultModel, interfaceType: secretInterfaceType(secret, entry.interfaceType),
-      authScheme: secretAuthScheme(secret, entry.interfaceType, entry.authScheme) };
-  }
-  $: integrationSecret = selected?.secretRefs.find((secret) => secret.id === integrationSecretId);
-  $: integrationTools = selected?.secretRefs.length
-    ? (integrationSecret ? compatibleToolsFor(integrationEntry(selected, integrationSecret))
-      : integrationToolDefinitions.filter(tool => selected!.secretRefs.some(secret =>
-          compatibleToolsFor(integrationEntry(selected!, secret)).some(item => item.id === tool.id))))
-      .map((tool) => ({
-        ...tool,
-        disabledReason: isOfficialOauth && ["anthropic", "codex", "openai", "grok", "xai", "copilot", "gemini-cli"].includes(selected?.providerId ?? "")
-          ? $t("integration.subscriptionRouteRequired")
-          : integrationSecret && providerIntegrationAvailability(tool, integrationEntry(selected!, integrationSecret)) === "default-model"
-          ? $t("integration.providerDefaultModelRequired")
-          : undefined
-      }))
-    : [];
-  // CLI-owned subscriptions are configured through local proxy groups.
-  // API credentials keep their direct tool configuration choices.
   $: keyFormats = selected ? [...new Set(selected.secretRefs.map(secret => secret.interfaceType ?? selected!.interfaceType))] : [];
   $: isOfficialOauth = selected?.credentialKind === "oauth" && selected?.providerKind === "official";
-  $: codexIntegrationModeOptions = isOfficialOauth
-    ? []
-    : [
-        { value: "auth_json", label: "auth.json" },
-        {
-          value: "experimental_bearer_token",
-          label: $t("providerDetail.codexModeExperimental")
-        }
-      ];
-
-  $: if (selected?.id && selected.id !== lastIntegrationEntryId) {
-    lastIntegrationEntryId = selected.id;
-    codexIntegrationMode = "auth_json";
-    integrationSecretId = selected.secretRefs.length === 1 ? selected.secretRefs[0].id : "";
-  }
-  $: if (integrationSecretId && !selected?.secretRefs.some(secret => secret.id === integrationSecretId)) {
-    integrationSecretId = "";
-  }
 
   // Close the dialogs only when the selected entry actually changes. Background
   // reloads swap the `selected` reference for the same id and must not interrupt
@@ -398,35 +352,6 @@
     showAddSecret = false;
     newSecretKey = "";
     cancelSecretEdit();
-  }
-
-  function integrationRequest(tool: IntegrationToolDefinition, id: string) {
-    if ((tool.id === "codex" || tool.id === "claude-code") && isOfficialOauth) {
-      return { tool: tool.id, mode: "official" as ToolConfigMode, id };
-    }
-    if (tool.id !== "codex") {
-      return { tool: tool.id, mode: tool.defaultMode, id };
-    }
-    return {
-      tool: tool.id,
-      mode: "plaintext" as ToolConfigMode,
-      id,
-      codexApiKeyMode: codexIntegrationMode
-    };
-  }
-
-  function setCodexIntegrationMode(mode: string) {
-    codexIntegrationMode = mode as CodexIntegrationMode;
-  }
-
-  async function previewIntegration(tool: IntegrationToolDefinition) {
-    if (!selected || !integrationSecret) throw new Error($t("integration.chooseKey"));
-    const request = { ...integrationRequest(tool, selected.id), secretId: integrationSecret.id };
-    const apply = onApplyToolConfig;
-    return {
-      preview: await onPreviewToolConfig(request),
-      apply: () => apply(request)
-    };
   }
 
   function fullyMasked(): string {
@@ -464,7 +389,7 @@
   }
 
   async function startEdit() {
-    if (!selected || startingEdit) return;
+    if (!selected || isSubscription || startingEdit) return;
     startingEdit = true;
     try { await onEditStart(selected); } finally { startingEdit = false; }
   }
@@ -516,7 +441,7 @@
 </script>
 
 {#if selected}
-  <section class="detail" class:editing={editMode}>
+  <section class="detail" class:editing={editMode && !isSubscription}>
     <header class="detail-header">
       <div class="identity">
         <ProviderIcon title={selected.title} kind={selected.providerKind} providerId={selected.providerId} credentialKind={selected.credentialKind} domain={selected.domains[0]} faviconUrl={selected.faviconUrl} size="lg" />
@@ -524,15 +449,15 @@
           <h1>{selected.title}</h1>
           <div class="meta">
             <Badge tone={providerKindTone[selected.providerKind]}>{$t(providerKindLabelKey(selected.providerKind))}</Badge>
-            <Badge>{$t(keyFormats.length > 1 ? "credential.multipleFormats" : interfaceLabelKey(keyFormats[0] ?? selected.interfaceType))}</Badge>
+            {#if !isSubscription}<Badge>{$t(keyFormats.length > 1 ? "credential.multipleFormats" : interfaceLabelKey(keyFormats[0] ?? selected.interfaceType))}</Badge>{/if}
             <Badge>{$t(selected.credentialKind === "oauth" ? "providerDetail.oauth" : "providerDetail.api")}</Badge>
-            {#if selected.accountIdentity}<span class="account-identity">{selected.accountIdentity}</span>{/if}
+            {#if !isSubscription && selected.accountIdentity}<span class="account-identity">{selected.accountIdentity}</span>{/if}
           </div>
         </div>
       </div>
 
       <div class="actions">
-        {#if !editMode && !showTrash}
+        {#if (!editMode || isSubscription) && !showTrash}
           <IconButton
             label={selected.favorite ? $t("providerDetail.removeFavorite") : $t("providerDetail.addFavorite")}
             pressed={selected.favorite}
@@ -542,7 +467,7 @@
             <Star size={16} fill={selected.favorite ? "currentColor" : "none"} />
           </IconButton>
         {/if}
-        {#if editMode}
+        {#if editMode && !isSubscription}
           <Button variant="ghost" disabled={saving} on:click={cancelEdit}>{$t("common.cancel")}</Button>
           <Button variant="primary" loading={saving} disabled={Boolean(secretBusy) || editingSecretSaving || editingSecretLoading || addingSecret || Boolean(editingSecretId && (!editingSecretLabel.trim() || !editingSecretValue.trim())) || (showAddSecret && (!newSecretLabel.trim() || !newSecretKey.trim()))} on:click={saveEdit}>{$t("providerModal.saveChanges")}</Button>
         {:else if showTrash}
@@ -560,9 +485,9 @@
             <Trash2 size={14} /> {$t("providerDetail.moveToTrash")}
           </Button>
         {:else}
-          <Button variant="primary" loading={startingEdit} on:click={startEdit}>
+          {#if !isSubscription}<Button variant="primary" loading={startingEdit} on:click={startEdit}>
             <Pencil size={14} /> {$t("providerDetail.edit")}
-          </Button>
+          </Button>{/if}
 
           <DropdownMenu.Root>
             <DropdownMenu.Trigger>
@@ -613,7 +538,7 @@
         {/if}
       {/if}
 
-      {#if editMode}
+      {#if editMode && !isSubscription}
         <ProviderFormFields
           showSecretFields={false}
           showConcurrencySetting
@@ -743,10 +668,10 @@
           </div>
         </section>
       {:else}
+        {#if isSubscription}
+          <SubscriptionAccountCard entry={selected} />
+        {:else}
         <Card title={$t("providerDetail.credentials")} padded={false}>
-          {#if selected.credentialKind === "oauth"}
-            <div class="oauth-note">{$t("providerDetail.oauthCredentialNote")}</div>
-          {/if}
           {#if endpointDisplay(selected)}
             <button
               type="button"
@@ -1001,6 +926,7 @@
             </div>
           {/if}
         </Card>
+        {/if}
 
         {#if hasQuota}
           <Card title={$t("providerDetail.quota")} collapsible>
@@ -1068,21 +994,9 @@
           </Card>
         {/if}
 
-        {#if integrationTools.length > 0}
-          <IntegrationCard
-            tools={integrationTools}
-            disabled={!integrationSecret}
-            detections={toolDetections}
-            onRefresh={onRefreshToolDetections}
-            codexMode={codexIntegrationMode}
-            codexModeOptions={codexIntegrationModeOptions}
-            onCodexModeChange={setCodexIntegrationMode}
-            resetKey={JSON.stringify([selected.id, selected.title, selected.providerId, integrationSecret, selected.interfaceType, selected.authScheme, selected.endpoints, selected.defaultModel, selected.supportsWebsockets, codexIntegrationMode, isOfficialOauth])}
-            onPreview={previewIntegration}
-          >
-            <CredentialPicker entry={selected} value={integrationSecretId} onValueChange={(value) => (integrationSecretId = value)} />
-          </IntegrationCard>
-        {/if}
+        <ProviderIntegration entry={selected} {invokeTauri} detections={toolDetections}
+          checkRevision={JSON.stringify([selected.updatedAt, selected.subscription?.observedAt, probeResult?.ok, probeResult?.status, usageProbeResult?.ok, usageProbeResult?.status])}
+          onPreview={onPreviewToolConfig} onApply={onApplyToolConfig} onRefresh={onRefreshToolDetections} />
       {/if}
     </div>
   </section>
@@ -1278,6 +1192,13 @@
     align-items: center;
   }
 
+
+  .snapshot-source {
+    margin-top: 8px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+  }
+
   .account-identity {
     color: var(--text-tertiary);
     font-size: 12px;
@@ -1287,18 +1208,6 @@
     max-width: 240px;
   }
 
-  .snapshot-source {
-    margin-top: 8px;
-    color: var(--text-tertiary);
-    font-size: 12px;
-  }
-
-  .oauth-note {
-    padding: 8px 14px;
-    color: var(--text-tertiary);
-    font-size: 12px;
-    border-bottom: 1px solid var(--border);
-  }
 
   .actions {
     flex: 0 0 auto;

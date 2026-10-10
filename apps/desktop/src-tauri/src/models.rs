@@ -356,6 +356,8 @@ pub(crate) struct ToolConfigRequest {
     pub(crate) mode: ToolConfigMode,
     #[serde(default)]
     pub(crate) codex_api_key_mode: Option<CodexApiKeyMode>,
+    #[serde(default)]
+    pub(crate) preview_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -369,6 +371,7 @@ pub(crate) struct ToolConfigPreviewFile {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolConfigPreviewResponse {
+    pub(crate) preview_id: Option<String>,
     pub(crate) tool: ToolConfigTool,
     pub(crate) mode: ToolConfigMode,
     pub(crate) entry_id: Uuid,
@@ -382,6 +385,8 @@ pub(crate) struct ToolConfigPreviewResponse {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ToolConfigApplyResponse {
+    pub(crate) outcome: aipass_agent_protocol::ToolConfigOutcome,
+    pub(crate) message: Option<String>,
     pub(crate) tool: ToolConfigTool,
     pub(crate) mode: ToolConfigMode,
     pub(crate) entry_id: Uuid,
@@ -499,6 +504,7 @@ pub(crate) fn into_agent_tool_config_request(request: ToolConfigRequest) -> Agen
             }
             CodexApiKeyMode::AuthJson => AgentCodexApiKeyMode::AuthJson,
         }),
+        preview_id: request.preview_id,
     }
 }
 
@@ -506,6 +512,7 @@ pub(crate) fn from_agent_tool_config_preview(
     response: AgentToolConfigPreviewResponse,
 ) -> ToolConfigPreviewResponse {
     ToolConfigPreviewResponse {
+        preview_id: response.preview_id,
         tool: from_agent_tool(response.tool),
         mode: from_agent_tool_mode(response.mode),
         entry_id: response.entry_id,
@@ -529,6 +536,8 @@ pub(crate) fn from_agent_tool_config_apply(
     response: AgentToolConfigApplyResponse,
 ) -> ToolConfigApplyResponse {
     ToolConfigApplyResponse {
+        outcome: response.outcome,
+        message: response.message,
         tool: from_agent_tool(response.tool),
         mode: from_agent_tool_mode(response.mode),
         entry_id: response.entry_id,

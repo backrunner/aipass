@@ -15,6 +15,7 @@ mod runtime_lifecycle;
 mod self_install;
 mod singleton;
 mod subscription_import;
+mod tool_commands;
 mod tray;
 mod tray_i18n;
 #[cfg(target_os = "macos")]
@@ -27,6 +28,7 @@ use panel_commands::*;
 use provider_inputs::endpoints_from;
 use provider_inputs::{provider_add_input, provider_update_input};
 use subscription_import::*;
+use tool_commands::*;
 use updates::{
     check_for_updates, clear_pending_update, download_update, install_pending_update,
     install_update,
@@ -2376,6 +2378,12 @@ pub fn run() {
             provider_usage_apply,
             tool_config_preview,
             tool_config_apply,
+            tool_config_status,
+            tool_config_rollback,
+            tool_config_login_start,
+            tool_config_login_poll,
+            tool_config_login_code,
+            tool_config_login_cancel,
             tool_config_proxy_preview,
             tool_config_proxy_apply,
             native_host_status,

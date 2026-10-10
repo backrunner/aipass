@@ -67,6 +67,7 @@
   }
 
   function entrySubtitle(entry: ProviderEntry): string {
+    if (entry.credentialKind === "oauth") return entry.accountIdentity ?? "";
     const parts: string[] = [];
     if (entry.accountIdentity) parts.push(entry.accountIdentity);
     const target = entry.domains[0] ?? entry.endpoints[0]?.url ?? entry.defaultModel;
@@ -75,13 +76,7 @@
     return parts.join(" · ");
   }
 
-  function getStatusIndicator(entry: ProviderEntry): "active" | "warning" | "error" | "inactive" {
-    if (entry.deletedAt || entry.archivedAt) return "inactive";
-    if (entry.websocketWarning) return "error";
-    if (entry.subscription?.error || entry.quota?.remaining === "0") return "warning";
-    if (entry.lastUsedAt) return "active";
-    return "inactive";
-  }
+
 </script>
 
 <section class="list-pane">
@@ -174,7 +169,6 @@
               <div class="entry-main">
                 <div class="title-row">
                   <span class="title">{entry.title}</span>
-                  <span class="status-indicator status-{getStatusIndicator(entry)}" aria-label={getStatusIndicator(entry)}></span>
                   {#if entry.credentialKind === "oauth"}
                     <Badge size="sm">{$t("providerDetail.oauth")}</Badge>
                   {/if}
@@ -370,32 +364,6 @@
     white-space: nowrap;
     font-size: 12px;
     color: var(--text-tertiary);
-  }
-
-  .status-indicator {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .status-active {
-    background: var(--success);
-    box-shadow: 0 0 0 2px var(--success-soft);
-  }
-
-  .status-warning {
-    background: var(--warning);
-    box-shadow: 0 0 0 2px var(--warning-soft);
-  }
-
-  .status-error {
-    background: var(--error);
-    box-shadow: 0 0 0 2px var(--error-soft);
-  }
-
-  .status-inactive {
-    background: var(--border);
   }
 
   @media (max-width: 720px) {

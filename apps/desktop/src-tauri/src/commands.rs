@@ -4,15 +4,13 @@ use crate::auth_tasks::{
     VaultAuthTaskStatusRequest, VaultAuthTaskStatusResponse,
 };
 use crate::models::{
-    from_agent_sync_conflict_response, from_agent_sync_settings, from_agent_tool_config_apply,
-    from_agent_tool_config_preview, from_tool_id, into_agent_cloud_sync_provider,
-    into_agent_sync_conflict_request, into_agent_sync_settings_update,
-    into_agent_tool_config_request, into_tool_id, AppPreferences, BrowserExtensionInstallResult,
+    from_agent_sync_conflict_response, from_agent_sync_settings, from_tool_id,
+    into_agent_cloud_sync_provider, into_agent_sync_conflict_request,
+    into_agent_sync_settings_update, AppPreferences, BrowserExtensionInstallResult,
     BrowserExtensionStatus, ChangePasswordRequest, CreateVaultRequest, NativeHostRepairRequest,
     NativeHostStatus, ProbeResult, ProviderAddRequest, ProviderUpdateRequest, RecoveryVaultRequest,
     SavePreferencesRequest, SaveSyncSettingsRequest, SyncCloudRequest, SyncConflictActionRequest,
     SyncConflictResponse, SyncConflictsRequest, SyncLocalRequest, SyncSettings, SyncWebDavRequest,
-    ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest, ToolConfigTool,
     ToolDetection, UnlockVaultRequest, VaultExportRequest, VaultImportRequest, VaultStatus,
 };
 use aipass_agent_protocol::{
@@ -22,10 +20,8 @@ use aipass_agent_protocol::{
     ProviderHeaderValues, SecretValue, SensitiveString, ServerTokenResponse, ServerUsageSummary,
     SessionPolicy, SessionStatus, SessionUnlockMode,
     SyncConflictResponse as AgentSyncConflictResponse, SyncSettings as AgentSyncSettings,
-    ToolConfigApplyResponse as AgentToolConfigApplyResponse,
-    ToolConfigPreviewResponse as AgentToolConfigPreviewResponse,
-    ToolConfigProxyRequest as AgentToolConfigProxyRequest, UsageGranularity, UsageProbeMode,
-    UsageProbeResult as AgentUsageProbeResult, UsageProbeSource, UsageTimeseriesPoint,
+    UsageGranularity, UsageProbeMode, UsageProbeResult as AgentUsageProbeResult, UsageProbeSource,
+    UsageTimeseriesPoint,
 };
 use aipass_provider_registry::{GatewayMetadata, OAuthProvider, QuotaInfo, SubscriptionSnapshot};
 use aipass_proxy::{ProxyConfig, ProxyStatus};
@@ -1081,74 +1077,6 @@ pub(crate) async fn provider_usage_apply(
     )
     .await?;
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn tool_config_preview(
-    app: AppHandle,
-    request: ToolConfigRequest,
-) -> Result<ToolConfigPreviewResponse, String> {
-    let response: AgentToolConfigPreviewResponse = agent_request_async(
-        app,
-        AgentRequest::ToolConfigPreview {
-            request: into_agent_tool_config_request(request),
-        },
-    )
-    .await?;
-    Ok(from_agent_tool_config_preview(response))
-}
-
-#[tauri::command]
-pub(crate) async fn tool_config_apply(
-    app: AppHandle,
-    request: ToolConfigRequest,
-) -> Result<ToolConfigApplyResponse, String> {
-    let response: AgentToolConfigApplyResponse = agent_request_async(
-        app,
-        AgentRequest::ToolConfigApply {
-            request: into_agent_tool_config_request(request),
-        },
-    )
-    .await?;
-    Ok(from_agent_tool_config_apply(response))
-}
-
-#[tauri::command]
-pub(crate) async fn tool_config_proxy_preview(
-    app: AppHandle,
-    tool: ToolConfigTool,
-    route_id: Uuid,
-) -> Result<ToolConfigPreviewResponse, String> {
-    let response: AgentToolConfigPreviewResponse = agent_request_async(
-        app,
-        AgentRequest::ToolConfigProxyPreview {
-            request: AgentToolConfigProxyRequest {
-                tool: into_tool_id(tool),
-                route_id,
-            },
-        },
-    )
-    .await?;
-    Ok(from_agent_tool_config_preview(response))
-}
-
-#[tauri::command]
-pub(crate) async fn tool_config_proxy_apply(
-    app: AppHandle,
-    tool: ToolConfigTool,
-    route_id: Uuid,
-) -> Result<ToolConfigApplyResponse, String> {
-    let response: AgentToolConfigApplyResponse = agent_request_async(
-        app,
-        AgentRequest::ToolConfigProxyApply {
-            request: AgentToolConfigProxyRequest {
-                tool: into_tool_id(tool),
-                route_id,
-            },
-        },
-    )
-    .await?;
-    Ok(from_agent_tool_config_apply(response))
 }
 
 #[tauri::command]

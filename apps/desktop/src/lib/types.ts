@@ -473,6 +473,7 @@ export type SecretKeyMetadata = {
 };
 
 export type ToolConfigPreview = {
+  previewId?: string;
   tool: ToolConfigTarget;
   mode: ToolConfigMode;
   entryId: string;
@@ -484,6 +485,8 @@ export type ToolConfigPreview = {
 };
 
 export type ToolConfigApplyResult = {
+  outcome?: "applied" | "login_required" | "conflict" | "storage_unavailable";
+  message?: string;
   tool: ToolConfigTarget;
   mode: ToolConfigMode;
   entryId: string;
@@ -545,3 +548,7 @@ export type PasswordStrength = {
   score: number;
   hint?: string;
 };
+
+export type ToolSwitchRequest = { tool: ToolConfigTarget; mode: ToolConfigMode; id: string; secretId?: string; codexApiKeyMode?: CodexApiKeyMode; previewId?: string };
+export type ToolConfigStatus = { tool: ToolConfigTarget; state: string; entryTitle?: string; entryId?: string; secretId?: string; mode?: ToolConfigMode; accountIdentity?: string; operationId?: string; message?: string; overrides: string[] };
+export type ToolConfigLoginStatus = { ticket: string; status: string; url?: string; userCode?: string; requiresCode: boolean; message?: string; result?: ToolConfigApplyResult };

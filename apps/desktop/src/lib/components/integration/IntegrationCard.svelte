@@ -7,7 +7,7 @@
   import type {
     ToolConfigApplyResult,
     ToolConfigPreview,
-    ToolDetection
+    ToolDetection, ToolConfigStatus
   } from "../../types";
   import type { IntegrationToolDefinition } from "../../utils/integrations";
   import { Card } from "@aipass/ui";
@@ -31,7 +31,12 @@
   export let onRefresh: () => Promise<void> | void = () => {};
   export let resetKey = "";
   export let disabled = false;
+  export let showContext = true;
   export let localProxy = false;
+  export let nativeSwitch = false;
+  export let statuses: Record<string, ToolConfigStatus> = {};
+  export let onRestore: (tool: IntegrationToolDefinition) => Promise<void> = async () => {};
+  export let onReconnect: (tool: IntegrationToolDefinition) => Promise<void> = async () => {};
 
   type ToolState = { busy: boolean; error: string; applied?: ToolConfigApplyResult };
   const emptyState = (): ToolState => ({ busy: false, error: "" });
@@ -181,7 +186,7 @@
     </IconButton>
   </svelte:fragment>
   <div class="integrate-body">
-    {#if $$slots.default}
+    {#if showContext && $$slots.default}
       <div class="integration-context"><slot /></div>
     {/if}
 
@@ -210,7 +215,7 @@
                 <Eye size={14} />
               </IconButton>
               <Button variant="secondary" size="sm" on:click={() => showPreview(tool, false)} disabled={state.busy || disabled || Boolean(tool.disabledReason)}>
-                {$t("server.writeConfig")}
+                {$t(nativeSwitch ? "integration.switchAccount" : "server.writeConfig")}
               </Button>
             </span>
           </div>
@@ -225,6 +230,22 @@
                 onChange={onCodexModeChange}
               />
             </div>
+          {/if}
+
+          {#if statuses[tool.id]}
+            {@const status = statuses[tool.id]}
+            <div class="tool-current">
+              <span>{$t("integration.current")}: {status.accountIdentity || status.entryTitle || $t("integration.unmanaged")}
+                · {$t(`integration.state.${status.state}`)}</span>
+              {#if status.mode === "official" && ["login_required", "renewal_required"].includes(status.state)}
+                <Button size="sm" disabled={state.busy} on:click={() => onReconnect(tool)}>{$t("integration.relogin")}</Button>
+              {/if}
+              {#if status.operationId}
+                <Button size="sm" disabled={state.busy || status.state === "conflict"} on:click={() => onRestore(tool)}>{$t("integration.restore")}</Button>
+              {/if}
+            </div>
+            {#if ["api_key_invalid", "api_key_changed"].includes(status.state)}<Banner tone="warning">{$t("integration.updateApiKey")}</Banner>{/if}
+            {#if status.overrides.length}<Banner tone="warning">{$t("integration.environmentOverrides", { keys: status.overrides.join(", ") })}</Banner>{/if}
           {/if}
 
           {#if state.error}
@@ -369,6 +390,9 @@
     align-items: center;
     gap: 8px;
   }
+
+  .tool-current { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); }
+  .tool-current > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
   .tool-options {
     display: flex;

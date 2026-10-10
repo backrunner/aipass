@@ -1,5 +1,5 @@
 import type { ProviderEntry } from "@aipass/schemas";
-import { emptyDraft } from "@aipass/ui";
+import { emptyDraft, ProviderListPane } from "@aipass/ui";
 import { flushSync, mount, unmount, type ComponentProps } from "svelte";
 import { fromStore, writable } from "svelte/store";
 import { setLocale } from "../../stores/i18n";
@@ -25,6 +25,36 @@ function render(props: Partial<ComponentProps<typeof ProviderDetailPane>> = {}) 
   app = mount(ProviderDetailPane, { target: document.body, props: { invokeTauri: async () => { throw new Error("Unexpected runtime request"); }, selected, draft: emptyDraft(), probeResult: undefined, usageProbeResult: undefined, ...props } });
   flushSync();
 }
+
+test.each(["codex", "anthropic", "gemini"])("%s subscriptions show a read-only account without API credentials", (providerId) => {
+  const onReadSecret = vi.fn();
+  render({ selected: { ...selected, providerId, credentialKind: "oauth", accountIdentity: "alice@example.test:workspace-a",
+    endpoints: [{ id: "api", kind: "api", url: "https://fixture.test/api" }], defaultModel: "fixture-model" },
+    revealedSecrets: { key: "must-not-display" }, onReadSecret, editMode: true });
+  expect(document.querySelector(".subscription-account")?.textContent).toContain("alice@example.test:workspace-a");
+  expect(document.body.textContent).not.toContain("must-not-display");
+  expect(document.body.textContent).not.toContain("Managed by");
+  expect(document.querySelector(".credential-inline-editor, .secret-edit-row, .secret-copy, .add-secret-row, .credential-picker-trigger, .form-section, input[type=password]")).toBeNull();
+  expect([...document.querySelectorAll(".detail-header button")].some(button => button.textContent?.includes("Edit"))).toBe(false);
+  expect(onReadSecret).not.toHaveBeenCalled();
+});
+
+test("subscriptions without an identity display their account title", () => {
+  render({ selected: { ...selected, credentialKind: "oauth" } });
+  expect(document.querySelector(".subscription-account")?.textContent).toContain(selected.title);
+});
+
+test("the main account list omits health indicators and subscription API metadata", () => {
+  setLocale("en");
+  const account: ProviderEntry = { ...selected, credentialKind: "oauth", accountIdentity: "alice@example.test",
+    domains: ["api.fixture.test"], websocketWarning: { reason: "fixture", status: 400, detectedAt: 0, configKey: [] },
+    subscription: { observedAt: "2026-10-10T00:00:00Z", source: "fixture", windows: [], error: "expired" } };
+  app = mount(ProviderListPane, { target: document.body, props: { entries: [account, { ...selected, id: "api", lastUsedAt: "2026-10-10T00:00:00Z" }] } });
+  flushSync();
+  expect(document.querySelector(".status-indicator")).toBeNull();
+  expect(document.querySelector(".subtitle")?.textContent).toBe("alice@example.test");
+  expect(document.body.textContent).not.toContain("api.fixture.test");
+});
 
 async function chooseCredential(id: string) {
   document.querySelector<HTMLButtonElement>(".credential-picker-trigger")!
