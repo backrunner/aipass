@@ -15,8 +15,7 @@ run("pnpm", [
   "--debug",
   "--features",
   "custom-protocol",
-  "--bundles",
-  "app",
+  ...(process.platform === "darwin" ? ["--bundles", "app"] : ["--no-bundle"]),
   "--ci",
   "--config",
   "src-tauri/tauri.dev.conf.json"
@@ -33,7 +32,8 @@ if (process.platform === "darwin") {
   run(lsregister, ["-f", appBundle]);
   console.log(`registered aipass-dev:// with ${appBundle}`);
 } else {
-  console.log("development desktop built; the debug app registers aipass-dev:// on startup");
+  const executable = join(repoRoot, "target", "debug", process.platform === "win32" ? "aipass-desktop.exe" : "aipass-desktop");
+  console.log(`development desktop built at ${executable}; launch it to register aipass-dev://`);
 }
 
 function run(command, args) {

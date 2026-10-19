@@ -99,10 +99,10 @@ aee9eb05ecc931af04b784f4dd2e589de8f573fd90ad3f8c53de1c480d3bf186 ../../packages/
 f32b22b84b182859220ec87c2a1d06654d043774500151bc7c9c39dd606a2dc0 ../../packages/ui/src/index.test.ts
 30140eb1e0885a34c7b2504eb68d865ee0b3e82b5e25f289c314583843edfd07 ../../packages/ui/src/index.ts
 e869bc56c5048b80726d1c251a9868e5c36f96c4a6afdc7543b09478e77fe977 ../../packages/ui/src/locales/aliases.json
-bfcd2740a70b7bc613d8c699bbc5c698f50d0356c27d4964cf653ec4b2d128ac ../../packages/ui/src/locales/en.json
-e3510f57bc9e3d8b9de70077e0cd3d9ba41ab89e2bfe00cbaf80dc3a1a2be2b0 ../../packages/ui/src/locales/zh-CN.json
+baef94777467b3d1e6e5c793f8a7da3b4950b819844a8e8cf56bb9f7b41893de ../../packages/ui/src/locales/en.json
+d162eab6d50f14e98436e3469e7c627e47ef7ea1c04f48cdbe93cf5c016a048f ../../packages/ui/src/locales/zh-CN.json
 b9018964d3462a82d1e63fe60da79bfd7034fb7723f7264d61ba4f9dd8c54be0 ../../packages/ui/src/provider-icons.ts
-2bbbbb6db9e1bf409e9f5a494d64bfec326689f1bc69b2632485df8514695d61 ../../packages/ui/src/styles/base.scss
+faa453a5674fdfe1721a9ce1d56e785acf876948f771bea27257ddb1dc7db65f ../../packages/ui/src/styles/base.scss
 b324d7c8d1f94e41888ce20da7fdfc5eb9b0c5a9c68b04f7a88db07d3e45f01b ../../packages/ui/src/types.ts
 05fed22f80bfc74f66dea9f5217d34431051584c9dfc3b51e2eece7e4e31a6ba ../desktop/public/aipass-logo.png
 7b746e40871e826a5ada08ff0d52c74390e0cc97a962c2b585c07eadb690bea9 index.html

@@ -1,7 +1,6 @@
 use aipass_agent_protocol::{read_frame, write_frame};
 use anyhow::{Context, Result};
 #[cfg(not(target_os = "windows"))]
-use directories::ProjectDirs;
 #[cfg(not(target_os = "windows"))]
 use interprocess::local_socket::GenericFilePath;
 #[cfg(target_os = "windows")]
@@ -367,8 +366,7 @@ fn desktop_singleton_name(instance: DesktopInstanceKind) -> &'static str {
 
 #[cfg(not(target_os = "windows"))]
 fn desktop_runtime_dir() -> Result<PathBuf> {
-    let dirs =
-        ProjectDirs::from("dev", "aipass", "desktop").context("cannot determine project dir")?;
+    let dirs = aipass_agent::paths::project_dirs()?;
     let dir = if let Some(explicit) = std::env::var_os("AIPASS_DESKTOP_RUNTIME_DIR") {
         PathBuf::from(explicit)
     } else {
@@ -379,9 +377,7 @@ fn desktop_runtime_dir() -> Result<PathBuf> {
                 .join(".aipass")
                 .join("run")
         } else {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| dirs.data_local_dir().join("runtime"))
+            aipass_agent::paths::linux_runtime_root(&dirs.data_local_dir().join("runtime"))
         };
         root.join("aipass-desktop")
     };

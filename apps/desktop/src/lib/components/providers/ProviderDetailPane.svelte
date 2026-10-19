@@ -16,6 +16,7 @@
     CredentialBillingFields,
     Field,
     IconButton,
+    SelectField,
     ProviderFormFields,
     ProviderIcon,
     providerKindTone
@@ -585,11 +586,7 @@
                     <Undo2 size={13} />
                   </IconButton>
                   <div class="secret-edit-meta">
-                    <select value={editingSecretInterface} aria-label={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} on:change={(event) => (editingSecretInterface = event.currentTarget.value as InterfaceType)}>
-                      {#each keyInterfaceOptions as option}
-                        <option value={option.value}>{option.label}</option>
-                      {/each}
-                    </select>
+                    <SelectField value={editingSecretInterface} ariaLabel={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} options={keyInterfaceOptions} onValueChange={(value) => (editingSecretInterface = value as InterfaceType)} />
                     <input
                       bind:value={editingSecretGroup}
                       aria-label={$t("providerDetail.keyGroup")}
@@ -645,11 +642,7 @@
                   <Trash2 size={13} />
                 </Button>
                 <div class="secret-edit-meta">
-                  <select value={newSecretInterface} aria-label={$t("providerDetail.keyFormat")} on:change={(event) => (newSecretInterface = event.currentTarget.value as InterfaceType)}>
-                    {#each keyInterfaceOptions as option}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
+                  <SelectField value={newSecretInterface} ariaLabel={$t("providerDetail.keyFormat")} options={keyInterfaceOptions} onValueChange={(value) => (newSecretInterface = value as InterfaceType)} />
                   <input
                     bind:value={newSecretGroup}
                     aria-label={$t("providerDetail.keyGroup")}
@@ -713,11 +706,7 @@
                   <Undo2 size={13} />
                 </IconButton>
                 <div class="secret-edit-meta">
-                  <select value={editingSecretInterface} aria-label={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} on:change={(event) => (editingSecretInterface = event.currentTarget.value as InterfaceType)}>
-                    {#each keyInterfaceOptions as option}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
+                  <SelectField value={editingSecretInterface} ariaLabel={$t("providerDetail.keyFormat")} disabled={editingSecretLoading} options={keyInterfaceOptions} onValueChange={(value) => (editingSecretInterface = value as InterfaceType)} />
                   <input
                     bind:value={editingSecretGroup}
                     aria-label={$t("providerDetail.keyGroup")}
@@ -811,11 +800,7 @@
                   <Undo2 size={13} />
                 </IconButton>
                 <div class="secret-edit-meta">
-                  <select value={newSecretInterface} aria-label={$t("providerDetail.keyFormat")} on:change={(event) => (newSecretInterface = event.currentTarget.value as InterfaceType)}>
-                    {#each keyInterfaceOptions as option}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
+                  <SelectField value={newSecretInterface} ariaLabel={$t("providerDetail.keyFormat")} options={keyInterfaceOptions} onValueChange={(value) => (newSecretInterface = value as InterfaceType)} />
                   <input
                     bind:value={newSecretGroup}
                     aria-label={$t("providerDetail.keyGroup")}
@@ -1633,8 +1618,7 @@
       grid-column: 1 / -1;
     }
 
-    input,
-    select {
+    input {
       width: 100%;
       min-width: 0;
       min-height: 32px;

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProviderEntry } from "@aipass/schemas";
-  import { scrollMask, Banner, Button } from "@aipass/ui";
+  import { scrollMask, Banner, Button, SelectField } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { Check, Gauge, RefreshCw, X } from "lucide-svelte";
 
@@ -147,17 +147,8 @@
           </div>
 
           {#if usageSecretOptions.length > 1}
-            <label class="usage-field">
-              <span class="usage-label">{$t("providerDetail.usageProbeKey")}</span>
-              <select
-                value={usageSecretId}
-                on:change={(event) => (usageSecretId = event.currentTarget.value)}
-              >
-                {#each usageSecretOptions as option}
-                  <option value={option.value}>{option.label}</option>
-                {/each}
-              </select>
-            </label>
+            <SelectField label={$t("providerDetail.usageProbeKey")} value={usageSecretId}
+              options={usageSecretOptions} onValueChange={(value) => (usageSecretId = value)} />
           {/if}
 
           <label class="usage-field">
@@ -399,8 +390,7 @@
     gap: 7px;
     min-width: 0;
 
-    input,
-    select {
+    input {
       width: 100%;
       min-height: 34px;
       padding: 0 11px;

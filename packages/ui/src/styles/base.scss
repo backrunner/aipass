@@ -3,7 +3,7 @@
 // stay in each app's own stylesheet.
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   --bg: #f5f6fa;
   --surface: #ffffff;
@@ -209,6 +209,7 @@ a:hover {
 }
 
 @mixin dark-theme {
+  color-scheme: dark;
   --bg: #0a0e1a;
   --surface: #131826;
   --surface-2: #1a2032;

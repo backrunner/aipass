@@ -9,10 +9,35 @@ use std::path::{Path, PathBuf};
 
 const CLOUD_SYNC_SUBDIR: &str = "AIPass";
 
+pub fn project_dirs() -> Result<ProjectDirs> {
+    let application = if cfg!(target_os = "linux") {
+        "aipass"
+    } else {
+        "desktop"
+    };
+    ProjectDirs::from("dev", "aipass", application).context("cannot determine project dir")
+}
+
 pub fn default_vault_dir() -> Result<PathBuf> {
-    let dirs =
-        ProjectDirs::from("dev", "aipass", "desktop").context("cannot determine project dir")?;
-    Ok(dirs.data_dir().join("vault"))
+    let preferred = project_dirs()?.data_dir().join("vault");
+    // Do not move a possibly open vault or silently present existing users with
+    // an empty vault. Only the legacy vault is retained, not the generic data root.
+    if cfg!(target_os = "linux") {
+        let legacy = ProjectDirs::from("dev", "aipass", "desktop")
+            .context("cannot determine legacy project dir")?
+            .data_dir()
+            .join("vault");
+        return Ok(select_vault_dir(preferred, legacy));
+    }
+    Ok(preferred)
+}
+
+fn select_vault_dir(preferred: PathBuf, legacy: PathBuf) -> PathBuf {
+    if !preferred.exists() && legacy.is_dir() {
+        legacy
+    } else {
+        preferred
+    }
 }
 
 pub fn canonical_vault_dir(path: impl AsRef<Path>) -> Result<PathBuf> {
@@ -58,9 +83,22 @@ fn linux_config_home_from(home: &Path, configured: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| home.join(".config"))
 }
 
+/// Ignore empty and relative XDG runtime roots, as required by the base directory spec.
+pub fn linux_runtime_root(fallback: &Path) -> PathBuf {
+    linux_runtime_root_from(
+        fallback,
+        std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+    )
+}
+
+fn linux_runtime_root_from(fallback: &Path, configured: Option<PathBuf>) -> PathBuf {
+    configured
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| fallback.to_path_buf())
+}
+
 pub fn agent_runtime_dir() -> Result<PathBuf> {
-    let dirs =
-        ProjectDirs::from("dev", "aipass", "desktop").context("cannot determine project dir")?;
+    let dirs = project_dirs()?;
     let dir = if let Some(explicit) = std::env::var_os("AIPASS_AGENT_RUNTIME_DIR") {
         PathBuf::from(explicit)
     } else if cfg!(target_os = "windows") {
@@ -73,9 +111,7 @@ pub fn agent_runtime_dir() -> Result<PathBuf> {
                 .join(".aipass")
                 .join("run")
         } else {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| dirs.data_local_dir().join("runtime"))
+            linux_runtime_root(&dirs.data_local_dir().join("runtime"))
         };
         root.join("aipass-agent")
     };
@@ -225,6 +261,36 @@ fn rank_onedrive_candidate(path: &Path) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_vault_is_preserved_without_overriding_new_vault() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let preferred = temp.path().join("aipass/vault");
+        let legacy = temp.path().join("desktop/vault");
+        assert_eq!(
+            super::select_vault_dir(preferred.clone(), legacy.clone()),
+            preferred
+        );
+        std::fs::create_dir_all(&legacy).expect("legacy");
+        assert_eq!(
+            super::select_vault_dir(preferred.clone(), legacy.clone()),
+            legacy
+        );
+        std::fs::create_dir_all(&preferred).expect("preferred");
+        assert_eq!(
+            super::select_vault_dir(preferred.clone(), legacy),
+            preferred
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_project_directory_is_application_specific() {
+        assert!(super::project_dirs()
+            .expect("dirs")
+            .data_dir()
+            .ends_with("aipass"));
+    }
+
     use super::*;
     use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
@@ -241,6 +307,18 @@ mod tests {
             home.join(".config")
         );
         assert_eq!(linux_config_home_from(home, None), home.join(".config"));
+    }
+
+    #[test]
+    fn linux_runtime_ignores_empty_and_relative_xdg_roots() {
+        let fallback = Path::new("/home/fixture/.local/share/desktop/runtime");
+        for configured in [None, Some("".into()), Some("relative".into())] {
+            assert_eq!(linux_runtime_root_from(fallback, configured), fallback);
+        }
+        assert_eq!(
+            linux_runtime_root_from(fallback, Some("/run/user/1000".into())),
+            Path::new("/run/user/1000")
+        );
     }
 
     fn env_lock() -> &'static Mutex<()> {

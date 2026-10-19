@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Field, IconButton } from "@aipass/ui";
+  import { Button, Field, IconButton, SelectField } from "@aipass/ui";
   import { Plus, Trash2, TestTube } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -90,13 +90,9 @@
 
             <div class="field-row">
               <Field label={$t("balanceEndpoint.method")}>
-                <select
-                  bind:value={endpoint.method}
-                  on:change={() => onUpdateEndpoint(endpoint.id, { method: endpoint.method })}
-                >
-                  <option value="GET">GET</option>
-                  <option value="POST">POST</option>
-                </select>
+                <SelectField value={endpoint.method} ariaLabel={$t("balanceEndpoint.method")}
+                  options={[{ value: "GET", label: "GET" }, { value: "POST", label: "POST" }]}
+                  onValueChange={(value) => { endpoint.method = value as "GET" | "POST"; onUpdateEndpoint(endpoint.id, { method: endpoint.method }); }} />
               </Field>
 
               <Field label={$t("balanceEndpoint.unit")}>
@@ -246,21 +242,6 @@
     gap: 10px;
   }
 
-  select {
-    width: 100%;
-    padding: 6px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-2);
-    color: var(--text);
-    font-size: 12px;
-    cursor: pointer;
-
-    &:focus {
-      outline: 2px solid var(--accent);
-      outline-offset: -1px;
-    }
-  }
 
   textarea {
     width: 100%;

@@ -1,7 +1,6 @@
 // Linux keeps the app title in the list column and window buttons in the
 // detail column. Share the detail's first row instead of adding a blank row.
 :root[data-platform="linux"] {
-  --window-radius: 0px;
   --linux-header-inset: 8px;
 
   .workspace > .list-pane .toolbar {

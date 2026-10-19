@@ -291,8 +291,8 @@ test("key editing carries the key's own interface and group", async () => {
     expect(document.querySelector<HTMLInputElement>(".secret-edit-input input")?.value).toBe("fixture-existing-key");
   });
   // The editor prefills the key's own attributes rather than the provider's.
-  const format = document.querySelector<HTMLSelectElement>(".credential-inline-editor select")!;
-  expect(format.value).toBe("anthropic_messages");
+  const format = document.querySelector<HTMLButtonElement>(".credential-inline-editor .select-trigger")!;
+  expect(format.textContent).toContain("Anthropic Messages");
   const group = document.querySelector<HTMLInputElement>('.credential-inline-editor .secret-edit-meta input')!;
   expect(group.value).toBe("vip");
   document.querySelector<HTMLButtonElement>(".credential-inline-editor .btn")!.click();
@@ -314,9 +314,13 @@ test("adding a key sends its interface and group metadata", async () => {
   inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
   (inputs[1] as HTMLInputElement).value = "sk-new-key";
   inputs[1].dispatchEvent(new Event("input", { bubbles: true }));
-  const format = document.querySelector<HTMLSelectElement>(".add-secret-row select")!;
-  format.value = "anthropic_messages";
-  format.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(document.querySelector(".add-secret-row select")).toBeNull();
+  document.querySelector<HTMLButtonElement>(".add-secret-row .select-trigger")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+  flushSync();
+  const option = [...document.querySelectorAll<HTMLElement>(".select-item")].find(item => item.textContent?.includes("Anthropic Messages"))!;
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerType: "mouse" }));
+  flushSync();
   const group = document.querySelector<HTMLInputElement>(".add-secret-row .secret-edit-meta input")!;
   group.value = "vip";
   group.dispatchEvent(new Event("input", { bubbles: true }));

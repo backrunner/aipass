@@ -1113,6 +1113,7 @@
   "subscriptionImport.error.discovery_failed": "无法发现账号来源，请检查所选目录",
   "settings.ccSwitchImportNow": "导入 API 配置",
   "settings.ccSwitchImported": "已导入 {count} 个 API 配置",
+  "settings.ccSwitchNothingImported": "未导入任何 API 配置。缺少受支持 API 密钥或已导入的配置会被跳过。",
   "subscriptionImport.directoryHint": "选择存放该服务商登录文件的账号目录。",
   "subscriptionImport.geminiDirectoryHint": "选择包含 .gemini 的 Gemini home 根目录，而不是 .gemini 目录。",
   "subscriptionImport.error.task_failed": "导入操作失败，请解锁密码库后重试。",

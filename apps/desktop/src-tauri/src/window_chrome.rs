@@ -3,10 +3,11 @@
 pub(super) fn configure_context(context: &mut tauri::Context<tauri::Wry>) {
     if cfg!(target_os = "linux") {
         // Use the themed in-app header consistently in dev, packaged and tray-first
-        // windows. Opaque rendering avoids compositor-dependent corner artifacts.
+        // windows. Transparency lets the shared rounded document mask reveal
+        // the desktop at the corners instead of an opaque rectangular surface.
         for window in &mut context.config_mut().app.windows {
             window.decorations = false;
-            window.transparent = false;
+            window.transparent = true;
         }
     }
 }
