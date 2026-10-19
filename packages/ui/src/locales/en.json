@@ -1113,6 +1113,7 @@
   "subscriptionImport.error.discovery_failed": "Could not discover sources; check the selected directory",
   "settings.ccSwitchImportNow": "Import API configurations",
   "settings.ccSwitchImported": "Imported {count} API configurations",
+  "settings.ccSwitchNothingImported": "No API configurations were imported. Entries without a supported API key or already imported entries are skipped.",
   "subscriptionImport.directoryHint": "Select the directory containing the provider’s login files.",
   "subscriptionImport.geminiDirectoryHint": "Select the Gemini home root containing .gemini, not the .gemini directory.",
   "subscriptionImport.error.task_failed": "The import operation failed. Unlock the vault and try again.",
