@@ -1,8 +1,8 @@
 //! Detection and vault import for providers configured in CC Switch.
 //!
-//! CC Switch keeps its provider list in `~/.cc-switch/config.json`, grouped by
-//! target app ("claude", "codex", "gemini"). The agent is the only component
-//! allowed to read that file; imported keys are persisted into the vault and
+//! CC Switch keeps providers in `~/.cc-switch/cc-switch.db`, or legacy
+//! `config.json`, grouped by target app (including OpenCode).
+//! The agent is the only component allowed to read them; keys are persisted into the vault and
 //! never returned over IPC.
 
 use aipass_agent_protocol::{endpoint_url, CcSwitchDetection, OfficialAccountRefreshResult};
@@ -11,16 +11,19 @@ use aipass_provider_registry::{
 };
 use aipass_vault::{ProviderEntryInput, Vault};
 use serde_json::Value;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::official_accounts::{home, refresh_account_secret};
+use std::collections::HashSet;
 
-const CCSWITCH_APPS: [&str; 3] = ["claude", "codex", "gemini"];
+#[path = "ccswitch_database.rs"]
+mod database;
+
+const CCSWITCH_APPS: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
 
 #[derive(Clone, Debug)]
 pub(crate) struct CcswitchProvider {
-    /// CC Switch app group this provider belongs to: "claude"/"codex"/"gemini".
+    /// CC Switch app group this provider belongs to.
     app_id: String,
     name: String,
     /// Missing or blank keys are reported as "skipped" at import time.
@@ -31,10 +34,20 @@ pub(crate) struct CcswitchProvider {
     category: Option<String>,
     notes: Option<String>,
     is_current: bool,
+    interface_type: InterfaceType,
 }
 
 fn config_path() -> PathBuf {
-    home().join(".cc-switch").join("config.json")
+    config_path_at(&home().join(".cc-switch"))
+}
+
+fn config_path_at(dir: &Path) -> PathBuf {
+    let database = dir.join("cc-switch.db");
+    if database.is_file() {
+        database
+    } else {
+        dir.join("config.json")
+    }
 }
 
 pub(crate) fn detect_ccswitch() -> CcSwitchDetection {
@@ -63,6 +76,16 @@ pub(crate) fn discover_ccswitch_providers() -> Vec<CcswitchProvider> {
 }
 
 fn discover_ccswitch_providers_at(path: &Path) -> Vec<CcswitchProvider> {
+    if path.extension().is_some_and(|extension| extension == "db") {
+        return database::discover(path).unwrap_or_else(|error| {
+            crate::logging::write_component_log(
+                crate::logging::AGENT_LOG,
+                "WARN",
+                &format!("cc-switch database unreadable: {error}"),
+            );
+            Vec::new()
+        });
+    }
     let value = match std::fs::read(path)
         .map_err(anyhow::Error::from)
         .and_then(|bytes| Ok(serde_json::from_slice::<Value>(&bytes)?))
@@ -110,6 +133,23 @@ fn parse_provider(
     let object = item.as_object()?;
     let settings = object.get("settingsConfig").cloned().unwrap_or_default();
     let env = settings.get("env").cloned().unwrap_or_default();
+    let package = str_field(&settings, "npm")
+        .or_else(|| str_field(&settings, "package"))
+        .map(|package| {
+            package
+                .strip_prefix("aisdk:")
+                .unwrap_or(&package)
+                .to_string()
+        });
+    let interface_type = if app_id == "claude"
+        || (app_id == "opencode" && package.as_deref() == Some("@ai-sdk/anthropic"))
+    {
+        InterfaceType::AnthropicMessages
+    } else if app_id == "opencode" && package.as_deref() == Some("@ai-sdk/google") {
+        InterfaceType::Gemini
+    } else {
+        InterfaceType::OpenAiCompatible
+    };
     let (key, base_url, model) = match app_id {
         "claude" => (
             str_field(&env, "ANTHROPIC_AUTH_TOKEN")
@@ -133,6 +173,32 @@ fn parse_provider(
             str_field(&env, "GOOGLE_GEMINI_BASE_URL"),
             str_field(&env, "GEMINI_MODEL"),
         ),
+        "opencode" => {
+            let options = settings
+                .get("options")
+                .or_else(|| settings.get("settings"))?;
+            // SDK adapters define the wire protocol; do not silently import an
+            // unsupported adapter as an OpenAI-compatible endpoint.
+            if !matches!(
+                package.as_deref(),
+                Some(
+                    "@ai-sdk/openai"
+                        | "@ai-sdk/openai-compatible"
+                        | "@ai-sdk/anthropic"
+                        | "@ai-sdk/google"
+                )
+            ) {
+                return None;
+            }
+            let key = str_field(options, "apiKey")
+                .filter(|key| !key.starts_with("{env:") && !key.starts_with("{file:"));
+            let base_url = str_field(options, "baseURL").or_else(|| match interface_type {
+                InterfaceType::AnthropicMessages => Some(default_endpoint("claude").to_string()),
+                InterfaceType::Gemini => Some(default_endpoint("gemini").to_string()),
+                _ => None,
+            });
+            (key, base_url, None)
+        }
         _ => (None, None, None),
     };
     Some(CcswitchProvider {
@@ -145,6 +211,7 @@ fn parse_provider(
         category: str_field(item, "category"),
         notes: str_field(item, "notes"),
         is_current,
+        interface_type,
     })
 }
 
@@ -322,10 +389,6 @@ fn new_entry_input(provider: &CcswitchProvider, key: &str, base_url: &str) -> Pr
         Some("official") | Some("cn_official") => ProviderKind::Official,
         _ => ProviderKind::ThirdParty,
     };
-    let interface_type = match provider.app_id.as_str() {
-        "claude" => InterfaceType::AnthropicMessages,
-        _ => InterfaceType::OpenAiCompatible,
-    };
     ProviderEntryInput {
         max_concurrent_requests: None,
         supports_websockets: None,
@@ -337,8 +400,12 @@ fn new_entry_input(provider: &CcswitchProvider, key: &str, base_url: &str) -> Pr
         domains: provider.website_host.clone().into_iter().collect(),
         favicon_url: None,
         endpoints: vec![ProviderEndpoint::api(base_url)],
-        interface_type,
-        auth_scheme: AuthScheme::Bearer,
+        interface_type: provider.interface_type.clone(),
+        auth_scheme: if provider.interface_type == InterfaceType::Gemini {
+            AuthScheme::GoogleApiKey
+        } else {
+            AuthScheme::Bearer
+        },
         api_key: key.to_string(),
         secret_label: None,
         default_model: provider.model.clone(),
@@ -457,12 +524,91 @@ mod tests {
     }
 
     #[test]
+    fn imports_opencode_sdk_settings_and_options_without_resolving_references() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("cc-switch.db");
+        let db = rusqlite::Connection::open(&path).expect("database");
+        db.execute_batch("CREATE TABLE providers (id TEXT, app_type TEXT, name TEXT, settings_config TEXT, website_url TEXT, category TEXT, notes TEXT, is_current INTEGER);").expect("schema");
+        for (id, settings) in [
+            (
+                "legacy",
+                serde_json::json!({"package":"@ai-sdk/openai-compatible", "settings":{"apiKey":"test-legacy", "baseURL":"https://legacy.example/v1"}}),
+            ),
+            (
+                "modern",
+                serde_json::json!({"npm":"aisdk:@ai-sdk/anthropic", "options":{"apiKey":"test-modern"}}),
+            ),
+            (
+                "google",
+                serde_json::json!({"package":"aisdk:@ai-sdk/google", "settings":{"apiKey":"test-google"}}),
+            ),
+            (
+                "reference",
+                serde_json::json!({"npm":"@ai-sdk/openai", "options":{"apiKey":"{env:OPENAI_API_KEY}"}}),
+            ),
+            (
+                "unsupported",
+                serde_json::json!({"npm":"unknown-sdk", "options":{"apiKey":"test-unsupported"}}),
+            ),
+        ] {
+            db.execute(
+                "INSERT INTO providers VALUES (?1, 'opencode', ?1, ?2, NULL, NULL, NULL, 0)",
+                rusqlite::params![id, settings.to_string()],
+            )
+            .expect("insert");
+        }
+        let providers = discover_ccswitch_providers_at(&path);
+        assert_eq!(providers.len(), 4);
+        let vault_dir = tempfile::tempdir().expect("vault dir");
+        let vault = test_vault(&vault_dir);
+        let results = import_providers(&vault, providers).expect("import");
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result.status == "imported")
+                .count(),
+            3
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result.status == "skipped")
+                .count(),
+            1
+        );
+        let entries = vault.list_provider_summaries().expect("entries");
+        let google = entries
+            .iter()
+            .find(|entry| entry.title == "google")
+            .expect("google");
+        assert_eq!(google.interface_type, InterfaceType::Gemini);
+        assert_eq!(google.auth_scheme, AuthScheme::GoogleApiKey);
+        let modern = entries
+            .iter()
+            .find(|entry| entry.title == "modern")
+            .expect("anthropic");
+        assert_eq!(modern.interface_type, InterfaceType::AnthropicMessages);
+        assert_eq!(
+            endpoint_url(&modern.endpoints),
+            Some("https://api.anthropic.com".to_string())
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.title == "legacy")
+                .expect("openai")
+                .interface_type,
+            InterfaceType::OpenAiCompatible
+        );
+    }
+
+    #[test]
     fn parses_supported_apps_and_tolerates_bad_entries() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = write_fixture(temp.path());
         let providers = discover_ccswitch_providers_at(&path);
 
-        // The malformed "a3" entry and the unsupported "opencode" group are
+        // The malformed "a3" entry and OpenCode config without an adapter are
         // dropped; the keyless provider is kept for a "skipped" result.
         assert_eq!(providers.len(), 4);
 
@@ -509,6 +655,65 @@ mod tests {
     }
 
     #[test]
+    fn prefers_database_over_legacy_config() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let legacy = temp.path().join("config.json");
+        assert_eq!(config_path_at(temp.path()), legacy);
+        std::fs::write(&legacy, b"{}").expect("legacy");
+        assert_eq!(config_path_at(temp.path()), legacy);
+        let database = temp.path().join("cc-switch.db");
+        std::fs::write(&database, b"").expect("database");
+        assert_eq!(config_path_at(temp.path()), database);
+    }
+
+    #[test]
+    fn sqlite_providers_import_without_modifying_source() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("cc-switch.db");
+        let db = rusqlite::Connection::open(&path).expect("fixture db");
+        db.execute_batch(
+            "CREATE TABLE providers (id TEXT, app_type TEXT, name TEXT,
+             settings_config TEXT, website_url TEXT, category TEXT, notes TEXT,
+             is_current INTEGER);
+             INSERT INTO providers VALUES ('bad', 'claude', 'Bad', '{', NULL, NULL, NULL, 0);
+             INSERT INTO providers VALUES ('ignored', 'opencode', 'Ignored', '{}', NULL, NULL, NULL, 0);",
+        ).expect("schema");
+        let settings = serde_json::json!({"env": {
+            "ANTHROPIC_AUTH_TOKEN": "fixture-key",
+            "ANTHROPIC_BASE_URL": "https://relay.example.com",
+            "ANTHROPIC_MODEL": "fixture-model"
+        }});
+        db.execute(
+            "INSERT INTO providers VALUES ('active', 'claude', 'Relay', ?1,
+             'https://relay.example.com/docs', 'aggregator', 'fixture notes', 1)",
+            [settings.to_string()],
+        )
+        .expect("provider");
+        drop(db);
+        let before = std::fs::read(&path).expect("source bytes");
+        let providers = discover_ccswitch_providers_at(&path);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].name, "Relay");
+        assert!(providers[0].is_current);
+        assert_eq!(providers[0].model.as_deref(), Some("fixture-model"));
+        assert_eq!(
+            providers[0].website_host.as_deref(),
+            Some("relay.example.com")
+        );
+        assert_eq!(providers[0].notes.as_deref(), Some("fixture notes"));
+        let vault_dir = tempfile::tempdir().expect("vault dir");
+        let vault = test_vault(&vault_dir);
+        let results = import_providers(&vault, providers).expect("import");
+        assert_eq!(results[0].status, "imported");
+        let entries = vault.list_provider_summaries().expect("summaries");
+        assert_eq!(
+            entries[0].fingerprint,
+            vault.fingerprint_secret("fixture-key")
+        );
+        assert_eq!(before, std::fs::read(&path).expect("unchanged source"));
+    }
+
+    #[test]
     fn malformed_config_yields_no_providers() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("config.json");
@@ -533,6 +738,11 @@ mod tests {
             category: None,
             notes: None,
             is_current: false,
+            interface_type: if app_id == "claude" {
+                InterfaceType::AnthropicMessages
+            } else {
+                InterfaceType::OpenAiCompatible
+            },
         }
     }
 
