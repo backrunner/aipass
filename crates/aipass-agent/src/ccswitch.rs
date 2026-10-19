@@ -13,8 +13,7 @@ use aipass_vault::{ProviderEntryInput, Vault};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::official_accounts::{home, refresh_account_secret};
-use std::collections::HashSet;
+use crate::official_accounts::home;
 
 #[path = "ccswitch_database.rs"]
 mod database;
@@ -300,15 +299,14 @@ fn import_providers(
     vault: &Vault,
     providers: Vec<CcswitchProvider>,
 ) -> anyhow::Result<Vec<OfficialAccountRefreshResult>> {
-    // Archived entries still belong to the user and must dedupe/refresh in
+    // Archived entries still belong to the user and must dedupe in
     // place; only trashed entries are forgotten. Both listing variants
     // already skip trash.
     let mut existing = vault.list_provider_summaries()?;
     existing.extend(vault.list_archived_provider_summaries()?);
-    let mut seen_in_batch = HashSet::new();
     let mut results = Vec::new();
     for provider in providers {
-        match import_provider(vault, &mut existing, &mut seen_in_batch, &provider) {
+        match import_provider(vault, &mut existing, &provider) {
             Ok(result) => results.push(result),
             Err(error) => results.push(import_result(&provider, "error", Some(error.to_string()))),
         }
@@ -319,7 +317,6 @@ fn import_providers(
 fn import_provider(
     vault: &Vault,
     existing: &mut Vec<aipass_vault::EntrySummary>,
-    seen_in_batch: &mut HashSet<(String, String)>,
     provider: &CcswitchProvider,
 ) -> anyhow::Result<OfficialAccountRefreshResult> {
     let Some(key) = provider.key.clone().filter(|key| !key.trim().is_empty()) else {
@@ -333,46 +330,23 @@ fn import_provider(
     if let Err(error) = validate_base_url(&base_url) {
         return Ok(import_result(provider, "error", Some(error)));
     }
-    // Exact duplicates inside one import batch are skipped rather than
-    // refreshed twice.
-    if !seen_in_batch.insert((
-        normalize_endpoint(&base_url).to_string(),
-        fingerprint.clone(),
-    )) {
+    // A shared name, endpoint or key is not evidence of key rotation. Keep
+    // distinct configurations instead of overwriting an existing credential.
+    if existing.iter().any(|entry| {
+        entry.fingerprint == fingerprint
+            && entry.interface_type == provider.interface_type
+            && entry.default_model == provider.model
+            && entry.auth_scheme
+                == if provider.interface_type == InterfaceType::Gemini {
+                    AuthScheme::GoogleApiKey
+                } else {
+                    AuthScheme::Bearer
+                }
+            && endpoint_url(&entry.endpoints)
+                .map(|url| normalize_endpoint(&url) == normalize_endpoint(&base_url))
+                .unwrap_or(false)
+    }) {
         return Ok(import_result(provider, "skipped", None));
-    }
-
-    // The same key stored anywhere in the vault identifies the provider,
-    // regardless of how the entry was originally created.
-    if let Some(id) = existing
-        .iter()
-        .find(|entry| entry.fingerprint == fingerprint)
-        .map(|entry| entry.id)
-    {
-        refresh_account_secret(vault, id, &key)?;
-        return Ok(import_result(provider, "refreshed", None));
-    }
-
-    // Otherwise a matching endpoint plus title points at the same provider
-    // configured under a rotated key.
-    let endpoint_match = existing
-        .iter()
-        .find(|entry| {
-            entry.title == provider.name
-                && endpoint_url(&entry.endpoints)
-                    .map(|url| normalize_endpoint(&url) == normalize_endpoint(&base_url))
-                    .unwrap_or(false)
-        })
-        .map(|entry| entry.id);
-    if let Some(id) = endpoint_match {
-        refresh_account_secret(vault, id, &key)?;
-        // The secret rotated, so refresh the cached summary for later dedupe.
-        if let Ok(summary) = vault.get_provider_summary(id) {
-            if let Some(slot) = existing.iter_mut().find(|entry| entry.id == id) {
-                *slot = summary;
-            }
-        }
-        return Ok(import_result(provider, "refreshed", None));
     }
 
     let new_id = vault.add_provider(new_entry_input(provider, &key, &base_url))?;
@@ -439,6 +413,10 @@ fn import_result(
         error,
     }
 }
+
+#[cfg(test)]
+#[path = "ccswitch_import_tests.rs"]
+mod import_tests;
 
 #[cfg(test)]
 mod tests {
@@ -777,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn key_already_in_vault_is_refreshed_not_duplicated() {
+    fn key_already_in_vault_with_same_configuration_is_skipped() {
         let temp = tempfile::tempdir().expect("tempdir");
         let vault = test_vault(&temp);
         manual_entry(
@@ -798,7 +776,7 @@ mod tests {
         )
         .expect("import");
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].status, "refreshed");
+        assert_eq!(results[0].status, "skipped");
         assert_eq!(results[0].provider_id, "claude");
         assert_eq!(results[0].account_identity.as_deref(), Some("Claude Relay"));
         assert_eq!(results[0].credential_kind, CredentialKind::Api);
@@ -947,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn archived_entry_is_refreshed_in_place_without_unarchiving() {
+    fn archived_entry_is_skipped_without_unarchiving() {
         let temp = tempfile::tempdir().expect("tempdir");
         let vault = test_vault(&temp);
         manual_entry(
@@ -969,7 +947,7 @@ mod tests {
             )],
         )
         .expect("import");
-        assert_eq!(results[0].status, "refreshed");
+        assert_eq!(results[0].status, "skipped");
         assert!(vault.list_provider_summaries().expect("active").is_empty());
         assert_eq!(
             vault
