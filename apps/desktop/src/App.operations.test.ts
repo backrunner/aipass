@@ -82,9 +82,11 @@ test.each(["add", "edit", "clear"] as const)("credential %s persists endpoint an
     document.querySelectorAll<HTMLButtonElement>(".kv-actions button[aria-label='Edit credential']")[1].click();
     await vi.waitFor(() => { flushSync(); expect(document.querySelector<HTMLInputElement>(`${selector} input[type=password]`)?.value).toBe("fixture-existing-key"); });
   }
-  const format = document.querySelector<HTMLSelectElement>(`${selector} select`)!;
-  format.value = "anthropic_messages";
-  format.dispatchEvent(new Event("change", { bubbles: true })); flushSync();
+  document.querySelector<HTMLButtonElement>(`${selector} .select-trigger`)!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+  flushSync();
+  const option = [...document.querySelectorAll<HTMLElement>(".select-item")].find(item => item.textContent?.includes("Anthropic Messages"))!;
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerType: "mouse" })); flushSync();
   input(`${selector} input[type=url]`, endpoint ? ` ${endpoint} ` : "");
   input(`${selector} input[placeholder='site-model']`, defaultModel ? ` ${defaultModel} ` : "");
   document.querySelector<HTMLButtonElement>(`${selector} .btn-secondary`)!.click();

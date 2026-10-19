@@ -28,7 +28,7 @@
   } from "../../types";
   import { checkForUpdates, clearPendingUpdate, installUpdate, persistUpdateChannel, resolveUpdateChannel, UPDATE_PROGRESS_EVENT, type UpdateChannel, type UpdateCheckResult, type UpdateProgress } from "../../services/updates";
   import { buildTimeLabel } from "../../build";
-  import { scrollMask, Badge, Banner, Button, Field, ProgressButton, SwitchField } from "@aipass/ui";
+  import { scrollMask, Badge, Banner, Button, Field, ProgressButton, SelectField, SwitchField } from "@aipass/ui";
   import { Card } from "@aipass/ui";
   import ConfirmModal from "../shared/ConfirmModal.svelte";
   import UpdateRestartConfirmModal from "../shared/UpdateRestartConfirmModal.svelte";
@@ -572,16 +572,9 @@
                     <span class="row-label">{$t("settings.autoLock")}</span>
                     <span class="row-desc">{$t("settings.autoLockDesc")}</span>
                   </div>
-                  <select
-                    class="select-input"
-                    bind:value={autoLockMinutes}
-                    on:change={() => onSavePreferences()}
-                    aria-label={$t("settings.autoLock")}
-                  >
-                    {#each autoLockOptions as option}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
+                  <div class="auto-lock-select"><SelectField value={String(autoLockMinutes)} ariaLabel={$t("settings.autoLock")}
+                    options={autoLockOptions.map(option => ({ value: String(option.value), label: option.label }))}
+                    onValueChange={(value) => { autoLockMinutes = Number(value); onSavePreferences(); }} /></div>
                 </div>
                 <div class="row">
                   <div class="row-text">
@@ -1224,21 +1217,9 @@
     }
   }
 
-  .select-input {
+  .auto-lock-select {
     width: 132px;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    color: var(--text);
-    font-size: 13px;
-
-    &:focus {
-      outline: 0;
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-ring);
-    }
+    flex-shrink: 0;
   }
 
   .row-actions {
