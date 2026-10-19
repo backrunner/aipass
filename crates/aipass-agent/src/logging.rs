@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+use anyhow::Result;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -275,8 +277,7 @@ pub fn log_dir() -> Result<PathBuf> {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
-            .context("cannot determine project dir")?;
+        let dirs = crate::paths::project_dirs()?;
         Ok(dirs.data_local_dir().join("logs"))
     }
 }
