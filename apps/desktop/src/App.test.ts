@@ -118,8 +118,10 @@ test("provider edit persists concurrency limits and WS opt-out across reopening"
   expect(document.querySelector(".quota-value")?.textContent).toContain("42.1234USD");
   button("Edit").click();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector(".detail.editing")).toBeTruthy(); });
-  document.querySelector<HTMLButtonElement>(".advanced summary")!.click();
+  expect(button("Advanced").getAttribute("aria-expanded")).toBe("false");
+  button("Advanced").click();
   flushSync();
+  expect(button("Advanced").getAttribute("aria-expanded")).toBe("true");
   const limit = document.querySelector<HTMLInputElement>('[aria-label="Concurrent request limit"]')!;
   expect(limit.value).toBe("1");
   limit.value = "3";
@@ -237,8 +239,10 @@ test("background WS disable preserves other edits and failed recovery keeps the 
   expect(entry.supportsWebsockets).toBe(false);
   button("Edit").click();
   await vi.waitFor(() => { flushSync(); expect(document.querySelector(".advanced [role=switch]")).toBeTruthy(); });
-  document.querySelector<HTMLButtonElement>(".advanced summary")!.click();
+  expect(button("Advanced").getAttribute("aria-expanded")).toBe("false");
+  button("Advanced").click();
   flushSync();
+  expect(button("Advanced").getAttribute("aria-expanded")).toBe("true");
   document.querySelector<HTMLButtonElement>(".advanced [role=switch]")!.click();
   flushSync();
   rejectRecovery = true;
