@@ -1,6 +1,6 @@
 <script lang="ts">
   import { authSchemeCompatibleWithInterface, providerDefinitions, type AuthScheme, type InterfaceType, type ProviderEntry } from "@aipass/schemas";
-  import { Card, SelectField, SwitchField, encodeListValues, encodePairValues, type Draft, type MaybePromise } from "@aipass/ui";
+  import { Card, Collapsible, SelectField, SwitchField, encodeListValues, encodePairValues, type Draft, type MaybePromise } from "@aipass/ui";
   import { Check, Copy } from "lucide-svelte";
   import { t } from "../../stores/i18n";
 
@@ -58,8 +58,8 @@
         on:input={event => update(row.key, event.currentTarget.value)} />
     </label>
   {/each}
-  <details class="advanced">
-    <summary>{$t("providerForm.advanced")}</summary>
+  <div class="advanced">
+  <Collapsible title={$t("providerForm.advanced")} variant="inline">
     <div class="item-row"><span>{$t("providerForm.provider")}</span>
       <SelectField value={providerId} options={providers} ariaLabel={$t("providerForm.provider")} disabled={!editing}
         onValueChange={value => { draft.providerId = value; void onProviderChanged(); }} />
@@ -101,7 +101,8 @@
       </div>
     {/if}
     {#if entry.gateway?.group}<div class="item-row"><span>{$t("providerDetail.gatewayGroup")}</span><span class="value">{entry.gateway.group}</span></div>{/if}
-  </details>
+  </Collapsible>
+  </div>
 {/if}
 
 <style>
@@ -114,8 +115,8 @@
   input:focus:not([readonly]), textarea:focus:not([readonly]) { outline: none; border-color: var(--accent); box-shadow: 0 1px var(--accent); }
   input[type=number][readonly] { appearance: textfield; }
   .value, code { color: var(--text); overflow-wrap: anywhere; }
-  .advanced summary { padding: 13px 16px; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
   .advanced { border-top: 1px solid var(--divider); }
+  .advanced > :global(.collapsible) { --collapsible-header-padding: 13px 16px; --collapsible-body-padding: 0; border-radius: 0; }
   .notes { display: block; width: calc(100% - 32px); margin: 10px 16px; padding: 4px 0; resize: vertical; min-height: 64px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; line-height: 1.6; }
   .notes[readonly] { border-color: transparent; outline: none; }
 </style>

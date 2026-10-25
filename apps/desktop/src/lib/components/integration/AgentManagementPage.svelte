@@ -134,8 +134,9 @@
 </script>
 
 <section class="list-pane agent-list-pane" aria-label={$t("agents.title")}>
-  <header class="toolbar"><h1>{$t("agents.title")}</h1>
-    <IconButton label={$t("integration.scanInstallations")} disabled={loading || Boolean(busy)} on:click={() => refresh()}><RefreshCw size={16} class={loading ? "spinning" : ""} /></IconButton>
+  <header class="toolbar">
+    <div class="agent-heading"><h1>{$t("agents.title")}</h1>{#if tools.length}<span class="agent-count">{tools.length}</span>{/if}</div>
+    <IconButton size="sm" label={$t("integration.scanInstallations")} disabled={loading || Boolean(busy)} on:click={() => refresh()}><RefreshCw size={14} class={loading ? "spinning" : ""} /></IconButton>
   </header>
   <div class="agent-list" use:scrollMask aria-busy={loading}>
     {#each tools as tool (tool.id)}
@@ -182,10 +183,14 @@
 
 <style lang="scss">
   .agent-list-pane, .agent-detail { display: flex; flex-direction: column; background: var(--surface); min-width: 0; min-height: 0; }
-  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: var(--workspace-content-top, 42px) var(--pane-content-inset, 13px) 12px; border-bottom: 1px solid var(--divider); flex-shrink: 0; }
-  h1, h2 { margin: 0; font-size: 17px; font-weight: 650; }
-  .agent-list { padding: 7px; overflow: auto; min-height: 0; }
-  .agent-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 12px 9px; border-radius: 8px; text-align: left; color: var(--text); }
+  .agent-list-pane { --list-toolbar-top: 38px; --agent-list-inset: 7px; }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: var(--list-toolbar-top) var(--pane-content-inset, 13px) 11px; padding-inline-end: calc(var(--pane-content-inset, 13px) - 5px); border-bottom: 1px solid var(--divider); flex-shrink: 0; }
+  .agent-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  h1 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; }
+  .agent-count { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px; background: var(--surface-2); color: var(--text-tertiary); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  h2 { margin: 0; font-size: 17px; font-weight: 650; }
+  .agent-list { padding: var(--agent-list-inset); overflow: auto; min-height: 0; }
+  .agent-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 12px calc(var(--pane-content-inset, 13px) - var(--agent-list-inset)); border-radius: 8px; text-align: left; color: var(--text); }
   .agent-row:hover { background: var(--surface-2); }
   .agent-row.active { background: var(--accent-soft); }
   .agent-row:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }

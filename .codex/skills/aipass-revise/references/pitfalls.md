@@ -886,7 +886,7 @@ Newest entries last within each section.
 - **Root cause**: Native details and copied grid animations were maintained independently across desktop, extension and control-panel UI.
 - **Fix**: Share `packages/ui/src/components/Collapsible.svelte`; retain mounted content behind `inert` and `aria-hidden`, bind expansion state, and place header actions outside the toggle button.
 - **Guardrail**: Preserve file selections and drafts across collapse; verify external closure restores focus, unique content IDs, disabled toggles, independent actions, and runtime-panel lazy loading. Keep legacy slot forwarding snippets scoped to the component rather than hoisted callbacks.
-- **Watch points**: Desktop `Card`, `ControlPanelSettings`, provider advanced fields, credential billing, OAuth diagnostics and pricing history; `Collapsible.test.ts` and certificate/billing draft regressions.
+- **Watch points**: Desktop `Card`, `ControlPanelSettings`, `SubscriptionAccountCard` account identifiers, `ProviderItemFields` inline advanced fields, credential billing, OAuth diagnostics and pricing history; `Collapsible.test.ts`, `ProviderDetailPane.test.ts` and certificate/billing draft regressions. New detail views must reuse the same component rather than reintroducing native `details`.
 
 
 ### Native subscription references must invalidate cached credential bindings

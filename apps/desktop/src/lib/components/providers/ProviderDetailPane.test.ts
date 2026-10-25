@@ -543,7 +543,7 @@ test("editing keeps credentials and live quota in place without exposing quota i
   expect(document.querySelector(".secret-copy")).toBe(credential);
   expect(document.querySelector('input[aria-label="Endpoint"]')).toBe(endpoint);
   expect(document.querySelector<HTMLInputElement>('input[aria-label="Endpoint"]')!.readOnly).toBe(false);
-  expect(document.querySelector<HTMLDetailsElement>("details.advanced")!.open).toBe(false);
+  expect(document.querySelector('.advanced .collapsible-trigger')?.getAttribute("aria-expanded")).toBe("false");
   expect(document.querySelector('[data-provider-field="quota"]')).toBeNull();
   selection.update(entry => ({...entry, quota: {...entry.quota, remaining: "87"}})); flushSync();
   expect(document.querySelector(".quota-value")?.textContent).toContain("87");
