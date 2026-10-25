@@ -40,17 +40,28 @@ Examples:
 ## Proportionate Local Validation
 
 User instruction, 2026-10-20: keep checks for simple fixes focused and efficient.
-This replaces the former full-workspace gate for every commit or push.
+This replaces the former full-workspace gate for every commit or push, except
+for the mandatory Clippy guard below (2026-10-25).
 
 - Choose checks from the behavior and dependencies affected by the intended diff. A small diff that changes authentication, secrets, persistence, sync, IPC, startup, updates or packaging is not automatically low risk.
 - Documentation-only edits need a diff/format/link review. Run `pnpm repo:check` when changing repository instructions, structure or dependency rules; validate edited skills with their skill validator.
-- Simple copy, locale, CSS, layout and isolated UI fixes need the affected package's typecheck, relevant existing tests when behavior changes, and a `960x640` visual check for visible changes. A copy/CSS-only fix does not require new tests, a workspace build, Rust checks or a DMG build.
+- Simple copy, locale, CSS, layout and isolated UI fixes need the affected package's typecheck, relevant existing tests when behavior changes, and a `960x640` visual check for visible changes. A copy/CSS-only fix does not require new tests, a workspace build, Rust checks beyond the mandatory Clippy guard, or a DMG build.
 - Ordinary logic changes need the affected packages/crates and their dependent callers checked. Use focused regression tests; expand the scope for shared contracts, failures or uncertain impact.
 - Changes to security, credential ownership, durable storage, sync, IPC contracts, runtime lifecycle, dependencies, build configuration or CI require the complete local gate in `.codex/skills/aipass-repo-guardrails/SKILL.md`. Every release also requires that gate and the artifact checks below.
 - Refresh affected tracked generated files before committing. Shared UI locales are included in the embedded control panel: rebuild `@aipass/control-panel` when changing them and include its generated output in the same concern.
 - Reuse passing checks when their source, tests, configuration and dependency inputs still match the committed files. A commit, signature or message-only amend does not invalidate checks. Rerun checks affected by later content changes; do not repeat unrelated passing checks.
 - Keep unrelated work intact and out of the commit. An unrelated dirty worktree alone does not require a temporary checkout or copying build caches; isolate when it is needed to validate the intended files independently.
 - Install dependencies when missing or changed. Read the relevant CI jobs when needed to select checks; reserve a complete workflow reread for the full gate or workflow changes. Remote CI keeps its configured coverage; distinguish local results, skipped checks and remote results.
+
+## Mandatory Clippy Guard
+
+User instruction, 2026-10-25: all Rust code must pass Clippy.
+
+- Before every commit, push or release, require a successful `cargo clippy --workspace --all-targets -- -D warnings` from the repository root for the intended code. This applies even to documentation and UI-only changes; checking only the edited crate is insufficient.
+- Any Clippy error or warning blocks completion of that gate. Fix the cause; do not remove `-D warnings`, exclude workspace members or targets, or add lint suppressions merely to make it pass.
+- Reuse a passing result only while its source, generated inputs, Cargo manifests and lockfile, build configuration, toolchain and relevant environment still match. Otherwise rerun the full command. Record the command and result when reporting validation.
+- Run the local guard natively on macOS with Homebrew Rust. Keep Linux and Windows Clippy checks in CI; a local pass does not prove platform-specific code passes remotely.
+- Other checks remain proportionate to the change. This guard does not require unrelated tests or desktop bundles for a simple edit.
 
 ## Desktop Artifact Release Gate
 

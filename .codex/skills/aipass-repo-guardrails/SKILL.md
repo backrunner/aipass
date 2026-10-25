@@ -108,16 +108,36 @@ the build-toolchain entry in the pitfalls registry for details.
 
 ## Commit and push validation
 
-Follow the proportionate validation rule in root `agents.md` (2026-10-20).
+Follow the proportionate validation rule in root `agents.md` (2026-10-20),
+with its mandatory Clippy guard (2026-10-25).
 Select checks by behavior and dependency impact, not by file count or size.
 Passing checks does not grant permission to push; push only when requested.
 
-### Select the local scope
+### Mandatory Clippy guard
+
+Before every commit, push or release, require this command to pass for the
+intended code, including documentation and UI-only changes:
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Run it from the repository root with Homebrew Rust on macOS. A crate-only check
+does not satisfy this guard. Fix failures before proceeding; do not relax lint
+levels, exclude workspace members or targets, or add suppressions merely to pass.
+Reuse a passing result only when its source, generated inputs, Cargo manifests
+and lockfile, build configuration, toolchain and relevant environment still
+match. Report the command and result, and distinguish local macOS validation
+from Linux and Windows CI coverage.
+
+### Select the additional local scope
+
+The following checks are in addition to the mandatory Clippy guard.
 
 | Change | Required local checks |
 | --- | --- |
 | Documentation only | Review diff, formatting and affected links. Run `pnpm repo:check` for repository instructions, structure or dependency rules, and the skill validator for edited skills. No application build. |
-| Simple copy, locale, CSS, layout or isolated UI fix | Affected package typecheck; relevant existing tests for changed behavior; inspect the affected UI at `960x640`. No new tests for copy/CSS alone, workspace checks or desktop bundle. |
+| Simple copy, locale, CSS, layout or isolated UI fix | Affected package typecheck; relevant existing tests for changed behavior; inspect the affected UI at `960x640`. No new tests for copy/CSS alone, other workspace checks or desktop bundle. |
 | Ordinary logic or feature change | Lint/typecheck/tests and, where compilation or output is affected, build the relevant packages/crates and dependent callers. Expand for shared contracts or uncertain impact. |
 | Security, credential ownership, durable storage, sync, IPC contract, startup/update lifecycle, dependency, build or CI behavior | Complete local gate below. Review relevant pitfalls and exercise the changed failure paths. |
 | Release/tag or artifact publication | Complete local gate and release checks below, against the exact release commit and finished artifacts. |
@@ -130,14 +150,15 @@ success does not justify repeating them.
 For a desktop display fix, typical commands are:
 
 ```bash
+cargo clippy --workspace --all-targets -- -D warnings
 pnpm --filter @aipass/desktop typecheck
 # Only when related behavior changes; pass test files directly to Vitest.
 pnpm --dir apps/desktop exec vitest run src/lib/components/integration/IntegrationCard.test.ts
 ```
 
 Use the actual affected package and tests. For a localized Rust logic fix outside
-the high-risk areas, use `cargo fmt -p <crate> -- --check`,
-`cargo clippy -p <crate> --all-targets -- -D warnings` and relevant
+the high-risk areas, keep the mandatory workspace Clippy check, then use
+`cargo fmt -p <crate> -- --check` and relevant
 `cargo test -p <crate> <filter>` tests, including dependent callers when needed.
 
 Shared UI locale changes require `pnpm --filter @aipass/control-panel build`
