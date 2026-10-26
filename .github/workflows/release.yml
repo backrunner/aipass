@@ -670,7 +670,8 @@ jobs:
               --draft \
               --verify-tag \
               --title "AIPass ${RELEASE_TAG}" \
-              --notes "Signed and notarized macOS desktop artifacts, updater manifest, CLI archives, and extension package. The publish step rewrites latest.json to point at this release and publishes it on the ${{ needs.resolve-release.outputs.channel }} channel."
+              --generate-notes \
+              --notes "Thanks to all developers who contributed to this release. The changelog below credits the merged pull requests and their authors. Signed and notarized macOS desktop artifacts, updater manifest, CLI archives, and extension package. The publish step rewrites latest.json to point at this release and publishes it on the ${{ needs.resolve-release.outputs.channel }} channel."
           fi
 
       - name: Validate updater manifest and publish
