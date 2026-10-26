@@ -574,8 +574,7 @@ fn parse_extension_package_metadata(
 }
 
 fn bundled_extension_extract_dir(extension_id: &str) -> Result<PathBuf, String> {
-    let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
-        .ok_or_else(|| "cannot determine AIPass project directory".to_string())?;
+    let dirs = aipass_agent::paths::project_dirs().map_err(|error| error.to_string())?;
     Ok(dirs.data_dir().join("browser-extension").join(extension_id))
 }
 

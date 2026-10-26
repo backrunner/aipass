@@ -945,7 +945,7 @@
     max-height: 120px;
     overflow: auto;
     overflow-wrap: anywhere;
-    padding: 12px 20px 0;
+    padding: 12px 20px;
   }
 
   :global(.settings-overlay) {

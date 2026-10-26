@@ -393,34 +393,6 @@ pub(crate) fn home() -> PathBuf {
         .map(|d| d.home_dir().to_owned())
         .unwrap_or_else(|| PathBuf::from("."))
 }
-pub(crate) fn refresh_account_secret(
-    vault: &Vault,
-    id: uuid::Uuid,
-    token: &str,
-) -> anyhow::Result<()> {
-    if vault.find_secret_id_by_value(id, token)?.is_some() {
-        return Ok(());
-    }
-    let summary = vault.get_provider_summary(id)?;
-    let primary = primary_secret_ref(&summary)?;
-    vault.update_secret(id, &primary.id, &primary.label, Some(token.to_string()))?;
-    Ok(())
-}
-
-/// The primary secret a rotated token is written into. An entry without any
-/// stored secret is a desync between the vault and the discovered credential
-/// store; report it instead of silently pretending the refresh happened.
-fn primary_secret_ref(
-    summary: &aipass_vault::EntrySummary,
-) -> anyhow::Result<&aipass_provider_registry::SecretRef> {
-    aipass_provider_registry::primary_secret_ref(&summary.secret_refs).ok_or_else(|| {
-        anyhow::anyhow!(
-            "provider entry {} has no stored secret to refresh",
-            summary.id
-        )
-    })
-}
-
 #[cfg(target_os = "macos")]
 pub(crate) fn read_keychain_bytes(
     service: &str,

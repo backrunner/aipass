@@ -1,6 +1,5 @@
 use aipass_storage::atomic_write_bytes;
 use anyhow::Result;
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -35,7 +34,7 @@ pub struct NativeHostSettings {
 }
 
 pub fn native_host_settings_path() -> Result<PathBuf> {
-    let dirs = project_dirs()?;
+    let dirs = aipass_agent::paths::project_dirs()?;
     Ok(dirs.config_dir().join("native-host.json"))
 }
 
@@ -81,14 +80,5 @@ fn normalize_extension_id(value: &str) -> String {
 }
 
 fn default_vault_dir() -> Result<PathBuf, std::env::VarError> {
-    if let Ok(dirs) = project_dirs() {
-        Ok(dirs.data_dir().join("vault"))
-    } else {
-        Err(std::env::VarError::NotPresent)
-    }
-}
-
-fn project_dirs() -> Result<ProjectDirs> {
-    ProjectDirs::from("dev", "aipass", "desktop")
-        .ok_or_else(|| anyhow::anyhow!("cannot determine AIPass project directory"))
+    aipass_agent::paths::default_vault_dir().map_err(|_| std::env::VarError::NotPresent)
 }

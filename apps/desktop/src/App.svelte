@@ -1338,11 +1338,13 @@
 
   async function importCcSwitchAccounts() {
     clearError();
+    notice = "";
     try {
       const result = await importCcSwitchConfigurations(invokeTauri, loadEntries, $t);
-      if (result.error) reportError(result.error);
-      notice = localizedMessage("settings.ccSwitchImported", { count: result.count });
-    } catch (e) { reportError(String(e)); }
+      if (result.error) reportError(result.error, "settings");
+      if (result.count > 0) notice = localizedMessage("settings.ccSwitchImported", { count: result.count });
+      else if (!result.error) reportError(localizedMessage("settings.ccSwitchNothingImported"), "settings");
+    } catch (e) { reportError(String(e), "settings"); }
   }
 
   function inferDraftFromDomain() {

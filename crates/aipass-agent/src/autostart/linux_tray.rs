@@ -22,6 +22,10 @@ fn script(binary: &Path, vault: &Path) -> String {
 }
 
 fn entry(supervisor: &Path) -> String {
+    desktop_entry(supervisor, "AIPass")
+}
+
+pub(super) fn desktop_entry(supervisor: &Path, name: &str) -> String {
     // Desktop entries have two escaping layers (value and Exec); field codes
     // must also be escaped, even inside a quoted argument.
     let argument = supervisor
@@ -33,18 +37,15 @@ fn entry(supervisor: &Path) -> String {
         .replace('%', "%%")
         .replace('\n', "\\n")
         .replace('\r', "\\r");
-    format!("[Desktop Entry]\nType=Application\nName=AIPass\nExec=\"{argument}\"\nTerminal=false\n")
+    format!("[Desktop Entry]\nType=Application\nName={name}\nExec=\"{argument}\"\nTerminal=false\n")
 }
 
 fn socket_path() -> Result<PathBuf> {
     if let Some(root) = std::env::var_os("AIPASS_DESKTOP_RUNTIME_DIR") {
         return Ok(PathBuf::from(root).join("desktop-tray.sock"));
     }
-    let dirs = directories::ProjectDirs::from("dev", "aipass", "desktop")
-        .context("cannot determine project dir")?;
-    let root = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs.data_local_dir().join("runtime"));
+    let dirs = crate::paths::project_dirs()?;
+    let root = crate::paths::linux_runtime_root(&dirs.data_local_dir().join("runtime"));
     Ok(root.join("aipass-desktop/desktop-tray.sock"))
 }
 

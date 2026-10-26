@@ -1,9 +1,17 @@
 use super::*;
 use crate::paths::agent_service_name;
 
+#[path = "linux_session.rs"]
+mod session;
+
 pub(super) fn install(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAutostartStatus> {
     let service_name = agent_service_name(vault_dir)?;
     let paths = linux_paths(&service_name)?;
+    if session::registered(vault_dir)?
+        || (!paths.unit_path.exists() && !systemctl_success(["show-environment"]))
+    {
+        return session::install(agent_binary, vault_dir);
+    }
     let agent_binary = absolute_path(agent_binary);
     let vault_dir = absolute_path(vault_dir);
 
@@ -53,6 +61,9 @@ pub(super) fn install(agent_binary: &Path, vault_dir: &Path) -> Result<AgentAuto
 }
 
 pub(super) fn uninstall(vault_dir: &Path) -> Result<AgentAutostartStatus> {
+    if session::registered(vault_dir)? {
+        return session::uninstall(vault_dir);
+    }
     let service_name = agent_service_name(vault_dir)?;
     let paths = linux_paths(&service_name)?;
     let _ = systemctl(["disable", "--now", paths.unit_name.as_str()]);
@@ -71,6 +82,10 @@ pub(super) fn uninstall(vault_dir: &Path) -> Result<AgentAutostartStatus> {
 }
 
 pub(super) fn stop(vault_dir: &Path) -> Result<AgentAutostartStatus> {
+    if session::registered(vault_dir)? {
+        shutdown_agent(vault_dir);
+        return session::query(vault_dir);
+    }
     let service_name = agent_service_name(vault_dir)?;
     let paths = linux_paths(&service_name)?;
     let _ = systemctl(["stop", paths.unit_name.as_str()]);
@@ -86,6 +101,9 @@ pub(super) fn stop(vault_dir: &Path) -> Result<AgentAutostartStatus> {
 }
 
 pub(super) fn query(vault_dir: &Path) -> Result<AgentAutostartStatus> {
+    if session::registered(vault_dir)? {
+        return session::query(vault_dir);
+    }
     let service_name = agent_service_name(vault_dir)?;
     let paths = linux_paths(&service_name)?;
     Ok(AgentAutostartStatus {
