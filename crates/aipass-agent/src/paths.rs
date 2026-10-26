@@ -429,13 +429,15 @@ mod tests {
 
     #[test]
     fn linux_runtime_ignores_empty_and_relative_xdg_roots() {
-        let fallback = Path::new("/home/fixture/.local/share/desktop/runtime");
+        let root = tempdir().unwrap();
+        let fallback = root.path().join("fallback/runtime");
+        let configured = root.path().join("custom/runtime");
         for configured in [None, Some("".into()), Some("relative".into())] {
-            assert_eq!(linux_runtime_root_from(fallback, configured), fallback);
+            assert_eq!(linux_runtime_root_from(&fallback, configured), fallback);
         }
         assert_eq!(
-            linux_runtime_root_from(fallback, Some("/run/user/1000".into())),
-            Path::new("/run/user/1000")
+            linux_runtime_root_from(&fallback, Some(configured.clone())),
+            configured
         );
     }
 
