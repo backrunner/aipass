@@ -222,11 +222,10 @@ pub fn prepare_uninstall(agent: &Path) -> Result<()> {
     crate::autostart::ensure_macos_agent_stopped(agent)?;
     #[cfg(windows)]
     crate::autostart::uninstall_windows_tray_entries(&agent.with_file_name("aipass-desktop.exe"))?;
-    #[cfg(windows)]
     for vault in &vaults {
         match crate::ipc::connect(vault) {
             Ok(_) => anyhow::bail!("an Agent is still running; stop it with 'aipass agent stop' (using its --vault path) and retry uninstall"),
-            Err(error) => anyhow::ensure!(error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound), "could not verify Agent shutdown; uninstall stopped"),
+            Err(error) => anyhow::ensure!(error.downcast_ref::<std::io::Error>().is_some_and(|e| matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)), "could not verify Agent shutdown; uninstall stopped"),
         }
     }
     let restored = recovery.restore(&owner)?;

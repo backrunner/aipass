@@ -251,6 +251,9 @@ pub(crate) fn recover(state: &Arc<AgentState>) -> ServiceResult<()> {
     }
     with_vault(state, false, |vault| {
         let key = Zeroizing::new(vault.config_backup_key());
+        let _recovery =
+            crate::proxy_recovery::WriteGuard::begin(&crate::server::home_dir(vault)?, false)
+                .map_err(safe_error)?;
         for tx in
             aipass_config_writers::transaction::pending(&root(state), &key).map_err(safe_error)?
         {
