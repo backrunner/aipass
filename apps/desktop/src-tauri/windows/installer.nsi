@@ -303,7 +303,12 @@ Function PageReinstallUpdateSelection
   ${EndIf}
 FunctionEnd
 Function PageLeaveReinstall
-  ${NSD_GetState} $R2 $R1
+  ; Passive mode has no radio-button HWND. Use its default maintenance choice.
+  ${If} $PassiveMode = 1
+    StrCpy $R1 1
+  ${Else}
+    ${NSD_GetState} $R2 $R1
+  ${EndIf}
 
   ; If migrating from Wix, always uninstall
   ${If} $WixMode = 1

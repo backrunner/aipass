@@ -70,6 +70,7 @@ try {
   // Force genuine manual upgrade/downgrade decisions with the same disposable
   // package, exercising the old-uninstaller handoff rather than just /UPDATE.
   for (const version of ["0.0.0", "999.0.0"]) {
+    writeFileSync(join(reports, "installer-stage.json"), JSON.stringify({ stage: "manual-replacement", previousVersion: version }));
     execFileSync("reg.exe", ["add", versionKey, "/v", "DisplayVersion", "/t", "REG_SZ", "/d", version, "/f"], { stdio: "pipe" });
     execFileSync(installer, ["/P", "/NS", `/D=${installed}`], installOptions);
     assertProxyPreserved();
@@ -92,6 +93,7 @@ try {
   if (proxyFixture) await proxyFixture.stop();
   if (child && !finished) child.kill();
   if (existsSync(join(root, "logs"))) cpSync(join(root, "logs"), join(reports, "logs"), { recursive: true });
+  if (existsSync(join(proxyRoot, "logs"))) cpSync(join(proxyRoot, "logs"), join(reports, "proxy-logs"), { recursive: true });
   if (success) {
     rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     rmSync(proxyRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });

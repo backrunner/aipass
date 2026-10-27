@@ -1292,3 +1292,10 @@ Newest entries last within each section.
 - **Fix**: observe request headers in the replay fixture, ignore only empty sockets and unauthenticated root GET/HEAD discovery, and retain rejection of generation paths, authentication and WebSocket upgrades.
 - **Guardrail**: inject harmless probes and real upstream handshakes into the observer. Require the former to pass and the latter to fail; keep the attempt-count and partial-output assertions. Do not disable developer services to make network fixtures pass.
 - **Watch points**: `websocket/tests/replay.rs` and single-use CLI callback fixtures.
+
+### NSIS passive maintenance has no radio-button handle
+- **Symptom**: the native Windows manual replacement fixture timed out while overwriting an installation with a running Agent.
+- **Root cause**: the pinned Tauri template called its maintenance handler in passive mode without creating the radio buttons; reading their state selected the skip-uninstall path, leaving the Agent executable in use.
+- **Fix**: select the default maintenance choice explicitly in passive mode, retaining the interactive radio selection and explicit replacement handoff.
+- **Guardrail**: preserve the upstream template hash after removing both reviewed patches. Exercise actual passive upgrade and downgrade with a registered Agent, and retain the fixture's proxy logs and installer stage on failure.
+- **Watch points**: `windows/installer.nsi`, `proxy-uninstall.test.mjs` and `verify-windows-runtime.mjs`.
