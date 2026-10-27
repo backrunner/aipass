@@ -19,7 +19,7 @@ export async function scanAgentManagement(
     try {
       return await invoke<ToolConfigStatus>("tool_config_status", { tool: detection.tool });
     } catch {
-      return { tool: detection.tool, state: "storage_unavailable", overrides: [] } as ToolConfigStatus;
+      return { tool: detection.tool, state: "unavailable", overrides: [] } as ToolConfigStatus;
     }
   }));
   return { detections, statuses: Object.fromEntries(results.map(status => [status.tool, status])) };

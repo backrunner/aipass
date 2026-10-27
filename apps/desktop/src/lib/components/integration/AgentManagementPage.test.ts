@@ -110,3 +110,23 @@ test.each([
   await vi.waitFor(() => { flushSync(); expect(document.querySelector('.agent-list')?.getAttribute("aria-busy")).toBe("false"); });
   expect(document.querySelector('.account-detail')).toBeNull();
 });
+
+test.each([
+  {failure: "validation_failed: Claude account identity unavailable", label: "Status unavailable"},
+  {failure: "IPC request timed out", label: "Status unavailable"},
+  {failure: undefined, label: "Storage unavailable"}
+])("a Claude status check reports $label without inventing a storage failure ($failure)", async ({failure, label}) => {
+  setLocale("en");
+  const invoke = vi.fn(async (command: string) => {
+    if (command === "tool_config_detect") return [{tool: "claude-code", binaryFound: true}];
+    if (command === "tool_config_status") {
+      if (failure) throw new Error(failure);
+      return {tool: "claude-code", state: "storage_unavailable", overrides: []};
+    }
+    return null;
+  });
+  app = mount(AgentManagementPage, {target: document.body, props: {invokeTauri: invoke as never, onRefreshEntries: async () => {}}});
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.agent-list')?.getAttribute("aria-busy")).toBe("false"); });
+  expect(document.querySelector('.row-note')?.textContent.trim()).toBe(label);
+  if (failure) expect(document.body.textContent).not.toContain("Storage unavailable");
+});

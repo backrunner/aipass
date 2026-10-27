@@ -712,6 +712,13 @@ Newest entries last within each section.
 
 ## Desktop operation feedback
 
+### Status request failures do not establish a storage failure
+- **Symptom**: Claude Code displayed Storage unavailable when its status request actually failed with `Claude account identity unavailable`.
+- **Root cause**: the desktop scan caught every rejected `tool_config_status` call and fabricated `storage_unavailable`, including validation and transport errors.
+- **Fix**: use the existing generic `unavailable` state for rejected requests; preserve genuine typed storage results and keep switching disabled when status is unknown.
+- **Guardrail**: test rejected identity validation, transport timeout, and a successful response explicitly reporting unavailable storage. Never classify a generic rejected request as a Keychain/storage error.
+- **Watch points**: `services/agentManagement.ts`, Agent page mutation controls and status labels, and `AgentManagementPage.test.ts`.
+
 ### Native import can link the active account without a managed switch
 - **Symptom**: Codex's imported native account appeared in the selector, but its usage was replaced by the connect-credentials hint.
 - **Root cause**: `AgentManagementPage.svelte` rendered account details only for `ready`; Rust can identify the imported active account by exact identity and native home while returning `unmanaged` with `mode=official` before any managed switch.

@@ -165,7 +165,7 @@
           placeholder={$t(available.length ? "agents.choose" : "agents.noCompatible")}
           ariaLabel={`${activeTool.name}: ${$t("agents.credential")}`} disabled={loading || Boolean(busy) || !available.length || needsRuntime}
           onValueChange={value => { if (activeTool) selections = { ...selections, [activeTool.id]: value }; }} />
-        <Button size="sm" variant="secondary" disabled={refreshing || Boolean(busy) || !selections[activeTool.id] || needsRuntime || activeStatus?.state === "conflict" || activeStatus?.state === "storage_unavailable"}
+        <Button size="sm" variant="secondary" disabled={refreshing || Boolean(busy) || !selections[activeTool.id] || needsRuntime || activeStatus?.state === "conflict" || activeStatus?.state === "storage_unavailable" || activeStatus?.state === "unavailable"}
           loading={busy === activeTool.id} on:click={() => { if (activeTool) void prepare(activeTool.id); }}>{$t(activeTool.setupGuide ? "integration.setupAction" : "agents.switch")}</Button>
       </div>
       {#if !detection?.binaryFound && !detection?.extensionFound}<p class="subtle">{$t("agents.configOnly")}</p>{/if}
