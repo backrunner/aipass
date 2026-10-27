@@ -137,7 +137,11 @@ fn undo_inner(
     }
     if extension == "toml" {
         fn doc(bytes: Option<&[u8]>) -> Result<toml_edit::DocumentMut> {
-            Ok(std::str::from_utf8(bytes.unwrap_or(b""))?.parse()?)
+            std::str::from_utf8(bytes.unwrap_or(b""))?
+                .parse()
+                .map_err(|_| {
+                    anyhow::anyhow!("invalid TOML configuration; original recovery data retained")
+                })
         }
         let old = doc(before)?;
         let new = doc(after)?;

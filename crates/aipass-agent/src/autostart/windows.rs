@@ -294,8 +294,8 @@ mod tests {
     fn executable_ownership_uses_canonical_paths_and_missing_siblings() {
         let root = tempfile::tempdir().unwrap();
         let binary = root.path().join("aipass-agent.exe");
-        fs::write(&binary, "fixture").unwrap();
-        let canonical = fs::canonicalize(&binary).unwrap();
+        std::fs::write(&binary, "fixture").unwrap();
+        let canonical = std::fs::canonicalize(&binary).unwrap();
         let alias = root.path().join(".").join("aipass-agent.exe");
         assert_eq!(
             display_path(&alias).unwrap(),

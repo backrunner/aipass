@@ -1299,3 +1299,10 @@ Newest entries last within each section.
 - **Fix**: select the default maintenance choice explicitly in passive mode, retaining the interactive radio selection and explicit replacement handoff. Canonicalize executable paths before matching Run entries: an installer can invoke an 8.3 alias while login registration stores its long path. Resolve missing desktop siblings through their existing parent for Agent-only fixtures.
 - **Guardrail**: preserve the upstream template hash after removing both reviewed patches. Exercise actual passive upgrade and downgrade with a registered Agent, and retain the fixture's proxy logs and installer stage on failure.
 - **Watch points**: `windows/installer.nsi`, `proxy-uninstall.test.mjs` and `verify-windows-runtime.mjs`.
+
+### Recovery parser errors can contain secret configuration text
+- **Symptom**: the malformed TOML recovery canary appeared in the full error chain used by the uninstall command.
+- **Root cause**: TOML parser errors include source snippets, and the recovery path propagated them to stderr and NSIS logging.
+- **Fix**: replace TOML parse failures with a fixed diagnostic, preserving the configuration and encrypted recovery data.
+- **Guardrail**: malformed configuration containing a synthetic credential must fail without including that credential in the formatted error chain. Keep native platform fixture imports explicit; macOS Clippy cannot compile Windows-only test modules.
+- **Watch points**: `proxy_recovery/merge.rs`, the uninstall entry point and native Windows CI.

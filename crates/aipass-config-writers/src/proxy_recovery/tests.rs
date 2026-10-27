@@ -737,3 +737,18 @@ fn toml_table_header_comments_survive_removal_of_owned_values() {
     assert!(text.contains("# user comment"));
     assert!(text.contains("\"original\""));
 }
+
+#[test]
+fn malformed_toml_errors_do_not_expose_configuration_contents() {
+    let error = super::merge::undo(
+        Some(Path::new("fixture.toml")),
+        Some(b"model = 'original'\n"),
+        Some(b"model = 'proxy'\n"),
+        Some(b"api_key = 'synthetic-toml-secret\n"),
+    )
+    .unwrap_err();
+    assert!(
+        !format!("{error:#}").contains("synthetic-toml-secret"),
+        "TOML parser errors must not expose configuration values"
+    );
+}
