@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 use url::Url;
+pub(crate) mod control;
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -45,6 +46,9 @@ fn updater_error(error: tauri_plugin_updater::Error) -> String {
         other => other.to_string(),
     }
 }
+
+static UPDATE_OPERATION: tauri::async_runtime::Mutex<()> =
+    tauri::async_runtime::Mutex::const_new(());
 
 const OFFICIAL_ENDPOINT: &str =
     "https://github.com/backrunner/aipass/releases/latest/download/latest.json";
@@ -119,12 +123,14 @@ fn updater_for_channel(
     app: &AppHandle,
     channel: &str,
 ) -> Result<tauri_plugin_updater::Updater, String> {
-    let builder = app.updater_builder();
+    let builder = app
+        .updater_builder()
+        .timeout(std::time::Duration::from_secs(300));
     // Windows install() hands off to NSIS and exits inside the plugin. Code
     // after install() and Tauri's normal Exit event do not run on that path.
     #[cfg(windows)]
     let builder = builder.on_before_exit(|| {
-        std::env::set_var("AIPASS_WINDOW_TARGET", "main");
+        std::env::set_var("AIPASS_WINDOW_TARGET", control::restart_target());
         let _ = crate::secret_clipboard::clear_now();
         let _ = crate::logging::log_event("desktop.update.windows_handoff", &[]);
     });
@@ -356,6 +362,7 @@ pub(crate) async fn check_for_updates(
     app: AppHandle,
     channel: String,
 ) -> Result<UpdateCheckResult, String> {
+    let _guard = UPDATE_OPERATION.try_lock().map_err(|_| "update_busy")?;
     let operation = crate::logging::DesktopOperation::start("desktop.update.check");
     let result = check_for_updates_inner(app, channel).await;
     operation.finish(result.as_ref().is_ok_and(|value| value.error.is_none()));
@@ -396,6 +403,7 @@ async fn check_for_updates_inner(
 
 #[tauri::command]
 pub(crate) async fn download_update(app: AppHandle, channel: String) -> Result<String, String> {
+    let _guard = UPDATE_OPERATION.try_lock().map_err(|_| "update_busy")?;
     crate::logging::log_task(
         "desktop.update.download",
         download_update_inner(app, channel),
@@ -491,7 +499,7 @@ fn install_verified_update(
     // Restart retains argv as well as environment. An explicit main target
     // also overrides --login-start, so a login-launched Windows instance
     // shows the updated window after "Install & restart".
-    std::env::set_var("AIPASS_WINDOW_TARGET", "main");
+    std::env::set_var("AIPASS_WINDOW_TARGET", control::restart_target());
     crate::ALLOW_PROCESS_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
     let _ = crate::logging::log_event("desktop.update.installed_restarting", &[]);
     app.restart()
@@ -521,6 +529,7 @@ pub(crate) async fn install_pending_update(
     app: AppHandle,
     channel: String,
 ) -> Result<bool, String> {
+    let _guard = UPDATE_OPERATION.try_lock().map_err(|_| "update_busy")?;
     crate::logging::log_task(
         "desktop.update.install_pending",
         install_pending_update_inner(app, channel),
@@ -541,11 +550,13 @@ async fn install_pending_update_inner(app: AppHandle, channel: String) -> Result
 
 #[tauri::command]
 pub(crate) fn clear_pending_update(app: AppHandle) -> Result<(), String> {
+    let _guard = UPDATE_OPERATION.try_lock().map_err(|_| "update_busy")?;
     try_clear_cached_update(&app)
 }
 
 #[tauri::command]
 pub(crate) async fn install_update(app: AppHandle, channel: String) -> Result<(), String> {
+    let _guard = UPDATE_OPERATION.try_lock().map_err(|_| "update_busy")?;
     crate::logging::log_task("desktop.update.install", install_update_inner(app, channel)).await
 }
 

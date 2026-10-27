@@ -192,3 +192,12 @@ aipass agent install | uninstall | status | start | stop
 ```
 
 The agent is the background process that holds the unlocked session. On macOS, `agent install` registers a LaunchAgent so it starts at login. The desktop app manages this for you; use these commands for headless or scripting setups.
+
+## Version updates
+
+```bash
+aipass self-update check --json
+aipass self-update install --yes --json
+```
+
+Check and install desktop or standalone CLI updates without an interactive prompt. See [CLI updates](/docs/updates#cli-updates) for detection, verification and exit codes.

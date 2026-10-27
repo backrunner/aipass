@@ -4,6 +4,7 @@ mod misc;
 mod proxy;
 mod secret;
 mod tools;
+mod updates;
 mod vault;
 
 use crate::*;
@@ -14,6 +15,7 @@ pub(crate) fn run(cli: Cli) -> Result<()> {
     let cli_password = cli.password.clone();
 
     match cli.command {
+        Command::SelfUpdate(args) => updates::handle(json, vault, args),
         Command::Tool { command } => tools::handle(json, vault, cli_password, command),
         Command::Doctor => misc::handle_doctor(json, vault, cli_password),
         Command::Completions { shell } => misc::handle_completions(shell),

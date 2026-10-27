@@ -31,6 +31,7 @@ enum Mode {
     /// Keep the isolated fixture open for native UI review; never an update gate.
     Interactive,
     Install,
+    CliInstall,
     Cached,
 }
 
@@ -61,7 +62,10 @@ pub(crate) fn endpoint() -> Option<url::Url> {
 
 pub(crate) fn reinstall_same_version() -> bool {
     CHECK.get().is_some_and(|check| {
-        matches!(check.config.mode, Mode::Install | Mode::Cached) && check.restarted_from.is_none()
+        matches!(
+            check.config.mode,
+            Mode::Install | Mode::CliInstall | Mode::Cached
+        ) && check.restarted_from.is_none()
     })
 }
 
@@ -250,6 +254,26 @@ pub(crate) fn start(app: AppHandle) {
                 }
                 installed?;
                 return Err("installer returned without restarting the application".into());
+            }
+            if check.config.mode == Mode::CliInstall {
+                let deadline = Instant::now() + Duration::from_secs(90);
+                let marker = if check.restarted_from.is_none() {
+                    "installed.json"
+                } else {
+                    "cli-confirmed.json"
+                };
+                while !check.root.join(marker).exists() {
+                    if Instant::now() >= deadline {
+                        return Err(format!("CLI did not complete {marker}"));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if check.restarted_from.is_none() {
+                    // The updater will terminate this process. Keep the observer
+                    // alive so it cannot race the actual CLI-driven installer.
+                    std::thread::sleep(Duration::from_secs(10));
+                    return Err("CLI installer did not restart".into());
+                }
             }
             if !matches!(check.config.mode, Mode::Startup | Mode::Interactive) {
                 let previous = check

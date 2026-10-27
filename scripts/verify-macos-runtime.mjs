@@ -67,8 +67,8 @@ export function verifyResult(result, log, mode, version) {
     );
     assert.match(
       events[restarted],
-      /target=main/,
-      "Updated app must reopen its main window",
+      mode === "cliInstall" ? /target=tray/ : /target=main/,
+      "Updated app must restart in the requested mode",
     );
   }
 }
@@ -127,7 +127,13 @@ function sampleFixtureProcess(root, pid, output) {
   try {
     const executable = run("/bin/ps", ["-p", String(pid), "-o", "comm="]);
     if (!executable.startsWith(`${root}/AIPass.app/Contents/`)) return;
-    run("/usr/bin/sample", [String(pid), "2", "1", "-file", join(output, "process-sample.txt")]);
+    run("/usr/bin/sample", [
+      String(pid),
+      "2",
+      "1",
+      "-file",
+      join(output, "process-sample.txt"),
+    ]);
   } catch (error) {
     // Sampling is diagnostic only; preserve the original gate failure.
     writeFileSync(join(output, "sample-error.log"), `${error.message}\n`);
@@ -258,7 +264,64 @@ async function scenario({
     });
     const resultPath = join(root, "result.json");
     const deadline = Date.now() + 120_000;
+    let cliUpdate;
+    let cliError;
     while (!existsSync(resultPath)) {
+      if (
+        mode === "cliInstall" &&
+        !cliUpdate &&
+        read(join(root, "logs/desktop.log")).includes(
+          "desktop.runtime_check.ready",
+        )
+      ) {
+        const cli = join(copy, "Contents/Resources/aipass");
+        const args = [
+          "self-update",
+          "--target",
+          "desktop",
+          "--timeout-seconds",
+          "90",
+          "install",
+          "--yes",
+          "--json",
+        ];
+        cliUpdate = new Promise((accept) => {
+          const process = spawn(cli, args, {
+            env: {
+              ...environment,
+              AIPASS_VAULT_DIR: join(root, "data/vault"),
+              AIPASS_AGENT_RUNTIME_DIR: join(root, "agent-run"),
+              AIPASS_DESKTOP_RUNTIME_DIR: join(root, "desktop-run"),
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          let stdout = "",
+            stderr = "";
+          process.stdout.on("data", (chunk) => (stdout += chunk));
+          process.stderr.on("data", (chunk) => (stderr += chunk));
+          process.on("error", (error) => {
+            cliError = error;
+            accept();
+          });
+          process.on("close", (code) => {
+            writeFileSync(
+              join(output, "cli-update.json"),
+              JSON.stringify({ code, stdout, stderr }, null, 2),
+            );
+            try {
+              assert.equal(code, 0, stderr);
+              const result = JSON.parse(stdout);
+              assert.equal(result.status, "installed");
+              assert.equal(result.currentVersion, version);
+              writeFileSync(join(root, "cli-confirmed.json"), stdout);
+            } catch (error) {
+              cliError = error;
+            }
+            accept();
+          });
+        });
+      }
+      if (cliError) throw cliError;
       if (spawnError) throw spawnError;
       if (
         child.signalCode ||
@@ -275,6 +338,8 @@ async function scenario({
       );
       await delay(100);
     }
+    if (cliUpdate) await cliUpdate;
+    if (cliError) throw cliError;
     const result = JSON.parse(read(resultPath));
     report.result = result;
     verifyResult(result, read(join(root, "logs/desktop.log")), mode, version);
@@ -425,6 +490,12 @@ async function main() {
               app: updaterApp,
               mode: "install",
               target: "main",
+            },
+            {
+              name: "cli-install-restart",
+              app: updaterApp,
+              mode: "cliInstall",
+              target: "tray",
             },
             {
               name: "cached-install-restart",

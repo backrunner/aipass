@@ -1139,6 +1139,13 @@ Newest entries last within each section.
 - **Guardrail**: run `verify-linux-native-clis.mjs` against production binaries with isolated HOME, a minimal desktop PATH and synthetic grants; test wrong permissions, malformed/expired/missing stores and non-executable files. Run `verify-linux-keyring.mjs` only under a fresh private `dbus-run-session`. Include real vendor capability probes separately from fixture tests. When transferring source snapshots, preserve fresh modification times or extract with `tar -m`; matching bytes on disk do not prove Cargo rebuilt a file whose archived timestamp stayed unchanged.
 - **Watch points**: `cli_discovery`, native CLI command environment, `native_import`, XDG helpers, `native_auth/linux_keyring`, default versus independent vendor homes and Linux packaged-runtime CI.
 
+### CLI update completion must verify the running suite
+- **Symptom**: an installer acknowledgement can be mistaken for a completed update, while copied CLI helpers or the resident Agent still run the previous version.
+- **Root cause**: desktop replacement, copied CLI installation and Agent readiness have separate asynchronous lifetimes (`updates.rs`, `cli_install.rs`, `startup.rs`).
+- **Fix**: authenticated singleton update control reuses the signed updater and serializes UI/CLI mutation; the CLI checks a changed desktop PID, expected desktop/CLI versions and typed Agent readiness. Standalone updates verify official asset digests, stage all three executables, scope service ownership and retain rollback files on recovery errors.
+- **Guardrail**: never report `installed` on acknowledgement alone; keep status responsive during install, preserve tray mode for unattended restart, fail without authorization prompts, and exercise CLI-driven signed restarts in `verify-macos-runtime.mjs`. Do not overwrite another installation's service or weaken update signatures.
+- **Watch points**: `updates/control.rs`, singleton auth, CLI dispatch/updates, Rust updates/install, copied helpers and runtime-check fixtures.
+
 ### Linux updates must preserve installation format and authorization boundaries
 - **Symptom**: Linux feeds contained only macOS entries, package authorization could fall through to password prompts, and installation failures disappeared while an update remained available.
 - **Root cause**: generic updater targets, the plugin's system-package fallback sequence, and an error banner nested inside the no-update branch. Plugin `install` also does not verify bytes reread from cache.

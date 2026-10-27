@@ -955,7 +955,7 @@ fn home_dir() -> Result<PathBuf> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn shell_quote(value: &str) -> String {
+pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 

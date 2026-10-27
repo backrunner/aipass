@@ -192,3 +192,12 @@ aipass agent install | uninstall | status | start | stop
 ```
 
 代理是持有已解锁会话的后台进程。在 macOS 上，`agent install` 注册 LaunchAgent 使其开机自启。桌面应用会替你管理这些；这些命令适用于无头或脚本化环境。
+
+## 版本更新
+
+```bash
+aipass self-update check --json
+aipass self-update install --yes --json
+```
+
+检查与安装桌面或独立 CLI 更新，无需交互提示。安装识别、校验与退出码见 [CLI 更新](/docs/zh/updates#cli-更新)。

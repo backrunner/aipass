@@ -88,6 +88,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "directories",
+ "flate2",
  "futures-util",
  "http-body-util",
  "hyper",
@@ -111,10 +112,12 @@ dependencies = [
  "rustix",
  "rustls",
  "rustls-pemfile",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
  "sys-locale",
+ "tar",
  "tempfile",
  "time",
  "tokio",
@@ -128,6 +131,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zbus 5.19.0",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

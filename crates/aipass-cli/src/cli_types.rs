@@ -1,5 +1,7 @@
 mod credentials;
+mod updates;
 pub use credentials::{AddArgs, UpdateArgs};
+pub use updates::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -24,6 +26,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Check or install AIPass version updates without unlocking the vault.
+    SelfUpdate(SelfUpdateArgs),
     Doctor,
     Completions {
         #[arg(value_enum)]

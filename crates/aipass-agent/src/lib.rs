@@ -28,6 +28,7 @@ mod subscriptions;
 pub(crate) mod sync_watch;
 mod tool_credentials;
 mod tool_switch;
+pub mod updates;
 pub(crate) mod usage_probe;
 pub(crate) mod vault_sync;
 pub(crate) mod websocket_capability;

@@ -31,3 +31,12 @@ test("requires completed install, a new process, frontend readiness and main-win
   ])
     assert.throws(() => verifyResult(candidate, events, "cached", version));
 });
+
+test("CLI updates require a new process and retain unattended tray mode", () => {
+  const trayLog = log.replace("target=main", "target=tray");
+  verifyResult(result, trayLog, "cliInstall", version);
+  assert.throws(() => verifyResult(result, log, "cliInstall", version));
+  assert.throws(() =>
+    verifyResult({ ...result, pid: 10 }, trayLog, "cliInstall", version),
+  );
+});

@@ -55,6 +55,8 @@ struct SingletonRequest {
     command: Option<SingletonCommand>,
     #[serde(default)]
     deep_link_urls: Vec<String>,
+    #[serde(default)]
+    update: Option<aipass_agent_protocol::AuthenticatedDesktopUpdate>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,6 +78,7 @@ enum SingletonAction {
 enum SingletonCommand {
     Quit,
     Status,
+    Update,
 }
 
 pub(crate) fn acquire(
@@ -88,6 +91,7 @@ pub(crate) fn acquire(
         target: target.to_string(),
         command: None,
         deep_link_urls,
+        update: None,
     };
 
     if let Ok(decision) = request_existing_instance(&request, current_version) {
@@ -142,6 +146,10 @@ fn handle_connection(mut stream: Stream, app: AppHandle, current_version: &str) 
     let request: SingletonRequest = read_frame_with_deadline(&mut stream, Duration::from_secs(5))
         .context("failed to read desktop singleton request")?;
     let _ = crate::logging::log_event("desktop.singleton.request", &[("target", &request.target)]);
+
+    if request.command == Some(SingletonCommand::Update) {
+        return crate::updates::control::handle(stream, app, request.update);
+    }
 
     if matches!(
         request.command,
@@ -386,21 +394,16 @@ fn desktop_singleton_name(instance: DesktopInstanceKind) -> Result<String> {
 
 #[cfg(not(target_os = "windows"))]
 fn desktop_runtime_dir() -> Result<PathBuf> {
-    let dirs = aipass_agent::paths::project_dirs()?;
-    let dir = if let Some(explicit) = std::env::var_os("AIPASS_DESKTOP_RUNTIME_DIR") {
-        PathBuf::from(explicit)
-    } else {
-        let root = if cfg!(target_os = "macos") {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .context("HOME is not set")?
-                .join(".aipass")
-                .join("run")
-        } else {
-            aipass_agent::paths::linux_runtime_root(&dirs.data_local_dir().join("runtime"))
-        };
-        root.join("aipass-desktop")
+    let kind = match current_desktop_instance() {
+        DesktopInstanceKind::Release => "release",
+        DesktopInstanceKind::PackagedDevelopment => "packaged-development",
+        DesktopInstanceKind::LiveDevelopment => "development",
     };
+    let path = aipass_agent::updates::desktop::socket_path(kind)?;
+    let dir = path
+        .parent()
+        .context("desktop runtime path has no parent")?
+        .to_path_buf();
     fs::create_dir_all(&dir)?;
     #[cfg(unix)]
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;

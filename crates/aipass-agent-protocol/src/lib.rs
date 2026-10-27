@@ -1,5 +1,7 @@
 pub use aipass_config_writers::ToolId;
 mod account_results;
+mod updates;
+pub use updates::*;
 mod community;
 mod subscription_cli;
 mod subscription_import;
@@ -1516,36 +1518,7 @@ mod tests {
         assert_eq!(err.to_string(), "frame too large");
     }
 
-    /// An ordinary request must not be able to hang a caller indefinitely.
-    #[test]
-    fn ordinary_requests_use_the_default_response_timeout() {
-        assert_eq!(
-            AgentRequest::SessionStatus.response_timeout(),
-            DEFAULT_RESPONSE_TIMEOUT
-        );
-        assert_eq!(
-            AgentRequest::EntriesList { archived: false }.response_timeout(),
-            DEFAULT_RESPONSE_TIMEOUT
-        );
-    }
-
-    #[test]
-    fn tool_config_requests_use_the_long_response_timeout() {
-        let request = AgentRequest::ToolConfigApply {
-            request: ToolConfigRequest {
-                tool: ToolConfigTool::Codex,
-                id: uuid::Uuid::nil(),
-                secret_id: None,
-                mode: ToolConfigMode::Plaintext,
-                codex_api_key_mode: None,
-                preview_id: None,
-            },
-        };
-        assert_eq!(request.response_timeout(), LONG_RESPONSE_TIMEOUT);
-    }
-
-    /// A request that waits on the user outlives the default bound, so the
-    /// client must follow the deadline the request itself carries.
+    /// A request that waits on the user outlives the default bound.
     #[test]
     fn user_facing_waits_extend_past_their_own_deadline() {
         let timeout = AgentRequest::SessionUnlock {
@@ -1813,3 +1786,7 @@ mod tests {
 
 mod tool_config;
 pub use tool_config::*;
+
+#[cfg(test)]
+#[path = "request_timeout_tests.rs"]
+mod request_timeout_tests;

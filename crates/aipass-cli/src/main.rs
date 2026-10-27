@@ -67,6 +67,8 @@ mod tests {
                 assert!(matches!(cli.command, Command::Update(UpdateArgs {
                     max_concurrent_requests: Some(0), supports_websockets: Some(false), ..
                 })));
+                let update = Cli::try_parse_from(["aipass", "self-update", "install", "--yes", "--json"]).unwrap();
+                assert!(matches!(update.command, Command::SelfUpdate(_)));
                 let version = Cli::try_parse_from(["aipass", "--version"]).err().unwrap();
                 assert_eq!(version.kind(), clap::error::ErrorKind::DisplayVersion);
             })
