@@ -2,6 +2,45 @@ use super::*;
 use aipass_config_writers::native_auth::{parse, Resource};
 use sha2::{Digest, Sha256};
 
+pub(super) fn archived_store(active: &NativeStore, path: &Path) -> Result<NativeStore> {
+    let mut archived = NativeStore {
+        tool: active.tool.clone(),
+        home: path.to_owned(),
+        primary: Resource::File(path.join(if active.tool == "codex" {
+            "auth.json"
+        } else {
+            ".credentials.json"
+        })),
+        fallback: None,
+        profile: active
+            .profile
+            .as_ref()
+            .map(|_| Resource::File(path.join(".claude.json"))),
+    };
+    if matches!(active.primary, Resource::Keychain { .. }) {
+        let account = std::env::var("USER").context("system account unavailable")?;
+        archived.primary = Resource::Keychain {
+            service: if active.tool == "codex" {
+                "Codex Auth".into()
+            } else {
+                format!(
+                    "Claude Code-credentials-{}",
+                    &format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()))[..8]
+                )
+            },
+            account: if active.tool == "codex" {
+                format!(
+                    "cli|{}",
+                    &format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()))[..16]
+                )
+            } else {
+                account
+            },
+        };
+    }
+    Ok(archived)
+}
+
 pub(super) fn active_store(home: &Path, tool: &ToolConfigTool) -> Result<NativeStore> {
     match tool {
         ToolConfigTool::Codex => NativeStore::codex(
@@ -312,41 +351,7 @@ pub(super) fn archive_outgoing(
             .context("native credential directory unavailable")?
             .join("aipass-accounts")
             .join(entry.id.to_string());
-        let mut archived = NativeStore {
-            tool: active.tool.clone(),
-            home: path.clone(),
-            primary: Resource::File(path.join(if active.tool == "codex" {
-                "auth.json"
-            } else {
-                ".credentials.json"
-            })),
-            fallback: None,
-            profile: active
-                .profile
-                .as_ref()
-                .map(|_| Resource::File(path.join(".claude.json"))),
-        };
-        if matches!(active.primary, Resource::Keychain { .. }) {
-            let account = std::env::var("USER").context("system account unavailable")?;
-            archived.primary = Resource::Keychain {
-                service: if active.tool == "codex" {
-                    "Codex Auth".into()
-                } else {
-                    format!(
-                        "Claude Code-credentials-{}",
-                        &format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()))[..8]
-                    )
-                },
-                account: if active.tool == "codex" {
-                    format!(
-                        "cli|{}",
-                        &format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()))[..16]
-                    )
-                } else {
-                    account
-                },
-            };
-        }
+        let archived = archived_store(active, &path)?;
         if active.tool == "codex" {
             changes.push(Change::new(
                 Resource::File(path.join("config.toml")),

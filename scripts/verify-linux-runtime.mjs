@@ -153,7 +153,9 @@ for (const target of ["main", "tray"]) {
       cpSync(join(root, "logs"), join(report, "logs"), { recursive: true });
     if (existsSync(join(root, "result.json")))
       cpSync(join(root, "result.json"), join(report, "result.json"));
-    if (succeeded) rmSync(root, { recursive: true, force: true });
+    // Agent shutdown is acknowledged before its final background log writes.
+    // Retry transient ENOTEMPTY/EBUSY, while still failing persistent cleanup.
+    if (succeeded) rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     else writeFileSync(join(report, "fixture.txt"), root);
   }
 }

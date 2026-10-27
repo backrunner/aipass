@@ -63,6 +63,15 @@ pub(crate) fn resources(home: &Path, tool: &ToolConfigTool) -> anyhow::Result<Ve
     resources.dedup();
     Ok(resources)
 }
+pub(crate) fn config_paths(home: &Path, tool: &ToolConfigTool) -> Vec<PathBuf> {
+    let mut paths = reader::paths(home, tool);
+    if *tool == ToolConfigTool::Codex {
+        if let Some(config) = paths.first() {
+            paths.push(config.with_file_name("auth.json"));
+        }
+    }
+    paths
+}
 fn matching(vault: &Vault, c: &Credential) -> ServiceResult<Option<(Uuid, String)>> {
     for entry in vault.list_provider_summaries().map_err(map_vault_error)? {
         if entry.credential_kind != CredentialKind::Api || entry.archived_at.is_some() {

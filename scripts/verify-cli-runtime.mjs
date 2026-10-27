@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isolatedEnvironment, prepareFixtureRecoveryKey, removeFixtureRecoveryKey } from "./fixtures/proxy-recovery.mjs";
 
 assert.ok(
   process.argv[2],
@@ -54,9 +55,7 @@ writeFileSync(
   '{"mode":"local","cloudkitMigrationComplete":true}',
 );
 const env = {
-  ...Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("AIPASS_")),
-  ),
+  ...isolatedEnvironment(root),
   HOME: home,
   USERPROFILE: home,
   ...(process.platform === "win32" ? { APPDATA: join(home, "AppData/Roaming"), LOCALAPPDATA: join(home, "AppData/Local") } : {}),
@@ -87,6 +86,7 @@ const run = (args, extra = {}) =>
     }),
   );
 // Starting explicitly avoids registering a login service during this test.
+prepareFixtureRecoveryKey(root, env);
 const agent = spawn(join(stage, "aipass-agent" + suffix), ["--vault", vault], {
   env,
   stdio: ["ignore", "pipe", "pipe"],
@@ -270,6 +270,7 @@ try {
       if (registryExisted) execFileSync("reg.exe", ["import", registryBackup], { stdio: "ignore" });
       else spawnSync("reg.exe", ["delete", registryKey, "/f"], { stdio: "ignore" });
     }
+    removeFixtureRecoveryKey(root);
     if (complete) rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   } catch (error) {
     console.error(`CLI fixture cleanup failed: ${root}`);

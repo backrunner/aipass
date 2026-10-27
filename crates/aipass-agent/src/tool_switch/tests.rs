@@ -619,6 +619,10 @@ fn claude_reauthentication_rejects_a_different_organization_of_the_same_email() 
 #[test]
 fn upgraded_claude_bindings_keep_status_but_reject_an_external_organization_switch() {
     let (_dir, state, home) = fixture();
+    // This tests organization binding, not a system Keychain write. Keep the
+    // active credential backend inside the fixture even under an isolated HOME.
+    fs::create_dir_all(home.join(".claude")).unwrap();
+    fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
     let path = home.join("org-a");
     write_claude(&path, "alice@example.test", "a");
     fs::write(

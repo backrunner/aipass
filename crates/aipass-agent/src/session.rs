@@ -1,3 +1,4 @@
+mod unlock;
 use aipass_agent_protocol::{
     AgentErrorCode, LockReason, SensitiveString, SessionPolicy, SessionStatus, SyncMode,
     SyncSettings, SyncSettingsUpdate,
@@ -16,6 +17,7 @@ use std::sync::{
 };
 use std::time::Duration as StdDuration;
 use time::OffsetDateTime;
+pub(crate) use unlock::complete_unlock;
 use zeroize::Zeroize;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -242,32 +244,6 @@ pub fn unlock_with_password(
     session_status(state)
 }
 
-/// Shared post-unlock lifecycle for local passwords and explicitly granted remote codes.
-pub(crate) fn complete_unlock(state: &Arc<AgentState>) {
-    if crate::tool_switch::recover(state).is_err() {
-        crate::logging::write_component_log(
-            crate::logging::AGENT_LOG,
-            "WARN",
-            "event=tool.switch.recovery_pending",
-        );
-    }
-    if with_vault(state, false, |vault| {
-        crate::official_accounts::migrate(vault)
-    })
-    .is_err()
-    {
-        crate::logging::write_component_log(
-            crate::logging::AGENT_LOG,
-            "WARN",
-            "event=subscription.cli_handoff.failed",
-        );
-    }
-    clear_last_lock_reason(state);
-    restore_proxy_if_enabled(state);
-    state.session_changed.notify_all();
-    crate::sync_watch::start_sync_watcher_for_current_settings(state);
-}
-
 /// Recreate the local proxy runtime after unlocking an agent that was
 /// previously closed with the proxy enabled. Startup failures are logged but
 /// do not make an otherwise successful vault unlock fail; the user can retry
@@ -400,6 +376,7 @@ pub fn create_vault_with_options(
     password.zeroize();
     let recovery_kit = creation.recovery_kit.clone();
     set_session_vault(state, creation.vault);
+    crate::proxy_recovery::audit_session(state);
     Ok((recovery_kit, session_status(state)?))
 }
 

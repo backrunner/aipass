@@ -34,6 +34,11 @@ fn signed_out_placeholders_do_not_require_an_account_profile() {
         let (_root, store) = store(tool, auth);
         assert_eq!(store.identity().unwrap(), None, "tool={tool}");
         assert_eq!(
+            store.identity_from(auth.as_bytes(), None).unwrap(),
+            None,
+            "tool={tool}"
+        );
+        assert_eq!(
             store.primary.read().unwrap().unwrap().as_slice(),
             auth.as_bytes()
         );
@@ -56,6 +61,10 @@ fn existing_native_grants_without_identity_are_not_treated_as_signed_out() {
     ] {
         let (_root, store) = store(tool, auth);
         assert!(store.identity().is_err(), "tool={tool}");
+        assert!(
+            store.identity_from(auth.as_bytes(), None).is_err(),
+            "tool={tool}"
+        );
     }
 }
 
@@ -69,8 +78,24 @@ fn malformed_or_unreadable_stores_remain_errors() {
     ] {
         let (root, store) = store("claude-code", auth);
         assert!(store.identity().is_err());
+        assert!(store.identity_from(auth.as_bytes(), None).is_err());
         fs::remove_file(root.path().join("auth.json")).unwrap();
         fs::create_dir(root.path().join("auth.json")).unwrap();
         assert!(store.identity().is_err());
     }
+}
+
+#[test]
+fn captured_identity_uses_snapshot_bytes_without_rereading_live_stores() {
+    let (root, store) = store("claude-code", "invalid live credentials");
+    fs::write(root.path().join("profile.json"), "invalid live profile").unwrap();
+    let credentials = br#"{"claudeAiOauth":{"accessToken":"fixture-access"}}"#;
+    let profile =
+        br#"{"oauthAccount":{"emailAddress":"alice@example.test","organizationUuid":"org"}}"#;
+    let identity = store.identity_from(credentials, Some(profile)).unwrap();
+    assert_eq!(identity.as_deref(), Some("alice@example.test::org::org"));
+    assert!(store.identity().is_err());
+    assert!(store
+        .identity_from(credentials, Some(b"invalid snapshot profile"))
+        .is_err());
 }

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use time::OffsetDateTime;
 use uuid::Uuid;
+#[cfg(test)]
+mod recovery_tests;
 
 #[derive(Clone, Debug)]
 struct PreparedWrite {
@@ -83,15 +85,55 @@ pub fn rollback(plan: &ConfigPlan) -> Result<()> {
 }
 
 pub fn rollback_encrypted(backup_path: &Path, backup_key: &[u8; KEY_LEN]) -> Result<ApplyResult> {
+    prepare_rollback_encrypted(backup_path, backup_key)?.apply()
+}
+
+pub struct PreparedRollback {
+    result: ApplyResult,
+    transaction: crate::transaction::Transaction,
+}
+impl PreparedRollback {
+    pub fn apply(self) -> Result<ApplyResult> {
+        self.transaction.apply()?;
+        Ok(self.result)
+    }
+}
+
+pub fn prepare_rollback_encrypted(
+    backup_path: &Path,
+    backup_key: &[u8; KEY_LEN],
+) -> Result<PreparedRollback> {
     let primary_backup: EncryptedBackup = read_json(backup_path)?;
     let backup_paths = backup_group_paths(backup_path, primary_backup.operation_id)?;
-    for path in backup_paths {
-        restore_encrypted_backup_file(&path, backup_key)?;
-    }
-    Ok(ApplyResult {
+    let changes = backup_paths
+        .iter()
+        .map(|path| {
+            let backup: EncryptedBackup = read_json(path)?;
+            let raw = zeroize::Zeroizing::new(decrypt_bytes(
+                backup_key,
+                backup_aad(backup.operation_id, &backup.target_path).as_bytes(),
+                &backup.ciphertext,
+            )?);
+            crate::transaction::Change::new(
+                crate::native_auth::Resource::File(backup.target_path),
+                backup.target_existed.then(|| raw.to_vec()),
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // Decrypt and validate the entire group before any file is changed.
+    let transaction = crate::transaction::Transaction {
         operation_id: primary_backup.operation_id,
-        target_path: primary_backup.target_path,
-        backup_path: backup_path.to_path_buf(),
+        committed: false,
+        changes,
+        metadata: serde_json::Value::Null,
+    };
+    Ok(PreparedRollback {
+        transaction,
+        result: ApplyResult {
+            operation_id: primary_backup.operation_id,
+            target_path: primary_backup.target_path,
+            backup_path: backup_path.to_path_buf(),
+        },
     })
 }
 
@@ -100,10 +142,10 @@ pub fn find_backup_by_operation(home: &Path, operation_id: Uuid) -> Result<PathB
     for root in [
         codex_dir.join(".aipass-backups"),
         home.join(".claude").join(".aipass-backups"),
-        home.join(".gemini").join(".aipass-backups"),
-        home.join(".config")
-            .join("opencode")
-            .join(".aipass-backups"),
+        crate::gemini_config_dir(home).join(".aipass-backups"),
+        crate::utils::opencode_config_path(home).with_file_name(".aipass-backups"),
+        crate::pi_config_dir(home).join(".aipass-backups"),
+        crate::grok_config_dir(home).join(".aipass-backups"),
         home.join(".aipass").join("tools").join(".aipass-backups"),
     ] {
         if !root.exists() {

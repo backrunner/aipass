@@ -1,6 +1,9 @@
 AIPass
 Copyright 2026 AIPass contributors
 
+The Windows NSIS installer template is adapted from Tauri CLI 2.11.2 (MIT).
+Its license is retained in apps/desktop/src-tauri/windows/LICENSE-TAURI.
+
 This product includes software developed by AIPass contributors under
 the Apache License, Version 2.0.
 

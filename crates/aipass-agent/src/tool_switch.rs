@@ -18,6 +18,8 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod apply;
+use apply::{apply_prepared, Prepared};
 mod automatic;
 mod health;
 pub(crate) use automatic::refresh as refresh_automatic;
@@ -234,7 +236,7 @@ pub(crate) fn recover(state: &Arc<AgentState>) -> ServiceResult<()> {
         )
     })?;
     if !has_pending {
-        return Ok(());
+        return crate::proxy_recovery::audit(state);
     }
     // A proxy refresh may still be finishing while the vault is unlocked again.
     let locks = account_locks(state)?;
@@ -249,6 +251,9 @@ pub(crate) fn recover(state: &Arc<AgentState>) -> ServiceResult<()> {
     }
     with_vault(state, false, |vault| {
         let key = Zeroizing::new(vault.config_backup_key());
+        let _recovery =
+            crate::proxy_recovery::WriteGuard::begin(&crate::server::home_dir(vault)?, false)
+                .map_err(safe_error)?;
         for tx in
             aipass_config_writers::transaction::pending(&root(state), &key).map_err(safe_error)?
         {
@@ -262,6 +267,21 @@ pub(crate) fn recover(state: &Arc<AgentState>) -> ServiceResult<()> {
         }
         Ok(())
     })
+}
+pub(crate) fn has_proxy_binding(
+    state: &AgentState,
+    vault: &Vault,
+    tool: &ToolConfigTool,
+    paths: &[PathBuf],
+) -> Result<bool> {
+    Ok(
+        load_binding(state, tool, &vault.config_backup_key())?.is_some_and(|b| {
+            b.route_id.is_some()
+                && b.config_resources
+                    .iter()
+                    .any(|r| matches!(r, Resource::File(path) if paths.contains(path)))
+        }),
+    )
 }
 fn outcome(
     request: &ToolConfigRequest,
@@ -468,197 +488,11 @@ fn apply_inner(
             identity: entry.account_identity,
             selected,
             route_id: None,
+            markers: aipass_config_writers::proxy_recovery::Markers::default(),
             plan,
             content,
         },
     )
-}
-struct Prepared {
-    title: String,
-    identity: Option<String>,
-    selected: Option<String>,
-    route_id: Option<Uuid>,
-    plan: ConfigPlan,
-    content: String,
-}
-fn apply_prepared(
-    state: &Arc<AgentState>,
-    vault: &Vault,
-    request: &ToolConfigRequest,
-    prepared: Prepared,
-) -> ServiceResult<ToolConfigApplyResponse> {
-    let Prepared {
-        title,
-        identity,
-        selected,
-        route_id,
-        plan,
-        content,
-    } = prepared;
-    let content = Zeroizing::new(content);
-    let home = crate::server::home_dir(vault)?;
-    let active = active_store(&home, &request.tool).map_err(safe_error)?;
-    let key = Zeroizing::new(vault.config_backup_key());
-    let mut refs = Vec::new();
-    let mut changes = Vec::new();
-    archive_outgoing(vault, request, &active, &home, &mut changes, &mut refs)
-        .map_err(safe_error)?;
-    let source = if request.mode == ToolConfigMode::Official {
-        Some(source_store(vault, request, &home).map_err(safe_error)?)
-    } else {
-        None
-    };
-    if let Some(source) = &source {
-        let expected = identity
-            .as_deref()
-            .ok_or_else(|| safe_error(anyhow::anyhow!("native account identity unavailable")))?;
-        if source.identity().map_err(safe_error)?.as_deref() != Some(expected) {
-            return Err(ServiceError::new(
-                AgentErrorCode::Conflict,
-                "native account changed",
-            ));
-        }
-        copy_store(source, &active, &mut changes).map_err(safe_error)?;
-        let before = reference(vault, request.id, &request.tool).map_err(safe_error)?;
-        let mut after = before.clone();
-        after["nativeHome"] = json!(active.home);
-        refs.push(RefUpdate {
-            id: request.id,
-            provider: if request.tool == ToolConfigTool::Codex {
-                "codex"
-            } else {
-                "anthropic"
-            }
-            .into(),
-            before,
-            after,
-        });
-    } else {
-        for resource in active.resources() {
-            changes.push(Change::unchanged(resource).map_err(safe_error)?);
-        }
-    }
-    changes.push(
-        Change::new(
-            Resource::File(plan.target_path.clone()),
-            Some(content.as_bytes().to_vec()),
-        )
-        .map_err(safe_error)?,
-    );
-    for write in &plan.extra_writes {
-        // For keyring Codex API auth, use its existing secure backend.
-        let resource = if write.target_path == active.home.join("auth.json") {
-            active.primary.clone()
-        } else {
-            Resource::File(write.target_path.clone())
-        };
-        replace_change(
-            &mut changes,
-            Change::new(resource, Some(write.content.as_bytes().to_vec())).map_err(safe_error)?,
-        );
-    }
-    // Native/auto backend selection must stay consistent with actual writes.
-    preserve_codex_backend(&active, &plan, &mut changes).map_err(safe_error)?;
-    let mut config_resources = std::iter::once(Resource::File(plan.target_path.clone()))
-        .chain(
-            plan.extra_writes
-                .iter()
-                .filter(|w| w.target_path != active.home.join("auth.json"))
-                .map(|w| Resource::File(w.target_path.clone())),
-        )
-        .collect::<Vec<_>>();
-    if request.mode != ToolConfigMode::Official {
-        config_resources.extend(active.resources());
-        config_resources.sort_by_key(|r| r.label());
-        config_resources.dedup();
-    }
-    // Save binding in the same encrypted transaction; calculate postimage fingerprint in memory.
-    let mut saved_request = request.clone();
-    saved_request.preview_id = None;
-    if saved_request.secret_id.is_none() {
-        saved_request.secret_id = selected;
-    }
-    let config_fingerprint = fingerprint_after(
-        &config_resources,
-        &changes,
-        &key,
-        &context(&saved_request).map_err(safe_error)?,
-    )
-    .map_err(safe_error)?;
-    let binding = Binding {
-        route_id,
-        title: title.clone(),
-        request: saved_request,
-        operation_id: plan.operation_id,
-        identity: if source.is_some() {
-            identity.clone()
-        } else {
-            None
-        },
-        config_resources,
-        config_fingerprint,
-    };
-    changes.push(
-        Change::new(
-            Resource::File(binding_path(state, &request.tool)),
-            Some(encode_binding(&binding, &key).map_err(safe_error)?),
-        )
-        .map_err(safe_error)?,
-    );
-    dedup_changes(&mut changes).map_err(safe_error)?;
-    let mut tx = Transaction {
-        operation_id: plan.operation_id,
-        committed: false,
-        changes,
-        metadata: serde_json::to_value(&refs).map_err(safe_error)?,
-    };
-    let backup = tx.save(&root(state), &key).map_err(safe_error)?;
-    if let Err(error) = tx
-        .apply()
-        .map_err(safe_error)
-        .and_then(|_| set_references(vault, &refs, true))
-    {
-        tx.restore().map_err(safe_error)?;
-        set_references(vault, &refs, false)?;
-        std::fs::remove_file(&backup).map_err(safe_error)?;
-        return Err(error);
-    }
-    tx.committed = true;
-    if let Err(e) = tx.save(&root(state), &key) {
-        tx.restore().map_err(safe_error)?;
-        set_references(vault, &refs, false)?;
-        return Err(safe_error(e));
-    }
-    // A cache error cannot turn committed credentials into a replayable failure.
-    if refresh_cache(state, vault, &refs).is_err() {
-        crate::logging::write_component_log(
-            crate::logging::AGENT_LOG,
-            "WARN",
-            "event=tool.switch.proxy_refresh_failed",
-        );
-    }
-    crate::logging::write_component_log(
-        crate::logging::AGENT_LOG,
-        "INFO",
-        &format!(
-            "event=tool.switch.committed operation_id={} tool={} entry_id={}",
-            tx.operation_id,
-            tool_name(&request.tool),
-            request.id
-        ),
-    );
-    Ok(ToolConfigApplyResponse {
-        tool: request.tool.clone(),
-        mode: request.mode.clone(),
-        entry_id: request.id,
-        entry_title: title,
-        operation_id: tx.operation_id,
-        target_path: plan.target_path.display().to_string(),
-        backup_path: backup.display().to_string(),
-        summary: plan.summary,
-        outcome: ToolConfigOutcome::Applied,
-        message: Some("Restart the CLI to use the selected credentials".into()),
-    })
 }
 pub(crate) fn status(
     state: &Arc<AgentState>,

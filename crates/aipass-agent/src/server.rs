@@ -22,6 +22,8 @@ use aipass_agent_protocol::{
     ToolConfigMode, ToolConfigPreviewFile, ToolConfigPreviewResponse, ToolConfigProxyRequest,
     ToolConfigRequest, ToolConfigTool, VaultCreateResponse, AGENT_PROTOCOL_VERSION,
 };
+#[cfg(test)]
+use aipass_config_writers::rollback_encrypted;
 use aipass_config_writers::{
     apply_plan_encrypted, config_backup_path, diff_preview_for_path, plan_claude_code,
     plan_claude_code_official, plan_claude_code_plaintext, plan_codex, plan_codex_official,
@@ -29,9 +31,8 @@ use aipass_config_writers::{
     plan_gemini_cli, plan_gemini_cli_plaintext, plan_grok, plan_grok_plaintext,
     plan_grok_plaintext_with_backend, plan_opencode, plan_opencode_plaintext,
     plan_opencode_plaintext_with_api, plan_pi, plan_pi_plaintext, plan_pi_plaintext_with_api,
-    redacted_diff_preview, rollback_encrypted, ApplyResult,
-    CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan, GrokApiBackend, OpenCodeApi, PiApi,
-    ToolEntry, ToolId,
+    redacted_diff_preview, ApplyResult, CodexApiKeyMode as WriterCodexApiKeyMode, ConfigPlan,
+    GrokApiBackend, OpenCodeApi, PiApi, ToolEntry, ToolId,
 };
 use aipass_crypto::{mask_secret, SecretString};
 use aipass_provider_registry::{

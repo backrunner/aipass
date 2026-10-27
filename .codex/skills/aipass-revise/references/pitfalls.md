@@ -138,7 +138,7 @@ Newest entries last within each section.
 - **Symptom**: signed-out Claude Code showed unavailable storage/status and could not switch to a managed API credential.
 - **Root cause**: `NativeStore::identity` tried to resolve account metadata for empty/null OAuth placeholders; status also conflated absent credentials with unmanaged external credentials.
 - **Fix**: return no native identity only when access/refresh tokens are absent, preserve malformed/unreadable-store errors, and report `not_logged_in` when neither literal credentials nor external references exist. Keep references out of import and execute nothing during discovery.
-- **Guardrail**: test empty/null stores, refresh-only grants, malformed/denied stores, external references, and signed-out preview/apply/rollback with exact restored bytes. Never turn a token-bearing identity failure into permission to discard credentials.
+- **Guardrail**: test empty/null stores, refresh-only grants, malformed/denied stores, external references, and signed-out preview/apply/rollback with exact restored bytes. Keep live and captured-byte identity validation on the same path; validate snapshots without rereading live stores. Never turn a token-bearing identity failure into permission to discard credentials.
 - **Watch points**: `native_auth::identity`, `tool_credentials::{snapshot,preserve}`, `tool_switch::{status_snapshot,apply_prepared}`, Agent management labels and switch controls.
 
 ### Native switches must follow the latest vendor store
@@ -1282,7 +1282,7 @@ Newest entries last within each section.
 - **Evidence**: A disposable loopback observer received `GET / HTTP/1.1` with `User-Agent: LocalStack/1.0` from the running local service scanner.
 - **Fix**: Reuse probe-aware accepts in Agent proxy fixtures and keep unauthenticated root discovery out of image fixture request counters. Preserve assertions for authenticated root and every API-path request.
 - **Guardrail**: Inject discovery before the intended request in a regression test and prove authenticated/API traffic is still captured. Do not stop unrelated apps, retry until green, or relax production proxy behavior to repair test isolation.
-- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs and proxy/tests/image_api.rs.
+- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs, proxy/tests/image_api.rs and subscriptions/cli_accounts/grok/process_tests.rs (empty TCP and unauthenticated root probes must not consume the single-use grant).
 
 
 ### Extension detection must pair each extension with its own host
@@ -1306,3 +1306,31 @@ Newest entries last within each section.
 - **Fix**: inspect the raw response version and reuse the authenticated older-Agent retirement handshake before waiting for exit.
 - **Guardrail**: run a real named-pipe regression that returns an older status, verifies the same token on legacy shutdown and confirms cleanup completes. Restrict legacy retries to shutdown, never credential or provider mutations.
 - **Watch points**: autostart/windows.rs, AgentClient::shutdown_older_agent, Agent protocol changes, NSIS cleanup.
+
+### Proxy restoration needs explicit uninstall intent and an owned original
+- **Symptom**: removing AIPass could leave Agent tools pointing at a dead local proxy; attaching recovery directly to an uninstaller could also detach manual upgrades.
+- **Root cause**: NSIS pre-uninstall originally only stopped processes/login entries, while manual replacement can invoke an old uninstaller without the updater's `/UPDATE`. Vault-encrypted history alone cannot support locked-vault uninstall and its latest backup can already be another proxy.
+- **Fix**: device-protected, installation-owned reversal receipts in `proxy_recovery`; protocol 21 replaces older resident writers. Preserve interrupted chains and compact only verified completed writes, preflight all resources, resume encrypted recovery, preserve unrelated fields and validate current native archives. Pass `/AIPASS_REPLACE` from the pinned NSIS template. macOS uses an explicit packaged uninstaller; file disappearance is not intent.
+- **Guardrail**: exercise repeated route writes, partial failure and interrupted restoration, user conflicts, native renewal/account changes, locked recovery, manual upgrade/downgrade, reinstall and failed replacement. Keep verified default-vault registrations for uninstall retries. Preserve encrypted retired history for ordinary rollback and decrypt the full backup group before writes. Retire only replaced proxy fields; clean dormant entries using recorded route markers while preserving direct selections, including an unchanged model. Keep legacy blockers when shared files still contain known proxy entries. Normalize line endings before vendor-template checks. Reject unknown legacy baselines and inaccessible device keys. Never restore account archives/Vault references or treat arbitrary localhost settings as owned. Run fixtures with temporary HOME/vendor directories and an explicit disposable keychain; do not use the developer's login Keychain or Agent configuration.
+- **Watch points**: native `tool_switch/apply.rs` and pending-transaction recovery, generic tool handlers/rollback, proxy receipt history/markers and platform key storage, NSIS template/hooks, macOS uninstaller and both packaged-runtime scripts. Apply the same recovery file lock to startup transaction replay. Stop owned services and reject every surviving Agent on the affected vault IPC, including another executable, before capturing native originals. Never share a `target` directory with a different source worktree when validating artifacts or Clippy metadata.
+
+### Bare TCP acceptance is not evidence of a replayed generation
+- **Symptom**: the WebSocket disconnect regression intermittently reported a fallback after output had already arrived.
+- **Root cause**: local port discovery sent an unauthenticated root HTTP probe to the fixture's backup listener; the test counted any TCP acceptance as an upstream request.
+- **Fix**: observe request headers in the replay fixture, ignore only empty sockets and unauthenticated root GET/HEAD discovery, and retain rejection of generation paths, authentication and WebSocket upgrades.
+- **Guardrail**: inject harmless probes and real upstream handshakes into the observer. Require the former to pass and the latter to fail; keep the attempt-count and partial-output assertions. Do not disable developer services to make network fixtures pass.
+- **Watch points**: `websocket/tests/replay.rs` and single-use CLI callback fixtures.
+
+### NSIS passive maintenance has no radio-button handle
+- **Symptom**: the native Windows manual replacement fixture timed out while overwriting an installation with a running Agent.
+- **Root cause**: the pinned Tauri template called its maintenance handler in passive mode without creating the radio buttons; reading their state selected the skip-uninstall path, leaving the Agent executable in use.
+- **Fix**: select the default maintenance choice explicitly in passive mode, retaining the interactive radio selection and explicit replacement handoff. Canonicalize executable paths before matching Run entries: an installer can invoke an 8.3 alias while login registration stores its long path. Resolve missing desktop siblings through their existing parent for Agent-only fixtures.
+- **Guardrail**: preserve the upstream template hash after removing both reviewed patches. Exercise actual passive upgrade and downgrade with a registered Agent, and retain the fixture's proxy logs and installer stage on failure.
+- **Watch points**: `windows/installer.nsi`, `proxy-uninstall.test.mjs` and `verify-windows-runtime.mjs`.
+
+### Recovery parser errors can contain secret configuration text
+- **Symptom**: the malformed TOML recovery canary appeared in the full error chain used by the uninstall command.
+- **Root cause**: TOML parser errors include source snippets, and the recovery path propagated them to stderr and NSIS logging.
+- **Fix**: replace TOML parse failures with a fixed diagnostic, preserving the configuration and encrypted recovery data.
+- **Guardrail**: malformed configuration containing a synthetic credential must fail without including that credential in the formatted error chain. Keep native platform fixture imports explicit; macOS Clippy cannot compile Windows-only test modules.
+- **Watch points**: `proxy_recovery/merge.rs`, the uninstall entry point and native Windows CI.
