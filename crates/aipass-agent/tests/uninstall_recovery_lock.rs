@@ -80,10 +80,20 @@ fn unlock_cannot_replay_pending_config_writes_while_uninstall_holds_the_lock() {
     let runtime = root.join("r");
     let vault_dir = root.join("data/vault");
     let settings = root.join("data/agent");
-    for path in [&home, &runtime, &settings] {
+    for path in [
+        home.clone(),
+        runtime.clone(),
+        settings.clone(),
+        home.join("AppData/Roaming"),
+        home.join("AppData/Local"),
+    ] {
         fs::create_dir_all(path).unwrap();
     }
-    fs::write(settings.join("sync-settings.json"), serde_json::json!({"mode":"local","syncFolder":root.join("sync"),"cloudkitMigrationComplete":true}).to_string()).unwrap();
+    fs::write(
+        settings.join("sync-settings.json"),
+        r#"{"mode":"local","cloudkitMigrationComplete":true}"#,
+    )
+    .unwrap();
     let password = SecretString::new("independent-recovery-fixture");
     let creation = Vault::create(&vault_dir, &password).unwrap();
     let file = home.join("vendor.json");
@@ -129,6 +139,8 @@ fn unlock_cannot_replay_pending_config_writes_while_uninstall_holds_the_lock() {
     ] {
         command.env_remove(key);
     }
+    let process_log = root.join("process.log");
+    let output = fs::File::create(&process_log).unwrap();
     command
         .args(["--vault"])
         .arg(&vault_dir)
@@ -145,8 +157,8 @@ fn unlock_cannot_replay_pending_config_writes_while_uninstall_holds_the_lock() {
         .env("AIPASS_LOG_DIR", root.join("logs"))
         .env("AIPASS_AGENT_SUPPRESS_TRAY", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(output.try_clone().unwrap())
+        .stderr(output);
     // Declared after the recovery guard: child shutdown always precedes unlock.
     let mut agent = Agent(command.spawn().unwrap());
     let namespace = aipass_agent::namespace_for_vault_dir(&vault_dir).unwrap();
@@ -155,10 +167,13 @@ fn unlock_cannot_replay_pending_config_writes_while_uninstall_holds_the_lock() {
         if request(&runtime, &namespace, AgentRequest::SessionStatus).is_ok() {
             break;
         }
-        assert!(
-            agent.0.try_wait().unwrap().is_none(),
-            "Fixture Agent exited"
-        );
+        if let Some(status) = agent.0.try_wait().unwrap() {
+            panic!(
+                "Fixture Agent exited ({status}): {}\n{}",
+                fs::read_to_string(&process_log).unwrap_or_default(),
+                fs::read_to_string(root.join("logs/agent.log")).unwrap_or_default()
+            );
+        }
         assert!(Instant::now() < deadline, "Fixture Agent did not bind");
         std::thread::sleep(Duration::from_millis(20));
     }

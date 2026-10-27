@@ -204,6 +204,8 @@ jobs:
       - name: Verify embedded Svelte control panel is reproducible
         run: git diff --exit-code -- apps/control-panel/embedded
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Verify production Agent recovery locking
+        run: cargo test -p aipass-agent --test uninstall_recovery_lock
       - run: cargo test --workspace --no-fail-fast
         timeout-minutes: 20
       - run: cargo build --workspace
