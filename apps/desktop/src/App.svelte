@@ -20,6 +20,7 @@
   import RecoveryKitModal from "./lib/components/auth/RecoveryKitModal.svelte";
   import UnlockTransition from "./lib/components/auth/UnlockTransition.svelte";
   import AgentManagementPage from "./lib/components/integration/AgentManagementPage.svelte";
+  import type { AgentManagementSnapshot } from "./lib/services/agentManagement";
   import { toolConfigActions } from "./lib/services/toolConfig";
   import { VaultSidebar as Sidebar } from "@aipass/ui";
   import ProviderDetailPane from "./lib/components/providers/ProviderDetailPane.svelte";
@@ -362,6 +363,7 @@
   let selectedRouteId = "";
   let pricingConfig: PricingConfig = { groups: [], assignments: [] };
   let toolDetections: ToolDetection[] = [];
+  let agentManagementSnapshot: AgentManagementSnapshot | undefined;
   let toolDetectionsLoaded = false;
   let serverStatusTimer: ReturnType<typeof setInterval> | undefined;
   let serverStatusPromise: Promise<void> | undefined;
@@ -1122,6 +1124,7 @@
   }
 
   function clearSensitiveUnlockedState() {
+    agentManagementSnapshot = undefined;
     serverMutationVersion++;
     errorToast = undefined;
     showOAuthConnect = showSubscriptionImport = officialAccountsBusy = false;
@@ -3257,7 +3260,7 @@
       />
 
       {#if showAgents}
-        <AgentManagementPage {invokeTauri} entries={countEntries} onRefreshEntries={() => loadEntries(false, false, false)} />
+        <AgentManagementPage {invokeTauri} entries={countEntries} bind:snapshot={agentManagementSnapshot} onRefreshEntries={() => loadEntries(false, false, false)} />
       {:else if showServer}
         <RouteListPane
           routes={serverConfig.routes}

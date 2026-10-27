@@ -712,6 +712,13 @@ Newest entries last within each section.
 
 ## Desktop operation feedback
 
+### Agent navigation must retain the last completed scan
+- **Symptom**: every return to Agent management replaced both panes with a full loading state.
+- **Root cause**: `AgentManagementPage.svelte` owned detections/statuses inside the component that navigation destroys.
+- **Fix**: keep a presentation-only snapshot in the unlocked workspace, initialize remounts from it, and scan in the background. Separate first-load UI from refresh activity; keep the completed snapshot on detection failure.
+- **Guardrail**: clear the snapshot with unlocked workspace state, reject responses after teardown, coalesce overlapping refreshes, and disable mutation controls while refreshing. Cover cached empty lists and lock during a pending scan in `AgentManagementCache.test.ts` and `App.operations.test.ts`.
+- **Watch points**: Agent page mount/focus/manual refresh, selected tool fallback, preview/apply refresh, and `App.svelte::clearSensitiveUnlockedState`.
+
 ### Shared errors leaked into the selected provider
 - **Symptom**: import, settings and other operation failures appeared as a permanent error banner on the provider detail page.
 - **Root cause**: `App.svelte:3331` forwarded its shared `errorText` into `ProviderDetailPane.svelte:523`, independent of which operation failed; closing a dialog exposed its stale error behind it.

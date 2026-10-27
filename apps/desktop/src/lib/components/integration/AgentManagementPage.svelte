@@ -4,8 +4,9 @@
   import { RefreshCw, Terminal } from "lucide-svelte";
   import type { ProviderEntry } from "@aipass/schemas";
   import { t } from "../../stores/i18n";
-  import type { ToolDetection, ToolConfigTarget, ToolConfigStatus, ToolSwitchRequest, ToolConfigPreview, ToolConfigApplyResult } from "../../types";
-  import { integrationToolDefinitions, installedIntegrationTools, toolIsInstalled } from "../../utils/integrations";
+  import type { ToolConfigTarget, ToolConfigStatus, ToolSwitchRequest, ToolConfigPreview, ToolConfigApplyResult } from "../../types";
+  import { integrationToolDefinitions, installedIntegrationTools } from "../../utils/integrations";
+  import { scanAgentManagement, type AgentManagementSnapshot } from "../../services/agentManagement";
   import { agentCredentialChoices } from "../../utils/agent-credentials";
   import AgentAccountDetail from "./AgentAccountDetail.svelte";
   import { subscriptionAccountPresentation } from "@aipass/schemas";
@@ -17,10 +18,12 @@
   export let entries: ProviderEntry[] = [];
   export let invokeTauri: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   export let onRefreshEntries: () => Promise<void>;
-  let detections: ToolDetection[] = [];
-  let statuses: Partial<Record<ToolConfigTarget, ToolConfigStatus>> = {};
-  let selections: Partial<Record<ToolConfigTarget, string>> = {};
-  let loading = true;
+  export let snapshot: AgentManagementSnapshot | undefined = undefined;
+  let detections = snapshot?.detections ?? [];
+  let statuses = snapshot?.statuses ?? {};
+  let selections = reconcileSelections(statuses);
+  let loading = !snapshot;
+  let refreshing = false;
   let busy: ToolConfigTarget | undefined;
   let error = "";
   let message = "";
@@ -39,8 +42,9 @@
   $: choices = Object.fromEntries(tools.map(tool => [tool.id, agentCredentialChoices(entries, tool.id)]));
   $: if (previewOpen && selectionRevision !== revision && !busy) { previewOpen = false; pending = undefined; }
 
-  let selectedTool: ToolConfigTarget | undefined;
+  let selectedTool = snapshot?.selectedTool;
   $: if (!tools.some(tool => tool.id === selectedTool)) selectedTool = tools[0]?.id;
+  $: if (snapshot && snapshot.selectedTool !== selectedTool) snapshot = { ...snapshot, selectedTool };
   $: activeTool = tools.find(tool => tool.id === selectedTool);
   $: activeStatus = selectedTool ? statuses[selectedTool] : undefined;
   $: activeEntry = entries.find(entry => entry.id === activeStatus?.entryId);
@@ -50,29 +54,28 @@
       : entry?.title || status?.entryTitle || status?.accountIdentity || $t("integration.unmanaged");
   }
 
+  function reconcileSelections(next: typeof statuses, previous: Partial<Record<ToolConfigTarget, string>> = {}) {
+    const result: typeof previous = {};
+    for (const status of Object.values(next)) {
+      const available = agentCredentialChoices(entries, status.tool);
+      result[status.tool] = available.find(choice => choice.value === previous[status.tool])?.value
+        ?? available.find(choice => choice.request.id === status.entryId && choice.request.secretId === status.secretId)?.value ?? "";
+    }
+    return result;
+  }
   async function refresh(clearError = true) {
+    if (refreshing || busy || previewOpen) return;
     const current = ++generation;
-    loading = true; if (clearError) error = "";
+    refreshing = true; loading = !snapshot; if (clearError) error = "";
     try {
-      const detected = await invokeTauri<ToolDetection[]>("tool_config_detect");
-      const active = detected.filter(toolIsInstalled);
-      const results = await Promise.all(active.map(async d => {
-        if (integrationToolDefinitions.find(tool => tool.id === d.tool)?.setupGuide) return {tool:d.tool,state:"unmanaged",overrides:[]} as ToolConfigStatus;
-        try { return await invokeTauri<ToolConfigStatus>("tool_config_status", { tool: d.tool }); }
-        catch { return { tool: d.tool, state: "storage_unavailable", overrides: [] } as ToolConfigStatus; }
-      }));
+      const result = await scanAgentManagement(invokeTauri);
       if (!mounted || generation !== current) return;
-      detections = detected;
-      statuses = Object.fromEntries(results.map(s => [s.tool, s]));
-      const next: typeof selections = {};
-      for (const s of results) {
-        const available = agentCredentialChoices(entries, s.tool);
-        next[s.tool] = available.find(c => c.value === selections[s.tool])?.value
-          ?? available.find(c => c.request.id === s.entryId && c.request.secretId === s.secretId)?.value ?? "";
-      }
-      selections = next;
+      detections = result.detections;
+      statuses = result.statuses;
+      selections = reconcileSelections(statuses, selections);
+      snapshot = { ...result, selectedTool };
     } catch (e) { if (mounted && generation === current) error = String(e); }
-    finally { if (mounted && generation === current) loading = false; }
+    finally { if (mounted && generation === current) { loading = false; refreshing = false; } }
   }
   function focused() { if (!busy && !previewOpen) void refresh(); }
   onMount(() => { mounted = true; void refresh(); window.addEventListener("focus", focused); });
@@ -80,7 +83,7 @@
 
   async function prepare(tool: ToolConfigTarget) {
     const choice = choices[tool]?.find(c => c.value === selections[tool]);
-    if (!choice || busy || loading) return;
+    if (!choice || busy || refreshing) return;
     if (integrationToolDefinitions.find(item => item.id === tool)?.setupGuide) { setupRequest = { ...choice.request }; return; }
     busy = tool; error = message = "";
     const current = generation;
@@ -136,15 +139,16 @@
 <section class="list-pane agent-list-pane" aria-label={$t("agents.title")}>
   <header class="toolbar">
     <div class="agent-heading"><h1>{$t("agents.title")}</h1>{#if tools.length}<span class="agent-count">{tools.length}</span>{/if}</div>
-    <IconButton size="sm" label={$t("integration.scanInstallations")} disabled={loading || Boolean(busy)} on:click={() => refresh()}><RefreshCw size={14} class={loading ? "spinning" : ""} /></IconButton>
+    <IconButton size="sm" label={$t("integration.scanInstallations")} disabled={refreshing || Boolean(busy) || previewOpen} on:click={() => refresh()}><RefreshCw size={14} class={refreshing ? "spinning" : ""} /></IconButton>
   </header>
-  <div class="agent-list" use:scrollMask aria-busy={loading}>
+  <div class="agent-list" use:scrollMask aria-busy={refreshing}>
+    {#if error && !tools.length}<Banner tone="danger">{error}</Banner>{/if}
     {#each tools as tool (tool.id)}
       <button type="button" class="agent-row" class:active={selectedTool === tool.id} aria-pressed={selectedTool === tool.id} on:click={() => selectedTool = tool.id}>
         <span class="tool-icon"><IntegrationToolIcon tool={tool.id} size={23} /></span>
         <span class="tool-copy"><strong>{tool.name}</strong><span class="current">{accountLabel(statuses[tool.id])}</span></span>
       </button>
-    {:else}<div class="empty"><Terminal size={28} /><strong>{$t(loading ? "agents.scanning" : "agents.empty")}</strong><span>{$t("agents.emptyDetail")}</span></div>{/each}
+    {:else}<div class="empty"><Terminal size={28} /><strong>{$t(loading ? "agents.scanning" : "agents.empty")}</strong>{#if !loading}<span>{$t("agents.emptyDetail")}</span>{/if}</div>{/each}
   </div>
 </section>
 <section class="detail agent-detail" aria-label={activeTool?.name ?? $t("agents.title")}>
@@ -161,14 +165,14 @@
           placeholder={$t(available.length ? "agents.choose" : "agents.noCompatible")}
           ariaLabel={`${activeTool.name}: ${$t("agents.credential")}`} disabled={loading || Boolean(busy) || !available.length || needsRuntime}
           onValueChange={value => { if (activeTool) selections = { ...selections, [activeTool.id]: value }; }} />
-        <Button size="sm" variant="secondary" disabled={loading || Boolean(busy) || !selections[activeTool.id] || needsRuntime || activeStatus?.state === "conflict" || activeStatus?.state === "storage_unavailable"}
+        <Button size="sm" variant="secondary" disabled={refreshing || Boolean(busy) || !selections[activeTool.id] || needsRuntime || activeStatus?.state === "conflict" || activeStatus?.state === "storage_unavailable"}
           loading={busy === activeTool.id} on:click={() => { if (activeTool) void prepare(activeTool.id); }}>{$t(activeTool.setupGuide ? "integration.setupAction" : "agents.switch")}</Button>
       </div>
       {#if !detection?.binaryFound && !detection?.extensionFound}<p class="subtle">{$t("agents.configOnly")}</p>{/if}
       {#if needsRuntime}<p class="subtle">{$t("agents.cursorRuntimeRequired")}</p>{/if}
       {#if activeStatus?.state && activeStatus.state !== "ready" && activeStatus.state !== "unmanaged"}
         <div class="row-note">{$t(`integration.state.${activeStatus.state}`)}
-          {#if activeStatus.operationId}<Button size="sm" disabled={Boolean(busy) || loading} on:click={() => { if (activeTool) void restore(activeTool.id); }}>{$t("integration.restore")}</Button>{/if}
+          {#if activeStatus.operationId}<Button size="sm" disabled={Boolean(busy) || refreshing} on:click={() => { if (activeTool) void restore(activeTool.id); }}>{$t("integration.restore")}</Button>{/if}
         </div>
       {/if}
       {#if activeStatus?.overrides.length}<div class="row-note">{$t("integration.environmentOverrides", { keys: activeStatus.overrides.join(", ") })}</div>{/if}
