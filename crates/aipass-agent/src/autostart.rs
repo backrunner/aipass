@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod macos_uninstall;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use anyhow::Context;
 use anyhow::Result;
@@ -53,6 +55,16 @@ pub fn suspend_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {
 
 pub fn uninstall_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {
     imp::uninstall(vault_dir)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn uninstall_owned_macos_agent(agent: &Path, vault: &Path) -> Result<()> {
+    macos_uninstall::run(agent, vault)
+}
+
+#[cfg(windows)]
+pub(crate) fn owned_windows_vaults(agent: &Path) -> Result<Vec<PathBuf>> {
+    imp::owned_vaults(agent)
 }
 
 pub fn stop_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {

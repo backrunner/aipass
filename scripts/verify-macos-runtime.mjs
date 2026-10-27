@@ -19,6 +19,8 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { isolatedEnvironment, prepareFixtureRecoveryKey, removeFixtureRecoveryKey } from "./fixtures/proxy-recovery.mjs";
+import { createProxyFixture } from "./fixtures/proxy-uninstall.mjs";
 
 const run = (command, args) =>
   execFileSync(command, args, {
@@ -190,6 +192,13 @@ async function scenario({
       "Artifact does not support isolated runtime verification",
     );
     const originalHash = digest(binary);
+    const proxyFixture = await createProxyFixture(join(copy, "Contents/Resources"), root);
+    let preservedProxyFiles;
+    try {
+      proxyFixture.run(["lock"]);
+      preservedProxyFiles = [proxyFixture.models, proxyFixture.settings, join(root, "home/.aipass/proxy-recovery/receipt.aiprecovery")]
+        .map(path => [path, readFileSync(path)]);
+    } finally { await proxyFixture.stop(); }
     const packageBytes = archive ? readFileSync(archive) : null;
     const packageSignature = signature ? read(signature).trim() : "";
     server = createServer((request, response) => {
@@ -239,9 +248,8 @@ async function scenario({
         JSON.stringify({ version, channel }),
       );
     }
-    const environment = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.startsWith("AIPASS_")),
-    );
+    const environment = isolatedEnvironment(root);
+    prepareFixtureRecoveryKey(root, environment);
     environment.AIPASS_WINDOW_TARGET = target;
     // Do not inherit release signing/notarization credentials into the app.
     for (const key of Object.keys(environment)) {
@@ -370,9 +378,12 @@ async function scenario({
       );
       await delay(100);
     }
+    for (const [path, bytes] of preservedProxyFiles)
+      assert.deepEqual(readFileSync(path), bytes, "Startup or update changed proxy configuration/restoration history");
+    report.proxyConfigurationPreserved = true;
     report.ok = true;
     console.log(
-      `Passed ${name}: ${version}, 960x640, responsive frontend and agent${mode === "startup" ? "" : ", verified install and new process restart"}.`,
+      `Passed ${name}: ${version}, 960x640, responsive frontend and agent, proxy configuration/history preserved${mode === "startup" ? "" : ", verified install and new process restart"}.`,
     );
   } catch (error) {
     report.error = error.message;
@@ -405,6 +416,7 @@ async function scenario({
     // Logs carry only fixture data. Keep them on failure; remove the app,
     // temporary vault and update package on every outcome.
     await delay(200);
+    removeFixtureRecoveryKey(root);
     rmSync(root, { recursive: true, force: true });
   }
 }

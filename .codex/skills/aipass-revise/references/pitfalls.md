@@ -1254,7 +1254,7 @@ Newest entries last within each section.
 - **Evidence**: A disposable loopback observer received `GET / HTTP/1.1` with `User-Agent: LocalStack/1.0` from the running local service scanner.
 - **Fix**: Reuse probe-aware accepts in Agent proxy fixtures and keep unauthenticated root discovery out of image fixture request counters. Preserve assertions for authenticated root and every API-path request.
 - **Guardrail**: Inject discovery before the intended request in a regression test and prove authenticated/API traffic is still captured. Do not stop unrelated apps, retry until green, or relax production proxy behavior to repair test isolation.
-- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs and proxy/tests/image_api.rs.
+- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs, proxy/tests/image_api.rs and subscriptions/cli_accounts/grok/process_tests.rs (empty TCP and unauthenticated root probes must not consume the single-use grant).
 
 
 ### Extension detection must pair each extension with its own host
@@ -1278,3 +1278,10 @@ Newest entries last within each section.
 - **Fix**: inspect the raw response version and reuse the authenticated older-Agent retirement handshake before waiting for exit.
 - **Guardrail**: run a real named-pipe regression that returns an older status, verifies the same token on legacy shutdown and confirms cleanup completes. Restrict legacy retries to shutdown, never credential or provider mutations.
 - **Watch points**: autostart/windows.rs, AgentClient::shutdown_older_agent, Agent protocol changes, NSIS cleanup.
+
+### Proxy restoration needs explicit uninstall intent and an owned original
+- **Symptom**: removing AIPass could leave Agent tools pointing at a dead local proxy; attaching recovery directly to an uninstaller could also detach manual upgrades.
+- **Root cause**: NSIS pre-uninstall originally only stopped processes/login entries, while manual replacement can invoke an old uninstaller without the updater's `/UPDATE`. Vault-encrypted history alone cannot support locked-vault uninstall and its latest backup can already be another proxy.
+- **Fix**: device-protected, installation-owned reversal receipts in `proxy_recovery`; protocol 21 replaces older resident writers. Preserve interrupted chains and compact only verified completed writes, preflight all resources, resume encrypted recovery, preserve unrelated fields and validate current native archives. Pass `/AIPASS_REPLACE` from the pinned NSIS template. macOS uses an explicit packaged uninstaller; file disappearance is not intent.
+- **Guardrail**: exercise repeated route writes, partial failure and interrupted restoration, user conflicts, native renewal/account changes, locked recovery, manual upgrade/downgrade, reinstall and failed replacement. Reject unknown legacy baselines and inaccessible device keys. Never restore account archives/Vault references or treat arbitrary localhost settings as owned. Run fixtures with temporary HOME/vendor directories and an explicit disposable keychain; do not use the developer's login Keychain or Agent configuration.
+- **Watch points**: native `tool_switch/apply.rs`, generic tool handlers/rollback, proxy receipt writer and platform key storage, NSIS template/hooks, macOS uninstaller and both packaged-runtime scripts.

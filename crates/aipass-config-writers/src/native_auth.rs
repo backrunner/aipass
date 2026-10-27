@@ -168,7 +168,7 @@ pub fn parse(bytes: &[u8]) -> Result<PrivateJson> {
         .map_err(|_| anyhow::anyhow!("invalid native credential data"))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NativeStore {
     pub tool: String,
     pub home: PathBuf,
@@ -302,7 +302,28 @@ impl NativeStore {
         let Some(bytes) = self.primary.read()? else {
             return Ok(None);
         };
-        let auth = parse(&bytes)?;
+        self.identity_with(&bytes, || {
+            let raw = self
+                .profile
+                .as_ref()
+                .context("native account profile unavailable")?
+                .read()?
+                .context("native account profile unavailable")?;
+            parse(&raw)
+        })
+    }
+    /// Validate exactly the captured bytes, without a second credential read.
+    pub fn identity_from(&self, primary: &[u8], profile: Option<&[u8]>) -> Result<Option<String>> {
+        self.identity_with(primary, || {
+            parse(profile.context("native account profile unavailable")?)
+        })
+    }
+    fn identity_with(
+        &self,
+        bytes: &[u8],
+        profile: impl FnOnce() -> Result<PrivateJson>,
+    ) -> Result<Option<String>> {
+        let auth = parse(bytes)?;
         if self.tool == "codex" {
             if auth.0["OPENAI_API_KEY"]
                 .as_str()
@@ -325,13 +346,7 @@ impl NativeStore {
             if auth.0.get("claudeAiOauth").is_none() {
                 return Ok(None);
             }
-            let bytes = self
-                .profile
-                .as_ref()
-                .context("native account profile unavailable")?
-                .read()?
-                .context("native account profile unavailable")?;
-            let profile = parse(&bytes)?;
+            let profile = profile()?;
             Ok(Some(claude_identity::identity(&Value::Null, &profile.0)?))
         }
     }

@@ -642,7 +642,7 @@ pub(super) fn advertised_bind_addr(bind_addr: &str) -> String {
         .unwrap_or_else(|| bind_addr.to_string())
 }
 
-pub(super) fn tool_config_tool_for(tool: &ToolId) -> ToolConfigTool {
+pub(crate) fn tool_config_tool_for(tool: &ToolId) -> ToolConfigTool {
     match tool {
         ToolId::Codex => ToolConfigTool::Codex,
         ToolId::ClaudeCode => ToolConfigTool::ClaudeCode,

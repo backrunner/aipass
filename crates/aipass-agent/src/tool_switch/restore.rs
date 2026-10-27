@@ -156,6 +156,8 @@ pub(crate) fn rollback(
         }
         let home = crate::server::home_dir(vault)?;
         let active = active_store(&home, &binding.request.tool).map_err(safe_error)?;
+        let _recovery =
+            crate::proxy_recovery::WriteGuard::begin(&home, false).map_err(safe_error)?;
         let verified = historical::validate(state, vault, &active, &tx)?;
         let mut changes = Vec::new();
         let mut refs = Vec::new();

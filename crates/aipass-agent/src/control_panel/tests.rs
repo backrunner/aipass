@@ -487,7 +487,9 @@ impl Fixture {
         let mut client = Client::builder()
             .no_proxy()
             .local_address(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
-            .timeout(Duration::from_secs(5));
+            // The first idle-policy check initializes the macOS WindowServer
+            // connection. Allow that OS startup work in this HTTP fixture.
+            .timeout(Duration::from_secs(30));
         if let Some(pem) = status.certificate_pem {
             client = client
                 .add_root_certificate(reqwest::Certificate::from_pem(pem.as_bytes()).unwrap());

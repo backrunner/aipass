@@ -26,6 +26,8 @@ struct Cli {
     install_autostart: bool,
     #[arg(long, default_value_t = false, hide = true)]
     uninstall_autostart: bool,
+    #[arg(long, default_value_t = false, hide = true)]
+    prepare_uninstall: bool,
 }
 
 fn main() -> Result<()> {
@@ -33,6 +35,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let cli = Cli::parse();
+    if cli.prepare_uninstall {
+        return aipass_agent::proxy_recovery::prepare_uninstall(&std::env::current_exe()?);
+    }
     if cli.login_start {
         // HKCU Run has no per-entry environment. This GUI-subsystem executable
         // remains headless and does not open another desktop on CLI-only login.

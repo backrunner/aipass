@@ -138,6 +138,10 @@ jobs:
         run: |
           cargo test -p aipass-desktop --lib
           cargo test -p aipass-agent autostart::
+      - name: Verify isolated proxy uninstall recovery
+        run: |
+          cargo build -p aipass-agent -p aipass-cli
+          node scripts/verify-proxy-uninstall.mjs target/debug
       - name: Prepare disposable updater signing key
         run: node scripts/prepare-runtime-check-build.mjs "${RUNNER_TEMP}/aipass-runtime-signing"
       - name: Build macOS test app and DMG with ad hoc signing
@@ -205,6 +209,8 @@ jobs:
       - run: cargo build --workspace
       - name: Verify unpackaged Windows CLI and Agent runtime
         run: node scripts/verify-cli-runtime.mjs target/debug windows-runtime-check-reports/cli-debug
+      - name: Verify isolated proxy uninstall recovery
+        run: node scripts/verify-proxy-uninstall.mjs target/debug
       - name: Prepare disposable updater signing key
         run: node scripts/prepare-runtime-check-build.mjs "${{ runner.temp }}/aipass-windows-runtime-signing"
       - name: Build Windows NSIS test installer

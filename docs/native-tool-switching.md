@@ -96,3 +96,52 @@ credential environment assignments.
 - Temporary fixture credentials, Vault, vendor homes, Agent autostart registration,
   UI page and processes were removed. Curated local evidence is retained under
   `runtime-check-reports/native-switching/` (ignored by Git).
+
+## Proxy restoration on uninstall
+
+macOS and Windows proxy writes retain encrypted, device-local reversal receipts
+under `~/.aipass/proxy-recovery`. Each receipt belongs to the exact Agent
+executable and records the external resources before/after each write. Repeated
+route changes unwind to the first original, rather than to an earlier proxy.
+Intentional direct configuration retires that tool's proxy history.
+Protocol 21 retires older resident Agents before they can accept configuration
+writes without these receipts. Only completed writes with matching intermediate
+images can compact their history; interrupted writes retain the full chain.
+
+Only an explicit uninstall runs restoration. Normal quit, autostart removal,
+missing executables, crashes and updater shutdown do not run it. Windows NSIS
+uses `/UPDATE` for updater installs and `/AIPASS_REPLACE` when its manual
+upgrade/downgrade invokes the old uninstaller. The latter is a command-line
+context, not a persistent flag that could survive cancellation or failure.
+Windows desktop packaging is restricted to NSIS; MSI/portable deletion does not
+provide this uninstall contract. Running AI tools may need a restart to reload
+their restored configuration.
+
+On macOS, quit AIPass through its tray menu, then open the installed application's
+`Contents/Resources/Uninstall AIPass.command`. It restores configurations before
+moving that exact app bundle to Trash, and retains the vault. Dragging an app
+directly to Trash cannot reliably execute recovery and is not a supported
+restoration trigger.
+
+Recovery preflights every affected resource, preserves unrelated JSON/TOML
+values, checks again at write boundaries, and retains an encrypted journal for
+interrupted operations. Conflicting owned values, edited opaque launchers,
+commented JSON requiring a merge, unavailable credentials and missing device
+keys stop uninstall. They do not authorize overwriting the user's current data.
+Native originals use a validated current archive when AIPass has moved the
+original account for renewal; receipts never undo that archive or its vault
+references. Internal native ownership bindings are removed after restoration.
+
+Unlock/create audits identify older proxy integrations without receipts. Their
+original settings cannot be invented: uninstall and proxy reapply stop until
+the affected Agent is explicitly switched to direct configuration. A registered
+vault without an audit must be opened and unlocked first. Deleted historical
+routes/credentials cannot be reconstructed from an unavailable original backup.
+
+`node scripts/verify-proxy-uninstall.mjs target/debug` uses copied executables,
+a temporary HOME/vault, synthetic Pi configuration and an isolated macOS
+keychain. It covers real CLI writes, repeated routes, locked recovery, conflict
+preflight and retries. `verify-windows-runtime.mjs` additionally exercises real
+NSIS manual upgrades/downgrades, reinstall, updater mode and an interrupted
+replacement on disposable GitHub-hosted Windows runners. These are distinct
+from macOS verification and production-signed Windows acceptance.

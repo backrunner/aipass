@@ -15,6 +15,7 @@ pub mod native_auth;
 mod native_plan;
 mod plan;
 mod preview_redaction;
+pub mod proxy_recovery;
 pub mod transaction;
 mod utils;
 pub use native_plan::prepare_native_codex_plan;

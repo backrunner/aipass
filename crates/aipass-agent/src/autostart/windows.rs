@@ -195,6 +195,29 @@ pub(super) fn uninstall_entries(desktop: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn owned_vaults(agent: &Path) -> Result<Vec<PathBuf>> {
+    let agent = display_path(agent)?;
+    let desktop = display_path(&Path::new(&agent).with_file_name("aipass-desktop.exe"))?;
+    let mut result = Vec::new();
+    if let Some(key) = Key::read_only(RUN_KEY)? {
+        for name in key.names()? {
+            let binary = if name.starts_with("com.aipass.tray.") {
+                &desktop
+            } else if name.starts_with("com.aipass.agent.") {
+                &agent
+            } else {
+                continue;
+            };
+            if let Some(command) = key.read(&name)? {
+                if let Some(vault) = super::windows_command::vault_for_command(binary, &command) {
+                    result.push(crate::canonical_vault_dir(vault)?);
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 fn stop_owned_tray(desktop: &Path) -> Result<()> {
     use interprocess::local_socket::traits::StreamCommon as _;
     use std::os::windows::{
