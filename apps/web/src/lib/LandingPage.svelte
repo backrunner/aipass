@@ -3,8 +3,8 @@
   import { faGithub } from '@fortawesome/free-brands-svg-icons/faGithub';
   import { ArrowRight, ArrowUpRight, Download, KeyRound, Lock, MousePointerClick, ShieldCheck, Terminal } from 'lucide-svelte';
   import { ThemeToggle } from 'svedocs/theme';
-  import LandingBackground from '$lib/LandingBackground.svelte';
-  import ReleaseDownload from '$lib/ReleaseDownload.svelte';
+  import LandingBackground from '#lib/LandingBackground.svelte';
+  import ReleaseDownload from '#lib/ReleaseDownload.svelte';
   import {
     absoluteSiteUrl,
     HOME_SOCIAL_IMAGE,
@@ -13,7 +13,7 @@
     SITE_URL,
     SOCIAL_IMAGE_HEIGHT,
     SOCIAL_IMAGE_WIDTH
-  } from '$lib/seo';
+  } from '#lib/seo.js';
 
   export let locale: 'en' | 'zh' = 'en';
 

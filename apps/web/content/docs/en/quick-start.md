@@ -9,7 +9,7 @@ order: 2
 
 ## 1. Install the desktop app
 
-Download AIPass for macOS from the [home page](/) — the buttons link directly to the newest GitHub Release. Open the `.dmg` and move AIPass to Applications.
+Download a desktop package for macOS or Linux from [GitHub Releases](https://github.com/backrunner/aipass/releases). Follow the [installation guide](/docs/installation); Windows users can use the standalone CLI archive.
 
 ## 2. Create your vault
 
@@ -70,7 +70,7 @@ Helper mode (the default for Claude Code) never writes your key to disk — it p
 
 ## 5. Install the browser extension
 
-Install the AIPass extension from the Chrome Web Store, then pair it with the desktop app:
+Download `aipass-edge-extension.zip` from GitHub Releases, extract it, and load the unpacked folder from your Chromium browser’s extensions page. Then pair it with the desktop app:
 
 ```bash
 aipass native-host install --extension-id <chrome-extension-id>

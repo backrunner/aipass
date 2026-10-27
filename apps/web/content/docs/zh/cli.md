@@ -174,7 +174,7 @@ aipass sync --webdav-url https://cloud.example/dav \
   --webdav-username u --webdav-password p
 ```
 
-每次运行只能选择一个目标。同步只复制加密对象（`objects/`、`grants/`、`devices/`）；冲突版本会被隔离，在桌面应用中手动解决。`AIPASS_ICLOUD_ROOT` 和 `AIPASS_ONEDRIVE_ROOT` 可覆盖自动检测的云文件夹。
+每次运行只能选择一个目标。同步传输经过认证的加密快照；冲突版本在桌面应用中处理。`AIPASS_ICLOUD_ROOT` 和 `AIPASS_ONEDRIVE_ROOT` 可覆盖自动检测的云文件夹。
 
 ## Native Host 与代理
 

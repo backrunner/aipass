@@ -16,6 +16,7 @@ target/
 **/target/
 apps/**/dist/
 apps/**/build/
+apps/web/static/_svedocs/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/tauri.release.generated.json
 apps/desktop/src-tauri/.cloudkit-build/

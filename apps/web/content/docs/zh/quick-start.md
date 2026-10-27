@@ -9,7 +9,7 @@ order: 2
 
 ## 1. 安装桌面应用
 
-从[首页](/)下载 macOS 版 AIPass——按钮直接指向最新的 GitHub Release。打开 `.dmg` 并将 AIPass 拖入「应用程序」。
+从 [GitHub Releases](https://github.com/backrunner/aipass/releases) 下载 macOS 或 Linux 桌面包，步骤见[安装指南](/docs/zh/installation)。Windows 用户可使用独立 CLI 压缩包。
 
 ## 2. 创建保险库
 
@@ -70,7 +70,7 @@ Helper 模式（Claude Code 的默认模式）不会把密钥写入磁盘——�
 
 ## 5. 安装浏览器扩展
 
-从 Chrome 应用商店安装 AIPass 扩展，然后与桌面应用配对：
+从 GitHub Releases 下载 `aipass-edge-extension.zip` 并解压，在 Chromium 浏览器的扩展页面加载解压后的文件夹，再与桌面应用配对：
 
 ```bash
 aipass native-host install --extension-id <chrome-extension-id>

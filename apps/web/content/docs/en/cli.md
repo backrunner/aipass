@@ -174,7 +174,7 @@ aipass sync --webdav-url https://cloud.example/dav \
   --webdav-username u --webdav-password p
 ```
 
-Choose exactly one target per run. Sync replicates only encrypted objects (`objects/`, `grants/`, `devices/`); conflicting versions are quarantined for manual resolution in the desktop app. `AIPASS_ICLOUD_ROOT` and `AIPASS_ONEDRIVE_ROOT` override the auto-detected cloud folders.
+Choose exactly one target per run. Sync transfers authenticated encrypted snapshots; conflicting versions are resolved in the desktop app. `AIPASS_ICLOUD_ROOT` and `AIPASS_ONEDRIVE_ROOT` override the auto-detected cloud folders.
 
 ## Native host and agent
 

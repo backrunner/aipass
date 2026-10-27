@@ -4,9 +4,11 @@
   import layouts from 'virtual:svedocs/layouts';
   import themeComponents from 'virtual:svedocs/theme-components';
   import loadSearch from 'virtual:svedocs/search-loader';
-  import LandingBackground from '$lib/LandingBackground.svelte';
+  import LandingBackground from '#lib/LandingBackground.svelte';
 
-  export let data;
+  import type { PageProps } from './$types';
+
+  let { data }: PageProps = $props();
 </script>
 
 <div class="docs-shell">

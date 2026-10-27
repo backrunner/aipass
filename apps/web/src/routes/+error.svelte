@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { ErrorPage } from 'svedocs/theme';
   import config from 'virtual:svedocs/config';
   import pages from 'virtual:svedocs/page-index';
@@ -10,10 +12,10 @@
 </script>
 
 <ErrorPage
-  status={$page.status}
-  message={$page.error?.message}
-  error={$page.error}
-  path={$page.url.pathname}
+  status={page.status}
+  message={page.error?.message}
+  error={page.error}
+  path={page.url.pathname}
   {config}
   {pages}
   {tree}

@@ -1,76 +1,63 @@
 ---
 title: 安装
-description: 下载并安装 AIPass 桌面应用、CLI 与浏览器扩展。
+description: 安装桌面应用、独立 CLI 和 Chromium 浏览器扩展。
 navTitle: 安装
 order: 3
 ---
 
 # 安装
 
-## 桌面应用（macOS）
+从 [GitHub Releases](https://github.com/backrunner/aipass/releases) 下载。每个 release 都列出平台制品与变更；官方、Beta 和 Nightly 的区别见[更新](/docs/zh/updates)。
 
-从[下载区](/)或直接从 [GitHub Releases](https://github.com/backrunner/aipass/releases) 下载安装包。单个**通用构建**（文件名中含 `universal`）同时支持 Apple silicon 和 Intel Mac——下载页会检测你的系统并提供一个按钮。
+## 桌面应用
 
-打开 `.dmg` 并将 AIPass 拖入「应用程序」。正式构建使用 Developer ID 证书签名并经过 Apple 公证，Gatekeeper 可直接打开。如果你安装的是未签名的本地构建，macOS 会阻止首次启动——在**系统设置 → 隐私与安全性**中允许即可。
+### macOS
 
-Windows 支持正在准备中，下载页上标注为 **Coming soon**。
+下载 `AIPass-macOS-<version>.dmg`。Universal 应用同时支持 Apple silicon 和 Intel Mac。打开 DMG，将 AIPass 复制到 Applications 后启动。公开的 macOS 应用和 DMG 均经过签名与公证。
 
-首次启动时应用会要求设置主密码、创建保险库，并显示一次恢复密钥。应用还会注册后台代理，让保险库会话在应用重启后仍然保留。
+### Linux
 
-## CLI
+按机器架构选择 x86_64 或 aarch64：
 
-`aipass` CLI 随桌面应用和代码仓库一起提供。用以下命令验证：
+- Debian/Ubuntu 系统使用 `.deb`。
+- RPM 系统使用 `.rpm`。
+- 便携运行可用 `.AppImage`，启动前需授予执行权限。
+
+使用适合发行版的包格式与权限。没有 systemd 用户服务的会话可使用桌面会话自启后端。
+
+### Windows
+
+提供独立 Windows CLI 压缩包。Windows 桌面安装包会在 CI 中验证；请以所选 release 实际附带的制品为准。
+
+首次启动时创建保险库，并离线保存只显示一次的恢复密钥。步骤见[快速开始](/docs/zh/quick-start)。
+
+## 独立 CLI
+
+解压 `aipass-cli-macos.tar.gz`、`aipass-cli-linux.tar.gz` 或 `aipass-cli-windows.zip`。将 `aipass`、`aipass-agent` 和 `aipass-native-host` 保留在同一目录内（Windows 带 `.exe` 后缀），并把该目录加入 `PATH`。
 
 ```bash
 aipass --help
 aipass doctor
+aipass agent status
 ```
 
-`aipass doctor` 检查保险库清单、代理可达性、Native Host 二进制、已安装的浏览器清单以及扩展白名单——出现异常时先运行它。加 `--json` 可获得机器可读的报告。
+需要时 CLI 会启动同目录的 Agent。`doctor` 检查保险库、Agent、Native Host、浏览器注册及扩展允许列表；加上 `--json` 可获得机器可读输出。
 
-用 `aipass completions <shell>` 打印 shell 补全脚本（bash、zsh、fish 等）。
+使用 `aipass agent install` 设置登录自启；`start`、`stop` 和 `uninstall` 分别管理启动、停止与移除。`aipass completions <shell>` 输出 shell 补全。
 
-CLI 与桌面应用使用同一个后台代理。代理的生命周期命令：
+## 浏览器扩展
+
+下载并解压 `aipass-edge-extension.zip`。在 `edge://extensions` 或 `chrome://extensions` 打开开发者模式，加载解压后的文件夹。使用已安装扩展的 ID 注册 Native Messaging：
 
 ```bash
-aipass agent install    # 注册代理开机自启（macOS 上为 LaunchAgent）
-aipass agent status     # 注册/运行状态及锁定状态
-aipass agent start
-aipass agent stop
-aipass agent uninstall
+aipass native-host install --extension-id <extension-id>
+aipass native-host install --browser edge --extension-id <extension-id>
 ```
 
-通常你不需要这些命令——CLI 会按需启动代理——但 `agent install` 可以让会话在登录后保持可用。
+支持 Chrome、Chromium、Edge 和 Brave。桌面应用也提供扩展状态与修复操作。填充凭据时需要解锁保险库；详见[扩展指南](/docs/zh/extension)。
 
-## 浏览器扩展（Chrome）
+## 同步与新设备
 
-1. 从 Chrome 应用商店安装 AIPass 扩展。如果商店尚未上架，从 [GitHub Releases](https://github.com/backrunner/aipass/releases) 下载扩展包，在 `chrome://extensions` 开启开发者模式后加载。
-2. 将扩展连接到桌面应用。应用会注册 Chrome Native Messaging Host；也可以用 CLI 完成：
+已签名的 macOS 桌面构建默认使用 CloudKit。文件夹和 WebDAV 目标复用同一加密快照引擎。CLI 还提供显式文件夹、OneDrive 和旧 iCloud Drive 路径，见 [CLI 参考](/docs/zh/cli#同步)。
 
-```bash
-aipass native-host install --extension-id <chrome-extension-id>
-```
-
-安装器会写入带有扩展白名单的 Native Messaging 清单 `dev.aipass.native.json`——在 macOS 上位于 `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`——并为 Native Host 记录允许的扩展 ID。通过 `--browser` 支持 Chromium、Edge 和 Brave：
-
-```bash
-aipass native-host install --browser brave --extension-id <id1>,<id2>
-```
-
-多次传入 `--extension-id` 或用逗号分隔，可允许多个扩展构建（例如商店版和开发版）。桌面应用的扩展设置中也能查看 Native Host 状态并修复清单。
-
-此后扩展即可识别服务商控制台，并从已解锁的保险库请求填充授权。完整流程见[扩展指南](/docs/zh/extension)。
-
-## 同步（可选）
-
-要跨机器复制保险库，配置一个同步目标：
-
-```bash
-aipass sync --dir ~/Sync/AIPass                 # 任意本地文件夹
-aipass sync --icloud                            # iCloud Drive（macOS）
-aipass sync --onedrive                          # OneDrive 文件夹
-aipass sync --webdav-url https://cloud.example/dav \
-  --webdav-username "$USER" --webdav-password "$PASS"
-```
-
-同步只会传输加密对象——目标位置永远看不到明文密钥。iCloud 同步写入 iCloud Drive 中的 `AIPass` 文件夹，且仅限 macOS。冲突（同一对象在两台机器上被修改）会被隔离，并在桌面应用的同步设置中解决。
+同步和备份不包含设备本地的订阅登录凭据。新设备或恢复后需要分别登录这些账号，详见[安全](/docs/zh/security#同步)。

@@ -7,7 +7,7 @@ order: 7
 
 # Security architecture
 
-AIPass is local-first: the vault is a directory of encrypted files on your machine (`~/Library/Application Support/dev.aipass.desktop/vault` on macOS), and no plaintext credential is ever written to disk, synced, or logged.
+AIPass is local-first: the vault is a directory of encrypted files on your machine (`~/Library/Application Support/dev.aipass.desktop/vault` on macOS), and vault/sync records do not expose plaintext credentials. An explicitly selected plaintext tool-configuration mode can write a key to that tool’s own files.
 
 ## Key hierarchy
 
@@ -40,7 +40,7 @@ Recovery is one-time: using it sets a new master password, generates a **new** r
 
 ## Epoch rotation and devices
 
-Rotating the epoch (`aipass vault rotate`, or **Settings → Rotate keys**) ratchets the epoch key forward with HKDF-SHA256 keyed by fresh randomness and re-wraps every record's data key. Old epoch keys cannot decrypt records written after rotation — this is forward secrecy for the vault.
+Rotating the epoch (`aipass vault rotate`, or **Settings → Rotate keys**) creates a fresh random epoch key and re-wraps active records. Old epoch keys cannot decrypt new writes. Rotation cannot make an attacker forget old ciphertext and matching keys already copied.
 
 Each machine that opens the vault is registered as an encrypted device record. Revoking a device (`aipass vault revoke-device <id>`) marks it untrusted **and** rotates the epoch, so a device that lost sync access cannot use stale key material.
 
@@ -60,4 +60,6 @@ The same encrypted-backup approach protects tool configurations: `aipass configu
 
 ## Sync
 
-Sync replicates only three encrypted object families — `objects/*.aipobj`, `grants/*.aipgrant`, `devices/*.aipdevice` — to a local folder, iCloud Drive, OneDrive, or a WebDAV endpoint. Objects carry Lamport timestamps for ordering; when the same object differs on both sides, the losing version is quarantined and you resolve it (accept or discard) in the desktop app's sync settings. The sync target never holds plaintext: the pipeline is tested to confirm no plaintext secrets land on the remote.
+Sync uses complete encrypted snapshots, including the wrapped key material needed to restore the vault. macOS uses CloudKit by default; configured folder and WebDAV targets use the same snapshot engine. Snapshots are authenticated before they are applied, and conflicting record changes require resolution in the desktop app.
+
+Subscription login credentials remain encrypted on their originating device and are excluded from sync and exports. Reauthenticate after restoring a backup or setting up another device. Historical encrypted snapshots can retain older data; deleting the current entry does not immediately erase historical backups.

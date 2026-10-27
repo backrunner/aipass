@@ -7,7 +7,7 @@ order: 5
 
 # Desktop app
 
-The desktop app is the primary interface to the vault. It is a Tauri app for macOS and talks to the same background agent as the CLI, so an unlock in the app also unlocks `aipass` and the browser extension.
+The desktop app is the primary interface to the vault. It is a Tauri app and talks to the same background agent as the CLI, so an unlock in the app also unlocks `aipass` and the browser extension.
 
 ## Vault, unlock, and lock
 
@@ -16,7 +16,7 @@ On first launch the app asks for a master password, creates the vault, and shows
 The vault locks itself according to the lock policy in **Settings → Lock policy**:
 
 - **Auto-lock** after idle: 15 minutes, 30 minutes, 1 hour (default), 2, 4, 8, or 24 hours, or never.
-- **Lock on sleep** (default on) — the vault locks when the Mac sleeps.
+- **Lock on sleep** (default on) — the vault locks when the computer sleeps.
 - **Lock on screen lock** (default on) — the vault locks when you lock the screen.
 
 Quitting the app or restarting the agent also locks the session. Locking is cryptographic: the agent drops the decrypted keys from memory, so nothing — including the browser extension — can read secrets until you unlock again.
@@ -41,33 +41,19 @@ The `v1/add` path is versioned. Repeat `domain`, `endpoint`, `consoleEndpoint`, 
 
 ## Integrations
 
-The Integrations section configures AI tools to use a stored credential, with a preview dialog before anything is written. Supported tools:
+Use **Quick integration** to configure an installed AI tool from a credential or proxy route. Review the plan before applying it; previous configurations are backed up with encryption for rollback. Supported CLI tools include Codex, Claude Code, Gemini CLI, OpenCode, Grok, Pi, and Cursor Agent Local.
 
-- **Codex**, **Claude Code**, **Gemini CLI**, **OpenCode** — also available from `aipass configure`.
-- **Grok**, **Pi**, **Cursor Agent Local** — desktop-only integrations.
+See [Tool integrations](/docs/integrations) for key selection, subscription accounts, and CC Switch imports.
 
-Compatibility is checked per entry: for example Codex requires an OpenAI-compatible endpoint with bearer auth, and Claude Code requires an Anthropic Messages interface. Every apply writes an encrypted backup of the previous configuration and can be rolled back.
+## Local proxy
 
-## Local proxy (Server)
+The local proxy uses route tokens while provider credentials stay in AIPass. Configure routes, target selection, protocol conversion, WebSocket preference, and per-key usage pricing in **Local proxy**.
 
-The **Server** section runs a local HTTP proxy that lets tools share vault credentials without holding real keys. Highlights:
-
-- Binds to `127.0.0.1:8787` by default; the address is configurable.
-- Routes define an inbound protocol (OpenAI Responses, OpenAI Chat Completions, or Anthropic Messages). Targets can use any supported provider format: when a target's format differs from the inbound protocol, the proxy converts between protocols automatically (e.g. Claude Code can run on OpenAI-format providers).
-- Each route has its own bearer token, a strategy (fallback or round-robin), and weighted targets pointing at vault entries — so a failed provider falls over to the next target automatically.
-- Retry policy per route: max attempts, failure threshold, circuit-open seconds, connect / first-byte / stream-idle timeouts.
-- Known conversion limits: `/v1/messages/count_tokens` is not converted; `thinking` and `cache_control` fields are dropped across protocols; `anthropic-beta` feature headers are not forwarded to OpenAI upstreams.
-- Usage statistics per provider and model — request counts, tokens, estimated cost from your pricing table, success rate, time to first token — stored locally in SQLite.
-
-Because targets reference vault entries, rotating a key in the vault updates the proxy without touching your tools.
-
-The public model price table used for cost estimates updates independently of app releases. On startup, the background agent checks its local cache and downloads prices from LiteLLM if the cache is missing or at least 24 hours old. It refreshes daily while running and retries hourly after failures. Offline or invalid responses leave the last successful download in use; without a valid cache, built-in prices apply. Price downloads work while the vault is locked and require no proxy restart.
-
-Custom pricing groups, manual prices, and credential multipliers take precedence over the public table. Historical usage costs are recalculated when queried, so updating public prices can also change historical estimates that use those prices. Actual charges follow your provider's bill.
+See [Local proxy](/docs/local-proxy) for session behavior, conversion limits, safe fallback, and the LAN control panel.
 
 ## Tray
 
-AIPass lives in the macOS menu bar. The tray menu shows agent and proxy status and offers:
+AIPass uses the system tray or macOS menu bar. The tray menu shows agent and proxy status and offers:
 
 - **Open AIPass** / **Hide Window**, **Refresh Status**, **Quit**.
 - Start the agent, **Lock Vault**, and install launch-at-login for the tray.
@@ -75,11 +61,11 @@ AIPass lives in the macOS menu bar. The tray menu shows agent and proxy status a
 
 ## Launch at login
 
-Two independent autostart entries exist, both registered as macOS LaunchAgents:
+Agent and tray startup are configured independently. macOS uses LaunchAgents, Windows uses per-user startup registration, and Linux uses its supported session backend (including a desktop-session fallback when no systemd user manager is available):
 
 - The **agent** keeps your unlocked session and serves the CLI and browser extension (`aipass agent install`).
 - The **tray** app can start at login so the menu bar icon is always present; install it from the tray menu.
 
 ## Updates
 
-The app checks for updates in the background and shows a banner when one is available; **Settings → Updates** switches between the official and beta channels. Details are in [Updates](/docs/updates).
+The app checks for updates in the background and shows a banner when one is available; **Settings → Updates** switches between the official, beta, and nightly channels. Details are in [Updates](/docs/updates).

@@ -48,7 +48,7 @@ aipass vault rotate
 
 ## 同步
 
-选择一个同步目标：
+已签名的 macOS 桌面构建默认使用 CloudKit，也可使用其他同步目标：
 
 - **本地文件夹** —— 任意目录，包括已被其他工具同步的目录。
 - **WebDAV** —— URL 加用户名和密码。
@@ -62,7 +62,7 @@ aipass sync --onedrive
 aipass sync --webdav-url https://cloud.example/dav --webdav-username u --webdav-password p
 ```
 
-同步只传输加密对象。当同一对象在两台机器上被修改时，冲突会被隔离并列在同步设置中，你可以逐个**接受**（保留传入版本）或**丢弃**（保留当前版本）。
+同步传输加密快照，并发修改在同步设置中处理；历史快照可能保留旧版本。订阅登录凭据仅保存在各设备本机。
 
 ## 设备、导出与导入
 
@@ -79,6 +79,6 @@ aipass vault import --input backup.aipexport --export-password "$PW"
 
 ## Server（本地代理）
 
-内置代理的设置：绑定地址（默认 `127.0.0.1:8787`）、带重试策略的路由（最大尝试 1–10 次、失败阈值 1–20、熔断秒数、连接 / 首字节 / 流空闲超时），以及用于成本估算的模型定价表。见[桌面应用](/docs/zh/desktop)。
+在**本地代理**中配置监听地址、路由令牌、目标、重试等待策略及模型价格。传输和失败行为见[本地代理](/docs/zh/local-proxy)。
 
 本地存活检测使用 `GET /health`（例如 `http://127.0.0.1:8787/health`）。该接口由本地代理直接返回，不会转发到任何上游。

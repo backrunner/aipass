@@ -4,6 +4,12 @@ declare module 'virtual:svedocs/config' {
   export default config;
 }
 
+declare module 'virtual:svedocs/server-config' {
+  import type { SvedocsResolvedConfig } from 'svedocs/core';
+  const config: SvedocsResolvedConfig;
+  export default config;
+}
+
 declare module 'virtual:svedocs/pages' {
   import type { SvedocsPage } from 'svedocs/core';
   const pages: SvedocsPage[];
@@ -40,6 +46,11 @@ declare module 'virtual:svedocs/search-loader' {
   export default loadSearch;
 }
 
+declare module 'virtual:svedocs/markdown' {
+  const markdown: Record<string, string>;
+  export default markdown;
+}
+
 declare module 'virtual:svedocs/components' {
   import type { Component } from 'svelte';
   const components: Record<string, Component>;
@@ -56,4 +67,19 @@ declare module 'virtual:svedocs/theme-components' {
   import type { SvedocsThemeComponentMap } from 'svedocs/theme/types';
   const components: Partial<SvedocsThemeComponentMap>;
   export default components;
+}
+
+declare module 'virtual:svedocs/component-loaders' {
+  import type { Component } from 'svelte';
+  import type { SvedocsModuleLoader } from 'svedocs/routes';
+  const loaders: Record<string, SvedocsModuleLoader<Component>>;
+  export default loaders;
+}
+
+declare module 'virtual:svedocs/layout-loaders' {
+  import type { Component } from 'svelte';
+  import type { SvedocsModuleLoader } from 'svedocs/routes';
+  import type { SvedocsCustomLayoutProps } from 'svedocs/theme/types';
+  const loaders: Record<string, SvedocsModuleLoader<Component<SvedocsCustomLayoutProps>>>;
+  export default loaders;
 }
