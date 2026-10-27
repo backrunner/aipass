@@ -1,13 +1,13 @@
 <script lang="ts">
   import type { ProviderEntry, SecretRef } from "@aipass/schemas";
   import { scrollMask } from "../actions/scrollMask";
-  import { interfaceLabel } from "../helpers";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import Button from "./Button.svelte";
   import Field from "./Field.svelte";
   import IconButton from "./IconButton.svelte";
   import SelectField from "./SelectField.svelte";
+  import ProxyCredentialPicker from "./ProxyCredentialPicker.svelte";
   import SwitchField from "./SwitchField.svelte";
   import { Dialog, Switch } from "bits-ui";
   import { AlertTriangle, ChevronDown, ChevronUp, GripVertical, KeyRound, Trash2, X } from "lucide-svelte";
@@ -48,7 +48,6 @@
   let holdInitialDelayMs = route?.retry?.holdInitialDelayMs ?? 500;
   let holdMaxDelayMs = route?.retry?.holdMaxDelayMs ?? 10_000;
   let holdMaxDurationMs = route?.retry?.holdMaxDurationMs ?? 300_000;
-  let memberPickerValue = "";
   let members: Member[] = [];
   // Targets whose provider entry or secret can no longer be resolved (archived,
   // trashed or deleted). They stay visible as placeholder rows and are preserved
@@ -74,7 +73,8 @@
         .filter((secret) => credentialAvailable(entry, secret))
         .map((secret) => ({
         value: `${entry.id}::${secret.id}`,
-        label: `${entry.title} · ${secret.label} · ${secret.masked} · ${interfaceLabel[secret.interfaceType ?? entry.interfaceType]}${secret.group ? ` · ${secret.group}` : ""}`,
+        entry,
+        secret,
         disabled: members.some((member) => member.entry.id === entry.id && member.secret.id === secret.id)
       }))
     );
@@ -364,15 +364,10 @@
               <span class="members-count">{$t("server.memberCount", { count: members.length + missingMembers.length })}</span>
             </div>
             <div class="member-picker">
-              <SelectField
-                bind:value={memberPickerValue}
-                placeholder={$t("server.addMember")}
+              <ProxyCredentialPicker
+                disabled={saving}
                 options={credentialOptions}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  addMember(value);
-                  memberPickerValue = "";
-                }}
+                onSelect={addMember}
               />
             </div>
 
@@ -408,7 +403,8 @@
                     <Badge size="sm">{$t(member.entry.credentialKind === "oauth" ? "providerDetail.subscriptionType" : "providerDetail.api")}</Badge>
                   </div>
                   <div class="member-description">
-                    <span title={member.secret.label}>{member.secret.label}{#if !member.enabled} · {$t("server.memberDisabled")}{/if}</span>
+                    <span title={member.secret.label}>{member.secret.label}</span>
+                    {#if !member.enabled}<Badge size="sm">{$t("server.memberDisabled")}</Badge>{/if}
                     {#if member.enabled && member.targetId && degradedTargetIds.has(member.targetId)}
                       <Badge tone="warning" size="sm"><AlertTriangle size={12} /> {$t("server.degraded")}</Badge>
                     {/if}
@@ -458,7 +454,8 @@
                       <Badge tone="warning" size="sm"><AlertTriangle size={12} /> {$t("server.degraded")}</Badge>
                     {/if}
                   </div>
-                  <span class="mono">{missing.providerEntryId} · {$t("server.memberMissing")}</span>
+                  <span class="mono">{missing.providerEntryId}</span>
+                  <span>{$t("server.memberMissing")}</span>
                 </div>
                 <div class="member-controls">
                   <div class="member-actions">

@@ -327,13 +327,9 @@ pub(super) fn archive_outgoing(
     changes: &mut Vec<Change>,
     refs: &mut Vec<RefUpdate>,
 ) -> Result<()> {
-    let Some(identity) = active.identity()? else {
-        return Ok(());
-    };
+    let mut outgoing = Vec::new();
     for entry in vault.list_provider_summaries()? {
-        if entry.account_identity.as_deref() != Some(&identity)
-            || entry.credential_kind != aipass_provider_registry::CredentialKind::OAuth
-        {
+        if entry.credential_kind != aipass_provider_registry::CredentialKind::OAuth {
             continue;
         }
         if request.mode == ToolConfigMode::Official && entry.id == request.id {
@@ -344,6 +340,21 @@ pub(super) fn archive_outgoing(
         };
         if before["nativeHome"].as_str() != Some(active.home.to_string_lossy().as_ref()) {
             continue;
+        }
+        outgoing.push((entry, before));
+    }
+    // An unmanaged CLI can retain an OAuth grant after its account profile was
+    // removed. Keep those bytes in the encrypted transaction without inventing
+    // an identity or importing them as a subscription.
+    if outgoing.is_empty() {
+        return Ok(());
+    }
+    let identity = active
+        .identity()?
+        .context("managed native account identity unavailable; reconnect explicitly")?;
+    for (entry, before) in outgoing {
+        if entry.account_identity.as_deref() != Some(&identity) {
+            bail!("managed native account changed; reconnect explicitly");
         }
         let path = active
             .home

@@ -134,6 +134,13 @@ Newest entries last within each section.
 
 ## Tool configuration writes (aipass-agent / config-writers)
 
+### Gateway writes must preserve unidentifiable native remnants without activating them
+- **Symptom**: configuring Claude Code for the local proxy failed with `Claude account identity unavailable` when a native grant remained without its account profile; reverting a configuration-only change hit the same verification path.
+- **Root cause**: `tool_switch::status_snapshot` and `native::archive_outgoing` required an identity even without a managed outgoing reference; `historical::validate` verified unchanged grants as if it were replaying them.
+- **Fix**: report unbound identity failures as unavailable, require strict outgoing verification only for references to the active native home, and preserve raw native resources in the encrypted transaction. Skip historical grant activation checks only when every captured native resource is unchanged; retain the caller's complete fingerprint check.
+- **Guardrail**: never infer an identity, import unknown grants, or discard native material to configure a gateway. Missing/changed managed identities must stop before writes. Test absent, empty and malformed profiles, exact encrypted backups, configuration rollback and external-change conflicts.
+- **Watch points**: `tool_switch::{status_snapshot,apply_prepared}`, `native::archive_outgoing`, `historical::validate`, proxy receipts and `claude_proxy_*` regression tests. Keep `NativeStore::identity` and `identity_from` strict for token-bearing grants.
+
 ### An empty native login store must allow selecting managed credentials
 - **Symptom**: signed-out Claude Code showed unavailable storage/status and could not switch to a managed API credential.
 - **Root cause**: `NativeStore::identity` tried to resolve account metadata for empty/null OAuth placeholders; status also conflated absent credentials with unmanaged external credentials.

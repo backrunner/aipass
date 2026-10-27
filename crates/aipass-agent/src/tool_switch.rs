@@ -583,7 +583,19 @@ fn status_snapshot(
             let home = crate::server::home_dir(vault)?;
             match active_store(&home, &tool) {
                 Ok(store) => {
-                    result.account_identity = store.identity().map_err(safe_error)?;
+                    result.account_identity = match store.identity() {
+                        Ok(identity) => identity,
+                        Err(_) => {
+                            // Unbound native remnants must not prevent configuring a
+                            // gateway. The write transaction preserves their raw bytes;
+                            // managed outgoing accounts are still checked before writes.
+                            result.state = "unavailable".into();
+                            result.message = Some(
+                                "Native account identity unavailable; reconnect the account to use its subscription".into(),
+                            );
+                            return Ok(result);
+                        }
+                    };
                     if let Some(identity) = &result.account_identity {
                         if let Some(entry) = vault
                             .list_provider_summaries()
