@@ -77,6 +77,14 @@ update crashes from reaching releases.
   build success alone is not a runtime validation result.
 - See `docs/desktop-artifact-validation.md`; local checks remain macOS-only.
 
+User instruction, 2026-10-27: DMG image validation is non-GUI only.
+
+- Use `scripts/verify-macos-dmg.mjs` for image checksums, read-only mounting,
+  app metadata and required executable payloads. Do not test Finder windows,
+  backgrounds, icon positions or Retina artwork.
+- Keep the application startup/update runtime checks above and release
+  signature/notarization verification. This removes DMG presentation tests.
+
 ## Local Validation Platform
 
 User instruction, 2026-09-07: permanently skip local Ubuntu validation.

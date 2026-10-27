@@ -11,6 +11,21 @@ documentation fix does not require producing a macOS bundle. Changes requiring
 the complete local gate and artifacts intended for publication still require
 the finished-DMG and updater checks described here.
 
+## DMG image integrity
+
+Per the 2026-10-27 user instruction, `scripts/verify-macos-dmg.mjs` runs only
+non-GUI checks on the finished image: `hdiutil verify`, a read-only mount,
+valid app metadata, and readable, nonempty executable payloads. It does not
+open Finder or inspect window geometry, background art, icon positions or
+Retina representations. The existing packaging appearance is still generated.
+
+Run `node --test scripts/verify-macos-dmg.test.mjs` on macOS to exercise a
+valid image without layout assets, a truncated image and a missing helper.
+Production signing/notarization checks and the application runtime gate below
+remain required.
+
+## Application runtime
+
 `scripts/verify-macos-runtime.mjs` validates the finished DMG and updater archive:
 
 - Copy the DMG's application into a disposable directory, open the main window
@@ -65,6 +80,7 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' \
 TAURI_BUNDLER_DMG_IGNORE_CI=true \
   pnpm --dir apps/desktop tauri build --ci --bundles app,dmg \
   --config "$runtime_signing_dir/tauri.runtime-check.json"
+node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
 node scripts/verify-macos-runtime.mjs target/release/bundle runtime-check-reports
 rm -rf "$runtime_signing_dir"
 ```

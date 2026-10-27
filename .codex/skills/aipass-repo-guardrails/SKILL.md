@@ -243,9 +243,16 @@ test -n "${app_path}"
 test -x "${app_path}/Contents/MacOS/aipass-desktop"
 test -x "${app_path}/Contents/Resources/aipass-agent"
 test -x "${app_path}/Contents/Resources/aipass-native-host"
+node --test scripts/verify-macos-dmg.test.mjs
 node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
 node scripts/verify-macos-runtime.mjs target/release/bundle runtime-check-reports
 ```
+
+Per `agents.md` (2026-10-27), DMG validation is non-GUI: verify the image
+checksum, read-only mounting, app metadata and executable payloads with
+`verify-macos-dmg.mjs`. Do not inspect Finder windows, background artwork,
+icon positions or Retina layout. Packaging still preserves the configured
+installation appearance.
 
 The runtime artifact gate is mandatory per `agents.md` (2026-09-08). Run the
 finished DMG and updater archive through main/tray startup and both manual/cached

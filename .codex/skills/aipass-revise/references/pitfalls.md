@@ -747,8 +747,8 @@ Newest entries last within each section.
 ### CI silently omitted the DMG installation layout
 - **Symptom**: published DMGs opened without the configured background or icon positions; the original 1x PNG also looked soft on Retina displays.
 - **Root cause**: `.github/workflows/release.yml` set `CI=true`, which makes Tauri pass `--skip-jenkins` to create-dmg and skip saving Finder's layout. The background generator downsampled everything to 660×400 pixels.
-- **Fix**: set `TAURI_BUNDLER_DMG_IGNORE_CI=true` in both macOS workflows, generate a TIFF with 1x/2x representations at the same logical size, and verify the mounted DMG with `scripts/verify-macos-dmg.mjs`.
-- **Guardrail**: build and mount the actual DMG on macOS with Finder; verify saved background selection, both image resolutions, window/icon positions, Applications link, and executable payloads. A copied image file alone does not prove Finder uses it.
+- **Fix**: set `TAURI_BUNDLER_DMG_IGNORE_CI=true` in both macOS workflows and generate a TIFF with 1x/2x representations at the same logical size.
+- **Guardrail**: preserve the configured packaging appearance. Per the 2026-10-27 user instruction, automated DMG validation checks only image integrity, read-only mounting, app metadata and executable payloads; do not restore Finder/background/icon/Retina presentation tests. Keep application startup/update and production signature/notarization gates.
 - **Watch points**: both workflows, `tauri.conf.json`, the background generator, and the local macOS bundle gate.
 
 ### Homebrew Rust's objcopy dependency produced misaligned macro libraries

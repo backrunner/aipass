@@ -157,8 +157,10 @@ jobs:
           test -x "${app_path}/Contents/MacOS/aipass-desktop"
           test -x "${app_path}/Contents/Resources/aipass-agent"
           test -x "${app_path}/Contents/Resources/aipass-native-host"
-      - name: Verify DMG installation window
-        run: node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
+      - name: Verify DMG integrity
+        run: |
+          node --test scripts/verify-macos-dmg.test.mjs
+          node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
       - name: Verify packaged startup and update restart
         run: node scripts/verify-macos-runtime.mjs target/release/bundle runtime-check-reports
       - name: Upload runtime diagnostics
