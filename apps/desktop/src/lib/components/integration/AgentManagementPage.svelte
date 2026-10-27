@@ -176,7 +176,7 @@
         </div>
       {/if}
       {#if activeStatus?.overrides.length}<div class="row-note">{$t("integration.environmentOverrides", { keys: activeStatus.overrides.join(", ") })}</div>{/if}
-      {#if activeEntry && activeStatus?.state === "ready"}
+      {#if activeEntry && (activeStatus?.state === "ready" || (activeStatus?.state === "unmanaged" && activeStatus.mode === "official"))}
         {#key `${activeTool.id}:${activeEntry.id}:${activeStatus.secretId ?? ""}`}<AgentAccountDetail entry={activeEntry} secretId={activeStatus.secretId} {invokeTauri} {onRefreshEntries} />{/key}
       {:else}<div class="unmanaged"><strong>{accountLabel(activeStatus)}</strong><span>{$t("agents.unlinkedUsage")}</span></div>{/if}
     </div>

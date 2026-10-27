@@ -712,6 +712,13 @@ Newest entries last within each section.
 
 ## Desktop operation feedback
 
+### Native import can link the active account without a managed switch
+- **Symptom**: Codex's imported native account appeared in the selector, but its usage was replaced by the connect-credentials hint.
+- **Root cause**: `AgentManagementPage.svelte` rendered account details only for `ready`; Rust can identify the imported active account by exact identity and native home while returning `unmanaged` with `mode=official` before any managed switch.
+- **Fix**: also show the Rust-linked active entry for that native status. Retain the current-account binding rather than inferring it from the dropdown selection.
+- **Guardrail**: test imported native accounts before any switch, selecting a different account, absent active entry IDs, and conflicts. Do not change the Rust status to `ready` merely for display: that also enters its native renewal path.
+- **Watch points**: `tool_switch::status_snapshot/status_checked`, Agent page detail gating and `AgentManagementPage.test.ts`.
+
 ### Agent navigation must retain the last completed scan
 - **Symptom**: every return to Agent management replaced both panes with a full loading state.
 - **Root cause**: `AgentManagementPage.svelte` owned detections/statuses inside the component that navigation destroys.
