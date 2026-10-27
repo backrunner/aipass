@@ -96,7 +96,7 @@ pub(super) fn field<'a>(doc: &'a Value, key: &str) -> Option<&'a str> {
     doc.get(key)?.as_str().filter(|s| !s.trim().is_empty())
 }
 pub(super) fn add(
-    out: &mut Vec<Credential>,
+    out: &mut Vec<DetectedCredential>,
     key: Option<&str>,
     endpoint: Option<&str>,
     interface: InterfaceType,
@@ -112,6 +112,7 @@ pub(super) fn add(
         || key.starts_with('$')
         || key.starts_with('!')
     {
+        out.push(DetectedCredential::ExternalReference);
         return Ok(());
     }
     let endpoint = endpoint.context("credential endpoint unavailable")?;
@@ -120,13 +121,13 @@ pub(super) fn add(
         matches!(url.scheme(), "http" | "https"),
         "invalid credential endpoint"
     );
-    out.push(Credential {
+    out.push(DetectedCredential::Literal(Credential {
         key: Zeroizing::new(key.into()),
         endpoint: endpoint.into(),
         interface,
         auth,
         model: model.map(str::to_owned),
-    });
+    }));
     Ok(())
 }
 pub(super) fn env(path: &Path) -> Result<PrivateJson> {
@@ -178,6 +179,16 @@ pub(super) fn env(path: &Path) -> Result<PrivateJson> {
     Ok(values)
 }
 pub(super) fn read(home: &Path, tool: &ToolConfigTool) -> Result<Vec<Credential>> {
+    Ok(detect(home, tool)?
+        .into_iter()
+        .filter_map(|value| match value {
+            DetectedCredential::Literal(value) => Some(value),
+            DetectedCredential::ExternalReference => None,
+        })
+        .collect())
+}
+
+pub(super) fn detect(home: &Path, tool: &ToolConfigTool) -> Result<Vec<DetectedCredential>> {
     if matches!(
         tool,
         ToolConfigTool::KimiCode
@@ -209,6 +220,9 @@ pub(super) fn read(home: &Path, tool: &ToolConfigTool) -> Result<Vec<Credential>
         ToolConfigTool::Codex => {
             let provider = field(&doc.0, "model_provider").unwrap_or("openai");
             let selected = &doc.0["model_providers"][provider];
+            if field(selected, "env_key").is_some() || field(selected, "api_key_helper").is_some() {
+                out.push(DetectedCredential::ExternalReference);
+            }
             let endpoint = field(selected, "base_url").unwrap_or("https://api.openai.com/v1");
             let store = native(home, tool)?.context("native store unavailable")?;
             let auth = store
@@ -239,6 +253,9 @@ pub(super) fn read(home: &Path, tool: &ToolConfigTool) -> Result<Vec<Credential>
             }
         }
         ToolConfigTool::ClaudeCode => {
+            if field(&doc.0, "apiKeyHelper").is_some() {
+                out.push(DetectedCredential::ExternalReference);
+            }
             let env = &doc.0["env"];
             let endpoint = field(env, "ANTHROPIC_BASE_URL").unwrap_or("https://api.anthropic.com");
             for (key, auth) in [

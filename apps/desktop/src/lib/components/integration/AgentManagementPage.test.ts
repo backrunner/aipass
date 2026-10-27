@@ -130,3 +130,25 @@ test.each([
   expect(document.querySelector('.row-note')?.textContent.trim()).toBe(label);
   if (failure) expect(document.body.textContent).not.toContain("Storage unavailable");
 });
+
+test.each(["codex", "claude-code"] as const)("a signed-out %s can select a managed credential and switch after preview", async (tool) => {
+  setLocale("en");
+  const selected = tool === "claude-code" ? {...entry, interfaceType: "anthropic_messages" as const, authScheme: "x_api_key" as const} : entry;
+  const invoke = vi.fn(async (command: string) => {
+    if (command === "tool_config_detect") return [{tool, binaryFound: true}];
+    if (command === "tool_config_status") return {tool, state: "not_logged_in", overrides: []};
+    if (command === "tool_config_preview") return {...preview, tool};
+    return invokeFixture()(command);
+  });
+  app = mount(AgentManagementPage, {target: document.body, props: {entries: [selected], invokeTauri: invoke as never, onRefreshEntries: async () => {}}});
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.unmanaged')?.textContent.trim()).toBe("Not signed in"); });
+  expect(document.querySelector('.row-note')).toBeNull();
+  expect(document.querySelector('.account-detail')).toBeNull();
+  document.querySelector<HTMLButtonElement>('.switch-controls .select-trigger')!.dispatchEvent(new PointerEvent("pointerdown", {bubbles: true, button: 0, pointerType: "mouse"}));
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('[role=option][data-value="api:key"]')).toBeTruthy(); });
+  document.querySelector<HTMLElement>('[role=option][data-value="api:key"]')!.dispatchEvent(new PointerEvent("pointerup", {bubbles: true, button: 0, pointerType: "mouse"}));
+  await settled(); await prepare();
+  expect(invoke.mock.calls.some(([command]) => command === "agent_management_apply")).toBe(false);
+  document.querySelector<HTMLButtonElement>('.dialog-actions .btn-primary')!.click();
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("agent_management_apply", {request: expect.objectContaining({tool, id:"api", secretId:"key", previewId:"snapshot"})}));
+});

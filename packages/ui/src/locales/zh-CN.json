@@ -1152,6 +1152,7 @@
   "integration.environmentOverrides": "环境变量可能覆盖此配置：{keys}",
   "integration.state.ready": "可用",
   "integration.state.unmanaged": "未由 AIPass 配置",
+  "integration.state.not_logged_in": "尚未登录",
   "integration.state.conflict": "已被外部修改",
   "integration.state.login_required": "需要重新登录",
   "integration.state.renewal_required": "需要检查续期",

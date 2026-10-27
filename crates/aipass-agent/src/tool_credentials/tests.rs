@@ -75,6 +75,95 @@ fn request(id: Uuid, tool: ToolConfigTool) -> ToolConfigRequest {
         preview_id: None,
     }
 }
+
+#[test]
+fn signed_out_native_agents_can_preview_apply_and_rollback_managed_api_credentials() {
+    for (tool, directory, auth_file, auth) in [
+        (
+            ToolConfigTool::Codex,
+            ".codex",
+            "auth.json",
+            r#"{"tokens":null}"#,
+        ),
+        (
+            ToolConfigTool::ClaudeCode,
+            ".claude",
+            ".credentials.json",
+            r#"{"claudeAiOauth":null,"mcpOAuth":{}}"#,
+        ),
+    ] {
+        let (_dir, state, home) = fixture();
+        let path = home.join(directory).join(auth_file);
+        write(&path, auth);
+        let before = crate::tool_switch::status(&state, tool.clone()).unwrap();
+        assert_eq!(before.state, "not_logged_in");
+        assert!(before.entry_id.is_none());
+        let id = with_vault(&state, false, |v| {
+            let mut input = api_input("https://selected.test/v1", "private-selected");
+            if tool == ToolConfigTool::ClaudeCode {
+                input.interface_type = InterfaceType::AnthropicMessages;
+                input.auth_scheme = AuthScheme::XApiKey;
+            }
+            v.add_provider(input).map_err(map_vault_error)
+        })
+        .unwrap();
+        let mut selected = request(id, tool.clone());
+        preview(&state, &mut selected);
+        assert_eq!(fs::read_to_string(&path).unwrap(), auth);
+        let result = apply(&state, selected).unwrap();
+        assert_eq!(result.outcome, ToolConfigOutcome::Applied);
+        let after = crate::tool_switch::status(&state, tool.clone()).unwrap();
+        assert_eq!(after.state, "ready");
+        assert_eq!(after.entry_id, Some(id));
+        with_vault(&state, false, |v| {
+            assert_eq!(v.list_provider_summaries().unwrap().len(), 1);
+            Ok(())
+        })
+        .unwrap();
+        crate::tool_switch::rollback(&state, result.operation_id).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), auth);
+        assert_eq!(
+            crate::tool_switch::status(&state, tool).unwrap().state,
+            "not_logged_in"
+        );
+    }
+}
+
+#[test]
+fn no_credentials_are_distinct_from_external_references_and_unknown_api_keys() {
+    let (_dir, state, home) = fixture();
+    for tool in [
+        ToolConfigTool::Codex,
+        ToolConfigTool::ClaudeCode,
+        ToolConfigTool::OpenCode,
+        ToolConfigTool::Pi,
+        ToolConfigTool::Grok,
+        ToolConfigTool::GeminiCli,
+    ] {
+        assert_eq!(status(&state, tool).unwrap().state, "not_logged_in");
+    }
+    let path = home.join(".claude/settings.json");
+    for content in [
+        r#"{"apiKeyHelper":"never-execute-this-command"}"#,
+        r#"{"env":{"ANTHROPIC_API_KEY":"$EXTERNAL_KEY"}}"#,
+        r#"{"env":{"ANTHROPIC_API_KEY":"unmanaged-key"}}"#,
+    ] {
+        write(&path, content);
+        assert_eq!(
+            status(&state, ToolConfigTool::ClaudeCode).unwrap().state,
+            "unmanaged"
+        );
+    }
+    let codex = home.join(".codex/config.toml");
+    write(
+        &codex,
+        "model_provider = \"external\"\n[model_providers.external]\nenv_key = \"EXTERNAL_KEY\"\n",
+    );
+    assert_eq!(
+        status(&state, ToolConfigTool::Codex).unwrap().state,
+        "unmanaged"
+    );
+}
 fn preview(state: &Arc<AgentState>, request: &mut ToolConfigRequest) {
     let response = crate::server::handle_request(
         state,

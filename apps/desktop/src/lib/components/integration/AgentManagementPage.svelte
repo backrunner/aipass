@@ -49,6 +49,7 @@
   $: activeStatus = selectedTool ? statuses[selectedTool] : undefined;
   $: activeEntry = entries.find(entry => entry.id === activeStatus?.entryId);
   function accountLabel(status: ToolConfigStatus | undefined) {
+    if (status?.state === "not_logged_in") return $t("integration.state.not_logged_in");
     const entry = entries.find(entry => entry.id === status?.entryId);
     return entry?.credentialKind === "oauth" ? subscriptionAccountPresentation(entry, $t).account || entry.title
       : entry?.title || status?.entryTitle || status?.accountIdentity || $t("integration.unmanaged");
@@ -170,7 +171,7 @@
       </div>
       {#if !detection?.binaryFound && !detection?.extensionFound}<p class="subtle">{$t("agents.configOnly")}</p>{/if}
       {#if needsRuntime}<p class="subtle">{$t("agents.cursorRuntimeRequired")}</p>{/if}
-      {#if activeStatus?.state && activeStatus.state !== "ready" && activeStatus.state !== "unmanaged"}
+      {#if activeStatus?.state && !["ready", "unmanaged", "not_logged_in"].includes(activeStatus.state)}
         <div class="row-note">{$t(`integration.state.${activeStatus.state}`)}
           {#if activeStatus.operationId}<Button size="sm" disabled={Boolean(busy) || refreshing} on:click={() => { if (activeTool) void restore(activeTool.id); }}>{$t("integration.restore")}</Button>{/if}
         </div>
@@ -178,7 +179,7 @@
       {#if activeStatus?.overrides.length}<div class="row-note">{$t("integration.environmentOverrides", { keys: activeStatus.overrides.join(", ") })}</div>{/if}
       {#if activeEntry && (activeStatus?.state === "ready" || (activeStatus?.state === "unmanaged" && activeStatus.mode === "official"))}
         {#key `${activeTool.id}:${activeEntry.id}:${activeStatus.secretId ?? ""}`}<AgentAccountDetail entry={activeEntry} secretId={activeStatus.secretId} {invokeTauri} {onRefreshEntries} />{/key}
-      {:else}<div class="unmanaged"><strong>{accountLabel(activeStatus)}</strong><span>{$t("agents.unlinkedUsage")}</span></div>{/if}
+      {:else}<div class="unmanaged"><strong>{accountLabel(activeStatus)}</strong>{#if activeStatus?.state !== "not_logged_in"}<span>{$t("agents.unlinkedUsage")}</span>{/if}</div>{/if}
     </div>
   {:else}<div class="empty"><Terminal size={28} /><span>{$t(loading ? "agents.scanning" : "agents.empty")}</span></div>{/if}
 </section>

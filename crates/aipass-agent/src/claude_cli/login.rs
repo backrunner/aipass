@@ -360,7 +360,9 @@ mod review_tests {
         };
         let account = signed_in_at(&binary, &directory, &path).unwrap();
         let primary = Resource::File(path.join(".credentials.json"));
-        primary.write(Some(br#"{"claudeAiOauth":{}}"#)).unwrap();
+        primary
+            .write(Some(br#"{"claudeAiOauth":{"accessToken":"fixture-access"}}"#))
+            .unwrap();
         let store = NativeStore {
             tool: "claude-code".into(),
             home: path,

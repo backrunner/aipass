@@ -134,6 +134,13 @@ Newest entries last within each section.
 
 ## Tool configuration writes (aipass-agent / config-writers)
 
+### An empty native login store must allow selecting managed credentials
+- **Symptom**: signed-out Claude Code showed unavailable storage/status and could not switch to a managed API credential.
+- **Root cause**: `NativeStore::identity` tried to resolve account metadata for empty/null OAuth placeholders; status also conflated absent credentials with unmanaged external credentials.
+- **Fix**: return no native identity only when access/refresh tokens are absent, preserve malformed/unreadable-store errors, and report `not_logged_in` when neither literal credentials nor external references exist. Keep references out of import and execute nothing during discovery.
+- **Guardrail**: test empty/null stores, refresh-only grants, malformed/denied stores, external references, and signed-out preview/apply/rollback with exact restored bytes. Never turn a token-bearing identity failure into permission to discard credentials.
+- **Watch points**: `native_auth::identity`, `tool_credentials::{snapshot,preserve}`, `tool_switch::{status_snapshot,apply_prepared}`, Agent management labels and switch controls.
+
 ### Native switches must follow the latest vendor store
 - **Symptom**: switching through API or proxy writes can leave a subscription bound to replaced active credentials, or replay an older refresh token.
 - **Root cause**: the configuration writer previously backed up files without coordinating native-store ownership and local provider references.
