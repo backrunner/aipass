@@ -5,6 +5,7 @@ use super::*;
 
 mod diagnostics;
 mod persistence;
+mod replay;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{accept_hdr_async, client_async, tungstenite::client::IntoClientRequest};
 
@@ -563,58 +564,6 @@ async fn websocket_slow_generation_stays_active_beyond_legacy_idle_timeout() {
         ws.close(None).await.unwrap();
         server.await.unwrap();
     }
-}
-
-#[tokio::test]
-async fn websocket_does_not_replay_after_upstream_disconnect() {
-    let primary = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mut route = test_route(format!("http://{}/v1", primary.local_addr().unwrap()));
-    route.config.retry.silent_retry = true;
-    route.config.retry.hold_on_failure = true;
-    route.targets.push(
-        test_route(format!("http://{}/v1", fallback.local_addr().unwrap())).targets[0].clone(),
-    );
-    let server = tokio::spawn(async move {
-        let (stream, _) = primary.accept().await.unwrap();
-        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-        assert!(receive(&mut ws).await.is_text());
-        ws.send(event(
-            serde_json::json!({"type":"response.created","response":{"id":"partial"}}),
-        ))
-        .await
-        .unwrap();
-        ws.send(event(serde_json::json!({"type":"response.output_text.delta","item_id":"item","delta":"partial"}))).await.unwrap();
-        // Drop without a Close or response.completed after delivering output.
-    });
-    let (handle, store, _dir) = start_proxy(vec![route], direct());
-    let mut ws = connect(&handle, "/v1/responses", LOCAL_TOKEN)
-        .await
-        .unwrap();
-    ws.send(event(
-        serde_json::json!({"type":"response.create","model":"test","input":"hello"}),
-    ))
-    .await
-    .unwrap();
-    for _ in 0..2 {
-        assert!(receive(&mut ws).await.is_text());
-    }
-    let end = tokio::time::timeout(Duration::from_secs(1), ws.next())
-        .await
-        .unwrap();
-    assert!(!matches!(end, Some(Ok(Message::Text(_)))));
-    server.await.unwrap();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), fallback.accept())
-            .await
-            .is_err()
-    );
-    let summary = store.summary(|_| 0).unwrap();
-    assert_eq!(summary.request_count, 1);
-    assert_eq!(summary.completed_attempts, 1);
-    assert_eq!(summary.successful_attempts, 0);
-    assert!(summary.average_first_token_ms.is_some());
-    assert_eq!(handle.status().failures, 1);
 }
 
 #[tokio::test]

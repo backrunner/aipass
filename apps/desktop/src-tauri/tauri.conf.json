@@ -57,6 +57,7 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "macos/Uninstall AIPass.command": "Uninstall AIPass.command",
       "../../../target/release/cli/*": "",
       "../../../target/release/aipass-agent*": "",
       "../../../target/release/aipass-native-host*": "",
@@ -65,7 +66,8 @@
     },
     "windows": {
       "nsis": {
-        "installerHooks": "windows/nsis-hooks.nsh"
+        "installerHooks": "windows/nsis-hooks.nsh",
+        "template": "windows/installer.nsi"
       }
     },
     "macOS": {

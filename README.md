@@ -36,6 +36,10 @@ AIPass brings AI provider API keys and supported subscription accounts into one 
 2. Create your vault and keep the one-time recovery key offline.
 3. Add a credential or connect a subscription, then configure an installed AI tool.
 
+On macOS, quit from the tray and open `AIPass.app/Contents/Resources/Uninstall AIPass.command`
+to restore Agent configurations before removal. On Windows, use the installed NSIS
+uninstaller. See [proxy restoration and upgrades](docs/native-tool-switching.md#proxy-restoration-on-uninstall).
+
 Desktop releases are available for macOS (Universal) and Linux (x86_64 / aarch64). Standalone CLI archives are available for macOS, Linux, and Windows.
 
 AIPass is pre-release software. Read the release notes before upgrading.

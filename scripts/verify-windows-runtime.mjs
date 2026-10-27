@@ -6,6 +6,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { createProxyFixture } from "./fixtures/proxy-uninstall.mjs";
 
 assert.equal(process.platform, "win32");
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Use a disposable GitHub runner for installer registration");
@@ -20,6 +21,8 @@ const installed = join(root, "package");
 let child;
 let finished = true;
 let success = false;
+let proxyFixture;
+const proxyRoot = mkdtempSync(join(tmpdir(), "aipass-proxy-installer-"));
 try {
   // NSIS consumes the final directory parameter as unquoted command-line text,
   // including spaces. No command shell participates in this invocation.
@@ -57,13 +60,43 @@ try {
   }
   const uninstaller = readdirSync(installed).find(name => /^uninstall.*\.exe$/i.test(name));
   assert.ok(uninstaller, "Missing installed uninstaller");
-  execFileSync(join(installed, uninstaller), ["/S", `_?=${installed}`], { timeout: 120_000, windowsVerbatimArguments: true });
+  proxyFixture = await createProxyFixture(installed, proxyRoot);
+  proxyFixture.run(["lock"]);
+  const snapshots = [proxyFixture.models, proxyFixture.settings].map(path => readFileSync(path));
+  const assertProxyPreserved = () => [proxyFixture.models, proxyFixture.settings].forEach((path, i) => assert.deepEqual(readFileSync(path), snapshots[i], "Upgrade detached the proxy"));
+  const installer = join(bundle, installers[0]);
+  const installOptions = { env: proxyFixture.env, timeout: 120_000, windowsVerbatimArguments: true };
+  const versionKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AIPass";
+  // Force genuine manual upgrade/downgrade decisions with the same disposable
+  // package, exercising the old-uninstaller handoff rather than just /UPDATE.
+  for (const version of ["0.0.0", "999.0.0"]) {
+    writeFileSync(join(reports, "installer-stage.json"), JSON.stringify({ stage: "manual-replacement", previousVersion: version }));
+    execFileSync("reg.exe", ["add", versionKey, "/v", "DisplayVersion", "/t", "REG_SZ", "/d", version, "/f"], { stdio: "pipe" });
+    execFileSync(installer, ["/P", "/NS", `/D=${installed}`], installOptions);
+    assertProxyPreserved();
+  }
+  for (const args of [["/S"], ["/S", "/UPDATE"]]) {
+    execFileSync(installer, [...args, `/D=${installed}`], installOptions);
+    assertProxyPreserved();
+  }
+  // An interrupted replacement has no persistent marker that could cause the
+  // next real uninstall to skip recovery. Reinstall and then uninstall normally.
+  execFileSync(join(installed, uninstaller), ["/S", "/AIPASS_REPLACE", `_?=${installed}`], installOptions);
+  assertProxyPreserved();
+  execFileSync(installer, ["/S", `/D=${installed}`], installOptions);
+  execFileSync(join(installed, uninstaller), ["/S", `_?=${installed}`], installOptions);
+  proxyFixture.assertRestored();
   assert.ok(!existsSync(join(installed, "aipass-desktop.exe")), "Uninstall left the main executable");
   success = true;
-  console.log("Windows NSIS install/uninstall, CLI CRUD/backup/sync/Native Messaging, main/tray 960x640 frontend and Agent IPC passed");
+  console.log("Windows NSIS install/uninstall, manual upgrade/downgrade, reinstall, updater mode, interrupted replacement and locked-vault proxy restoration, CLI CRUD/backup/sync/Native Messaging, main/tray 960x640 frontend and Agent IPC passed");
 } finally {
+  if (proxyFixture) await proxyFixture.stop();
   if (child && !finished) child.kill();
   if (existsSync(join(root, "logs"))) cpSync(join(root, "logs"), join(reports, "logs"), { recursive: true });
-  if (success) rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  if (existsSync(join(proxyRoot, "logs"))) cpSync(join(proxyRoot, "logs"), join(reports, "proxy-logs"), { recursive: true });
+  if (success) {
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    rmSync(proxyRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
   else writeFileSync(join(reports, "fixture.txt"), root);
 }

@@ -15,6 +15,7 @@ pub mod native_auth;
 mod native_plan;
 mod plan;
 mod preview_redaction;
+pub mod proxy_recovery;
 pub mod transaction;
 mod utils;
 pub use native_plan::prepare_native_codex_plan;
@@ -22,7 +23,7 @@ pub use preview_redaction::redact_config;
 
 pub use backup::{
     apply_plan, apply_plan_encrypted, apply_plan_with_plain_backup, find_backup_by_operation,
-    rollback, rollback_encrypted, rollback_plain,
+    prepare_rollback_encrypted, rollback, rollback_encrypted, rollback_plain, PreparedRollback,
 };
 pub use detect::{detect_tool_in, detect_tools, detect_tools_in, ToolDetection};
 pub use models::{

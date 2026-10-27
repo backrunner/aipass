@@ -62,14 +62,31 @@ async fn two_processes_rotate_one_source_once_and_both_use_the_new_token() {
     let count = Arc::new(AtomicUsize::new(0));
     let calls = count.clone();
     let server = tokio::spawn(async move {
-        loop {
+        'accept: loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut data = Vec::new();
             loop {
                 let mut chunk = [0; 1024];
                 let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 && data.is_empty() {
+                    continue 'accept;
+                }
                 assert!(n > 0 && data.len() < 8192);
                 data.extend_from_slice(&chunk[..n]);
+                if data.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&data).to_ascii_lowercase();
+                    if (headers.starts_with("get / http/1.")
+                        || headers.starts_with("head / http/1."))
+                        && !headers.contains("\r\nauthorization:")
+                    {
+                        socket.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                        continue 'accept;
+                    }
+                    assert!(
+                        headers.starts_with("post / http/1."),
+                        "unexpected grant request"
+                    );
+                }
                 if data.ends_with(b"single-use-grant") {
                     break;
                 }
@@ -83,6 +100,25 @@ async fn two_processes_rotate_one_source_once_and_both_use_the_new_token() {
             socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
         }
     });
+    // Local listener discovery must not spend the fixture's single-use grant.
+    drop(
+        tokio::net::TcpStream::connect(url.trim_start_matches("http://"))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NO_CONTENT
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 0);
     let mut children = Vec::new();
     for id in ["a", "b"] {
         children.push(

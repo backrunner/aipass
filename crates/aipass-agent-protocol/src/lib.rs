@@ -56,8 +56,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 17 adds native credential switching and target-bound reauthentication.
 // Version 18 requires credential-bound subscription response feedback.
 // Version 19 requires the expanded installed-Agent catalog and native-OS config helpers.
-// Version 20 requires device-local managed grants and target-bound reconnect.
-pub const AGENT_PROTOCOL_VERSION: u32 = 20;
+// Version 20 binds local grants/reconnect; version 21 requires owned proxy-uninstall receipts.
+pub const AGENT_PROTOCOL_VERSION: u32 = 21;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]

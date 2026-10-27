@@ -63,3 +63,4 @@ pub use windows_service::{
     stop_service as stop_windows_service, uninstall_service as uninstall_windows_service,
     WindowsServiceStatus,
 };
+pub mod proxy_recovery;
