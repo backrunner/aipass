@@ -157,6 +157,9 @@ fn status(stream: &mut Stream) -> Result<()> {
 }
 
 fn display_path(path: &Path) -> Result<String> {
+    // Installers can launch via 8.3 paths while Run entries contain the long
+    // canonical path. Resolve even a missing sibling through its parent.
+    let path = crate::canonical_vault_dir(path)?;
     let path = path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("login path is not valid Unicode"))?;
@@ -286,6 +289,38 @@ mod tests {
         AgentErrorCode, AgentRequest, AgentResponse, AuthenticatedAgentRequest,
         AGENT_PROTOCOL_VERSION,
     };
+
+    #[test]
+    fn executable_ownership_uses_canonical_paths_and_missing_siblings() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("aipass-agent.exe");
+        fs::write(&binary, "fixture").unwrap();
+        let canonical = fs::canonicalize(&binary).unwrap();
+        let alias = root.path().join(".").join("aipass-agent.exe");
+        assert_eq!(
+            display_path(&alias).unwrap(),
+            display_path(&canonical).unwrap()
+        );
+        let value = super::super::windows_command::command(
+            &display_path(&canonical).unwrap(),
+            "C:\\fixture-vault",
+        )
+        .unwrap();
+        assert_eq!(
+            super::super::windows_command::vault_for_command(
+                &display_path(&alias).unwrap(),
+                &value
+            )
+            .as_deref(),
+            Some("C:\\fixture-vault")
+        );
+        let missing = root.path().join(".").join("aipass-desktop.exe");
+        let expected = canonical.with_file_name("aipass-desktop.exe");
+        assert_eq!(
+            display_path(&missing).unwrap(),
+            display_path(&expected).unwrap()
+        );
+    }
 
     #[test]
     fn uninstall_stops_an_older_authenticated_agent_instead_of_ignoring_the_mismatch() {

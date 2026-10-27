@@ -1296,6 +1296,6 @@ Newest entries last within each section.
 ### NSIS passive maintenance has no radio-button handle
 - **Symptom**: the native Windows manual replacement fixture timed out while overwriting an installation with a running Agent.
 - **Root cause**: the pinned Tauri template called its maintenance handler in passive mode without creating the radio buttons; reading their state selected the skip-uninstall path, leaving the Agent executable in use.
-- **Fix**: select the default maintenance choice explicitly in passive mode, retaining the interactive radio selection and explicit replacement handoff.
+- **Fix**: select the default maintenance choice explicitly in passive mode, retaining the interactive radio selection and explicit replacement handoff. Canonicalize executable paths before matching Run entries: an installer can invoke an 8.3 alias while login registration stores its long path. Resolve missing desktop siblings through their existing parent for Agent-only fixtures.
 - **Guardrail**: preserve the upstream template hash after removing both reviewed patches. Exercise actual passive upgrade and downgrade with a registered Agent, and retain the fixture's proxy logs and installer stage on failure.
 - **Watch points**: `windows/installer.nsi`, `proxy-uninstall.test.mjs` and `verify-windows-runtime.mjs`.
