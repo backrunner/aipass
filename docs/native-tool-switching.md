@@ -103,7 +103,11 @@ macOS and Windows proxy writes retain encrypted, device-local reversal receipts
 under `~/.aipass/proxy-recovery`. Each receipt belongs to the exact Agent
 executable and records the external resources before/after each write. Repeated
 route changes unwind to the first original, rather than to an earlier proxy.
-Intentional direct configuration retires that tool's proxy history.
+Intentional direct configuration retires the fields it replaces. Shared files
+can retain dormant proxy providers: exact recorded route IDs, tokens and
+endpoints keep those entries recoverable without reverting the selected direct
+provider or its model. The matching ordinary rollback reactivates its encrypted
+recovery history before it restores a proxy configuration.
 Protocol 21 retires older resident Agents before they can accept configuration
 writes without these receipts. Only completed writes with matching intermediate
 images can compact their history; interrupted writes retain the full chain.
@@ -131,17 +135,25 @@ keys stop uninstall. They do not authorize overwriting the user's current data.
 Native originals use a validated current archive when AIPass has moved the
 original account for renewal; receipts never undo that archive or its vault
 references. Internal native ownership bindings are removed after restoration.
+Verification of retained vaults survives successful service cleanup, so retrying
+an uninstall after a cancelled app removal remains safe and idempotent.
+Owned background services stop before native archives are captured. A remaining
+manually launched Agent blocks restoration until it is stopped, avoiding a race
+with credential renewal. A failed recovery can require reopening AIPass to start
+its background services again.
 
 Unlock/create audits identify older proxy integrations without receipts. Their
 original settings cannot be invented: uninstall and proxy reapply stop until
-the affected Agent is explicitly switched to direct configuration. A registered
+the affected Agent is explicitly switched to direct configuration and any
+remaining old proxy entries are removed. A registered
 vault without an audit must be opened and unlocked first. Deleted historical
 routes/credentials cannot be reconstructed from an unavailable original backup.
 
 `node scripts/verify-proxy-uninstall.mjs target/debug` uses copied executables,
 a temporary HOME/vault, synthetic Pi configuration and an isolated macOS
-keychain. It covers real CLI writes, repeated routes, locked recovery, conflict
-preflight and retries. `verify-windows-runtime.mjs` additionally exercises real
+keychain. It covers real CLI writes, repeated routes, direct/rollback, dormant
+proxy cleanup, shared-model preservation, locked recovery, conflict preflight
+and retries with a retained default vault. `verify-windows-runtime.mjs` additionally exercises real
 NSIS manual upgrades/downgrades, reinstall, updater mode and an interrupted
 replacement on disposable GitHub-hosted Windows runners. These are distinct
 from macOS verification and production-signed Windows acceptance.

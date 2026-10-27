@@ -29,7 +29,7 @@ impl Fixture {
     fn record(&self, recovery: &mut Recovery, path: &Path, content: &[u8]) -> Change {
         let change = Change::new(Resource::File(path.to_owned()), Some(content.to_vec())).unwrap();
         recovery
-            .record(
+            .record_proxy_native(
                 &self.owner,
                 &self.vault,
                 ToolId::Codex,
@@ -38,6 +38,8 @@ impl Fixture {
                     before: change.before.clone(),
                     after: change.after.clone(),
                 }],
+                Vec::new(),
+                Markers::fixture(),
             )
             .unwrap();
         change
@@ -340,7 +342,11 @@ fn installation_and_vault_ownership_survive_restart_and_service_cleanup_retry() 
     r.restore(&f.owner).unwrap();
     assert_eq!(r.vaults(&f.owner), vec![f.vault.clone()]);
     r.finish(&f.owner).unwrap();
-    assert!(r.vaults(&f.owner).is_empty());
+    drop(r);
+    let mut r = f.open();
+    assert_eq!(r.vaults(&f.owner), vec![f.vault.clone()]);
+    assert_eq!(r.restore(&f.owner).unwrap(), 0);
+    r.finish(&f.owner).unwrap();
 }
 
 #[test]
@@ -518,4 +524,216 @@ fn symbolic_link_targets_are_never_followed() {
     std::os::unix::fs::symlink(&other, &file).unwrap();
     assert!(r.restore(&f.owner).is_err());
     assert_eq!(fs::read(other).unwrap(), b"user-owned");
+}
+
+#[test]
+fn direct_configuration_keeps_dormant_proxy_fields_owned_and_preserves_its_new_fields() {
+    let f = Fixture::new();
+    let file = f.file("models.json");
+    fs::write(
+        &file,
+        br#"{"providers":{"personal":{"url":"original"}},"default":"personal"}"#,
+    )
+    .unwrap();
+    let mut r = f.open();
+    f.apply(&mut r, &file, br#"{"providers":{"personal":{"url":"original"},"proxy":{"url":"localhost"}},"default":"proxy"}"#);
+    fs::write(&file, br#"{"providers":{"personal":{"url":"original"},"proxy":{"url":"localhost"},"direct":{"url":"upstream"}},"default":"direct"}"#).unwrap();
+    r.retire_for_operation(
+        &f.owner,
+        &ToolId::Codex,
+        &[Resource::File(file.clone())],
+        Uuid::new_v4(),
+        &[],
+    )
+    .unwrap();
+    let mut value = read_json(&file);
+    value["theme"] = json!("new-user-edit");
+    fs::write(&file, value.to_string()).unwrap();
+    r.restore(&f.owner).unwrap();
+    assert_eq!(
+        read_json(&file),
+        json!({"providers":{"personal":{"url":"original"},"direct":{"url":"upstream"}},"default":"direct","theme":"new-user-edit"})
+    );
+}
+
+#[test]
+fn direct_selection_keeps_a_model_shared_with_the_previous_proxy() {
+    let f = Fixture::new();
+    let file = f.file("settings.json");
+    fs::write(
+        &file,
+        br#"{"defaultProvider":"original","defaultModel":"old-model"}"#,
+    )
+    .unwrap();
+    let mut r = f.open();
+    f.apply(
+        &mut r,
+        &file,
+        br#"{"defaultProvider":"proxy","defaultModel":"shared-model"}"#,
+    );
+    fs::write(
+        &file,
+        br#"{"defaultProvider":"direct","defaultModel":"shared-model"}"#,
+    )
+    .unwrap();
+    r.retire_for_operation(
+        &f.owner,
+        &ToolId::Codex,
+        &[Resource::File(file.clone())],
+        Uuid::new_v4(),
+        &[],
+    )
+    .unwrap();
+    r.restore(&f.owner).unwrap();
+    assert_eq!(
+        read_json(&file),
+        json!({"defaultProvider":"direct","defaultModel":"shared-model"})
+    );
+}
+
+#[test]
+fn legacy_direct_switch_cannot_hide_proxy_entries_preserved_by_its_writer() {
+    let f = Fixture::new();
+    let file = f.file("models.json");
+    let resource = Resource::File(file.clone());
+    let mut r = f.open();
+    r.audit_with_markers(
+        &f.owner,
+        &f.vault,
+        vec![(ToolId::Pi, vec![resource.clone()])],
+        Markers::fixture(),
+    )
+    .unwrap();
+    fs::write(&file, br#"{"providers":{"old":{"token":"proxy"},"direct":{"token":"new-direct"}},"selected":"direct"}"#).unwrap();
+    assert!(r
+        .retire_for_operation(
+            &f.owner,
+            &ToolId::Pi,
+            std::slice::from_ref(&resource),
+            Uuid::new_v4(),
+            &[]
+        )
+        .is_err());
+    assert!(r.restore(&f.owner).is_err());
+    assert!(read_json(&file)["providers"]["old"].is_object());
+    fs::write(
+        &file,
+        br#"{"providers":{"direct":{"token":"new-direct"}},"selected":"direct"}"#,
+    )
+    .unwrap();
+    r.retire_for_operation(&f.owner, &ToolId::Pi, &[resource], Uuid::new_v4(), &[])
+        .unwrap();
+    r.restore(&f.owner).unwrap();
+    assert_eq!(read_json(&file)["selected"], "direct");
+}
+
+#[test]
+fn rollback_reactivates_retired_history_before_writing_and_survives_restart() {
+    let f = Fixture::new();
+    let file = f.file("config.json");
+    fs::write(&file, br#"{"url":"original"}"#).unwrap();
+    let id = Uuid::new_v4();
+    {
+        let mut r = f.open();
+        f.apply(&mut r, &file, br#"{"url":"proxy"}"#);
+        fs::write(&file, br#"{"url":"direct"}"#).unwrap();
+        r.retire_for_operation(
+            &f.owner,
+            &ToolId::Codex,
+            &[Resource::File(file.clone())],
+            id,
+            &[],
+        )
+        .unwrap();
+    }
+    {
+        let mut r = f.open();
+        assert_eq!(r.receipt.retired.len(), 1);
+        r.reactivate(&f.owner, id).unwrap();
+    }
+    let mut r = f.open();
+    // A crash before rollback leaves the newer direct config untouched.
+    assert!(r.restore(&f.owner).is_err());
+    assert_eq!(read_json(&file), json!({"url":"direct"}));
+    fs::write(&file, br#"{"url":"proxy"}"#).unwrap();
+    r.restore(&f.owner).unwrap();
+    assert_eq!(read_json(&file), json!({"url":"original"}));
+}
+
+#[test]
+fn retired_history_is_scoped_to_written_profiles_and_pruned_on_replacement() {
+    let f = Fixture::new();
+    let a = f.file("a.json");
+    let b = f.file("b.json");
+    let mut r = f.open();
+    f.apply(&mut r, &a, br#"{"url":"proxy-a"}"#);
+    f.apply(&mut r, &b, br#"{"url":"proxy-b"}"#);
+    fs::write(&a, br#"{"url":"direct-a"}"#).unwrap();
+    let id = Uuid::new_v4();
+    r.retire_for_operation(
+        &f.owner,
+        &ToolId::Codex,
+        &[Resource::File(a.clone())],
+        id,
+        &[],
+    )
+    .unwrap();
+    let another = f.file("another-app-agent");
+    r.record(
+        &another,
+        &f.vault,
+        ToolId::Codex,
+        vec![Change::unchanged(Resource::File(a.clone())).unwrap()],
+    )
+    .unwrap();
+    assert!(r.reactivate(&f.owner, id).is_err());
+    assert_eq!(read_json(&a), json!({"url":"direct-a"}));
+    // Replacing a direct write also replaces its ordinary rollback backup.
+    r.retire_for_operation(
+        &f.owner,
+        &ToolId::Codex,
+        &[Resource::File(a.clone())],
+        Uuid::new_v4(),
+        &[],
+    )
+    .unwrap();
+    assert!(r.receipt.retired.is_empty());
+    r.restore(&f.owner).unwrap();
+    assert!(!b.exists());
+    assert_eq!(read_json(&a), json!({"url":"direct-a"}));
+}
+
+#[test]
+fn direct_native_credentials_are_retired_as_a_whole() {
+    let f = Fixture::new();
+    let file = f.file("auth.json");
+    fs::write(&file, br#"{"tokens":"original-native-token"}"#).unwrap();
+    let mut r = f.open();
+    f.apply(&mut r, &file, br#"{"api_key":"proxy"}"#);
+    fs::write(&file, br#"{"api_key":"direct"}"#).unwrap();
+    let resource = Resource::File(file.clone());
+    r.retire_for_operation(
+        &f.owner,
+        &ToolId::Codex,
+        std::slice::from_ref(&resource),
+        Uuid::new_v4(),
+        std::slice::from_ref(&resource),
+    )
+    .unwrap();
+    r.restore(&f.owner).unwrap();
+    assert_eq!(read_json(&file), json!({"api_key":"direct"}));
+}
+
+#[test]
+fn toml_table_header_comments_survive_removal_of_owned_values() {
+    let f = Fixture::new();
+    let file = f.file("config.toml");
+    fs::write(&file, "[provider]\nurl = \"original\"\n").unwrap();
+    let mut r = f.open();
+    f.apply(&mut r, &file, b"[provider]\nurl = \"proxy\"\n");
+    fs::write(&file, "[provider] # user comment\nurl = \"proxy\"\n").unwrap();
+    r.restore(&f.owner).unwrap();
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(text.contains("# user comment"));
+    assert!(text.contains("\"original\""));
 }

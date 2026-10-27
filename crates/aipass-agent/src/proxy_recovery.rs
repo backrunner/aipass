@@ -36,13 +36,16 @@ impl WriteGuard {
         vault: &Path,
         plan: &ConfigPlan,
         content: &str,
+        entry: &aipass_config_writers::ToolEntry,
     ) -> Result<()> {
         self.require_audit(vault)?;
-        self.recovery.record(
+        self.recovery.record_proxy_native(
             &self.owner,
             vault,
             plan.tool.clone(),
             Recovery::plan_changes(plan, content)?,
+            Vec::new(),
+            aipass_config_writers::proxy_recovery::Markers::from_entry(entry),
         )
     }
     pub(crate) fn record(
@@ -51,10 +54,11 @@ impl WriteGuard {
         tool: ToolId,
         changes: Vec<Change>,
         sources: Vec<aipass_config_writers::proxy_recovery::NativeSource>,
+        markers: aipass_config_writers::proxy_recovery::Markers,
     ) -> Result<()> {
         self.require_audit(vault)?;
         self.recovery
-            .record_native(&self.owner, vault, tool, changes, sources)
+            .record_proxy_native(&self.owner, vault, tool, changes, sources, markers)
     }
     fn require_audit(&self, vault: &Path) -> Result<()> {
         anyhow::ensure!(self.recovery.vaults(&self.owner).iter().any(|v| v == vault), "proxy restoration history is not verified; lock and unlock AIPass before configuring Agents");
@@ -83,7 +87,17 @@ impl WriteGuard {
             )
             .chain(extra.iter().cloned())
             .collect();
-        self.recovery.retire(&self.owner, &plan.tool, &resources)
+        self.recovery.retire_for_operation(
+            &self.owner,
+            &plan.tool,
+            &resources,
+            plan.operation_id,
+            extra,
+        )
+    }
+    pub(crate) fn reactivate(&mut self, vault: &Path, operation_id: uuid::Uuid) -> Result<()> {
+        self.require_audit(vault)?;
+        self.recovery.reactivate(&self.owner, operation_id)
     }
 }
 fn open(root: &Path) -> Result<Recovery> {
@@ -120,6 +134,14 @@ pub(crate) fn audit(
             .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy unavailable")))?
             .config(vault)?;
         let mut legacy = Vec::new();
+        let mut markers = aipass_config_writers::proxy_recovery::Markers::default();
+        for route in &config.routes {
+            markers.add_route(route.id, &route.token);
+        }
+        markers.add_endpoint(&format!(
+            "http://{}",
+            crate::server::advertised_bind_addr(&config.bind_addr)
+        ));
         for detection in aipass_config_writers::detect_tools_in(Some(&home), &[]) {
             let tool = crate::server::tool_config_tool_for(&detection.tool);
             let mut paths = crate::tool_credentials::config_paths(&home, &tool);
@@ -161,7 +183,7 @@ pub(crate) fn audit(
         }
         guard
             .recovery
-            .audit(&guard.owner, &state.vault_dir, legacy)
+            .audit_with_markers(&guard.owner, &state.vault_dir, legacy, markers)
             .map_err(ServiceError::internal)
     })
 }
@@ -188,16 +210,26 @@ pub fn prepare_uninstall(agent: &Path) -> Result<()> {
     let mut recovery = open(&root)?;
     let vaults = recovery.vaults(&owner);
     anyhow::ensure!(required_vaults.iter().all(|v| vaults.contains(v)), "a registered vault has no verified restoration history; open and unlock it before uninstalling");
-    let restored = recovery.restore(&owner)?;
-    // Keep the writer lock until services have stopped. A racing writer fails
-    // instead of reinstalling the proxy after successful restoration.
-    for vault in vaults {
+    // Quiesce this installation before capturing current native archives: an
+    // in-flight Agent renewal must not invalidate the credentials we restore.
+    // Keep the writer lock throughout shutdown and restoration.
+    for vault in &vaults {
         let _ = &vault;
         #[cfg(target_os = "macos")]
-        crate::autostart::uninstall_owned_macos_agent(agent, &vault)?;
+        crate::autostart::uninstall_owned_macos_agent(agent, vault)?;
     }
+    #[cfg(target_os = "macos")]
+    crate::autostart::ensure_macos_agent_stopped(agent)?;
     #[cfg(windows)]
     crate::autostart::uninstall_windows_tray_entries(&agent.with_file_name("aipass-desktop.exe"))?;
+    #[cfg(windows)]
+    for vault in &vaults {
+        match crate::ipc::connect(vault) {
+            Ok(_) => anyhow::bail!("an Agent is still running; stop it with 'aipass agent stop' (using its --vault path) and retry uninstall"),
+            Err(error) => anyhow::ensure!(error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound), "could not verify Agent shutdown; uninstall stopped"),
+        }
+    }
+    let restored = recovery.restore(&owner)?;
     recovery.finish(&owner)?;
     crate::logging::write_component_log(
         crate::logging::AGENT_LOG,

@@ -61,6 +61,10 @@ pub fn uninstall_autostart(vault_dir: &Path) -> Result<AgentAutostartStatus> {
 pub(crate) fn uninstall_owned_macos_agent(agent: &Path, vault: &Path) -> Result<()> {
     macos_uninstall::run(agent, vault)
 }
+#[cfg(target_os = "macos")]
+pub(crate) fn ensure_macos_agent_stopped(agent: &Path) -> Result<()> {
+    macos_uninstall::ensure_stopped(agent)
+}
 
 #[cfg(windows)]
 pub(crate) fn owned_windows_vaults(agent: &Path) -> Result<Vec<PathBuf>> {

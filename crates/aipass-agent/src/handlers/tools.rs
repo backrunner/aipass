@@ -147,7 +147,7 @@ pub(super) fn handle(
                 let mut response = tool_apply_response(request.clone(), entry, plan, applied);
                 if retirement_failed {
                     write_component_log(AGENT_LOG, "WARN", "event=proxy.uninstall.retirement_pending");
-                    response.message = Some("Configuration applied; uninstall recovery history could not be updated. Retry this configuration before uninstalling.".into());
+                    response.message = Some("Configuration applied; proxy restoration needs attention. Remove remaining proxy entries or retry this configuration before uninstalling.".into());
                 }
                 Ok(response)
             })
@@ -181,11 +181,13 @@ pub(super) fn handle(
             );
             let result = with_vault(state, false, |vault| {
                 let home = home_dir(vault)?;
-                let _recovery = crate::proxy_recovery::WriteGuard::begin(&home, false).map_err(ServiceError::internal)?;
+                let mut recovery = crate::proxy_recovery::WriteGuard::begin(&home, false).map_err(ServiceError::internal)?;
                 let backup = aipass_config_writers::find_backup_by_operation(&home, operation_id)
                     .map_err(ServiceError::internal)?;
+                let prepared = aipass_config_writers::prepare_rollback_encrypted(&backup, &vault.config_backup_key()).map_err(ServiceError::internal)?;
+                if let Some(recovery) = &mut recovery { recovery.reactivate(&state.vault_dir, operation_id).map_err(ServiceError::internal)?; }
                 let backup_path = "redacted";
-                rollback_encrypted(&backup, &vault.config_backup_key())
+                prepared.apply()
                     .map_err(|err| {
                         write_component_log(
                             AGENT_LOG,
@@ -292,7 +294,7 @@ pub(super) fn handle(
             let result = with_vault(state, false, |vault| {
                 let (entry, plan, content) = build_tool_config_proxy_plan(vault, state, &request_for_closure, false)?;
                 let mut recovery = crate::proxy_recovery::WriteGuard::begin(&home_dir(vault)?, true).map_err(ServiceError::internal)?;
-                if let Some(recovery) = &mut recovery { recovery.record_plan(&state.vault_dir, &plan, &content).map_err(ServiceError::internal)?; }
+                if let Some(recovery) = &mut recovery { recovery.record_plan(&state.vault_dir, &plan, &content, &entry).map_err(ServiceError::internal)?; }
                 let operation_id = plan.operation_id;
                 let target = "redacted";
                 let applied = apply_plan_encrypted(&plan, &content, &vault.config_backup_key())

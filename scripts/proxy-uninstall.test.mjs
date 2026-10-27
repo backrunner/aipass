@@ -9,7 +9,7 @@ import { isolatedEnvironment } from "./fixtures/proxy-recovery.mjs";
 
 test("manual installer replacement preserves the pinned Tauri lifecycle", () => {
   assert.deepEqual(JSON.parse(readFileSync("apps/desktop/src-tauri/tauri.windows.conf.json", "utf8")).bundle.targets, ["nsis"], "Do not ship an installer format without the explicit uninstall/upgrade contract");
-  const raw = readFileSync("apps/desktop/src-tauri/windows/installer.nsi", "utf8");
+  const raw = readFileSync("apps/desktop/src-tauri/windows/installer.nsi", "utf8").replace(/\r\n/g, "\n");
   const addition = '      ; A manual upgrade/downgrade may run the old uninstaller without /UPDATE.\n      ; Pass explicit replacement intent; same-version "uninstall" stays a real uninstall.\n      ${IfThen} $R0 != 0 ${|} StrCpy $R1 "$R1 /AIPASS_REPLACE" ${|}\n';
   assert.equal(raw.split(addition).length, 2);
   const upstream = raw.replace('; Adapted from Tauri CLI 2.11.2 installer.nsi (MIT), see LICENSE-TAURI.\n', "").replace(addition, "");

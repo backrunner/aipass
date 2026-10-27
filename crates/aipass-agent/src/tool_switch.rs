@@ -485,6 +485,7 @@ fn apply_inner(
             identity: entry.account_identity,
             selected,
             route_id: None,
+            markers: aipass_config_writers::proxy_recovery::Markers::default(),
             plan,
             content,
         },

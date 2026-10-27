@@ -5,6 +5,7 @@ pub(super) struct Prepared {
     pub(super) identity: Option<String>,
     pub(super) selected: Option<String>,
     pub(super) route_id: Option<Uuid>,
+    pub(super) markers: aipass_config_writers::proxy_recovery::Markers,
     pub(super) plan: ConfigPlan,
     pub(super) content: String,
 }
@@ -19,6 +20,7 @@ pub(super) fn apply_prepared(
         identity,
         selected,
         route_id,
+        markers,
         plan,
         content,
     } = prepared;
@@ -187,7 +189,13 @@ pub(super) fn apply_prepared(
                 }
             }
             recovery
-                .record(&state.vault_dir, plan.tool.clone(), writes, sources)
+                .record(
+                    &state.vault_dir,
+                    plan.tool.clone(),
+                    writes,
+                    sources,
+                    markers,
+                )
                 .map_err(safe_error)?;
         }
     }
@@ -269,6 +277,6 @@ pub(super) fn apply_prepared(
         backup_path: backup.display().to_string(),
         summary: plan.summary,
         outcome: ToolConfigOutcome::Applied,
-        message: Some(if retirement_failed { "Configuration applied; uninstall recovery history could not be updated. Retry this configuration before uninstalling." } else { "Restart the CLI to use the selected credentials" }.into()),
+        message: Some(if retirement_failed { "Configuration applied; proxy restoration needs attention. Remove remaining proxy entries or retry this configuration before uninstalling." } else { "Restart the CLI to use the selected credentials" }.into()),
     })
 }

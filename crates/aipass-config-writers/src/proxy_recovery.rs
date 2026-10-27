@@ -1,5 +1,8 @@
 //! Device-local, encrypted uninstall receipts. No vault key is stored here.
 //! The caller holds one OS file lock across preparation and the actual write.
+mod history;
+mod markers;
+pub use markers::Markers;
 #[cfg(target_os = "macos")]
 pub mod macos_key;
 mod merge;
@@ -30,8 +33,10 @@ struct Step {
     sources: Vec<NativeSource>,
     #[serde(default)]
     legacy: bool,
+    #[serde(default)]
+    markers: Markers,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NativeSource {
     pub active: crate::native_auth::NativeStore,
     pub archived: crate::native_auth::NativeStore,
@@ -44,6 +49,8 @@ struct Receipt {
     vaults: Vec<(PathBuf, PathBuf)>,
     #[serde(default)]
     detached: Vec<PathBuf>,
+    #[serde(default)]
+    retired: Vec<history::Retired>,
 }
 
 pub struct Recovery {
@@ -133,6 +140,17 @@ impl Recovery {
         changes: Vec<Change>,
         sources: Vec<NativeSource>,
     ) -> Result<()> {
+        self.record_proxy_native(owner, vault, tool, changes, sources, Markers::default())
+    }
+    pub fn record_proxy_native(
+        &mut self,
+        owner: &Path,
+        vault: &Path,
+        tool: ToolId,
+        changes: Vec<Change>,
+        sources: Vec<NativeSource>,
+        markers: Markers,
+    ) -> Result<()> {
         self.ensure_attached(owner)?;
         ensure!(
             !self.pending_path().exists(),
@@ -149,6 +167,7 @@ impl Recovery {
                 bail!("another AIPass installation owns this proxy configuration");
             }
         }
+        self.discard_retired(owner, &changes);
         self.receipt.steps.push(Step {
             owner: owner.to_owned(),
             vault: vault.to_owned(),
@@ -156,6 +175,7 @@ impl Recovery {
             changes,
             sources,
             legacy: false,
+            markers,
         });
         let registration = (owner.to_owned(), vault.to_owned());
         if !self.receipt.vaults.contains(&registration) {
@@ -205,21 +225,8 @@ impl Recovery {
             change.before = old.before.clone();
         }
         last.sources = std::mem::take(&mut previous.sources);
+        last.markers.extend(&previous.markers);
         self.receipt.steps.push(last);
-        self.save()
-    }
-    /// Called only after a successful intentional switch away from the proxy.
-    pub fn retire(&mut self, owner: &Path, tool: &ToolId, resources: &[Resource]) -> Result<()> {
-        ensure!(
-            !self.pending_path().exists(),
-            "unfinished uninstall recovery"
-        );
-        for step in &mut self.receipt.steps {
-            if step.owner == owner && &step.tool == tool {
-                step.changes.retain(|c| !resources.contains(&c.resource));
-            }
-        }
-        self.receipt.steps.retain(|s| !s.changes.is_empty());
         self.save()
     }
     pub fn plan_changes(plan: &ConfigPlan, content: &str) -> Result<Vec<Change>> {
@@ -258,6 +265,15 @@ impl Recovery {
         vault: &Path,
         legacy: Vec<(ToolId, Vec<Resource>)>,
     ) -> Result<()> {
+        self.audit_with_markers(owner, vault, legacy, Markers::default())
+    }
+    pub fn audit_with_markers(
+        &mut self,
+        owner: &Path,
+        vault: &Path,
+        legacy: Vec<(ToolId, Vec<Resource>)>,
+        markers: Markers,
+    ) -> Result<()> {
         self.ensure_writable()?;
         self.receipt.detached.retain(|o| o != owner);
         for (tool, resources) in legacy {
@@ -267,6 +283,7 @@ impl Recovery {
                 .iter_mut()
                 .find(|s| s.owner == owner && s.vault == vault && s.tool == tool && s.legacy)
             {
+                step.markers.extend(&markers);
                 for resource in resources {
                     if !step.changes.iter().any(|c| c.resource == resource) {
                         step.changes.push(Change {
@@ -292,6 +309,7 @@ impl Recovery {
                     .collect(),
                 sources: Vec::new(),
                 legacy: true,
+                markers: markers.clone(),
             });
         }
         let registration = (owner.to_owned(), vault.to_owned());
@@ -301,7 +319,12 @@ impl Recovery {
         self.save()
     }
     pub fn finish(&mut self, owner: &Path) -> Result<()> {
-        self.receipt.vaults.retain(|(o, _)| o != owner);
+        // Retain verification after service cleanup. The default vault remains
+        // on disk, and a cancelled removal or second uninstall needs this proof.
+        ensure!(
+            self.receipt.detached.iter().any(|o| o == owner),
+            "uninstall recovery has not completed"
+        );
         self.save()
     }
     /// Preflight the whole installation in memory before writing any file.
@@ -421,7 +444,11 @@ impl Recovery {
                 "configuration changed during uninstall; recovery retained"
             );
             if current.as_deref().map(Vec::as_slice) != c.after.as_deref() {
-                changes.push(Change::new(c.resource.clone(), c.after.clone())?);
+                changes.push(Change {
+                    resource: c.resource.clone(),
+                    before: current.map(|v| v.to_vec()),
+                    after: c.after.clone(),
+                });
             }
         }
         let count = changes.len();

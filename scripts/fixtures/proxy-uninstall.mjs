@@ -1,28 +1,31 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join, delimiter } from "node:path";
+import { cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join, dirname, delimiter } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isolatedEnvironment, prepareFixtureRecoveryKey } from "./proxy-recovery.mjs";
 
 // Only synthetic Pi configuration is used. No vendor process or network call.
-export async function createProxyFixture(binaries, root) {
+export async function createProxyFixture(binaries, root, { defaultVault = false } = {}) {
   const suffix = process.platform === "win32" ? ".exe" : "";
   const env = isolatedEnvironment(root);
   prepareFixtureRecoveryKey(root, env);
   const home = env.HOME;
-  const vault = join(root, "data/vault");
+  assert.ok(!defaultVault || process.platform === "darwin");
+  const vault = defaultVault ? join(home, "Library/Application Support/dev.aipass.desktop/vault") : join(root, "data/vault");
   const runtime = join(root, "run");
   const bin = join(home, ".local/bin");
-  for (const path of [runtime, bin, join(root, "data/agent"), join(home, ".pi/agent")]) mkdirSync(path, { recursive: true });
+  const agentData = join(dirname(vault), "agent");
+  for (const path of [runtime, bin, agentData, join(home, ".pi/agent")]) mkdirSync(path, { recursive: true });
   // Discovery checks only installation. This fixture is never executed.
-  writeFileSync(join(bin, "pi" + (suffix || "")), "fixture executable", { mode: 0o700 });
+  if (process.platform === "win32") cpSync(process.execPath, join(bin, "pi.exe"));
+  else writeFileSync(join(bin, "pi"), "fixture executable", { mode: 0o700 });
   Object.assign(env, {
     PATH: bin + delimiter + (process.platform === "win32" ? join(process.env.SystemRoot, "System32") : "/usr/bin:/bin:/usr/sbin:/sbin"),
     AIPASS_VAULT_DIR: vault, AIPASS_AGENT_RUNTIME_DIR: runtime,
     AIPASS_LOG_DIR: join(root, "logs"), AIPASS_AGENT_SUPPRESS_TRAY: "1",
   });
-  writeFileSync(join(root, "data/agent/sync-settings.json"), '{"mode":"local","cloudkitMigrationComplete":true}');
+  writeFileSync(join(agentData, "sync-settings.json"), '{"mode":"local","cloudkitMigrationComplete":true}');
   const agentBinary = join(binaries, "aipass-agent" + suffix);
   const cli = join(binaries, "aipass" + suffix);
   const child = spawn(agentBinary, ["--vault", vault], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -67,6 +70,7 @@ export async function createProxyFixture(binaries, root) {
       assert.deepEqual(JSON.parse(readFileSync(models)), originalModels);
       assert.deepEqual(JSON.parse(readFileSync(settings)), expected);
     };
-    return { env, run, agentBinary, models, settings, stop, assertRestored, output: () => output };
+    const proxyProviderIds = Object.keys(JSON.parse(readFileSync(models)).providers).filter(key => !(key in originalModels.providers));
+    return { env, run, id, secret, proxyProviderIds, agentBinary, models, settings, stop, assertRestored, output: () => output };
   } catch (error) { await stop(); error.message += `\nFixture Agent output: ${output.slice(-8192)}`; throw error; }
 }

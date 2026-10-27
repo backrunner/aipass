@@ -4,6 +4,25 @@ use aipass_agent_protocol::{AgentRequest, AGENT_PROTOCOL_VERSION};
 use anyhow::{ensure, Context};
 use std::time::{Duration, Instant};
 
+pub(super) fn ensure_stopped(agent: &Path) -> Result<()> {
+    // Also cover manually launched/custom-vault Agents without launchd files.
+    // This process is the recovery executable, so only its own PID may remain.
+    let output = Command::new("/usr/sbin/lsof")
+        .arg("-t")
+        .arg(agent)
+        .output()?;
+    let pids = String::from_utf8(output.stdout)?
+        .lines()
+        .map(str::parse::<u32>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    ensure!(
+        output.status.success() && pids.contains(&std::process::id()),
+        "could not verify the uninstalling Agent executable; uninstall stopped"
+    );
+    ensure!(pids.iter().all(|pid| *pid == std::process::id()), "an Agent from this application is still running; stop it with 'aipass agent stop' (using its --vault path) and retry uninstall");
+    Ok(())
+}
+
 pub(super) fn run(agent: &Path, vault: &Path) -> Result<()> {
     let status = query_autostart(vault)?;
     let supervisor = status

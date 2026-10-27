@@ -629,7 +629,7 @@ pub(crate) fn combined_tool_config_preview(files: &[ToolConfigPreviewFile]) -> S
         .join("\n\n")
 }
 
-pub(super) fn advertised_bind_addr(bind_addr: &str) -> String {
+pub(crate) fn advertised_bind_addr(bind_addr: &str) -> String {
     bind_addr
         .parse::<std::net::SocketAddr>()
         .ok()

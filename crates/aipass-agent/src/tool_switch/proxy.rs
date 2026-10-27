@@ -61,6 +61,7 @@ pub(super) fn apply_proxy_locked(
             vault,
             &direct,
             Prepared {
+                markers: aipass_config_writers::proxy_recovery::Markers::from_entry(&entry),
                 title: entry.title,
                 identity: None,
                 selected: None,
