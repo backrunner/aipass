@@ -125,7 +125,21 @@ mod tests {
         let vault = root.path().join("vault '$HOME% name");
         let supervisor = root.path().join("startup.sh");
         write_supervisor(&supervisor, &script(&binary, &vault)).unwrap();
-        assert!(Command::new(&supervisor).status().unwrap().success());
+        // Parallel tests can briefly inherit a just-written fixture descriptor
+        // between fork and exec. Retry only the kernel's ETXTBSY rejection.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let status = loop {
+            match Command::new(&supervisor).status() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
+        assert!(status.success());
         assert_eq!(
             fs::read_to_string(output).unwrap(),
             format!("--vault\n{}\n", vault.display())
