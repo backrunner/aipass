@@ -134,6 +134,13 @@ Newest entries last within each section.
 
 ## Tool configuration writes (aipass-agent / config-writers)
 
+### An empty native login store must allow selecting managed credentials
+- **Symptom**: signed-out Claude Code showed unavailable storage/status and could not switch to a managed API credential.
+- **Root cause**: `NativeStore::identity` tried to resolve account metadata for empty/null OAuth placeholders; status also conflated absent credentials with unmanaged external credentials.
+- **Fix**: return no native identity only when access/refresh tokens are absent, preserve malformed/unreadable-store errors, and report `not_logged_in` when neither literal credentials nor external references exist. Keep references out of import and execute nothing during discovery.
+- **Guardrail**: test empty/null stores, refresh-only grants, malformed/denied stores, external references, and signed-out preview/apply/rollback with exact restored bytes. Keep live and captured-byte identity validation on the same path; validate snapshots without rereading live stores. Never turn a token-bearing identity failure into permission to discard credentials.
+- **Watch points**: `native_auth::identity`, `tool_credentials::{snapshot,preserve}`, `tool_switch::{status_snapshot,apply_prepared}`, Agent management labels and switch controls.
+
 ### Native switches must follow the latest vendor store
 - **Symptom**: switching through API or proxy writes can leave a subscription bound to replaced active credentials, or replay an older refresh token.
 - **Root cause**: the configuration writer previously backed up files without coordinating native-store ownership and local provider references.
@@ -711,6 +718,27 @@ Newest entries last within each section.
 - **Watch points**: `crates/aipass-agent/src/language.rs`, `crates/aipass-agent-protocol/src/lib.rs`, `apps/desktop/src/App.svelte`, `apps/desktop/src-tauri/src/tray.rs`, Swift tray DTO/view, native-host ping, and `packages/ui/src/locales/`.
 
 ## Desktop operation feedback
+
+### Status request failures do not establish a storage failure
+- **Symptom**: Claude Code displayed Storage unavailable when its status request actually failed with `Claude account identity unavailable`.
+- **Root cause**: the desktop scan caught every rejected `tool_config_status` call and fabricated `storage_unavailable`, including validation and transport errors.
+- **Fix**: use the existing generic `unavailable` state for rejected requests; preserve genuine typed storage results and keep switching disabled when status is unknown.
+- **Guardrail**: test rejected identity validation, transport timeout, and a successful response explicitly reporting unavailable storage. Never classify a generic rejected request as a Keychain/storage error.
+- **Watch points**: `services/agentManagement.ts`, Agent page mutation controls and status labels, and `AgentManagementPage.test.ts`.
+
+### Native import can link the active account without a managed switch
+- **Symptom**: Codex's imported native account appeared in the selector, but its usage was replaced by the connect-credentials hint.
+- **Root cause**: `AgentManagementPage.svelte` rendered account details only for `ready`; Rust can identify the imported active account by exact identity and native home while returning `unmanaged` with `mode=official` before any managed switch.
+- **Fix**: also show the Rust-linked active entry for that native status. Retain the current-account binding rather than inferring it from the dropdown selection.
+- **Guardrail**: test imported native accounts before any switch, selecting a different account, absent active entry IDs, and conflicts. Do not change the Rust status to `ready` merely for display: that also enters its native renewal path.
+- **Watch points**: `tool_switch::status_snapshot/status_checked`, Agent page detail gating and `AgentManagementPage.test.ts`.
+
+### Agent navigation must retain the last completed scan
+- **Symptom**: every return to Agent management replaced both panes with a full loading state.
+- **Root cause**: `AgentManagementPage.svelte` owned detections/statuses inside the component that navigation destroys.
+- **Fix**: keep a presentation-only snapshot in the unlocked workspace, initialize remounts from it, and scan in the background. Separate first-load UI from refresh activity; keep the completed snapshot on detection failure.
+- **Guardrail**: clear the snapshot with unlocked workspace state, reject responses after teardown, coalesce overlapping refreshes, and disable mutation controls while refreshing. Cover cached empty lists and lock during a pending scan in `AgentManagementCache.test.ts` and `App.operations.test.ts`.
+- **Watch points**: Agent page mount/focus/manual refresh, selected tool fallback, preview/apply refresh, and `App.svelte::clearSensitiveUnlockedState`.
 
 ### Shared errors leaked into the selected provider
 - **Symptom**: import, settings and other operation failures appeared as a permanent error banner on the provider detail page.

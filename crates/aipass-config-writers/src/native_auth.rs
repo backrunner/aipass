@@ -4,6 +4,8 @@ pub mod claude_identity;
 mod keychain_cache;
 #[cfg(target_os = "linux")]
 pub mod linux_keyring;
+#[cfg(test)]
+mod tests;
 #[cfg(any(target_os = "macos", test))]
 pub use keychain_cache::invalidate_reads;
 #[cfg(not(any(target_os = "macos", test)))]
@@ -324,11 +326,15 @@ impl NativeStore {
         profile: impl FnOnce() -> Result<PrivateJson>,
     ) -> Result<Option<String>> {
         let auth = parse(bytes)?;
+        anyhow::ensure!(auth.0.is_object(), "invalid native credential data");
         if self.tool == "codex" {
             if auth.0["OPENAI_API_KEY"]
                 .as_str()
                 .is_some_and(|s| !s.is_empty())
             {
+                return Ok(None);
+            }
+            if !has_native_credentials(&self.tool, &auth.0)? {
                 return Ok(None);
             }
             let tokens = &auth.0["tokens"];
@@ -343,7 +349,7 @@ impl NativeStore {
             }
             Ok(Some(format!("{user}:{workspace}")))
         } else {
-            if auth.0.get("claudeAiOauth").is_none() {
+            if !has_native_credentials(&self.tool, &auth.0)? {
                 return Ok(None);
             }
             let profile = profile()?;
@@ -360,6 +366,32 @@ impl NativeStore {
         r.extend(self.fallback.iter().cloned());
         r.extend(self.profile.iter().cloned());
         r
+    }
+}
+
+/// Empty/logout placeholders are distinct from grants whose identity needs verification.
+pub fn has_native_credentials(tool: &str, auth: &Value) -> Result<bool> {
+    anyhow::ensure!(auth.is_object(), "invalid native credential data");
+    let (tokens, access, refresh) = if tool == "codex" {
+        (&auth["tokens"], "access_token", "refresh_token")
+    } else {
+        (&auth["claudeAiOauth"], "accessToken", "refreshToken")
+    };
+    anyhow::ensure!(
+        tokens.is_null() || tokens.is_object(),
+        "invalid native credential data"
+    );
+    // Validate both fields even when one is present.
+    let access = has_token(tokens, access)?;
+    let refresh = has_token(tokens, refresh)?;
+    Ok(access || refresh)
+}
+
+fn has_token(value: &Value, key: &str) -> Result<bool> {
+    match &value[key] {
+        Value::Null => Ok(false),
+        Value::String(value) => Ok(!value.trim().is_empty()),
+        _ => bail!("invalid native credential data"),
     }
 }
 

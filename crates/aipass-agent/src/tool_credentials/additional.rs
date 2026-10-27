@@ -4,7 +4,7 @@ use super::*;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-pub(super) fn read(home: &Path, tool: &ToolConfigTool) -> Result<Vec<Credential>> {
+pub(super) fn read(home: &Path, tool: &ToolConfigTool) -> Result<Vec<DetectedCredential>> {
     if matches!(
         tool,
         ToolConfigTool::VscodeChat

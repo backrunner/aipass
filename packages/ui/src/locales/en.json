@@ -1152,6 +1152,7 @@
   "integration.environmentOverrides": "Environment variables may override this configuration: {keys}",
   "integration.state.ready": "Ready",
   "integration.state.unmanaged": "Not managed by AIPass",
+  "integration.state.not_logged_in": "Not signed in",
   "integration.state.conflict": "Changed externally",
   "integration.state.login_required": "Sign-in required",
   "integration.state.renewal_required": "Renewal check required",

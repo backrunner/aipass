@@ -27,6 +27,10 @@ struct Credential {
     auth: AuthScheme,
     model: Option<String>,
 }
+enum DetectedCredential {
+    Literal(Credential),
+    ExternalReference,
+}
 pub(crate) fn error(_: impl std::fmt::Display) -> ServiceError {
     ServiceError::new(AgentErrorCode::ValidationFailed,
         "Existing Agent credentials could not be imported safely; no tool configuration was changed")
@@ -244,8 +248,11 @@ pub(crate) fn snapshot(vault: &Vault, tool: ToolConfigTool) -> ServiceResult<Too
         }
         return Ok(status);
     }
-    let credentials = reader::read(&home, &tool).map_err(error)?;
-    if let Some(c) = credentials.first() {
+    let credentials = reader::detect(&home, &tool).map_err(error)?;
+    if credentials.is_empty() {
+        status.state = "not_logged_in".into();
+    }
+    if let Some(DetectedCredential::Literal(c)) = credentials.first() {
         if let Some((id, secret)) = matching(vault, c)? {
             let entry = vault.get_provider_summary(id).map_err(map_vault_error)?;
             status.entry_title = Some(entry.title);

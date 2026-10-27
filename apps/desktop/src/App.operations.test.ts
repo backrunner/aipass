@@ -564,3 +564,31 @@ test("a reveal completing after lock cannot reappear after unlocking", async () 
   expect(document.querySelector(".kv-value.revealed")).toBeNull();
   expect(document.body.textContent).not.toContain("synthetic-late-key");
 });
+
+test("Agent navigation reuses the session snapshot and lock clears it despite a late scan", async () => {
+  let locked = false;
+  let pending: Promise<unknown[]> | undefined;
+  let finish!: (value: unknown[]) => void;
+  await render({
+    vault_status: () => ({ exists: true, locked }),
+    tool_config_detect: () => pending ?? [{tool: "codex", binaryFound: true}],
+    tool_config_status: () => ({tool: "codex", state: "unmanaged", entryTitle: "Local account", overrides: []})
+  });
+  button("Agent").click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.agent-row')?.textContent).toContain("Local account"); });
+  document.querySelector<HTMLButtonElement>('button[aria-label^="All items,"]')!.click(); flushSync();
+  pending = new Promise(resolve => { finish = resolve; });
+  button("Agent").click(); flushSync();
+  expect(document.querySelector('.detail-header')?.textContent).toContain("Codex");
+  expect(document.body.textContent).not.toContain("Scanning installed Agents");
+  locked = true; listeners.get("vault-status-changed")!();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.agent-row')).toBeNull(); });
+  finish([{tool: "claude-code", binaryFound: true}]);
+  await pending;
+  pending = new Promise(() => {});
+  locked = false; listeners.get("vault-status-changed")!();
+  await vi.waitFor(() => { flushSync(); expect(button("Agent")).toBeTruthy(); });
+  button("Agent").click(); flushSync();
+  expect(document.querySelector('.agent-row')).toBeNull();
+  expect(document.body.textContent).toContain("Scanning installed Agents");
+});

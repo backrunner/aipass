@@ -52,11 +52,12 @@ test("credential edits while previewing invalidate the pending selection", async
   expect(invoke.mock.calls.some(([command]) => command === "agent_management_apply")).toBe(false);
 });
 
-test("the detail shows only the active account usage until a switch is applied", async () => {
+test.each(["ready", "unmanaged"])("the detail shows only the active account usage until a switch is applied (%s)", async (state) => {
   setLocale("en");
   const active = {...entry, quota: {remaining: "87", unit: "credits"}};
   const other = {...entry, id: "other", title: "Other account", quota: {remaining: "999", unit: "credits"}};
   const invoke = vi.fn(async (command: string) => {
+    if (command === "tool_config_status") return {tool: "codex", state, mode: "official", entryId: "api", secretId: "key", overrides: []};
     if (command === "server_usage_summary") return {providers: [
       {providerEntryId: "api", secretId: "key", requestCount: 3, inputTokens: 120, outputTokens: 40, cacheReadTokens: 8, cacheCreationTokens: 2},
       {providerEntryId: "other", secretId: "key", requestCount: 100, inputTokens: 50000, outputTokens: 50000, cacheReadTokens: 0, cacheCreationTokens: 0}
@@ -75,4 +76,79 @@ test("the detail shows only the active account usage until a switch is applied",
   expect(document.querySelector(".account-detail")?.textContent).not.toContain("999");
   expect(document.querySelector(".account-detail")?.textContent).not.toContain("50K");
   expect(invoke.mock.calls.some(([command]) => command === "agent_management_apply")).toBe(false);
+});
+
+test("an imported Codex native account shows subscription usage without a managed switch", async () => {
+  setLocale("en");
+  const account = {...entry, credentialKind: "oauth" as const, providerKind: "official" as const, providerId: "codex",
+    accountIdentity: "alice@example.test:workspace-a", subscription: {
+      source: "community:codex", observedAt: "2026-10-27T10:00:00Z", plan: "plus",
+      windows: [{id: "five-hour", label: "5 hours", windowMinutes: 300, usedPercent: 27}]
+    }};
+  const invoke = vi.fn(async (command: string) => {
+    if (command === "tool_config_status") return {tool: "codex", state: "unmanaged", mode: "official", entryId: "api", secretId: "key", accountIdentity: account.accountIdentity, overrides: []};
+    if (command === "server_usage_summary") return {providers: []};
+    return invokeFixture()(command);
+  });
+  app = mount(AgentManagementPage, {target: document.body, props: {entries: [account], invokeTauri: invoke as never, onRefreshEntries: async () => {}}});
+  await settled();
+  expect(document.querySelector('.subscription-usage')?.textContent).toContain("27%");
+  expect(document.querySelector('.subscription-usage [role=progressbar]')?.getAttribute("aria-valuenow")).toBe("27");
+  expect(document.querySelector('.unmanaged')).toBeNull();
+  expect(invoke.mock.calls.some(([command]) => command === "agent_management_apply" || command === "tool_config_apply")).toBe(false);
+});
+
+test.each([
+  {state: "unmanaged", mode: "official", entryId: undefined},
+  {state: "conflict", mode: "official", entryId: "api"},
+  {state: "unmanaged", mode: "plaintext", entryId: "api"}
+])("unverified or conflicting status cannot expose a selected account as active ($state, $mode, $entryId)", async (status) => {
+  setLocale("en");
+  const invoke = vi.fn(async (command: string) => command === "tool_config_status"
+    ? {tool: "codex", ...status, secretId: "key", overrides: []} : invokeFixture()(command));
+  app = mount(AgentManagementPage, {target: document.body, props: {entries: [entry], invokeTauri: invoke as never, onRefreshEntries: async () => {}}});
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.agent-list')?.getAttribute("aria-busy")).toBe("false"); });
+  expect(document.querySelector('.account-detail')).toBeNull();
+});
+
+test.each([
+  {failure: "validation_failed: Claude account identity unavailable", label: "Status unavailable"},
+  {failure: "IPC request timed out", label: "Status unavailable"},
+  {failure: undefined, label: "Storage unavailable"}
+])("a Claude status check reports $label without inventing a storage failure ($failure)", async ({failure, label}) => {
+  setLocale("en");
+  const invoke = vi.fn(async (command: string) => {
+    if (command === "tool_config_detect") return [{tool: "claude-code", binaryFound: true}];
+    if (command === "tool_config_status") {
+      if (failure) throw new Error(failure);
+      return {tool: "claude-code", state: "storage_unavailable", overrides: []};
+    }
+    return null;
+  });
+  app = mount(AgentManagementPage, {target: document.body, props: {invokeTauri: invoke as never, onRefreshEntries: async () => {}}});
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.agent-list')?.getAttribute("aria-busy")).toBe("false"); });
+  expect(document.querySelector('.row-note')?.textContent.trim()).toBe(label);
+  if (failure) expect(document.body.textContent).not.toContain("Storage unavailable");
+});
+
+test.each(["codex", "claude-code"] as const)("a signed-out %s can select a managed credential and switch after preview", async (tool) => {
+  setLocale("en");
+  const selected = tool === "claude-code" ? {...entry, interfaceType: "anthropic_messages" as const, authScheme: "x_api_key" as const} : entry;
+  const invoke = vi.fn(async (command: string) => {
+    if (command === "tool_config_detect") return [{tool, binaryFound: true}];
+    if (command === "tool_config_status") return {tool, state: "not_logged_in", overrides: []};
+    if (command === "tool_config_preview") return {...preview, tool};
+    return invokeFixture()(command);
+  });
+  app = mount(AgentManagementPage, {target: document.body, props: {entries: [selected], invokeTauri: invoke as never, onRefreshEntries: async () => {}}});
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.unmanaged')?.textContent.trim()).toBe("Not signed in"); });
+  expect(document.querySelector('.row-note')).toBeNull();
+  expect(document.querySelector('.account-detail')).toBeNull();
+  document.querySelector<HTMLButtonElement>('.switch-controls .select-trigger')!.dispatchEvent(new PointerEvent("pointerdown", {bubbles: true, button: 0, pointerType: "mouse"}));
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('[role=option][data-value="api:key"]')).toBeTruthy(); });
+  document.querySelector<HTMLElement>('[role=option][data-value="api:key"]')!.dispatchEvent(new PointerEvent("pointerup", {bubbles: true, button: 0, pointerType: "mouse"}));
+  await settled(); await prepare();
+  expect(invoke.mock.calls.some(([command]) => command === "agent_management_apply")).toBe(false);
+  document.querySelector<HTMLButtonElement>('.dialog-actions .btn-primary')!.click();
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("agent_management_apply", {request: expect.objectContaining({tool, id:"api", secretId:"key", previewId:"snapshot"})}));
 });

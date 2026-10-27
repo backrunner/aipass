@@ -4,7 +4,7 @@ use aipass_config_writers::native_auth::PrivateJson;
 use anyhow::Result;
 use serde_json::json;
 
-pub(super) fn read(home: &Path, tool: &ToolConfigTool) -> Result<Vec<Credential>> {
+pub(super) fn read(home: &Path, tool: &ToolConfigTool) -> Result<Vec<DetectedCredential>> {
     let paths = paths(home, tool);
     let mut out = Vec::new();
     match tool {

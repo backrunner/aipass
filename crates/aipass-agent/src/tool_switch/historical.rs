@@ -17,7 +17,9 @@ pub(super) fn validate(
         return Ok(Vec::new());
     };
     let auth = aipass_config_writers::native_auth::parse(old).map_err(safe_error)?;
-    if auth.0.get("tokens").is_none() && auth.0.get("claudeAiOauth").is_none() {
+    if !aipass_config_writers::native_auth::has_native_credentials(&active.tool, &auth.0)
+        .map_err(safe_error)?
+    {
         return Ok(Vec::new());
     }
     if aipass_config_writers::native_auth::credential_expiry(&active.tool, &auth.0)
