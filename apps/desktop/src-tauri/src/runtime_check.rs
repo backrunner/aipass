@@ -331,7 +331,6 @@ fn observe(app: &AppHandle) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    crate::logging::log_event("desktop.runtime_check.ready", &[])?;
     // Catch delayed exits and ensure native event-loop and typed agent IPC
     // remain responsive after the frontend reports ready.
     for _ in 0..20 {
@@ -401,6 +400,10 @@ fn observe(app: &AppHandle) -> Result<(), String> {
             crate::logging::log_event("desktop.runtime_check.close_reopen_passed", &[])?;
         }
     }
+    // The CLI fixture starts installing as soon as it sees this event. Publish
+    // it only after every startup probe: installation deliberately stops the
+    // Agent, so a probe still running then would abort the installing desktop.
+    crate::logging::log_event("desktop.runtime_check.ready", &[])?;
     Ok(())
 }
 

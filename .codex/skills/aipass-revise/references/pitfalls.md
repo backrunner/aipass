@@ -1146,6 +1146,13 @@ Newest entries last within each section.
 - **Guardrail**: never report `installed` on acknowledgement alone; keep status responsive during install, preserve tray mode for unattended restart, fail without authorization prompts, and exercise CLI-driven signed restarts in `verify-macos-runtime.mjs`. Do not overwrite another installation's service or weaken update signatures.
 - **Watch points**: `updates/control.rs`, singleton auth, CLI dispatch/updates, Rust updates/install, copied helpers and runtime-check fixtures.
 
+### CLI update fixtures must wait for completed startup probes
+- **Symptom**: macOS `cli-install-restart` exited during installation; the CLI timed out waiting for a restarted desktop with `Connection refused`.
+- **Root cause**: `apps/desktop/src-tauri/src/runtime_check.rs:334` emitted `desktop.runtime_check.ready` before its ten-second Agent/event-loop probes completed. `verify-macos-runtime.mjs` immediately started the CLI installer, whose intentional Agent shutdown failed a remaining probe and exited the installing desktop.
+- **Fix**: emit readiness only after all startup probes and viewport checks succeed, then wait for the CLI install/restart handshake.
+- **Guardrail**: publish fixture readiness after every probe that requires the pre-update Agent. Run the signed CLI install/restart scenario; retain changed-PID, running-version, copied-CLI, Agent-readiness and tray-mode assertions.
+- **Watch points**: `runtime_check.rs::observe/start`, `verify-macos-runtime.mjs`, CLI update restart polling and `updates.rs::stop_runtime_processes`.
+
 ### Linux updates must preserve installation format and authorization boundaries
 - **Symptom**: Linux feeds contained only macOS entries, package authorization could fall through to password prompts, and installation failures disappeared while an update remained available.
 - **Root cause**: generic updater targets, the plugin's system-package fallback sequence, and an error banner nested inside the no-update branch. Plugin `install` also does not verify bytes reread from cache.
