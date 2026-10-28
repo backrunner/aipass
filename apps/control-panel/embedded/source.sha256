@@ -84,7 +84,8 @@ f4d72275e952ba839881ff3f45feb9814204049b22624aae179992f8c9c90c22 ../../packages/
 69051f0d2cc6f011179df8f08ac0d3c6481e1c7b3ac2ac73f7d9ae0b85f1fb7e ../../packages/ui/src/components/ProviderFormFields.svelte
 7140b65055883ad0599b97416aada024a47b5647b789d64065bfaf611218c42a ../../packages/ui/src/components/ProviderIcon.svelte
 bd5b02915c626cb9023d32d9730445bfa5f21898e83a1d898de72733468b4afb ../../packages/ui/src/components/ProviderListPane.svelte
-8e3998096c3034d9112a79469f436afd5a339109aad72800df0f05716543f2a6 ../../packages/ui/src/components/ProxyRouteGroupDialog.svelte
+80a41eb6f83556d90322731411faae14d82a3fd4fac4ba7c6c251de5fd4746f7 ../../packages/ui/src/components/ProxyCredentialPicker.svelte
+0d1a19d3f392f834c6020e37fd0ebe82465099ec2af23d2fe9baaf4b73c7d528 ../../packages/ui/src/components/ProxyRouteGroupDialog.svelte
 4cd08e814ded8e3d7060c164deac053ccb7f85e17b6124a09e7f6c39a03d84ba ../../packages/ui/src/components/ProxyRouteList.svelte
 0e3833f3bfbc64a26e7c17a95d5fe8c9924bc58cf64303cc8bd783ed336dca77 ../../packages/ui/src/components/ProxyStatusGrid.svelte
 4a74e256a6d5e7f41979b9f92874e0febf3da2bf144e8d77cd7c347ea6e1ddac ../../packages/ui/src/components/SearchField.svelte
@@ -99,8 +100,8 @@ aee9eb05ecc931af04b784f4dd2e589de8f573fd90ad3f8c53de1c480d3bf186 ../../packages/
 f32b22b84b182859220ec87c2a1d06654d043774500151bc7c9c39dd606a2dc0 ../../packages/ui/src/index.test.ts
 30140eb1e0885a34c7b2504eb68d865ee0b3e82b5e25f289c314583843edfd07 ../../packages/ui/src/index.ts
 e869bc56c5048b80726d1c251a9868e5c36f96c4a6afdc7543b09478e77fe977 ../../packages/ui/src/locales/aliases.json
-c56d2c175ce5a5e0b5b9b993ff314aa9d5bd2c10aac3216251a7d9794b46b148 ../../packages/ui/src/locales/en.json
-fd5426755cb01eab84b80666af72aec5e5e1237ccec2ed0734b3a02a88422c9e ../../packages/ui/src/locales/zh-CN.json
+d03989994d486904870f39f9c15848c869e11c0571843649b00cb721f0b2270b ../../packages/ui/src/locales/en.json
+3449a70e3b93b6c29c59a765cc4bf350bf89cdc2a6e49db4a9483db327bcab38 ../../packages/ui/src/locales/zh-CN.json
 b9018964d3462a82d1e63fe60da79bfd7034fb7723f7264d61ba4f9dd8c54be0 ../../packages/ui/src/provider-icons.ts
 cf7bae55267729e8d66f74d8a60662d9373f836132e973cc7ecfb9cef8801abd ../../packages/ui/src/styles/base.scss
 105b51b17486f6286aec9a005ee079828f1ebe29c8303e565e4a6eaed808beb6 ../../packages/ui/src/styles/select-menu.scss

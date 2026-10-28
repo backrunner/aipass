@@ -246,18 +246,70 @@ test("offers credentials regardless of their native protocol", () => {
   app = mount(RouteGroupDialog, { target, props: { entries: mixedEntries } }) as never;
   flushSync();
 
-  const trigger = document.body.querySelector<HTMLButtonElement>(
-    '.select-trigger[aria-label="Add credential"]'
+  const trigger = document.body.querySelector<HTMLInputElement>(
+    '.credential-search-input'
   );
   expect(trigger).not.toBeNull();
-  trigger!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+  trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
   flushSync();
 
-  const labels = [...document.body.querySelectorAll(".select-item .select-item-text")].map(
-    (item) => item.textContent
+  const labels = [...document.body.querySelectorAll(".proxy-credential-option")].map(
+    (item) => item.getAttribute("data-label")
   );
-  expect(labels).toContain("Provider · Primary · **** · Anthropic Messages");
-  expect(labels).toContain("OpenAI · Key · **** · OpenAI-compatible");
+  expect(labels).toContain("Provider Primary **** Anthropic Messages");
+  expect(labels).toContain("OpenAI Key **** OpenAI-compatible");
+});
+
+test("searches credential fields and adds the exact key by keyboard without submitting", async () => {
+  const onSave = vi.fn();
+  const options = [{ ...entries[0], secretRefs: [
+    ...entries[0].secretRefs,
+    { id: "backup-id", label: "Backup", masked: "sk-...9876", interfaceType: "openai_compatible", group: "VIP" }
+  ] }] as ProviderEntry[];
+  app = mount(RouteGroupDialog, { target: document.body, props: { entries: options, onSave } }) as never;
+  flushSync();
+  const input = document.querySelector<HTMLInputElement>(".credential-search-input")!;
+  const search = (query: string) => {
+    input.value = query;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+  };
+  search("provider VIP 9876 OPENAI");
+  expect(document.querySelectorAll(".proxy-credential-option")).toHaveLength(1);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  flushSync();
+  expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await vi.waitFor(() => { flushSync(); expect(document.querySelectorAll(".member-row")).toHaveLength(1); });
+  expect(document.querySelector(".member-description")?.textContent).toContain("Backup");
+  expect(input.value).toBe("");
+  expect(onSave).not.toHaveBeenCalled();
+  search("backup");
+  expect(document.querySelector('.proxy-credential-option[data-disabled]')).not.toBeNull();
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  flushSync();
+  expect(document.querySelectorAll(".member-row")).toHaveLength(1);
+  document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+  expect(onSave.mock.calls[0][0].targets[0].secretId).toBe("backup-id");
+});
+
+test("shows an empty search state and Escape closes only the credential popup", () => {
+  app = mount(RouteGroupDialog, { target: document.body, props: { entries: mixedEntries } }) as never;
+  flushSync();
+  const input = document.querySelector<HTMLInputElement>(".credential-search-input")!;
+  input.value = "no-such-credential";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
+  expect(document.querySelectorAll(".proxy-credential-option")).toHaveLength(0);
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("No matching credentials");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  flushSync();
+  expect(input.getAttribute("aria-expanded")).toBe("false");
+  expect(input.value).toBe("");
+  expect(document.querySelector('.route-dialog-content[data-state="open"]')).not.toBeNull();
 });
 
 test("uses the selected route protocol for mixed-protocol groups", async () => {

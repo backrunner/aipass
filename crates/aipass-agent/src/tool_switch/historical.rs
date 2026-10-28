@@ -8,6 +8,18 @@ pub(super) fn validate(
     active: &NativeStore,
     tx: &Transaction,
 ) -> ServiceResult<Vec<(Resource, Zeroizing<Vec<u8>>)>> {
+    let native_resources = active.resources();
+    if tx
+        .changes
+        .iter()
+        .filter(|change| native_resources.contains(&change.resource))
+        .all(|change| change.before == change.after)
+    {
+        // Gateway-only writes preserve the native grant verbatim. Restoring
+        // their configuration does not activate/replay a historical login.
+        // The caller still verifies the complete current config fingerprint.
+        return Ok(Vec::new());
+    }
     let Some(old) = tx
         .changes
         .iter()

@@ -449,6 +449,146 @@ fn claude_roundtrip_archives_latest_grant_and_preserves_user_metadata() {
     assert_eq!(profile["userPreference"], true);
 }
 
+fn claude_proxy_request(state: &Arc<AgentState>) -> ToolConfigProxyRequest {
+    let route_id = Uuid::new_v4();
+    with_vault(state, false, |vault| {
+        let mut proxy = state.proxy.lock().unwrap();
+        let mut config = proxy.load_config(vault)?;
+        config.routes = vec![serde_json::from_value(json!({
+            "id": route_id, "name": "Claude gateway", "token": "fake-proxy-token",
+            "inboundProtocol": "anthropic_messages", "upstreamProtocol": "anthropic_messages",
+            "conversionEnabled": false, "strategy": "fallback", "targets": [],
+            "retry": aipass_proxy::RetryPolicy::default(), "enabled": true
+        }))
+        .unwrap()];
+        proxy.set_config(vault, config)?;
+        Ok(())
+    })
+    .unwrap();
+    ToolConfigProxyRequest {
+        tool: aipass_config_writers::ToolId::ClaudeCode,
+        route_id,
+    }
+}
+
+#[test]
+fn claude_proxy_preserves_unmanaged_oauth_without_a_resolvable_identity() {
+    for profile in [
+        None,
+        Some(r#"{"userPreference":true}"#),
+        Some("invalid-json"),
+    ] {
+        let (_dir, state, home) = fixture();
+        let active = home.join(".claude");
+        fs::create_dir_all(&active).unwrap();
+        let grant = claude_auth("orphaned", 4_000_000_000);
+        fs::write(active.join(".credentials.json"), &grant).unwrap();
+        if let Some(profile) = profile {
+            fs::write(home.join(".claude.json"), profile).unwrap();
+        }
+        let settings = r#"{"permissions":{"allow":["Read"]},"env":{"CUSTOM":"keep"}}"#;
+        fs::write(active.join("settings.json"), settings).unwrap();
+        let request = claude_proxy_request(&state);
+        assert_eq!(
+            status_snapshot(&state, ToolConfigTool::ClaudeCode)
+                .unwrap()
+                .state,
+            "unavailable"
+        );
+        let applied = proxy::apply_proxy(&state, request).unwrap();
+        assert_eq!(applied.outcome, ToolConfigOutcome::Applied);
+        let configured: Value =
+            serde_json::from_slice(&fs::read(active.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(configured["env"]["ANTHROPIC_API_KEY"], "fake-proxy-token");
+        assert!(configured["env"]["ANTHROPIC_BASE_URL"]
+            .as_str()
+            .unwrap()
+            .starts_with("http://127.0.0.1:"));
+        assert_eq!(configured["permissions"]["allow"][0], "Read");
+        assert_eq!(configured["env"]["CUSTOM"], "keep");
+        assert_eq!(fs::read(active.join(".credentials.json")).unwrap(), grant);
+        assert_eq!(
+            fs::read_to_string(home.join(".claude.json"))
+                .ok()
+                .as_deref(),
+            profile
+        );
+        with_vault(&state, false, |vault| {
+            assert!(vault.list_provider_summaries().unwrap().is_empty());
+            let tx = Transaction::load(Path::new(&applied.backup_path), &vault.config_backup_key())
+                .unwrap();
+            let saved = tx
+                .changes
+                .iter()
+                .find(|c| c.resource == Resource::File(active.join(".credentials.json")))
+                .unwrap();
+            assert_eq!(saved.before.as_deref(), Some(grant.as_slice()));
+            assert_eq!(saved.before, saved.after);
+            assert!(!fs::read_to_string(&applied.backup_path)
+                .unwrap()
+                .contains("fake-access-orphaned"));
+            Ok(())
+        })
+        .unwrap();
+        let status = status_snapshot(&state, ToolConfigTool::ClaudeCode).unwrap();
+        assert_eq!(status.state, "ready");
+        assert_eq!(status.account_identity, None);
+        let external = claude_auth("external-change", 4_000_000_000);
+        fs::write(active.join(".credentials.json"), &external).unwrap();
+        assert_eq!(
+            rollback(&state, applied.operation_id).unwrap_err().code,
+            AgentErrorCode::Conflict
+        );
+        assert_eq!(
+            fs::read(active.join(".credentials.json")).unwrap(),
+            external
+        );
+        fs::write(active.join(".credentials.json"), &grant).unwrap();
+        assert_eq!(
+            rollback(&state, applied.operation_id).unwrap().outcome,
+            ToolConfigOutcome::Applied
+        );
+        assert_eq!(
+            fs::read_to_string(active.join("settings.json")).unwrap(),
+            settings
+        );
+        assert_eq!(fs::read(active.join(".credentials.json")).unwrap(), grant);
+    }
+}
+
+#[test]
+fn claude_proxy_stops_when_a_managed_outgoing_identity_is_missing_or_changed() {
+    for profile in [
+        None,
+        Some(r#"{"oauthAccount":{"emailAddress":"bob@example.test"}}"#),
+    ] {
+        let (_dir, state, home) = fixture();
+        let active = home.join(".claude");
+        write_claude(&active, "alice@example.test", "managed");
+        fs::rename(active.join(".claude.json"), home.join(".claude.json")).unwrap();
+        let id = claude_register(&state, &active, "alice@example.test");
+        if let Some(profile) = profile {
+            fs::write(home.join(".claude.json"), profile).unwrap();
+        } else {
+            fs::remove_file(home.join(".claude.json")).unwrap();
+        }
+        let grant = fs::read(active.join(".credentials.json")).unwrap();
+        let request = claude_proxy_request(&state);
+        assert!(proxy::apply_proxy(&state, request).is_err());
+        assert!(!active.join("settings.json").exists());
+        assert!(!root(&state).exists());
+        assert_eq!(fs::read(active.join(".credentials.json")).unwrap(), grant);
+        with_vault(&state, false, |vault| {
+            assert_eq!(
+                reference(vault, id, &ToolConfigTool::ClaudeCode).unwrap()["nativeHome"],
+                json!(active)
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
 #[test]
 fn claude_quota_renewal_and_api_switch_share_the_account_lock() {
     let (_dir, state, home) = fixture();
