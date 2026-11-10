@@ -5,7 +5,9 @@ use super::*;
 
 fn data(raw: &str) -> Result<Option<Value>, ConversionError> {
     let text = raw
-        .lines()
+        .strip_prefix('\u{feff}')
+        .unwrap_or(raw)
+        .split(['\r', '\n'])
         .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
         .collect::<Vec<_>>()
         .join("\n");
@@ -46,12 +48,13 @@ pub(crate) struct ChatToResponses {
     created: Value,
     output: Vec<Value>,
     tools: HashMap<u64, usize>,
+    tool_identities: HashMap<u64, String>,
     text: Option<usize>,
     reasoning: Option<usize>,
     refusal: Option<usize>,
     usage: crate::UsageAccumulator,
     finish_reason: Option<String>,
-    choice: Option<u64>,
+    choice: crate::chat::Choice,
     sequence: u64,
     done: bool,
 }
@@ -161,7 +164,7 @@ impl ChatToResponses {
         }
         let mut out = Vec::new();
         self.start(&payload, &mut out);
-        if let Some(error) = payload.get("error").filter(|v| !v.is_null()) {
+        if let Some(error) = crate::stream::stream_error(raw, &payload) {
             self.emit(
                 json!({"type":"error", "error":error, "message":error["message"]}),
                 &mut out,
@@ -176,18 +179,14 @@ impl ChatToResponses {
         let Some(choices) = payload.get("choices").and_then(Value::as_array) else {
             return Ok(out);
         };
-        for choice in choices {
-            if let Some(index) = choice.get("index").and_then(Value::as_u64) {
-                if *self.choice.get_or_insert(index) != index {
-                    continue;
-                }
-            }
+        if let Some(choice) = self.choice.select(choices) {
             let delta = &choice["delta"];
+            crate::response::validate_chat_content(delta, RS)?;
             self.text(
                 string(
                     delta
                         .get("reasoning_content")
-                        .filter(|v| v.as_str() != Some(""))
+                        .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
                         .or_else(|| delta.get("reasoning")),
                 ),
                 true,
@@ -219,14 +218,11 @@ impl ChatToResponses {
             self.text(string(delta.get("refusal")), false, true, &mut out);
             if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for (position, call) in calls.iter().enumerate() {
-                    let key = call
-                        .get("index")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(position as u64);
+                    let key = crate::chat::tool_index(call, position)?;
                     let index = if let Some(index) = self.tools.get(&key) {
                         *index
                     } else {
-                        let custom = call["type"] == "custom";
+                        let custom = call["type"] == "custom" || call.get("custom").is_some();
                         let field = if custom { "custom" } else { "function" };
                         let call_id = call
                             .get("id")
@@ -240,10 +236,19 @@ impl ChatToResponses {
                         self.tools.insert(key, index);
                         index
                     };
+                    if let Some(id) = call["id"].as_str().filter(|id| !id.is_empty()) {
+                        let identity = self.tool_identities.entry(key).or_default();
+                        crate::chat::identity(identity, id);
+                        // The final item owns the complete identity, including
+                        // metadata first supplied after the added event.
+                        self.output[index]["call_id"] = json!(identity);
+                    }
                     let custom = self.output[index]["type"] == "custom_tool_call";
                     let field = if custom { "custom" } else { "function" };
                     if let Some(name) = call[field].get("name").filter(|v| v.as_str() != Some("")) {
-                        self.output[index]["name"] = name.clone();
+                        let mut previous = string(self.output[index].get("name")).to_owned();
+                        crate::chat::identity(&mut previous, string(Some(name)));
+                        self.output[index]["name"] = json!(previous);
                     }
                     let arg = if custom { "input" } else { "arguments" };
                     if let Some(value) = call[field].get(arg).filter(|v| !v.is_null()) {
@@ -266,7 +271,6 @@ impl ChatToResponses {
                 self.finish_reason = Some(finish.into());
             }
             // Translation has one choice, even when an upstream ignored n=1.
-            break;
         }
         Ok(out)
     }
@@ -339,7 +343,7 @@ pub(crate) struct ResponsesToChat {
     model: Value,
     created: Value,
     tools: HashMap<u64, (usize, bool)>,
-    emitted: std::collections::HashSet<(u64, String)>,
+    emitted: HashMap<(u64, String), String>,
     done: bool,
 }
 
@@ -352,6 +356,52 @@ impl ResponsesToChat {
         chunk(value)
     }
 
+    // Snapshots may complete a partial delta sequence. Only append the unseen
+    // suffix; a different prefix cannot be repaired after bytes were delivered.
+    fn tail(&self, key: &(u64, String), snapshot: &str) -> Result<String, ConversionError> {
+        let previous = self.emitted.get(key).map(String::as_str).unwrap_or("");
+        if let Some(tail) = snapshot.strip_prefix(previous) {
+            return Ok(tail.to_owned());
+        }
+        if previous.starts_with(snapshot) {
+            return Ok(String::new());
+        }
+        Err(invalid(
+            RS,
+            "output snapshot conflicts with delivered deltas",
+        ))
+    }
+    fn text_snapshot(
+        &mut self,
+        index: u64,
+        part: u64,
+        field: &str,
+        text: &str,
+        out: &mut Vec<String>,
+    ) -> Result<(), ConversionError> {
+        let key = (index, format!("{field}:{part}"));
+        let tail = self.tail(&key, text)?;
+        if !tail.is_empty() {
+            self.emitted.entry(key).or_default().push_str(&tail);
+            out.push(self.chunk(json!({field:tail}), Value::Null, None));
+        }
+        Ok(())
+    }
+    fn content_snapshot(
+        &mut self,
+        index: u64,
+        part_index: u64,
+        part: &Value,
+        out: &mut Vec<String>,
+    ) -> Result<(), ConversionError> {
+        let (field, key) = match string(part.get("type")) {
+            "output_text" => ("content", "text"),
+            "refusal" => ("refusal", "refusal"),
+            "summary_text" => ("reasoning_content", "text"),
+            _ => return Err(invalid(RS, "unsupported streamed content part")),
+        };
+        self.text_snapshot(index, part_index, field, string(part.get(key)), out)
+    }
     fn item(
         &mut self,
         index: u64,
@@ -371,38 +421,26 @@ impl ResponsesToChat {
                     out.push(self.chunk(json!({"tool_calls":[call]}), Value::Null, None));
                 }
                 let field = if custom { "input" } else { "arguments" };
-                if !self.emitted.contains(&(index, field.into())) {
-                    let text = string(item.get(field));
-                    if !text.is_empty() {
-                        self.tool_delta(index, text, out);
-                    }
-                }
+                let tail = self.tail(&(index, field.into()), string(item.get(field)))?;
+                self.tool_delta(index, &tail, out)?;
             }
             "message" => {
                 if let Some(parts) = item.get("content").and_then(Value::as_array) {
                     for (part_index, part) in parts.iter().enumerate() {
-                        let refusal = part["type"] == "refusal";
-                        let field = if refusal { "refusal" } else { "content" };
-                        let key = (index, format!("{field}:{part_index}"));
-                        let text = string(part.get(if refusal { "refusal" } else { "text" }));
-                        if !text.is_empty() && self.emitted.insert(key) {
-                            out.push(self.chunk(json!({field:text}), Value::Null, None));
-                        }
+                        self.content_snapshot(index, part_index as u64, part, out)?;
                     }
                 }
             }
             "reasoning" => {
                 if let Some(parts) = item.get("summary").and_then(Value::as_array) {
                     for (part_index, part) in parts.iter().enumerate() {
-                        let key = (index, format!("reasoning_content:{part_index}"));
-                        let text = string(part.get("text"));
-                        if !text.is_empty() && self.emitted.insert(key) {
-                            out.push(self.chunk(
-                                json!({"reasoning_content":text}),
-                                Value::Null,
-                                None,
-                            ));
-                        }
+                        self.text_snapshot(
+                            index,
+                            part_index as u64,
+                            "reasoning_content",
+                            string(part.get("text")),
+                            out,
+                        )?;
                     }
                 }
             }
@@ -411,20 +449,32 @@ impl ResponsesToChat {
         Ok(())
     }
 
-    fn tool_delta(&mut self, index: u64, text: &str, out: &mut Vec<String>) {
+    fn tool_delta(
+        &mut self,
+        index: u64,
+        text: &str,
+        out: &mut Vec<String>,
+    ) -> Result<(), ConversionError> {
         if text.is_empty() {
-            return;
+            return Ok(());
         }
-        if let Some((tool_index, custom)) = self.tools.get(&index).copied() {
-            let field = if custom { "custom" } else { "function" };
-            let arg = if custom { "input" } else { "arguments" };
-            self.emitted.insert((index, arg.into()));
-            out.push(self.chunk(
-                json!({"tool_calls":[{"index":tool_index, field:{arg:text}}]}),
-                Value::Null,
-                None,
-            ));
-        }
+        let (tool_index, custom) = self
+            .tools
+            .get(&index)
+            .copied()
+            .ok_or_else(|| invalid(RS, "tool arguments arrived before the tool identity"))?;
+        let field = if custom { "custom" } else { "function" };
+        let arg = if custom { "input" } else { "arguments" };
+        self.emitted
+            .entry((index, arg.into()))
+            .or_default()
+            .push_str(text);
+        out.push(self.chunk(
+            json!({"tool_calls":[{"index":tool_index, field:{arg:text}}]}),
+            Value::Null,
+            None,
+        ));
+        Ok(())
     }
 
     pub(crate) fn push(&mut self, raw: &str) -> Result<Vec<String>, ConversionError> {
@@ -435,6 +485,13 @@ impl ResponsesToChat {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
+        if let Some(error) = crate::stream::stream_error(raw, &payload) {
+            self.done = true;
+            return Ok(vec![
+                chunk(json!({"error":error})),
+                "data: [DONE]\n\n".into(),
+            ]);
+        }
         if let Some(response) = payload.get("response") {
             if self.id.is_empty() {
                 let source = response
@@ -475,11 +532,58 @@ impl ResponsesToChat {
                 } else {
                     "content_index"
                 }));
-                self.emitted.insert((index, format!("{field}:{part}")));
+                self.emitted
+                    .entry((index, format!("{field}:{part}")))
+                    .or_default()
+                    .push_str(string(payload.get("delta")));
                 out.push(self.chunk(json!({field:payload["delta"]}), Value::Null, None));
             }
             "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
-                self.tool_delta(index, string(payload.get("delta")), &mut out)
+                self.tool_delta(index, string(payload.get("delta")), &mut out)?
+            }
+            "response.content_part.added" | "response.content_part.done" => {
+                self.content_snapshot(
+                    index,
+                    crate::number(payload.get("content_index")),
+                    &payload["part"],
+                    &mut out,
+                )?;
+            }
+            "response.reasoning_summary_part.added" | "response.reasoning_summary_part.done" => {
+                self.text_snapshot(
+                    index,
+                    crate::number(payload.get("summary_index")),
+                    "reasoning_content",
+                    string(payload["part"].get("text")),
+                    &mut out,
+                )?;
+            }
+            "response.output_text.done"
+            | "response.refusal.done"
+            | "response.reasoning_summary_text.done" => {
+                let (field, key, part) = match string(payload.get("type")) {
+                    "response.refusal.done" => ("refusal", "refusal", "content_index"),
+                    "response.reasoning_summary_text.done" => {
+                        ("reasoning_content", "text", "summary_index")
+                    }
+                    _ => ("content", "text", "content_index"),
+                };
+                self.text_snapshot(
+                    index,
+                    crate::number(payload.get(part)),
+                    field,
+                    string(payload.get(key)),
+                    &mut out,
+                )?;
+            }
+            "response.function_call_arguments.done" | "response.custom_tool_call_input.done" => {
+                let field = if payload["type"] == "response.custom_tool_call_input.done" {
+                    "input"
+                } else {
+                    "arguments"
+                };
+                let tail = self.tail(&(index, field.into()), string(payload.get(field)))?;
+                self.tool_delta(index, &tail, &mut out)?;
             }
             "response.completed" | "response.incomplete" => {
                 let response = &payload["response"];
@@ -506,18 +610,6 @@ impl ResponsesToChat {
                     json!(finish),
                     Some(usage(&response["usage"], CC)),
                 ));
-                out.push("data: [DONE]\n\n".into());
-                self.done = true;
-            }
-            "error" | "response.failed" => {
-                let error = payload
-                    .get("error")
-                    .or_else(|| payload.pointer("/response/error"))
-                    .cloned()
-                    .unwrap_or_else(
-                        || json!({"message":payload["message"], "type":"upstream_error"}),
-                    );
-                out.push(chunk(json!({"error":error})));
                 out.push("data: [DONE]\n\n".into());
                 self.done = true;
             }

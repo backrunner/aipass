@@ -30,7 +30,8 @@ There is no direct Anthropic usage HTTP fallback. Unavailable or unrecognized
 readings keep previous windows and mark them stale. CLI-owned renewal stays in
 that account's own credential store.
 
-Inference uses the Claude Code bridge against the same persistent account home.
+Inference uses the Rust-owned [ACP routing adapter](claude-acp-routing.md) against
+the same persistent account home, without `-p` or a print-mode fallback.
 Inference and quota share the provider proxy override or global outbound proxy.
 Account identity is checked before reusing an existing conversation. Reconnecting
 to a different CLI home rotates the routing marker while preserving the entry

@@ -2,14 +2,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+mod chat;
 mod openai;
 mod reasoning;
 mod request;
 mod response;
+#[cfg(test)]
+mod review_followup;
+#[cfg(test)]
+mod review_tests;
 mod stream;
 mod usage;
 
-pub use reasoning::response_item_ciphertexts;
+pub use reasoning::{normalize_claude_thinking, response_item_ciphertexts, thinking_is_bound};
 pub use stream::StreamConverter;
 pub use usage::UsageAccumulator;
 
@@ -63,6 +68,12 @@ pub enum ConversionError {
     },
     #[error("protocol conversion is unavailable: {0:?} to {1:?}")]
     Unsupported(ProxyProtocol, ProxyProtocol),
+    #[error("{feature} cannot be preserved when converting {from:?} to {to:?}")]
+    UnsupportedFeature {
+        from: ProxyProtocol,
+        to: ProxyProtocol,
+        feature: String,
+    },
     #[error("invalid server-sent event: {0}")]
     InvalidEvent(String),
 }
@@ -159,6 +170,18 @@ pub(crate) fn invalid(protocol: ProxyProtocol, message: impl Into<String>) -> Co
     ConversionError::InvalidPayload {
         protocol,
         message: message.into(),
+    }
+}
+
+pub(crate) fn unsupported(
+    from: ProxyProtocol,
+    to: ProxyProtocol,
+    feature: impl Into<String>,
+) -> ConversionError {
+    ConversionError::UnsupportedFeature {
+        from,
+        to,
+        feature: feature.into(),
     }
 }
 

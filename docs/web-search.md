@@ -91,7 +91,7 @@ supported. Returned content is untrusted source material.
 
 ## Claude subscriptions
 
-The hidden official Claude Code process is a model bridge. It must not run Bash,
+By default, the official Claude Code process is a model bridge. It must not run Bash,
 Read, Write or other local workspace tools on behalf of an outer client. Caller
 functions cross the authenticated MCP bridge and execute in that client's own
 workspace/permission flow. The CLI only enables its own `WebSearch` when the
@@ -101,6 +101,10 @@ tools merely named WebSearch do not grant this capability. Tool-level options th
 CLI cannot enforce are rejected. The requested tool set participates in the
 existing account/session identity, so a search-capable process is not reused by a
 request without that declaration.
+
+Callers can separately opt into [native ACP tools](claude-acp-routing.md) by
+supplying an explicit working directory and permission policy. Those sessions
+keep the CLI's complete default tool set and its permission/input round trips.
 
 This is consistent with Magpie's selective `WebSearch` exception, reviewed at
 [75e769a](https://github.com/yetone/magpie/blob/75e769a9f9b419f805b925f147146eff179111b9/internal/gateway/claude_subscription.go).

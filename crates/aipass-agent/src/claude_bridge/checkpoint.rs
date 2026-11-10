@@ -119,7 +119,7 @@ fn text_only(value: &Value) -> bool {
 pub(super) fn save(inner: &Inner, key: &str) {
     let prepared = inner.runs.lock().ok().and_then(|runs| {
         let run = runs.get(key)?;
-        if !run.terminal || run.parked || !text_only(&json!(run.history_messages)) {
+        if !run.terminal || run.busy() || !text_only(&json!(run.history_messages)) {
             return None;
         }
         Some((
@@ -131,7 +131,7 @@ pub(super) fn save(inner: &Inner, key: &str) {
             run.native_session,
             run.cli_home.clone()?,
             run.workspace.clone(),
-            run.message["id"].as_str()?.to_owned(),
+            run.native_message.clone()?,
             aipass_proxy::subscription_history_call_ids(&json!({"messages":run.history_messages}))
                 .into_iter()
                 .filter(|id| id.starts_with("toolu_aipass_claude_"))

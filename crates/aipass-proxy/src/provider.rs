@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 pub enum ProviderProfile {
     #[default]
     Generic,
+    Anthropic,
     OpenAi,
     DeepSeek,
     Kimi,
@@ -19,6 +20,19 @@ pub(crate) fn prepare(
     protocol: ProxyProtocol,
     bytes: Bytes,
 ) -> Result<Bytes, String> {
+    if protocol == ProxyProtocol::AnthropicMessages {
+        let Ok(mut body) = serde_json::from_slice::<Value>(&bytes) else {
+            return Ok(bytes);
+        };
+        return if aipass_proxy_conversion::normalize_claude_thinking(
+            &mut body,
+            profile == ProviderProfile::Anthropic,
+        ) {
+            Ok(Bytes::from(body.to_string()))
+        } else {
+            Ok(bytes)
+        };
+    }
     if profile == ProviderProfile::Generic || protocol != ProxyProtocol::OpenAiChatCompletions {
         return Ok(bytes);
     }

@@ -1,4 +1,8 @@
 use super::*;
+mod conversion_tracking;
+mod progress;
+pub(crate) use conversion_tracking::track_converted_usage_stream;
+pub(crate) use progress::buffered_response_has_output;
 
 pub(crate) struct PrefetchedSse {
     pub(crate) bytes: Bytes,
@@ -45,7 +49,7 @@ pub(crate) async fn prefetch_sse_event(
             if sse_event_reports_error(event) {
                 return Err(PrefetchError {
                     message: "upstream returned an error event".into(),
-                    confirmed_failure: true,
+                    confirmed_failure: !sse_event_reports_output(protocol, event),
                 });
             }
             if sse_event_is_heartbeat(event) {
@@ -73,30 +77,36 @@ pub(crate) async fn prefetch_sse_event(
 }
 
 pub(crate) fn sse_event_boundary_end(bytes: &[u8]) -> Option<usize> {
-    let line_feed = bytes
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|index| index + 2);
-    let carriage_return = bytes
-        .windows(3)
-        .position(|window| window == b"\n\r\n")
-        .map(|index| index + 3);
-    match (line_feed, carriage_return) {
-        (Some(left), Some(right)) => Some(left.min(right)),
-        (Some(end), None) | (None, Some(end)) => Some(end),
-        (None, None) => None,
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        if matches!(bytes[index], b'\r' | b'\n') {
+            let empty = index == start;
+            let crlf = bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n');
+            index += if crlf { 2 } else { 1 };
+            if empty {
+                return Some(index);
+            }
+            start = index;
+        } else {
+            index += 1;
+        }
     }
+    None
 }
 
 pub(crate) fn sse_event_reports_error(event: &[u8]) -> bool {
+    // An event name without nonempty data is a control frame, not a
+    // dispatched error. It cannot authorize replaying a generation.
+    let Some(data) = sse_event_data(event).filter(|data| !trim_ascii(data).is_empty()) else {
+        return false;
+    };
     let event_is_error = sse_event_name(event)
         .is_some_and(|name| name.eq_ignore_ascii_case(b"error") || name.ends_with(b".failed"));
     if event_is_error {
         return true;
     }
-    sse_event_data(event)
-        .as_deref()
-        .is_some_and(is_upstream_error_payload)
+    is_upstream_error_payload(&data)
 }
 
 pub(crate) fn sse_event_reports_output(protocol: ProxyProtocol, event: &[u8]) -> bool {
@@ -108,12 +118,19 @@ pub(crate) fn sse_event_reports_output(protocol: ProxyProtocol, event: &[u8]) ->
         return false;
     }
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(data) else {
-        return true;
+        return !sse_event_reports_error(event);
     };
     match protocol {
         ProxyProtocol::OpenAiResponses => {
-            let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
+            if progress::response_output(&value)
+                || value.get("response").is_some_and(progress::response_output)
+                || value.get("item").is_some_and(progress::item_output)
+                || value.get("part").is_some_and(progress::part_output)
+            {
                 return true;
+            }
+            let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
+                return !sse_event_reports_error(event);
             };
             if kind == "response.output_item.added" {
                 let item = &value["item"];
@@ -143,14 +160,14 @@ pub(crate) fn sse_event_reports_output(protocol: ProxyProtocol, event: &[u8]) ->
         }
         ProxyProtocol::OpenAiChatCompletions => {
             let Some(choices) = value.get("choices").and_then(serde_json::Value::as_array) else {
-                return value.get("usage").is_none();
+                return value.get("usage").is_none() && !sse_event_reports_error(event);
             };
             choices.iter().any(|choice| {
                 let Some(delta) = choice.get("delta").or_else(|| choice.get("message")) else {
                     return false;
                 };
                 delta.get("content").is_some_and(json_value_has_output)
-                    || ["reasoning_content", "reasoning", "refusal"]
+                    || ["reasoning_content", "reasoning", "refusal", "audio"]
                         .iter()
                         .any(|key| delta.get(*key).is_some_and(json_value_has_output))
                     || delta.get("tool_calls").is_some_and(json_value_has_output)
@@ -161,19 +178,14 @@ pub(crate) fn sse_event_reports_output(protocol: ProxyProtocol, event: &[u8]) ->
         }
         ProxyProtocol::AnthropicMessages => {
             let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
-                return true;
+                return !sse_event_reports_error(event);
             };
             match kind {
-                "message_start" | "message_delta" | "message_stop" => false,
-                "content_block_start" => {
-                    let block = &value["content_block"];
-                    matches!(
-                        block["type"].as_str(),
-                        Some("tool_use" | "server_tool_use" | "redacted_thinking")
-                    ) || ["text", "thinking", "data"]
-                        .iter()
-                        .any(|key| block.get(*key).is_some_and(json_value_has_output))
-                }
+                "message_start" => value["message"]["content"]
+                    .as_array()
+                    .is_some_and(|parts| parts.iter().any(progress::part_output)),
+                "message_delta" | "message_stop" | "error" => false,
+                "content_block_start" => progress::part_output(&value["content_block"]),
                 "content_block_delta" => value.get("delta").is_some_and(json_value_has_output),
                 _ => true,
             }
@@ -210,17 +222,29 @@ pub(crate) fn sse_event_is_heartbeat(event: &[u8]) -> bool {
 }
 
 pub(crate) fn sse_event_name(event: &[u8]) -> Option<&[u8]> {
-    event.split(|byte| *byte == b'\n').find_map(|line| {
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        line.strip_prefix(b"event:").map(trim_ascii)
-    })
+    event
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(event)
+        .split(|byte| matches!(byte, b'\r' | b'\n'))
+        .filter_map(|line| {
+            if line == b"event" {
+                Some(&[][..])
+            } else {
+                line.strip_prefix(b"event:")
+                    .map(|v| v.strip_prefix(b" ").unwrap_or(v))
+            }
+        })
+        .next_back()
 }
 
 pub(crate) fn sse_event_data(event: &[u8]) -> Option<Vec<u8>> {
     let mut found = false;
     let mut data = Vec::new();
-    for line in event.split(|byte| *byte == b'\n') {
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
+    for line in event
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(event)
+        .split(|byte| matches!(byte, b'\r' | b'\n'))
+    {
         let value = if line == b"data" {
             &[][..]
         } else if let Some(value) = line.strip_prefix(b"data:") {
@@ -298,10 +322,7 @@ pub(crate) fn stream_reports_output(protocol: ProxyProtocol, bytes: &[u8]) -> bo
             .map(|n| offset + n)
             .unwrap_or(bytes.len());
         let event = &bytes[offset..end];
-        if !sse_event_reports_error(event)
-            && !sse_event_is_heartbeat(event)
-            && sse_event_reports_output(protocol, event)
-        {
+        if !sse_event_is_heartbeat(event) && sse_event_reports_output(protocol, event) {
             return true;
         }
         offset = end;
@@ -500,6 +521,17 @@ pub(crate) fn track_usage_stream<S>(
 where
     S: Stream<Item = Result<Bytes, BoxError>> + Send + 'static,
 {
+    track_usage_stream_inner(source, context, None)
+}
+
+fn track_usage_stream_inner<S>(
+    source: S,
+    context: UsageTrackingContext,
+    conversion: Option<tokio::sync::oneshot::Receiver<(bool, tokio::sync::oneshot::Sender<()>)>>,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>>
+where
+    S: Stream<Item = Result<Bytes, BoxError>> + Send + 'static,
+{
     let UsageTrackingContext {
         ws_evidence,
         protocol,
@@ -524,6 +556,7 @@ where
         let mut usage_event_buffer = Vec::new();
         let mut observed_usage = UsageAccumulator::default();
         let mut source_ended = false;
+        let mut config_cancelled = false;
         let mut transport_failed = false;
         let mut protocol_completed = false;
         let mut protocol_terminal = false;
@@ -534,7 +567,7 @@ where
         loop {
             let next = tokio::select! {
                 _ = sender.closed() => break,
-                _ = config_changed.changed() => break,
+                _ = config_changed.changed() => { config_cancelled = true; break; },
                 result = source.next() => result,
             };
             let result: Result<Bytes, BoxError> = match next {
@@ -578,13 +611,31 @@ where
                 break;
             }
         }
+        // The converter needs EOF to validate and flush the terminal event.
+        // Close its source before awaiting its outcome; otherwise both tasks
+        // would wait for each other. A dropped converter means cancellation.
+        let _keep_open = if conversion.is_none() {
+            Some(sender)
+        } else {
+            drop(sender);
+            None
+        };
+        let (converted, recorded) = match conversion {
+            Some(result) => match result.await {
+                Ok((success, recorded)) => (Some(success), Some(recorded)),
+                Err(_) => (None, None),
+            },
+            None => (Some(true), None),
+        };
+        let conversion_failed = converted == Some(false) && !config_cancelled;
         let stream_succeeded = if streaming {
             (protocol_terminal || (source_ended && protocol_completed))
                 && !protocol_failed
                 && !transport_failed
         } else {
             source_ended && !transport_failed
-        };
+        } && converted == Some(true)
+            && !config_cancelled;
         if stream_succeeded {
             if protocol == ProxyProtocol::OpenAiResponses {
                 websocket::capability::http_success(&failure_state, ws_evidence.as_ref());
@@ -605,7 +656,13 @@ where
                 &failure_state,
                 "upstream returned an error event after stream commit".into(),
             );
-        } else if streaming && source_ended {
+        } else if conversion_failed && !transport_failed {
+            mark_failure(&failure_state, target_id, &retry_policy);
+            set_error(
+                &failure_state,
+                "upstream stream could not be converted".into(),
+            );
+        } else if streaming && source_ended && !protocol_completed {
             mark_failure(&failure_state, target_id, &retry_policy);
             set_error(
                 &failure_state,
@@ -631,7 +688,12 @@ where
         if !stream_succeeded {
             record.status = StatusCode::BAD_GATEWAY.as_u16();
         }
-        if stream_succeeded || transport_failed || protocol_failed || source_ended {
+        if stream_succeeded
+            || transport_failed
+            || protocol_failed
+            || conversion_failed
+            || source_ended
+        {
             record_request(&failure_state, stream_succeeded, record.first_token_ms);
         }
         record.input_tokens = observed_usage.input_tokens;
@@ -648,12 +710,15 @@ where
             attempt.duration_ms = attempt_started.elapsed().as_millis() as u64;
             attempt.success = if stream_succeeded {
                 Some(true)
-            } else if transport_failed || protocol_failed || source_ended {
+            } else if transport_failed || protocol_failed || conversion_failed || source_ended {
                 Some(false)
             } else {
                 None
             };
             let _ = store.record_attempt(&attempt);
+        }
+        if let Some(recorded) = recorded {
+            let _ = recorded.send(());
         }
     });
     Box::pin(stream::unfold(receiver, |mut receiver| async move {

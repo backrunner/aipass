@@ -75,6 +75,20 @@ impl Drop for Body {
         self._cancel.cancel();
     }
 }
+// A second prepared frame could otherwise turn a failure after dispatch into
+// a local incompatibility and incorrectly authorize a second generation.
+pub(super) fn prepared_wire(current: &mut String, frame: &Value) -> Result<(), String> {
+    if !current.is_empty() {
+        return Err("duplicate provider preparation after dispatch".into());
+    }
+    let wire = frame["value"]["wire"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or("missing provider protocol")?;
+    *current = wire.to_owned();
+    Ok(())
+}
+
 impl SubscriptionBackend for CommunityBridge {
     fn request(
         &self,
@@ -98,6 +112,12 @@ impl SubscriptionBackend for CommunityBridge {
     ) -> SubscriptionFuture {
         let bridge = self.clone();
         Box::pin(async move {
+            if !payload.is_object() {
+                return Ok(SubscriptionResponse::rejected_request(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "request must be a JSON object",
+                ));
+            }
             let streaming = payload["stream"] == true;
             let owner = target.config.id;
             let (head_tx, head_rx) = oneshot::channel();
@@ -293,7 +313,15 @@ impl SubscriptionBackend for Dispatch {
         p: &Value,
         targets: &[ResolvedTarget],
     ) -> Result<Option<Uuid>, String> {
-        let a = self.claude.history_owner(p)?;
+        self.history_owner_for_session(p, targets, None)
+    }
+    fn history_owner_for_session(
+        &self,
+        p: &Value,
+        targets: &[ResolvedTarget],
+        session: Option<&str>,
+    ) -> Result<Option<Uuid>, String> {
+        let a = self.claude.history_owner_for_session(p, targets, session)?;
         let b = self.community.history_owner_for_targets(p, targets)?;
         if a.is_some() && b.is_some() && a != b {
             Err("conversation mixes subscription accounts".into())

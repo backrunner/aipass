@@ -25,8 +25,9 @@ mod provider;
 mod subscription;
 pub use provider::ProviderProfile;
 pub use subscription::{
-    subscription_history_call_ids, SubscriptionBackend, SubscriptionCodec, SubscriptionFuture,
-    SubscriptionResponse, SubscriptionStream,
+    portable_subscription_call_id, subscription_history_call_ids, SubscriptionBackend,
+    SubscriptionCodec, SubscriptionFuture, SubscriptionPrepareError, SubscriptionResponse,
+    SubscriptionStream,
 };
 mod concurrency;
 mod config;

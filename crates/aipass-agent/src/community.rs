@@ -705,17 +705,23 @@ impl CommunityBridge {
                         }
                     }
                     Some("prepared") => {
-                        wire = frame["value"]["wire"]
-                            .as_str()
-                            .ok_or("missing provider protocol")?
-                            .into();
+                        backend::prepared_wire(&mut wire, &frame)?;
                         payload["model"] = frame["value"]["model"].clone();
-                        let body = self.inner.codec.prepare_protocol(
+                        let body = match self.inner.codec.prepare_protocol(
                             &wire,
                             protocol,
                             payload.take(),
                             target.config.id,
-                        )?;
+                        ) {
+                            Ok(body) => body,
+                            Err(error) => {
+                                head.take()
+                                    .ok_or("duplicate provider preparation")?
+                                    .send(Ok((error.into_response(), wire)))
+                                    .map_err(|_| "request cancelled")?;
+                                return Ok(());
+                            }
+                        };
                         worker
                             .process
                             .send(&json!({"type":"request","body":body}))?;
@@ -742,14 +748,14 @@ impl CommunityBridge {
                                 }
                             }
                         }
-                        let response = SubscriptionResponse {
+                        let response = SubscriptionResponse::upstream(
                             status,
                             headers,
-                            body: Box::pin(Body {
+                            Box::pin(Body {
                                 receiver: receiver.take().ok_or("duplicate provider headers")?,
                                 _cancel: cancel.clone(),
                             }),
-                        };
+                        );
                         head.take()
                             .ok_or("duplicate provider headers")?
                             .send(Ok((response, wire.clone())))

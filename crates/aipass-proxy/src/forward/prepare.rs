@@ -22,10 +22,15 @@ pub(super) async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> Attemp
     ));
     let mut rewritten_payload = if (target.profile != ProviderProfile::Generic
         || target.upstream_kind != UpstreamKind::Standard
-        || target.model_override.is_some())
+        || target.model_override.is_some()
+        || target_protocol == ProxyProtocol::AnthropicMessages)
         && ctx.body.bytes().is_none()
     {
-        match ctx.request_json {
+        let payload = match ctx.request_json {
+            Some(value) => Some(value.clone()),
+            None => ctx.body.json().await,
+        };
+        match payload {
             Some(value) => Some(Bytes::from(value.to_string())),
             None => {
                 return AttemptDisposition::Abort(error_response(
@@ -63,12 +68,7 @@ pub(super) async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> Attemp
                     })
                 }) {
                 Ok(payload) => Bytes::from(payload),
-                Err(err) => {
-                    return AttemptDisposition::Abort(error_response(
-                        StatusCode::BAD_REQUEST,
-                        &err.to_string(),
-                    ))
-                }
+                Err(err) => return ctx.conversion_error(err),
             },
         );
     }
@@ -101,7 +101,9 @@ pub(super) async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> Attemp
             rewritten_payload = Some(Bytes::from(body.to_string()));
         }
     }
-    if target.profile != ProviderProfile::Generic {
+    if target.profile != ProviderProfile::Generic
+        || target_protocol == ProxyProtocol::AnthropicMessages
+    {
         if let Some(source) = rewritten_payload
             .take()
             .or_else(|| ctx.body.bytes().cloned())

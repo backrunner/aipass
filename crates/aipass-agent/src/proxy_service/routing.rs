@@ -9,6 +9,7 @@ pub(super) fn provider_profile(
         return Generic;
     }
     match entry.provider_id.as_deref() {
+        Some("anthropic") => Anthropic,
         Some("openai") => OpenAi,
         Some("deepseek") => DeepSeek,
         Some("moonshot" | "kimi") => Kimi,

@@ -31,7 +31,16 @@ const OPENED_URL: &str = "AIPASS_CLAUDE_OPENED_URL";
 const INSTALL_ERROR: &str = "Install or update Claude Code, then check again in AIPass";
 
 fn candidates() -> Vec<PathBuf> {
-    aipass_config_writers::cli_discovery::executable_candidates(&["claude"])
+    // Ordinary tests must never discover or probe the developer's installed
+    // CLI or credential store. Tests pass explicit synthetic executables.
+    #[cfg(test)]
+    {
+        Vec::new()
+    }
+    #[cfg(not(test))]
+    {
+        aipass_config_writers::cli_discovery::executable_candidates(&["claude"])
+    }
 }
 
 /// Shared with the generation bridge; a non-executable file is not a CLI.

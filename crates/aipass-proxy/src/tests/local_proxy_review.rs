@@ -104,6 +104,75 @@ impl SubscriptionBackend for CacheCapture {
     }
     fn revoke(&self) {}
 }
+
+#[test]
+fn claude_acp_options_cross_protocol_conversion_only_from_explicit_headers() {
+    for protocol in [
+        ProxyProtocol::AnthropicMessages,
+        ProxyProtocol::OpenAiChatCompletions,
+        ProxyProtocol::OpenAiResponses,
+    ] {
+        let mut target = conversion_target(
+            "https://unused.invalid".into(),
+            0,
+            ProxyProtocol::AnthropicMessages,
+        );
+        target.upstream_kind = UpstreamKind::ClaudeSubscription;
+        let proxy = direct_proxy(conversion_route(
+            "acp-options",
+            protocol,
+            ProxyProtocol::AnthropicMessages,
+            vec![target],
+            1,
+        ));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        *proxy.state.subscription_backend.write().unwrap() =
+            Some(Arc::new(CacheCapture(captured.clone())));
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let mut body = if protocol == ProxyProtocol::OpenAiResponses {
+            serde_json::json!({"model":"claude","input":"hello"})
+        } else {
+            serde_json::json!({"model":"claude","messages":[{"role":"user","content":"hello"}]})
+        };
+        body["_aipass_claude_session"] =
+            serde_json::json!({"cwd":"/spoofed","permissionMode":"bypassPermissions"});
+        for header in [
+            None,
+            Some(r#"{"cwd":"/fixture","permissionMode":"plan"}"#),
+            Some("invalid"),
+        ] {
+            let mut request = client
+                .post(format!("http://{}{}", proxy.bind_addr, protocol.path()))
+                .bearer_auth("acp-options")
+                .json(&body);
+            if let Some(header) = header {
+                request = request
+                    .header("x-aipass-claude-session", header)
+                    .header("x-aipass-session-id", "fixture");
+            }
+            let response = request.send().unwrap();
+            if header == Some("invalid") {
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            } else {
+                assert_eq!(response.status(), StatusCode::OK);
+                response.bytes().unwrap();
+                let messages = captured.lock().unwrap();
+                let payload = messages.last().unwrap();
+                if header.is_some() {
+                    assert_eq!(payload["_aipass_claude_session"]["cwd"], "/fixture");
+                    assert_eq!(payload["_aipass_claude_session"]["permissionMode"], "plan");
+                } else {
+                    assert!(payload.get("_aipass_claude_session").is_none());
+                }
+            }
+        }
+        assert_eq!(captured.lock().unwrap().len(), 2);
+    }
+}
 #[test]
 fn claude_client_cache_requires_a_messages_header_and_cannot_be_enabled_by_body_spoofing() {
     for (protocol, opt_in) in [
@@ -271,7 +340,7 @@ async fn mixed_line_endings_keep_split_sse_errors_explicit_before_commit() {
     }
 }
 
-fn direct_proxy(route: ResolvedRoute) -> ProxyHandle {
+pub(super) fn direct_proxy(route: ResolvedRoute) -> ProxyHandle {
     let proxy = start_proxy(available_addr(), route);
     let mut config = proxy.state.config.read().unwrap().clone();
     config.upstream_proxy.mode = UpstreamProxyMode::Direct;

@@ -3,7 +3,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::{invalid, number, parse_tool_arguments, ConversionError, ProxyProtocol};
+use crate::{invalid, number, parse_tool_arguments, unsupported, ConversionError, ProxyProtocol};
 
 use ProxyProtocol::{AnthropicMessages as AM, OpenAiChatCompletions as CC, OpenAiResponses as RS};
 
@@ -12,6 +12,41 @@ pub(crate) fn convert(
     to: ProxyProtocol,
     payload: Value,
 ) -> Result<Value, ConversionError> {
+    let source = object(&payload, from)?;
+    match from {
+        AM if !source.get("content").is_some_and(Value::is_array) => {
+            return Err(invalid(AM, "response has no content array"))
+        }
+        CC if !payload
+            .pointer("/choices/0/message")
+            .is_some_and(Value::is_object) =>
+        {
+            return Err(invalid(CC, "response has no assistant message"))
+        }
+        _ => {}
+    }
+    if from == AM {
+        for block in payload["content"].as_array().unwrap() {
+            validate_am_block(block, to)?;
+        }
+    }
+    if from == CC {
+        let message = &payload["choices"][0]["message"];
+        if ![
+            "content",
+            "refusal",
+            "reasoning",
+            "reasoning_content",
+            "tool_calls",
+            "function_call",
+        ]
+        .iter()
+        .any(|k| message.get(*k).is_some())
+        {
+            return Err(invalid(CC, "assistant message has no content or calls"));
+        }
+        validate_chat_content(message, to)?;
+    }
     match (from, to) {
         (AM, CC) => am_to_cc(payload),
         (AM, RS) => am_to_rs(payload),
@@ -20,6 +55,41 @@ pub(crate) fn convert(
         (CC, RS) | (RS, CC) => crate::openai::response(from, payload),
         _ => Err(ConversionError::Unsupported(from, to)),
     }
+}
+
+// Provider-owned opaque thinking is deliberately not transplanted. Unknown
+// executable/output blocks must not disappear into a fabricated text success.
+pub(crate) fn validate_am_block(block: &Value, to: ProxyProtocol) -> Result<(), ConversionError> {
+    match block["type"].as_str() {
+        Some("text" | "tool_use" | "thinking" | "redacted_thinking") => Ok(()),
+        Some(kind) => Err(unsupported(AM, to, format!("output block {kind}"))),
+        None => Err(invalid(AM, "output block has no type")),
+    }
+}
+pub(crate) fn validate_chat_content(
+    message: &Value,
+    to: ProxyProtocol,
+) -> Result<(), ConversionError> {
+    if message.get("audio").is_some_and(|v| !v.is_null()) {
+        return Err(unsupported(CC, to, "audio output"));
+    }
+    if message
+        .get("content")
+        .is_some_and(|v| !(v.is_null() || v.is_string() || v.is_array()))
+    {
+        return Err(invalid(CC, "assistant content must be text or an array"));
+    }
+    if let Some(parts) = message["content"].as_array() {
+        for part in parts {
+            if part["type"] == "text" && !part["text"].is_string() {
+                return Err(invalid(CC, "text part must contain text"));
+            }
+            if !matches!(part["type"].as_str(), Some("text" | "thinking")) {
+                return Err(unsupported(CC, to, "output content part"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn object(
@@ -280,6 +350,10 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
     let message = choice.get("message").cloned().unwrap_or(Value::Null);
 
     let mut content: Vec<Value> = Vec::new();
+    let refusal = message["refusal"].as_str().filter(|s| !s.is_empty());
+    if let Some(text) = refusal {
+        content.push(json!({"type":"text","text":text}));
+    }
     let reasoning = crate::reasoning::chat_reasoning(&message);
     if !reasoning.is_empty() {
         content.push(json!({"type":"thinking","thinking":reasoning}));
@@ -299,12 +373,22 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
     }
     if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
         for (index, call) in tool_calls.iter().enumerate() {
-            let function = call.get("function").cloned().unwrap_or(Value::Null);
+            let (name, input) = if call["type"] == "custom" {
+                (
+                    call["custom"]["name"].clone(),
+                    json!({"input":call["custom"]["input"]}),
+                )
+            } else {
+                (
+                    call["function"]["name"].clone(),
+                    parse_tool_arguments(call.pointer("/function/arguments"), CC)?,
+                )
+            };
             content.push(json!({
                 "type": "tool_use",
                 "id": call.get("id").cloned().unwrap_or_else(|| json!(format!("toolu_conv_{index}"))),
-                "name": function.get("name").cloned().unwrap_or(Value::Null),
-                "input": parse_tool_arguments(function.get("arguments"), CC)?,
+                "name": name,
+                "input": input,
             }));
         }
     }
@@ -319,7 +403,7 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
         "role": "assistant",
         "model": src.get("model").cloned().unwrap_or(Value::Null),
         "content": content,
-        "stop_reason": cc_finish_to_am_stop(choice.get("finish_reason").and_then(Value::as_str)),
+        "stop_reason": if refusal.is_some() {"refusal"}else{cc_finish_to_am_stop(choice.get("finish_reason").and_then(Value::as_str))},
         "stop_sequence": Value::Null,
         "usage": openai_usage_to_am(src.get("usage"), "prompt_tokens", "prompt_tokens_details"),
     }))
@@ -349,6 +433,7 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
 
     let mut content: Vec<Value> = Vec::new();
     let mut saw_tool = false;
+    let mut saw_refusal = false;
     for (index, item) in output.iter().enumerate() {
         match item.get("type").and_then(Value::as_str) {
             Some("reasoning") => {
@@ -369,8 +454,19 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
             Some("message") => {
                 if let Some(parts) = item.get("content").and_then(Value::as_array) {
                     for part in parts {
+                        if !matches!(part["type"].as_str(), Some("output_text" | "refusal")) {
+                            return Err(unsupported(RS, AM, "output content part"));
+                        }
                         if part.get("type").and_then(Value::as_str) == Some("output_text") {
                             content.push(json!({"type": "text", "text": part.get("text").cloned().unwrap_or(Value::Null)}));
+                        }
+                        if let Some(text) = part
+                            .get("refusal")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
+                            saw_refusal = true;
+                            content.push(json!({"type":"text","text":text}));
                         }
                     }
                 }
@@ -384,7 +480,7 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
                     "input": parse_tool_arguments(item.get("arguments"), RS)?,
                 }));
             }
-            _ => {}
+            _ => return Err(unsupported(RS, AM, "output item")),
         }
     }
 
@@ -393,6 +489,8 @@ fn rs_to_am(payload: Value) -> Result<Value, ConversionError> {
         "max_tokens"
     } else if saw_tool {
         "tool_use"
+    } else if saw_refusal {
+        "refusal"
     } else {
         "end_turn"
     };

@@ -216,6 +216,8 @@ enum AttemptDisposition {
     Response(Response<BoxBody>),
     /// Client-visible failure returned immediately, without retrying.
     Abort(Response<BoxBody>),
+    /// This request cannot be represented by this target. No request was sent.
+    Skip(String),
     /// Record the failure and move on to the next target or hold round.
     Retry {
         error: String,
@@ -260,6 +262,27 @@ struct AttemptContext<'a> {
 }
 
 impl AttemptContext<'_> {
+    fn conversion_error(
+        &self,
+        error: aipass_proxy_conversion::ConversionError,
+    ) -> AttemptDisposition {
+        if matches!(
+            error,
+            aipass_proxy_conversion::ConversionError::UnsupportedFeature { .. }
+                | aipass_proxy_conversion::ConversionError::Unsupported(..)
+        ) {
+            self.state.usage.log_diagnostic(
+                "info",
+                format!(
+                    "event=proxy.target.incompatible request_id={} target_id={} reason={error}",
+                    self.request_id, self.target.config.id
+                ),
+            );
+            AttemptDisposition::Skip(error.to_string())
+        } else {
+            AttemptDisposition::Abort(error_response(StatusCode::BAD_REQUEST, &error.to_string()))
+        }
+    }
     /// Persist a failed attempt, trip the circuit breaker, and report the
     /// error so the loop can move on to the next target.
     fn fail(
@@ -348,7 +371,7 @@ pub(crate) async fn forward_request_inner(
         method,
         request_query,
         incoming_headers,
-        body,
+        mut body,
         started,
         started_at,
     } = request;
@@ -359,7 +382,7 @@ pub(crate) async fn forward_request_inner(
             route.config.id
         ),
     );
-    let request_json = if route.config.conversion_enabled
+    let mut request_json = if route.config.conversion_enabled
         || route.targets.iter().any(|target| {
             target.upstream_kind != UpstreamKind::Standard
                 || target.profile != ProviderProfile::Generic
@@ -369,6 +392,12 @@ pub(crate) async fn forward_request_inner(
     } else {
         None
     };
+    if request_json.as_ref().is_some_and(|v| !v.is_object()) {
+        return Ok(error_response(
+            StatusCode::BAD_REQUEST,
+            "request must be a JSON object",
+        ));
+    }
     let request_metadata = body.metadata().await.unwrap_or_default();
     let tool_summary = body
         .parse_metadata::<diagnostics::protocol::RequestSummary>()
@@ -391,6 +420,14 @@ pub(crate) async fn forward_request_inner(
         model_routes::validate_request(&route, model.as_deref(), request_json.as_ref())
     {
         return Ok(error_response(StatusCode::BAD_REQUEST, &error));
+    }
+    if let Some(payload) = request_json.as_mut() {
+        if model_routes::make_portable(&route, payload) {
+            // Native HTTP and the websocket bridge read the replayable body,
+            // while conversions and subscription backends read request_json.
+            // Both paths must see the same history and identifiers.
+            body = ReplayableRequestBody::Memory(Bytes::from(payload.to_string()));
+        }
     }
     let mut last_error = None;
     let mut ws_rejection = None;
@@ -419,7 +456,13 @@ pub(crate) async fn forward_request_inner(
                 .read()
                 .map_err(|_| "Claude session unavailable")?
                 .as_ref()
-                .map(|backend| backend.history_owner_for_targets(payload, &route.targets))
+                .map(|backend| {
+                    backend.history_owner_for_session(
+                        payload,
+                        &route.targets,
+                        session_key.as_deref(),
+                    )
+                })
                 .transpose()?
                 .flatten();
             if gemini.is_some() && claude.is_some() {
@@ -443,6 +486,7 @@ pub(crate) async fn forward_request_inner(
     let mut target_attempts = 0u8;
     let mut generation_submitted = false;
     let mut capacity_skipped = false;
+    let mut incompatible_targets = std::collections::HashSet::new();
     let mut hold_round = 0u32;
     let hold_deadline = hold_deadline(&route.config.retry, started);
     'hold: loop {
@@ -458,6 +502,9 @@ pub(crate) async fn forward_request_inner(
             );
             let mut round_attempts = 0u8;
             for mut target in targets {
+                if incompatible_targets.contains(&target.config.id) {
+                    continue;
+                }
                 if history_owner.is_some_and(|owner| owner != target.config.id) {
                     continue;
                 }
@@ -575,6 +622,12 @@ pub(crate) async fn forward_request_inner(
                         return Ok(attach_in_flight_guard(response, Some(target_activity)))
                     }
                     AttemptDisposition::Abort(response) => return Ok(response),
+                    AttemptDisposition::Skip(error) => {
+                        incompatible_targets.insert(target.config.id);
+                        last_error = Some(error);
+                        round_attempts = round_attempts.saturating_sub(1);
+                        target_attempts = target_attempts.saturating_sub(1);
+                    }
                     AttemptDisposition::Dispatch(_) => {
                         unreachable!("dispatch is consumed inside run_http_attempt")
                     }
@@ -590,6 +643,14 @@ pub(crate) async fn forward_request_inner(
             }
         }
         if generation_submitted {
+            break;
+        }
+        if route
+            .targets
+            .iter()
+            .filter(|t| t.config.enabled && history_owner.is_none_or(|owner| owner == t.config.id))
+            .all(|t| incompatible_targets.contains(&t.config.id))
+        {
             break;
         }
         let retry = &route.config.retry;
@@ -610,12 +671,17 @@ pub(crate) async fn forward_request_inner(
     }
 
     let at_capacity = capacity_skipped && target_attempts == 0;
-    let final_status = if at_capacity {
+    let incompatible = !at_capacity && target_attempts == 0 && !incompatible_targets.is_empty();
+    let final_status = if incompatible {
+        StatusCode::BAD_REQUEST
+    } else if at_capacity {
         StatusCode::TOO_MANY_REQUESTS
     } else {
         ws_rejection.unwrap_or(StatusCode::BAD_GATEWAY)
     };
-    let message = if at_capacity {
+    let message = if incompatible {
+        "request cannot be preserved by the available targets"
+    } else if at_capacity {
         "all available providers are at their concurrency limit"
     } else {
         "all upstream targets failed"

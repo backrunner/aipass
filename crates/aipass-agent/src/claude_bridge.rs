@@ -1,5 +1,4 @@
-//! Genuine Claude Code process runtime. Caller tools cross authenticated Agent
-//! IPC with an additional per-run capability; the child only enables native web search when explicitly offered.
+//! Claude subscription routing through a Rust-owned ACP session adapter.
 use aipass_agent_protocol::{AgentRequest, ClaudeBridgeRequest, SensitiveString};
 use aipass_proxy::{
     ResolvedTarget, SubscriptionBackend, SubscriptionFuture, SubscriptionResponse,
@@ -33,6 +32,7 @@ struct ToolCall {
     arguments: Value,
     claimed: bool,
     result: Option<Value>,
+    control_id: Option<String>,
 }
 struct Run {
     entry_id: Uuid,
@@ -48,32 +48,29 @@ struct Run {
     history: [u8; 32],
     history_messages: Vec<Value>,
     child: Child,
-    stdin: ChildStdin,
+    acp: acp::Client,
     _directory: tempfile::TempDir,
     tools: Vec<Value>,
     sender: Option<SegmentSender>,
+    segment: Uuid,
     calls: Vec<ToolCall>,
     content: Vec<Value>,
     message: Value,
+    native_message: Option<String>,
     last_used: Instant,
     parked: bool,
+    deferred: bool,
     terminal: bool,
+}
+impl Run {
+    fn busy(&self) -> bool {
+        self.sender.is_some() || self.parked || self.deferred || self.acp.pending_work()
+    }
 }
 impl Drop for Run {
     fn drop(&mut self) {
-        if matches!(self.child.try_wait(), Ok(Some(_))) {
-            return;
-        }
-        #[cfg(windows)]
-        crate::windows_process::terminate_tree(self.child.id());
-        #[cfg(unix)]
-        {
-            if let Some(pid) = rustix::process::Pid::from_raw(self.child.id() as i32) {
-                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-            }
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        acp::stop(&mut self.child);
+        self.acp.cancel();
     }
 }
 struct Inner {
@@ -89,8 +86,7 @@ pub(crate) struct ClaudeBridge {
 impl ClaudeBridge {
     pub(crate) fn active(&self, entry: Uuid) -> bool {
         self.inner.runs.lock().map_or(true, |runs| {
-            runs.values()
-                .any(|r| r.entry_id == entry && (r.sender.is_some() || r.parked))
+            runs.values().any(|r| r.entry_id == entry && r.busy())
         })
     }
     pub(crate) fn new(vault: &Path) -> Self {
@@ -110,6 +106,7 @@ impl ClaudeBridge {
                 runs.retain(|_, r| {
                     r.sender.is_some()
                         || r.last_used.elapsed() < if r.parked { PARK_TTL } else { IDLE_TTL }
+                        || (!r.parked && r.acp.background_active())
                 });
             };
         });
@@ -128,17 +125,20 @@ impl ClaudeBridge {
         let run = runs
             .get_mut(capability)
             .ok_or("Claude bridge capability expired")?;
-        if run.last_used.elapsed() > if run.parked { PARK_TTL } else { IDLE_TTL } {
+        if run.last_used.elapsed() > if run.parked { PARK_TTL } else { IDLE_TTL }
+            && (run.parked || !run.acp.background_active())
+        {
             return Err("Claude session expired".into());
         }
         match request {
             ClaudeBridgeRequest::ListTools => Ok(json!({"tools":run.tools})),
             ClaudeBridgeRequest::Call { name, arguments } => {
-                let Some(call) = run
-                    .calls
-                    .iter_mut()
-                    .find(|c| !c.claimed && c.name == name && c.arguments == arguments)
-                else {
+                let Some(call) = run.calls.iter_mut().find(|c| {
+                    !c.claimed
+                        && c.control_id.is_none()
+                        && c.name == name
+                        && c.arguments == arguments
+                }) else {
                     return Ok(json!({"pending":true}));
                 };
                 call.claimed = true;
@@ -173,28 +173,8 @@ impl ClaudeBridge {
         payload: &Value,
         session: Option<String>,
     ) -> Result<(SubscriptionStream, Option<String>), String> {
-        if payload.to_string().len() > MAX_LINE as usize {
-            return Err("Claude input exceeds bridge limit".into());
-        }
-        if payload.get("temperature").is_some()
-            || payload.get("top_p").is_some()
-            || payload
-                .get("stop_sequences")
-                .is_some_and(|v| v.as_array().is_none_or(|a| !a.is_empty()))
-        {
-            return Err(
-                "Claude Code subscription does not expose sampling or stop-sequence controls"
-                    .into(),
-            );
-        }
-        if payload
-            .get("tool_choice")
-            .is_some_and(|v| v["type"] != "auto")
-        {
-            return Err("Claude Code subscription requires automatic tool choice".into());
-        }
-        let web_search = native_tools::search_requested(payload)?;
-        let cache = cache::Plan::read(payload)?;
+        let (web_search, options, cache) =
+            preflight::check(payload, session.as_deref()).map_err(|e| e.to_string())?;
         let mut normalized = payload.clone();
         if !cache.client {
             cache::strip_marks(&mut normalized);
@@ -207,6 +187,7 @@ impl ClaudeBridge {
             return Err("Claude messages are empty".into());
         }
         let mut context = json!({"model":payload["model"],"system":payload["system"],"tools":payload["tools"],"thinking":payload["thinking"],"output_config":payload["output_config"],"max_tokens":payload["max_tokens"]});
+        context["acp"] = json!({"version":1,"session":session,"execution":options});
         if cache.client {
             context["client_cache"] = cache.identity();
         }
@@ -254,12 +235,13 @@ impl ClaudeBridge {
             None
         };
         let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        let segment = Uuid::new_v4();
         let mut runs = self
             .inner
             .runs
             .lock()
             .map_err(|_| "Claude bridge unavailable")?;
-        let results = messages
+        let all_results = messages
             .last()
             .and_then(|m| m["content"].as_array())
             .map(|blocks| {
@@ -270,12 +252,29 @@ impl ClaudeBridge {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let native_result = |b: &Value| {
+            b["tool_use_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("toolu_aipass_claude_"))
+        };
+        let results = if all_results.iter().any(native_result) {
+            if !all_results.iter().all(native_result) {
+                return Err(
+                    "cannot mix pending Claude results with another provider's results".into(),
+                );
+            }
+            all_results
+        } else {
+            Vec::new()
+        };
         let key = runs
             .iter()
             .find(|(_, r)| {
                 r.owner == target.config.id
                     && r.fingerprint == fingerprint
                     && r.context == context
+                    && r.session == session
+                    && r.history == prefix
                     && r.sender.is_none()
                     && if !results.is_empty() {
                         r.parked
@@ -293,16 +292,30 @@ impl ClaudeBridge {
         if let Some(key) = key {
             let run = runs.get_mut(&key).unwrap();
             let prepared = validate_results(&run.calls, &results)?;
-            if !results.is_empty() {
-                for (id, result) in prepared {
-                    let call = run.calls.iter_mut().find(|c| c.id == id).unwrap();
-                    call.result = Some(result);
+            interactions::validate(run, &prepared)?;
+            let resumed = (|| {
+                if !results.is_empty() {
+                    for (id, result) in prepared {
+                        let call = run.calls.iter_mut().find(|c| c.id == id).unwrap();
+                        if let Some(control_id) = &call.control_id {
+                            run.acp
+                                .respond(control_id, interactions::response(&result)?)?;
+                        }
+                        call.result = Some(result);
+                    }
+                } else {
+                    run.acp
+                        .prompt(messages.last().unwrap()["content"].clone())?;
+                    run.calls.clear();
                 }
-            } else {
-                write_user(&mut run.stdin, messages.last().unwrap()["content"].clone())?;
-                run.calls.clear();
+                Ok::<_, String>(())
+            })();
+            if let Err(error) = resumed {
+                runs.remove(&key);
+                return Err(error);
             }
             run.sender = Some(sender);
+            run.segment = segment;
             run.last_used = Instant::now();
             run.terminal = false;
             run.parked = false;
@@ -313,6 +326,7 @@ impl ClaudeBridge {
                     receiver,
                     inner: Arc::downgrade(&self.inner),
                     key,
+                    segment,
                     complete: false,
                 }),
                 cache.report(false, !results.is_empty()),
@@ -324,17 +338,14 @@ impl ClaudeBridge {
             );
         }
         if runs.values().any(|r| {
-            r.owner == target.config.id
-                && session.is_some()
-                && r.session == session
-                && r.sender.is_some()
+            r.owner == target.config.id && session.is_some() && r.session == session && r.busy()
         }) {
             return Err("Claude conversation already has an active turn".into());
         }
         while runs.len() >= MAX_RUNS {
             let oldest = runs
                 .iter()
-                .filter(|(_, r)| r.sender.is_none())
+                .filter(|(_, r)| !r.busy())
                 .min_by_key(|(_, r)| r.last_used)
                 .map(|(k, _)| k.clone())
                 .ok_or("Claude process limit reached")?;
@@ -343,7 +354,14 @@ impl ClaudeBridge {
         let key = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let directory =
             tempfile::tempdir().map_err(|_| "could not create isolated Claude workspace")?;
-        let workspace = if cli_home.is_some() {
+        // A changed history invalidates the old native state. Never append only
+        // the latest user sentence after a turn handled by a different model.
+        runs.retain(|_, r| {
+            !(session.is_some() && r.session == session && r.owner == target.config.id)
+        });
+        let workspace = if let Some(options) = &options {
+            options.cwd.clone()
+        } else if cli_home.is_some() {
             checkpoint::workspace(&self.inner.vault)?
         } else {
             directory.path().to_owned()
@@ -354,17 +372,7 @@ impl ClaudeBridge {
                 .and_then(|home| checkpoint::restore(saved, home, &workspace))
         });
         let native_session = resumed.unwrap_or_else(Uuid::new_v4);
-        let tools = payload["tools"].as_array().map(|tools|tools.iter().filter(|tool| !tool["type"].as_str().is_some_and(|t|t.starts_with("web_search_"))).map(|tool|json!({"name":tool["name"],"description":tool["description"],"inputSchema":tool["input_schema"]})).collect::<Vec<_>>()).unwrap_or_default();
-        if tools.iter().any(|t| {
-            t["name"].as_str().is_none_or(|n| {
-                n.is_empty()
-                    || !n
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-            })
-        }) {
-            return Err("Claude bridge tool names must contain only letters, numbers, underscores or hyphens".into());
-        }
+        let tools = payload["tools"].as_array().map(|tools|tools.iter().filter(|tool| !tool["type"].as_str().is_some_and(|t|t.starts_with("web_search_"))).map(|tool|json!({"name":tool["name"],"description":tool["description"],"inputSchema":tool.get("input_schema").filter(|v|!v.is_null()).cloned().unwrap_or_else(||json!({"type":"object"}))})).collect::<Vec<_>>()).unwrap_or_default();
         let helper = std::env::current_exe().map_err(|_| "agent helper executable unavailable")?;
         let mcp = json!({"mcpServers":{"aipass":{"command":helper,"args":["--claude-mcp-helper","--vault",self.inner.vault],"env":{"AIPASS_CLAUDE_CAPABILITY":key}}}});
         #[cfg(test)]
@@ -382,16 +390,13 @@ impl ClaudeBridge {
         let mut command = Command::new(binary);
         command
             .args([
-                "-p",
                 "--output-format",
                 "stream-json",
                 "--input-format",
                 "stream-json",
                 "--include-partial-messages",
                 "--verbose",
-                "--strict-mcp-config",
-                "--setting-sources",
-                "",
+                "--permission-prompt-tool=stdio",
             ])
             .arg("--model")
             .arg(
@@ -405,7 +410,12 @@ impl ClaudeBridge {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        native_tools::configure(&mut command, web_search);
+        if let Some(options) = &options {
+            options.configure(&mut command);
+        } else {
+            command.args(["--strict-mcp-config", "--setting-sources", ""]);
+            native_tools::configure(&mut command, web_search);
+        }
         if cli_home.is_none() {
             command.arg("--no-session-persistence");
         } else if let Some(session) = resumed {
@@ -433,6 +443,7 @@ impl ClaudeBridge {
             command.arg("--effort").arg(effort);
         }
         crate::claude_cli::configure(&mut command, directory.path());
+        command.env("CLAUDE_CODE_ENTRYPOINT", "sdk-cli");
         command.current_dir(&workspace);
         if let Some(environment) = target
             .upstream_proxy
@@ -481,10 +492,11 @@ impl ClaudeBridge {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = command.spawn().map_err(|_| "could not start Claude Code")?;
-        let stdout = child.stdout.take().ok_or("Claude output unavailable")?;
-        let stdin = child.stdin.take().ok_or("Claude input unavailable")?;
-        let mut run = Run {
+        let prompt = handoff::prompt(messages, resumed.is_some())?;
+        // Validate multimodal content before starting any native process.
+        acp::validate_prompt(&prompt)?;
+        let connection = acp::Connection::spawn(&mut command, native_session)?;
+        let run = Run {
             entry_id: target.config.provider_entry_id,
             owner: target.config.id,
             fingerprint,
@@ -497,36 +509,44 @@ impl ClaudeBridge {
             session,
             history: history_hash(messages),
             history_messages: messages.clone(),
-            child,
-            stdin,
+            child: connection.child,
+            acp: connection.client,
             _directory: directory,
             tools,
             sender: Some(sender),
+            segment,
             calls: Vec::new(),
             content: Vec::new(),
             message: Value::Null,
+            native_message: None,
             last_used: Instant::now(),
             parked: false,
+            deferred: false,
             terminal: false,
         };
-        let prompt = if resumed.is_some() || (messages.len() == 1 && messages[0]["role"] == "user")
-        {
-            messages.last().unwrap()["content"].clone()
-        } else {
-            json!([{ "type":"text", "text":format!("Continue this conversation, preserving its tool results and user instructions:\n{}",json!(messages)) }])
-        };
-        write_user(&mut run.stdin, prompt)?;
+        let client = run.acp.clone();
+        let cwd = run.workspace.clone();
         runs.insert(key.clone(), run);
         drop(runs);
+        if let Err(error) =
+            acp::initialize(&client, &connection.output, &cwd).and_then(|()| client.prompt(prompt))
+        {
+            if let Ok(mut runs) = self.inner.runs.lock() {
+                runs.remove(&key);
+            }
+            return Err(error);
+        }
         let weak = Arc::downgrade(&self.inner);
         let reader_key = key.clone();
-        std::thread::spawn(move || read_events(stdout, weak, reader_key));
+        let native_tools = options.is_some();
+        std::thread::spawn(move || read_events(connection.output, weak, reader_key, native_tools));
         let full_replay = resumed.is_none() && messages.len() > 1;
         Ok((
             Box::pin(SegmentStream {
                 receiver,
                 inner: Arc::downgrade(&self.inner),
                 key,
+                segment,
                 complete: false,
             }),
             cache.report(full_replay, false),
@@ -534,8 +554,34 @@ impl ClaudeBridge {
     }
 }
 impl SubscriptionBackend for ClaudeBridge {
+    fn history_owner_for_session(
+        &self,
+        payload: &Value,
+        targets: &[ResolvedTarget],
+        session: Option<&str>,
+    ) -> Result<Option<Uuid>, String> {
+        let mut owner = self.history_owner(payload)?;
+        if let Some(session) = session {
+            let runs = self
+                .inner
+                .runs
+                .lock()
+                .map_err(|_| "Claude bridge unavailable")?;
+            for run in runs.values().filter(|r| {
+                r.session.as_deref() == Some(session)
+                    && targets.iter().any(|t| t.config.id == r.owner)
+                    && r.busy()
+            }) {
+                if owner.is_some_and(|owner| owner != run.owner) {
+                    return Err("conversation has unfinished work in another account".into());
+                }
+                owner = Some(run.owner);
+            }
+        }
+        Ok(owner)
+    }
     fn history_owner(&self, payload: &Value) -> Result<Option<Uuid>, String> {
-        let ids = aipass_proxy::subscription_history_call_ids(payload)
+        let ids = handoff::pending_ids(payload)
             .into_iter()
             .filter(|id| id.starts_with("toolu_aipass_claude_"))
             .map(str::to_owned)
@@ -611,11 +657,8 @@ impl SubscriptionBackend for ClaudeBridge {
     ) -> SubscriptionFuture {
         let bridge = self.clone();
         Box::pin(async move {
-            if let Err(error) = cache::Plan::read(&payload) {
-                return Ok(SubscriptionResponse::rejected_request(
-                    hyper::StatusCode::BAD_REQUEST,
-                    &error,
-                ));
+            if let Err(error) = preflight::check(&payload, session.as_deref()) {
+                return Ok(error.into_response());
             }
             let streaming = payload["stream"] == true;
             let (mut stream, cache_report) =
@@ -668,7 +711,23 @@ impl SubscriptionBackend for ClaudeBridge {
 fn history_hash(messages: &[Value]) -> [u8; 32] {
     let mut messages = messages.to_vec();
     for message in &mut messages {
+        for part in message["content"].as_array_mut().into_iter().flatten() {
+            let field = match part["type"].as_str() {
+                Some("tool_use") => "id",
+                Some("tool_result") => "tool_use_id",
+                _ => continue,
+            };
+            if let Some(id) = part[field]
+                .as_str()
+                .and_then(aipass_proxy::portable_subscription_call_id)
+            {
+                part[field] = json!(id);
+            }
+        }
         if message["role"] == "assistant" {
+            if let Some(text) = message["content"].as_str() {
+                message["content"] = json!([{"type":"text","text":text}]);
+            }
             if let Some(parts) = message["content"].as_array_mut() {
                 parts.retain(|p| {
                     !matches!(p["type"].as_str(), Some("thinking" | "redacted_thinking"))
@@ -677,22 +736,29 @@ fn history_hash(messages: &[Value]) -> [u8; 32] {
                                 s.starts_with("<reasoning>") && s.ends_with("</reasoning>")
                             }))
                 });
+                // OpenAI responses combine assistant text blocks and place
+                // function calls after the text. Compare that portable shape,
+                // preserving exact text, tool IDs, arguments and their order.
+                let text = parts
+                    .iter()
+                    .filter(|p| p["type"] == "text")
+                    .filter_map(|p| p["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                parts.retain(|p| p["type"] != "text");
+                if !text.is_empty() {
+                    parts.insert(0, json!({"type":"text","text":text}));
+                }
             }
         }
     }
+    messages.retain(|m| {
+        m["role"] != "assistant" || !m["content"].as_array().is_some_and(Vec::is_empty)
+    });
     hash(&json!(messages))
 }
 fn hash(v: &Value) -> [u8; 32] {
     Sha256::digest(v.to_string().as_bytes()).into()
-}
-fn write_user(stdin: &mut ChildStdin, content: Value) -> Result<(), String> {
-    writeln!(
-        stdin,
-        "{}",
-        json!({"type":"user","message":{"role":"user","content":content}})
-    )
-    .and_then(|_| stdin.flush())
-    .map_err(|_| "Claude process input closed".into())
 }
 fn claude_binary() -> Option<PathBuf> {
     crate::claude_cli::binary()
@@ -737,11 +803,16 @@ fn tool_result(value: &Value) -> Result<Value, String> {
     Ok(json!({"content":content,"isError":value["is_error"]==true}))
 }
 
+mod acp;
 mod cache;
 mod checkpoint;
 mod feedback;
+mod handoff;
+mod interactions;
 mod mcp;
 mod native;
+mod preflight;
+mod session_options;
 mod stream;
 pub use mcp::run_mcp_helper;
 #[cfg(target_os = "macos")]

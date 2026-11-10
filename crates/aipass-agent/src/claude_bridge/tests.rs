@@ -1,9 +1,12 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
+mod paseo;
+mod review;
+mod routing;
 pub(super) fn fixture(script: &str) -> (tempfile::TempDir, ClaudeBridge, ResolvedTarget) {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("claude");
-    std::fs::write(&path, format!("#!/bin/sh\n{script}")).unwrap();
+    std::fs::write(&path, format!("#!/bin/sh\ncase \" $* \" in *' -p '*|*' --print '*) exit 91;; esac\nread -r initialize\nprintf '%s\\n' '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"aipass-initialize\",\"response\":{{}}}}}}'\n{script}")).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     let bridge = ClaudeBridge::new(temp.path());
     *bridge.inner.binary.lock().unwrap() = Some(path);
@@ -21,7 +24,7 @@ pub(super) fn fixture(script: &str) -> (tempfile::TempDir, ClaudeBridge, Resolve
     };
     (temp, bridge, target)
 }
-async fn collect(mut stream: SubscriptionStream) -> Value {
+pub(super) async fn collect(mut stream: SubscriptionStream) -> Value {
     let mut collector = Collector::default();
     while let Some(chunk) = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -51,6 +54,7 @@ cat <<'EVENTS'
 {"type":"stream_event","event":{"type":"content_block_stop","index":0}}
 {"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}
 {"type":"stream_event","event":{"type":"message_stop"}}
+{"type":"result","is_error":false}
 EVENTS
 while read -r input; do :; done
 "#;
@@ -235,6 +239,17 @@ fn history_only_ignores_nonportable_assistant_thinking() {
     assert_ne!(
         history_hash(a.as_array().unwrap()),
         history_hash(c.as_array().unwrap())
+    );
+    let original = json!([{"role":"assistant","content":[{"type":"text","text":"one"},{"type":"text","text":"two"},{"type":"tool_use","id":"call","name":"lookup","input":{"n":1}}]}]);
+    let mut converted = json!([{"role":"assistant","content":[{"type":"text","text":"one\ntwo"},{"type":"tool_use","id":"call","name":"lookup","input":{"n":1}}]}]);
+    assert_eq!(
+        history_hash(original.as_array().unwrap()),
+        history_hash(converted.as_array().unwrap())
+    );
+    converted[0]["content"][1]["input"]["n"] = json!(2);
+    assert_ne!(
+        history_hash(original.as_array().unwrap()),
+        history_hash(converted.as_array().unwrap())
     );
 }
 

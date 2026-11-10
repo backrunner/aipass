@@ -182,7 +182,14 @@ printf '%s' '{"oauthAccount":{"emailAddress":"alice@example.test"}}' > .claude.j
 #[test]
 #[ignore = "explicit local CLI capability smoke, no login or model call"]
 fn installed_claude_can_be_probed_without_credentials() {
-    assert!(status().available);
+    let paths = aipass_config_writers::cli_discovery::executable_candidates(&["claude"]);
+    assert!(available_from(&paths).0.available);
+}
+
+#[test]
+fn ordinary_tests_never_discover_the_installed_claude() {
+    assert!(candidates().is_empty());
+    assert!(!status().available);
 }
 
 #[cfg(target_os = "macos")]

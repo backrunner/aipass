@@ -13,6 +13,16 @@ pub(super) async fn deliver_upstream_response(
         UpstreamKind::ClaudeSubscription | UpstreamKind::CommunitySubscription
     ) && response
         .headers
+        .get("x-aipass-target-incompatible")
+        .is_some_and(|v| v == "1")
+    {
+        return AttemptDisposition::Skip("subscription target cannot preserve this request".into());
+    }
+    if matches!(
+        target.upstream_kind,
+        UpstreamKind::ClaudeSubscription | UpstreamKind::CommunitySubscription
+    ) && response
+        .headers
         .get("x-aipass-local-rejection")
         .is_some_and(|v| v == "1")
     {
@@ -228,7 +238,7 @@ pub(super) async fn deliver_upstream_response(
             return ctx.fail(
                 Some(status),
                 first_token_ms,
-                false,
+                buffered_response_has_output(target_protocol, &buffered),
                 "upstream returned an error payload",
             );
         }
@@ -236,7 +246,7 @@ pub(super) async fn deliver_upstream_response(
             return ctx.fail(
                 Some(status),
                 first_token_ms,
-                false,
+                true,
                 "upstream returned an empty response",
             );
         }
@@ -287,10 +297,12 @@ pub(super) async fn deliver_upstream_response(
                 .and_then(|value| serde_json::to_vec(&value).ok())
                 .map(Bytes::from);
             if converted_payload.is_none() {
+                // A malformed successful reply is not an explicit rejection.
+                // Generation (including tools) may already have run upstream.
                 return ctx.fail(
                     Some(status),
                     first_token_ms,
-                    false,
+                    true,
                     "protocol conversion failed for upstream response",
                 );
             }
@@ -316,35 +328,35 @@ pub(super) async fn deliver_upstream_response(
             ctx.attempt_started,
         )
     });
-    let body_stream = track_usage_stream(
-        body_stream,
-        UsageTrackingContext {
-            protocol: upstream_protocol,
-            ws_evidence: ctx.ws_evidence.clone(),
-            store: state.usage.clone(),
-            record,
-            pricing: model_pricing,
-            streaming: streaming_response,
-            attempt_started: ctx.attempt_started,
-            started: ctx.started,
-            failure_state: state.clone(),
-            config_changed: ctx.config_changed.clone(),
-            route_id: route.config.id,
-            target_id: target.config.id,
-            session_key: ctx.session_key.map(str::to_string),
-            retry_policy: route.config.retry.clone(),
-            attempt: streaming_attempt,
-        },
-    );
+    let tracking = UsageTrackingContext {
+        protocol: upstream_protocol,
+        ws_evidence: ctx.ws_evidence.clone(),
+        store: state.usage.clone(),
+        record,
+        pricing: model_pricing,
+        streaming: streaming_response,
+        attempt_started: ctx.attempt_started,
+        started: ctx.started,
+        failure_state: state.clone(),
+        config_changed: ctx.config_changed.clone(),
+        route_id: route.config.id,
+        target_id: target.config.id,
+        session_key: ctx.session_key.map(str::to_string),
+        retry_policy: route.config.retry.clone(),
+        attempt: streaming_attempt,
+    };
     let output_stream: Pin<Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>> =
         if conversion && streaming_response {
-            convert_sse_stream(body_stream, upstream_protocol, inbound_protocol)
+            track_converted_usage_stream(body_stream, tracking, inbound_protocol)
         } else if let Some(converted) = converted_payload {
             // Track usage from the original provider payload only after
             // conversion has succeeded, then emit the converted body.
-            Box::pin(body_stream.map(move |result| result.map(|_| converted.clone())))
+            Box::pin(
+                track_usage_stream(body_stream, tracking)
+                    .map(move |result| result.map(|_| converted.clone())),
+            )
         } else {
-            Box::pin(body_stream)
+            track_usage_stream(body_stream, tracking)
         };
     if !streaming_response {
         persist_attempt(
