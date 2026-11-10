@@ -215,3 +215,52 @@ fn mixed_ttl_usage_survives_late_updates_and_every_protocol_round_trip() {
     usage.update(&json!({"cache_creation":{"ephemeral_1h_input_tokens":0}}));
     assert_eq!(usage.totals(AM).cache_creation_1h_tokens, 0);
 }
+
+#[test]
+fn thinking_token_details_survive_all_wire_conversions_without_double_counting() {
+    for thinking in [None, Some(0), Some(7)] {
+        let mut usage = json!({"input_tokens":11,"output_tokens":23});
+        if let Some(thinking) = thinking {
+            usage["output_tokens_details"] = json!({"thinking_tokens":thinking});
+        }
+        let message = json!({"id":"msg_usage","model":"fixture","content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn","usage":usage});
+        let frames = [
+            json!({"type":"message_start","message":{"id":"msg_usage","model":"fixture","usage":{"input_tokens":11,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"answer"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":usage}),
+            // A sparse late observation must not erase reasoning details.
+            json!({"type":"message_delta","usage":{"output_tokens":23}}),
+            json!({"type":"message_stop"}),
+        ];
+        for via in [AM, CC, RS] {
+            let intermediate = BuiltinConversionPlugin
+                .convert_response(AM, via, message.clone())
+                .unwrap();
+            let streamed = converted(AM, via, &frames);
+            for to in [AM, CC, RS] {
+                let buffered = BuiltinConversionPlugin
+                    .convert_response(via, to, intermediate.clone())
+                    .unwrap();
+                let mut accumulated = UsageAccumulator::default();
+                for frame in converted(via, to, &streamed) {
+                    accumulated.observe(to, &frame);
+                }
+                let pointer = match to {
+                    AM => "/output_tokens_details/thinking_tokens",
+                    CC => "/completion_tokens_details/reasoning_tokens",
+                    RS => "/output_tokens_details/reasoning_tokens",
+                };
+                for value in [&buffered["usage"], accumulated.wire()] {
+                    assert_eq!(
+                        value.pointer(pointer).and_then(Value::as_u64),
+                        thinking,
+                        "{via:?} -> {to:?}: {value}"
+                    );
+                    let totals = BuiltinConversionPlugin.extract_usage(to, value);
+                    assert_eq!((totals.input_tokens, totals.output_tokens), (11, 23));
+                }
+            }
+        }
+    }
+}

@@ -15,11 +15,25 @@ pub enum ProviderProfile {
     Grok,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PreparationError {
+    #[error("{0}")]
+    Invalid(&'static str),
+    #[error("{0}")]
+    Incompatible(&'static str),
+}
+
+impl From<&'static str> for PreparationError {
+    fn from(message: &'static str) -> Self {
+        Self::Invalid(message)
+    }
+}
+
 pub(crate) fn prepare(
     profile: ProviderProfile,
     protocol: ProxyProtocol,
     bytes: Bytes,
-) -> Result<Bytes, String> {
+) -> Result<Bytes, PreparationError> {
     if protocol == ProxyProtocol::AnthropicMessages {
         let Ok(mut body) = serde_json::from_slice::<Value>(&bytes) else {
             return Ok(bytes);
@@ -49,6 +63,7 @@ pub(crate) fn prepare(
         obj.entry(to).or_insert(value);
     }
     match profile {
+        ProviderProfile::Mistral => mistral_reasoning(obj)?,
         ProviderProfile::DeepSeek | ProviderProfile::Kimi => {
             let model = obj
                 .get("model")
@@ -131,9 +146,110 @@ pub(crate) fn prepare(
         .map_err(|_| "could not encode provider request".into())
 }
 
+// Mistral replays assistant reasoning in typed content, including when a
+// Responses/Messages history was first converted to Chat. Never infer this
+// contract from a model name or an arbitrary gateway URL.
+fn mistral_reasoning(body: &mut serde_json::Map<String, Value>) -> Result<(), PreparationError> {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for message in messages {
+        if message["role"] != "assistant" {
+            continue;
+        }
+        let Some(message) = message.as_object_mut() else {
+            continue;
+        };
+        for key in ["reasoning_content", "reasoning"] {
+            if message
+                .get(key)
+                .is_some_and(|v| !v.is_null() && !v.is_string())
+            {
+                return Err("Mistral assistant reasoning must be text".into());
+            }
+        }
+        let reasoning = message.get("reasoning").and_then(Value::as_str);
+        let content = message.get("reasoning_content").and_then(Value::as_str);
+        if reasoning.zip(content).is_some_and(|(a, b)| a != b) {
+            return Err(PreparationError::Incompatible(
+                "Mistral assistant reasoning aliases must agree",
+            ));
+        }
+        let thinking = content.or(reasoning).unwrap_or("").to_owned();
+        message.remove("reasoning");
+        message.remove("reasoning_content");
+        if thinking.trim().is_empty() {
+            continue;
+        }
+        let mut parts = match message.remove("content") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::String(text)) if text.is_empty() => Vec::new(),
+            Some(Value::String(text)) => vec![json!({"type":"text","text":text})],
+            Some(Value::Array(parts)) => parts,
+            _ => return Err("Mistral assistant content must be text or content parts".into()),
+        };
+        if parts.iter().any(|part| part["type"] == "thinking") {
+            return Err(PreparationError::Incompatible(
+                "Mistral assistant reasoning cannot use both fields and content parts",
+            ));
+        }
+        parts.insert(
+            0,
+            json!({"type":"thinking","thinking":[{"type":"text","text":thinking}]}),
+        );
+        message.insert("content".into(), json!(parts));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mistral_reasoning_keeps_tools_and_rejects_conflicting_representations() {
+        let converted = |message: Value| {
+            prepare(
+                ProviderProfile::Mistral,
+                ProxyProtocol::OpenAiChatCompletions,
+                Bytes::from(json!({"messages":[message]}).to_string()),
+            )
+            .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap()["messages"][0].clone())
+        };
+        let native = json!({"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"native"}]},{"type":"text","text":"answer"}],"tool_calls":[]});
+        assert_eq!(converted(native.clone()).unwrap(), native);
+        for absent in [json!(null), json!(""), json!(" \t")] {
+            let message = converted(json!({"role":"assistant","content":null,"reasoning_content":absent,"tool_calls":[{"id":"call_fixture"}]})).unwrap();
+            assert!(message.get("reasoning_content").is_none());
+            assert!(message["content"].is_null());
+            assert_eq!(message["tool_calls"], json!([{"id":"call_fixture"}]));
+        }
+        for reasoning in [json!("exact"), json!("")] {
+            let output = converted(json!({"role":"assistant","content":[{"type":"text","text":"answer"}],"reasoning":reasoning,"reasoning_content":reasoning})).unwrap();
+            assert!(output.get("reasoning").is_none() && output.get("reasoning_content").is_none());
+        }
+        for invalid in [
+            json!({"role":"assistant","reasoning":"one","reasoning_content":"two"}),
+            json!({"role":"assistant","reasoning_content":42}),
+            json!({"role":"assistant","reasoning_content":"one","content":42}),
+            json!({"role":"assistant","reasoning_content":"one","content":[{"type":"thinking","thinking":"two"}]}),
+        ] {
+            assert!(converted(invalid).is_err());
+        }
+        let user = json!({"role":"tool","content":{"reasoning_content":"user data"},"tool_call_id":"call_fixture"});
+        assert_eq!(converted(user.clone()).unwrap(), user);
+        let generic = Bytes::from(
+            json!({"messages":[{"role":"assistant","reasoning_content":"exact"}]}).to_string(),
+        );
+        assert_eq!(
+            prepare(
+                ProviderProfile::Generic,
+                ProxyProtocol::OpenAiChatCompletions,
+                generic.clone()
+            )
+            .unwrap(),
+            generic
+        );
+    }
     #[test]
     fn kimi_models_have_distinct_thinking_contracts() {
         let prepare_kimi = |body: Value| {

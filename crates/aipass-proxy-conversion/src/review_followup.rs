@@ -11,6 +11,85 @@ fn events(chunks: Vec<String>) -> Vec<Value> {
 }
 
 #[test]
+fn converted_chat_stop_reason_matches_actual_tool_calls() {
+    for calls in [
+        json!(null),
+        json!([]),
+        json!([{"id":"call_fixture","type":"function","function":{"name":"lookup","arguments":"{}"}}]),
+    ] {
+        let has_calls = calls.as_array().is_some_and(|calls| !calls.is_empty());
+        for finish in ["stop", "tool_calls", "length"] {
+            let expected = if finish == "length" {
+                "max_tokens"
+            } else if has_calls {
+                "tool_use"
+            } else {
+                "end_turn"
+            };
+            let message = json!({"role":"assistant","content":"answer","tool_calls":calls});
+            let converted = BuiltinConversionPlugin
+                .convert_response(
+                    CC,
+                    AM,
+                    json!({"choices":[{"message":message,"finish_reason":finish}]}),
+                )
+                .unwrap();
+            assert_eq!(
+                converted["stop_reason"], expected,
+                "buffered {finish} with {calls}"
+            );
+            let mut converter = StreamConverter::new(CC, AM).unwrap();
+            let mut output = converter
+                .push_event(&format!(
+                    "data: {}\n\n",
+                    json!({"choices":[{"delta":message}]})
+                ))
+                .unwrap();
+            output.extend(
+                converter
+                    .push_event(&format!(
+                        "data: {}\n\n",
+                        json!({"choices":[{"delta":{},"finish_reason":finish}]})
+                    ))
+                    .unwrap(),
+            );
+            output.extend(converter.finish().unwrap());
+            assert_eq!(
+                events(output)
+                    .iter()
+                    .find(|e| e["type"] == "message_delta")
+                    .unwrap()["delta"]["stop_reason"],
+                expected,
+                "stream {finish} with {calls}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unsupported_legacy_call_output_cannot_disappear_into_text_success() {
+    let message = json!({"role":"assistant","content":null,"function_call":{"name":"lookup","arguments":"{}"}});
+    for to in [AM, RS] {
+        assert!(matches!(
+            BuiltinConversionPlugin.convert_response(
+                CC,
+                to,
+                json!({"choices":[{"message":message,"finish_reason":"function_call"}]})
+            ),
+            Err(ConversionError::UnsupportedFeature { .. })
+        ));
+        let mut converter = StreamConverter::new(CC, to).unwrap();
+        assert!(matches!(
+            converter.push_event(&format!(
+                "data: {}\n\n",
+                json!({"choices":[{"delta":message}]})
+            )),
+            Err(ConversionError::UnsupportedFeature { .. })
+        ));
+    }
+}
+
+#[test]
 fn responses_final_snapshots_complete_partial_text_and_tool_arguments() {
     for to in [CC, AM] {
         let mut converter = StreamConverter::new(RS, to).unwrap();

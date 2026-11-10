@@ -111,10 +111,13 @@ pub(super) async fn prepare_upstream_request(ctx: &AttemptContext<'_>) -> Attemp
             rewritten_payload = Some(
                 match provider::prepare(target.profile, target_protocol, source) {
                     Ok(body) => body,
+                    Err(error @ provider::PreparationError::Incompatible(_)) => {
+                        return AttemptDisposition::Skip(error.to_string());
+                    }
                     Err(error) => {
                         return AttemptDisposition::Abort(error_response(
                             StatusCode::BAD_REQUEST,
-                            &error,
+                            &error.to_string(),
                         ))
                     }
                 },

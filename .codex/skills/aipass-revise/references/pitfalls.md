@@ -1279,6 +1279,20 @@ Newest entries last within each section.
 - **Guardrail**: Check native and converted routes, buffered and streamed delivery, and all authentication schemes. Keep arbitrary tool JSON untouched. Preserve exact schemas during fallback; do not flatten constraints without equivalent validation. Test that invalid continuations leave calls pending and embedded result images still work.
 - **Watch points**: `reasoning`, proxy `provider`, `forward/prepare`, `SubscriptionCodec`, `model_routes`, `upstream`, Claude preflight and `tests/magpie_followup`.
 
+### One-connection H2 fixtures can accept a local HTTP/1 probe first
+- **Symptom**: Cursor's loopback upload/pool tests intermittently failed before receiving request headers, with an H2 `PROTOCOL_ERROR`.
+- **Root cause**: `subscriptions/cursor.rs` and `cursor/pool/tests.rs` handed the listener's first accepted socket to an H2-only server. A failure capture showed that socket began `GET / HTTP/1.1`, not an H2 preface; successful later runs had not revealed the competing connection.
+- **Fix**: The shared test server answers only a bodyless, unauthenticated root discovery probe and accepts the intended H2 connection afterward. Both fixtures inject the probe before their own request; removing the filter makes the regression fail.
+- **Guardrail**: Classify a failing connection from captured bytes, not a passing retry. Do not ignore arbitrary errors, authenticated requests or non-root traffic. Keep malformed H2 prefaces visible to the H2 parser, and bound fixture accepts/headers. Production Cursor transport is unchanged.
+- **Watch points**: `subscriptions/cursor/test_server`, both Cursor H2 fixtures, and loopback mock servers that accept one connection.
+
+### Provider reply labels and converted finish reasons need wire evidence
+- **Symptom**: JSON-labeled SSE became a 502 or waited for EOF; thinking usage disappeared; converted plain text ended as tool work; Mistral received replay fields outside its content schema.
+- **Root cause**: `forward/response.rs` trusted Content-Type alone; response usage helpers omitted reasoning details; Chat stop mapping ignored emitted calls; the Mistral profile only normalized token limits.
+- **Fix**: Inspect bounded, uncompressed SSE prefixes without losing bytes, preserve reasoning usage across all conversions, base converted Messages stop reasons on actual calls, reject unsupported legacy output, and adapt Mistral reasoning after request conversion. Type provider-specific incompatibilities so fallback keeps the original body and attempt budget.
+- **Guardrail**: Exercise native and translated HTTP paths, both retry modes and every chunk split; hold upstream completion until the client acknowledges content. Assert errors before output can fall back while errors after output cannot. Preserve explicit zero usage without billing reasoning twice. Test profile normalization after each inbound conversion, plus unchanged generic providers and malformed/conflicting inputs.
+- **Watch points**: `forward/{prepare,response}`, `forward/response/sniff`, `provider`, conversion `response`, `stream/chat_messages`, `usage/tests`, and proxy `tests/magpie_followup`.
+
 ### Mixed groups need portable completed history and equivalent stream framing
 - **Symptom**: Old provider-owned tool IDs pinned every later turn, while native tool activity disappeared through OpenAI streaming conversion. Multiple text blocks could also invalidate a legitimate permission continuation.
 - **Root cause**: History ownership scanned completed rounds, synthesized text was emitted only in populated block-start events, and streamed Chat text lacked the non-streaming block separator.

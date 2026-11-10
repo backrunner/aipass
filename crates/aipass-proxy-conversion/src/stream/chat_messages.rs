@@ -222,6 +222,7 @@ impl CcToAm {
         let mut out = Vec::new();
         self.ensure_started(&mut out);
         self.close_open(&mut out);
+        let has_tools = !self.tools.is_empty();
         for (cc_index, mut tool) in std::mem::take(&mut self.tools) {
             if tool.id.is_empty() {
                 tool.id = format!("toolu_conv_{cc_index}");
@@ -250,7 +251,7 @@ impl CcToAm {
         let stop = if self.refused && reason == "stop" {
             "refusal"
         } else {
-            cc_finish_to_am_stop(Some(&reason))
+            cc_finish_to_am_stop(Some(&reason), has_tools)
         };
         out.push(emit_typed("message_delta",&json!({"type":"message_delta","delta":{"stop_reason":stop,"stop_sequence":null},"usage":crate::response::openai_usage_to_am(Some(self.usage.wire()), "prompt_tokens", "prompt_tokens_details")})));
         out.push(emit_typed("message_stop", &json!({"type":"message_stop"})));

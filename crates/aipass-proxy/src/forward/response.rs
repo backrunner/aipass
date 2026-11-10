@@ -1,4 +1,5 @@
 use super::*;
+mod sniff;
 
 pub(super) async fn deliver_upstream_response(
     ctx: &AttemptContext<'_>,
@@ -82,7 +83,7 @@ pub(super) async fn deliver_upstream_response(
             generation_submitted: false,
         };
     }
-    let response_headers = response.headers;
+    let mut response_headers = response.headers;
     let content_type = response_headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -99,13 +100,25 @@ pub(super) async fn deliver_upstream_response(
         route.config.conversion_enabled && route.config.inbound_protocol != target_protocol;
     let codex_response =
         status.is_success() && target.upstream_kind == UpstreamKind::CodexSubscription;
-    let streaming_response =
-        ctx.streaming_request && (is_event_stream(&content_type) || codex_response);
+    let mut upstream_stream: UpstreamBodyStream = response.body;
+    let streaming_response = ctx.streaming_request
+        && (is_event_stream(&content_type)
+            || codex_response
+            || (status.is_success()
+                && match sniff::event_stream(&response_headers, &mut upstream_stream).await {
+                    Ok(streaming) => streaming,
+                    Err(err) => return ctx.fail(Some(status), None, true, err.to_string()),
+                }));
+    if streaming_response && !is_event_stream(&content_type) {
+        response_headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        );
+    }
     // A silent retry must not commit a response before the upstream stream
     // has completed. Only an explicit upstream error can permit a retry; an
     // incomplete stream must never replay generation.
     let buffer_streaming = streaming_response && route.config.retry.silent_retry && !ctx.websocket;
-    let mut upstream_stream: UpstreamBodyStream = response.body;
     if target.upstream_kind == UpstreamKind::GeminiNative && streaming_response {
         upstream_stream = gemini::stream(
             upstream_stream,
@@ -113,7 +126,7 @@ pub(super) async fn deliver_upstream_response(
             state.gemini_signatures.clone(),
         );
     }
-    if is_event_stream(&content_type) {
+    if streaming_response || is_event_stream(&content_type) {
         let diagnostic_state = state.clone();
         let request_id = ctx.request_id;
         let route_id = route.config.id;

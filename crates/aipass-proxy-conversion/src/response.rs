@@ -70,6 +70,9 @@ pub(crate) fn validate_chat_content(
     message: &Value,
     to: ProxyProtocol,
 ) -> Result<(), ConversionError> {
+    if message.get("function_call").is_some_and(|v| !v.is_null()) {
+        return Err(unsupported(CC, to, "legacy function_call output"));
+    }
     if message.get("audio").is_some_and(|v| !v.is_null()) {
         return Err(unsupported(CC, to, "audio output"));
     }
@@ -135,10 +138,10 @@ pub(crate) fn am_stop_to_cc_finish(stop_reason: Option<&str>) -> &'static str {
 }
 
 /// CC finish_reason -> AM stop_reason.
-pub(crate) fn cc_finish_to_am_stop(finish_reason: Option<&str>) -> &'static str {
+pub(crate) fn cc_finish_to_am_stop(finish_reason: Option<&str>, has_tools: bool) -> &'static str {
     match finish_reason {
         Some("length") => "max_tokens",
-        Some("tool_calls") => "tool_use",
+        _ if has_tools => "tool_use",
         _ => "end_turn",
     }
 }
@@ -186,6 +189,17 @@ pub(crate) fn am_usage_to_openai(
         "total_tokens": total_input.saturating_add(output),
         details_key: {"cached_tokens": cache_read, "cache_creation_tokens": cache_creation},
     });
+    if let Some(thinking) = usage
+        .pointer("/output_tokens_details/thinking_tokens")
+        .and_then(Value::as_u64)
+    {
+        let key = if output_key == "completion_tokens" {
+            "completion_tokens_details"
+        } else {
+            "output_tokens_details"
+        };
+        result[key] = json!({"reasoning_tokens": thinking});
+    }
     if let Some(hour) = usage
         .pointer("/cache_creation/ephemeral_1h_input_tokens")
         .and_then(Value::as_u64)
@@ -210,6 +224,14 @@ pub(crate) fn openai_usage_to_am(
         "cache_read_input_tokens": cache_read,
         "cache_creation_input_tokens": cache_creation,
     });
+    let output_details = if input_key == "prompt_tokens" {
+        "completion_tokens_details"
+    } else {
+        "output_tokens_details"
+    };
+    if let Some(reasoning) = usage[output_details]["reasoning_tokens"].as_u64() {
+        result["output_tokens_details"] = json!({"thinking_tokens": reasoning});
+    }
     if let Some(hour) = usage
         .pointer(&format!("/{details_key}/cache_creation_1h_tokens"))
         .and_then(Value::as_u64)
@@ -397,13 +419,14 @@ fn cc_to_am(payload: Value) -> Result<Value, ConversionError> {
         .get("id")
         .and_then(Value::as_str)
         .unwrap_or("chatcmpl_conv");
+    let has_tools = content.iter().any(|block| block["type"] == "tool_use");
     Ok(json!({
         "id": swap_id_prefix(id, "chatcmpl_", "msg_"),
         "type": "message",
         "role": "assistant",
         "model": src.get("model").cloned().unwrap_or(Value::Null),
         "content": content,
-        "stop_reason": if refusal.is_some() {"refusal"}else{cc_finish_to_am_stop(choice.get("finish_reason").and_then(Value::as_str))},
+        "stop_reason": if refusal.is_some() {"refusal"}else{cc_finish_to_am_stop(choice.get("finish_reason").and_then(Value::as_str), has_tools)},
         "stop_sequence": Value::Null,
         "usage": openai_usage_to_am(src.get("usage"), "prompt_tokens", "prompt_tokens_details"),
     }))
@@ -606,7 +629,7 @@ mod tests {
         ] {
             let out = cc_to_am(json!({
                 "id": "chatcmpl_1", "model": "m",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}, "finish_reason": finish}],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "x", "tool_calls": if finish == "tool_calls" {json!([{"id":"call_fixture","type":"function","function":{"name":"lookup","arguments":"{}"}}])}else{Value::Null}}, "finish_reason": finish}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}
             }))
             .unwrap();
