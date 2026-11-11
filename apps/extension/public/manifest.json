@@ -3,7 +3,7 @@
   "name": "__MSG_extensionName__",
   "short_name": "AIPass",
   "default_locale": "en",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "__MSG_extensionDescription__",
   "icons": {
     "16": "icons/icon-16.png",
@@ -64,5 +64,6 @@
         "<all_urls>"
       ]
     }
-  ]
+  ],
+  "version_name": "0.2.0"
 }
