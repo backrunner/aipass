@@ -174,3 +174,25 @@ fn cancellation_stops_a_waiting_native_adapter() {
     assert!(p.send(&json!({"op":"catalog"})).is_err());
     assert!(worker.next().is_err());
 }
+
+#[test]
+fn duplicate_provider_preparation_cannot_be_reclassified_as_preflight() {
+    let mut wire = String::new();
+    assert!(
+        backend::prepared_wire(&mut wire, &json!({"type":"prepared","value":{"wire":""}})).is_err()
+    );
+    assert!(wire.is_empty());
+    backend::prepared_wire(
+        &mut wire,
+        &json!({"type":"prepared","value":{"wire":"responses"}}),
+    )
+    .unwrap();
+    for next in ["responses", "anthropic", ""] {
+        assert!(backend::prepared_wire(
+            &mut wire,
+            &json!({"type":"prepared","value":{"wire":next}})
+        )
+        .is_err());
+        assert_eq!(wire, "responses");
+    }
+}

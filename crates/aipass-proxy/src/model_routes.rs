@@ -1,6 +1,8 @@
 //! Public group models and member-model bindings, independent of transports.
 use super::*;
 use serde_json::Value;
+mod history;
+pub(crate) use history::make_portable;
 
 pub(crate) fn model_id(route: &ResolvedRoute) -> Option<String> {
     route
@@ -100,8 +102,8 @@ fn bound_block(value: &Value) -> bool {
         return true;
     }
     match value.get("type").and_then(Value::as_str) {
-        Some("redacted_thinking") => true,
-        Some("thinking") => value.get("signature").is_some_and(|v| !v.is_null()),
+        Some("redacted_thinking" | "item_reference") => true,
+        Some("thinking") => aipass_proxy_conversion::thinking_is_bound(value),
         _ => false,
     }
 }

@@ -1,4 +1,6 @@
 mod chinese_providers;
+mod probes;
+use probes::assert_no_api_request;
 mod websocket;
 use super::*;
 use crate::tests::{available_addr, single_target_route};
@@ -356,11 +358,7 @@ async fn api_fallback_survives_rejection_and_never_forwards_keys_on_redirect() {
         let (mut stream, _) = last.accept().await.unwrap();
         let _ = request(&mut stream).await;
         respond(&mut stream,"200 OK",json!({"results":[{"title":"source","url":"https://example.com","content":"verified"}]})).await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), destination.accept())
-                .await
-                .is_err()
-        );
+        assert_no_api_request(&destination).await;
     });
     let route = single_target_route(
         "local-search-token",

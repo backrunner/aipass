@@ -60,7 +60,7 @@ async fn one_native_http2_run_survives_tool_result_and_validates_the_returned_hi
     let requests = Arc::new(AtomicUsize::new(0));
     let seen = requests.clone();
     let server = tokio::spawn(async move {
-        let (socket, _) = listener.accept().await.unwrap();
+        let socket = super::super::test_server::accept(&listener).await.unwrap();
         hyper::server::conn::http2::Builder::new(TokioExecutor::new())
             .serve_connection(
                 TokioIo::new(socket),
@@ -153,6 +153,7 @@ async fn one_native_http2_run_survives_tool_result_and_validates_the_returned_hi
             .await
             .unwrap();
     });
+    super::super::test_server::probe(&base).await;
     let body = json!({"model":"m","stream":true,"messages":[{"role":"user","content":"find"}],"tools":[{"type":"function","function":{"name":"search","parameters":{"type":"object"}}}]});
     let (commands, receiver) = mpsc::channel(1);
     let (abort, cancel) = watch::channel(false);

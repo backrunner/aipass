@@ -178,10 +178,6 @@ async fn oversized_yuanbao_query_falls_through_without_a_request() {
         .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"web_search","arguments":{"query":"中".repeat(501)}}}))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(reply["result"]["isError"], false, "{reply}");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), rejected.accept())
-            .await
-            .is_err()
-    );
+    assert_no_api_request(&rejected).await;
     task.await.unwrap();
 }

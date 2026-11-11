@@ -23,6 +23,8 @@ pub(super) struct CcToAm {
     finish_reason: Option<String>,
     usage: UsageAccumulator,
     terminated: bool,
+    choice: crate::chat::Choice,
+    refused: bool,
 }
 
 #[derive(Default)]
@@ -48,7 +50,7 @@ impl CcToAm {
         };
         // Some providers deliver mid-stream failures as an {"error": ...}
         // payload; surface it instead of silently ending with end_turn.
-        if let Some(error) = chunk.get("error") {
+        if let Some(error) = stream_error(raw, &chunk) {
             self.close_open(&mut out);
             out.push(emit_typed(
                 "error",
@@ -68,12 +70,13 @@ impl CcToAm {
         }
         self.usage.observe(CC, &chunk);
         let choices = chunk.get("choices").and_then(Value::as_array);
-        let Some(choice) = choices.and_then(|choices| choices.first()) else {
+        let Some(choice) = choices.and_then(|choices| self.choice.select(choices)) else {
             return Ok(out); // usage-only chunk
         };
         self.ensure_started(&mut out);
 
         let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+        crate::response::validate_chat_content(&delta, AM)?;
         let reasoning = crate::reasoning::chat_reasoning(&delta);
         if !reasoning.is_empty() {
             let index = match self.open {
@@ -92,7 +95,7 @@ impl CcToAm {
 
         // A few providers stream structured content parts instead of a plain
         // string; fold the text parts so the content is not dropped.
-        let content = match delta.get("content") {
+        let mut content = match delta.get("content") {
             Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
             Some(Value::Array(parts)) => {
                 let text = parts
@@ -104,6 +107,10 @@ impl CcToAm {
             }
             _ => None,
         };
+        if let Some(refusal) = delta["refusal"].as_str().filter(|s| !s.is_empty()) {
+            self.refused = true;
+            content.get_or_insert_with(String::new).push_str(refusal);
+        }
         if let Some(content) = content {
             let index = self.open_text(&mut out);
             out.push(emit_typed(
@@ -112,21 +119,21 @@ impl CcToAm {
             ));
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
-            for call in tool_calls {
-                let index = call["index"].as_u64().unwrap_or(0);
+            for (position, call) in tool_calls.iter().enumerate() {
+                let index = crate::chat::tool_index(call, position)?;
                 if self.tools.len() >= 1024 && !self.tools.contains_key(&index) {
                     return Err(invalid(CC, "too many tool calls"));
                 }
                 let tool = self.tools.entry(index).or_default();
                 if let Some(id) = call["id"].as_str() {
-                    tool.id.push_str(id);
+                    crate::chat::identity(&mut tool.id, id);
                 }
                 if let Some(name) = call
                     .pointer("/function/name")
                     .or_else(|| call.pointer("/custom/name"))
                     .and_then(Value::as_str)
                 {
-                    tool.name.push_str(name);
+                    crate::chat::identity(&mut tool.name, name);
                 }
                 tool.custom |= call["type"] == "custom" || call.get("custom").is_some();
                 if let Some(value) = call
@@ -215,6 +222,7 @@ impl CcToAm {
         let mut out = Vec::new();
         self.ensure_started(&mut out);
         self.close_open(&mut out);
+        let has_tools = !self.tools.is_empty();
         for (cc_index, mut tool) in std::mem::take(&mut self.tools) {
             if tool.id.is_empty() {
                 tool.id = format!("toolu_conv_{cc_index}");
@@ -240,7 +248,12 @@ impl CcToAm {
                 &json!({"type":"content_block_stop","index":index}),
             ));
         }
-        out.push(emit_typed("message_delta",&json!({"type":"message_delta","delta":{"stop_reason":cc_finish_to_am_stop(Some(&reason)),"stop_sequence":null},"usage":crate::response::openai_usage_to_am(Some(self.usage.wire()), "prompt_tokens", "prompt_tokens_details")})));
+        let stop = if self.refused && reason == "stop" {
+            "refusal"
+        } else {
+            cc_finish_to_am_stop(Some(&reason), has_tools)
+        };
+        out.push(emit_typed("message_delta",&json!({"type":"message_delta","delta":{"stop_reason":stop,"stop_sequence":null},"usage":crate::response::openai_usage_to_am(Some(self.usage.wire()), "prompt_tokens", "prompt_tokens_details")})));
         out.push(emit_typed("message_stop", &json!({"type":"message_stop"})));
         self.terminated = true;
         Ok(out)
@@ -252,6 +265,7 @@ impl CcToAm {
 #[derive(Default)]
 pub(super) struct AmToCc {
     started: bool,
+    text_started: bool,
     id: String,
     model: String,
     created: u64,
@@ -270,7 +284,12 @@ impl AmToCc {
         let Some(payload) = parse_payload(&parsed, AM)? else {
             return Ok(out);
         };
-        let Some(kind) = event_kind(&parsed, &payload) else {
+        let error = stream_error(raw, &payload);
+        let Some(kind) = error
+            .as_ref()
+            .map(|_| "error".to_owned())
+            .or_else(|| event_kind(&parsed, &payload))
+        else {
             return Ok(out);
         };
         if self.done {
@@ -300,6 +319,15 @@ impl AmToCc {
             "content_block_start" => {
                 let index = crate::number(payload.get("index"));
                 let block = payload.get("content_block").cloned().unwrap_or(Value::Null);
+                crate::response::validate_am_block(&block, CC)?;
+                if block["type"] == "text" {
+                    // Match non-streaming conversion's block separator so a
+                    // streamed response can be replayed as identical history.
+                    if self.text_started {
+                        out.push(self.chunk(json!({"content":"\n"}), Value::Null, None));
+                    }
+                    self.text_started = true;
+                }
                 if block.get("type").and_then(Value::as_str) == Some("tool_use") {
                     let tool_index = self.next_tool;
                     self.next_tool += 1;
@@ -392,7 +420,7 @@ impl AmToCc {
             // Upstream errors must reach the client; an unnoticed failure
             // would look like a cleanly truncated stream.
             "error" if !self.done => {
-                let error = payload.get("error").cloned().unwrap_or(Value::Null);
+                let error = error.expect("error events have normalized details");
                 let id = if self.id.is_empty() {
                     "chatcmpl_conv".to_string()
                 } else {
@@ -411,6 +439,9 @@ impl AmToCc {
             }
             // content_block_stop, ping, and unknown types carry no CC meaning.
             _ => {}
+        }
+        if let Some(delta) = initial_block_delta(&payload) {
+            out.extend(self.push(&emit_typed("content_block_delta", &delta))?);
         }
         Ok(out)
     }

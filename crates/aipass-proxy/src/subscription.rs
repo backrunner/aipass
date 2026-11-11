@@ -10,6 +10,27 @@ pub struct SubscriptionResponse {
     pub body: SubscriptionStream,
 }
 impl SubscriptionResponse {
+    /// This target cannot represent the request, before any generation starts.
+    pub fn incompatible_target(message: &str) -> Self {
+        let mut response = Self::rejected_request(StatusCode::BAD_REQUEST, message);
+        response.headers.remove("x-aipass-local-rejection");
+        response.headers.insert(
+            "x-aipass-target-incompatible",
+            HeaderValue::from_static("1"),
+        );
+        response
+    }
+    /// Only trusted local preflight may create routing-control headers.
+    /// Never accept these markers from a remote HTTP/provider response.
+    pub fn upstream(status: StatusCode, mut headers: HeaderMap, body: SubscriptionStream) -> Self {
+        headers.remove("x-aipass-local-rejection");
+        headers.remove("x-aipass-target-incompatible");
+        Self {
+            status,
+            headers,
+            body,
+        }
+    }
     /// A local preflight rejection must not trip the vendor circuit or send the
     /// same invalid continuation to another billable account.
     pub fn rejected_request(status: StatusCode, message: &str) -> Self {
@@ -30,6 +51,32 @@ impl SubscriptionResponse {
         }
     }
 }
+#[derive(Debug, thiserror::Error)]
+pub enum SubscriptionPrepareError {
+    #[error("{0}")]
+    Conversion(#[from] aipass_proxy_conversion::ConversionError),
+    #[error("{0}")]
+    Local(String),
+}
+impl SubscriptionPrepareError {
+    /// Preparation happens before the generation body is sent to the worker.
+    /// Carry that evidence without treating later worker failures as retryable.
+    pub fn into_response(self) -> SubscriptionResponse {
+        let incompatible = matches!(
+            &self,
+            Self::Conversion(
+                aipass_proxy_conversion::ConversionError::UnsupportedFeature { .. }
+                    | aipass_proxy_conversion::ConversionError::Unsupported(..)
+            )
+        );
+        if incompatible {
+            SubscriptionResponse::incompatible_target(&self.to_string())
+        } else {
+            SubscriptionResponse::rejected_request(StatusCode::BAD_REQUEST, &self.to_string())
+        }
+    }
+}
+
 pub trait SubscriptionBackend: Send + Sync {
     fn request_protocol(
         &self,
@@ -64,19 +111,45 @@ pub trait SubscriptionBackend: Send + Sync {
     ) -> Result<Option<Uuid>, String> {
         self.history_owner(payload)
     }
+    /// Native background work can own a session after its HTTP reply completed.
+    fn history_owner_for_session(
+        &self,
+        payload: &serde_json::Value,
+        targets: &[ResolvedTarget],
+        _session: Option<&str>,
+    ) -> Result<Option<Uuid>, String> {
+        self.history_owner_for_targets(payload, targets)
+    }
 }
 impl From<reqwest::Response> for SubscriptionResponse {
     fn from(response: reqwest::Response) -> Self {
-        Self {
-            status: response.status(),
-            headers: response.headers().clone(),
-            body: Box::pin(
+        Self::upstream(
+            response.status(),
+            response.headers().clone(),
+            Box::pin(
                 response
                     .bytes_stream()
                     .map(|r| r.map_err(|e| -> BoxError { Box::new(e) })),
             ),
-        }
+        )
     }
+}
+
+/// Stable transcript alias shared by group routing and native history matching.
+/// An alias carries no authority to resume a pending native tool call.
+pub fn portable_subscription_call_id(id: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    [
+        "toolu_aipass_claude_",
+        "call_aipass_gemini_",
+        "call_aipass_cursor_",
+    ]
+    .iter()
+    .any(|prefix| id.starts_with(prefix))
+    .then(|| {
+        let digest = format!("{:x}", Sha256::digest(id.as_bytes()));
+        format!("call_history_{}", &digest[..48])
+    })
 }
 
 /// Only protocol-owned call identifiers are inspected; schemas and user JSON
@@ -139,6 +212,7 @@ impl SubscriptionCodec {
         owner: Uuid,
     ) -> Result<serde_json::Value, String> {
         self.prepare_protocol(wire, ProxyProtocol::OpenAiChatCompletions, body, owner)
+            .map_err(|e| e.to_string())
     }
     pub fn prepare_protocol(
         &self,
@@ -146,27 +220,38 @@ impl SubscriptionCodec {
         source: ProxyProtocol,
         mut body: serde_json::Value,
         owner: Uuid,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, SubscriptionPrepareError> {
+        if !body.is_object() {
+            return Err(SubscriptionPrepareError::Local(
+                "request must be a JSON object".into(),
+            ));
+        }
         body["stream"] = serde_json::json!(true);
         if wire == "gemini" {
-            body = BuiltinConversionPlugin
-                .convert_request(source, ProxyProtocol::OpenAiChatCompletions, body)
-                .map_err(|e| e.to_string())?;
+            body = BuiltinConversionPlugin.convert_request(
+                source,
+                ProxyProtocol::OpenAiChatCompletions,
+                body,
+            )?;
             let (_, bytes) = gemini::prepare(
                 "https://generativelanguage.googleapis.com",
                 Bytes::from(body.to_string()),
                 owner,
-                &*self
-                    .gemini
-                    .lock()
-                    .map_err(|_| "signature ledger unavailable")?,
-            )?;
-            return serde_json::from_slice(&bytes)
-                .map_err(|_| "invalid native Gemini request".into());
+                &*self.gemini.lock().map_err(|_| {
+                    SubscriptionPrepareError::Local("signature ledger unavailable".into())
+                })?,
+            )
+            .map_err(SubscriptionPrepareError::Local)?;
+            return serde_json::from_slice(&bytes).map_err(|_| {
+                SubscriptionPrepareError::Local("invalid native Gemini request".into())
+            });
         }
-        BuiltinConversionPlugin
-            .convert_request(source, community_protocol(wire)?, body)
-            .map_err(|e| e.to_string())
+        let protocol = community_protocol(wire).map_err(SubscriptionPrepareError::Local)?;
+        let mut body = BuiltinConversionPlugin.convert_request(source, protocol, body)?;
+        if protocol == ProxyProtocol::AnthropicMessages {
+            aipass_proxy_conversion::normalize_claude_thinking(&mut body, false);
+        }
+        Ok(body)
     }
     pub async fn normalize(
         &self,

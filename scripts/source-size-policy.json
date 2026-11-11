@@ -87,11 +87,6 @@
       "owner": "crates/aipass-provider-registry",
       "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
     },
-    "crates/aipass-proxy-conversion/src/request.rs": {
-      "maxLines": 1451,
-      "owner": "crates/aipass-proxy-conversion",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
     "crates/aipass-proxy/src/tests.rs": {
       "maxLines": 4343,
       "owner": "crates/aipass-proxy",

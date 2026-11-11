@@ -3,7 +3,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::{invalid, ConversionError, ProxyProtocol};
+use crate::{invalid, unsupported, ConversionError, ProxyProtocol};
 use ProxyProtocol::{OpenAiChatCompletions as CC, OpenAiResponses as RS};
 
 mod stream;
@@ -57,6 +57,7 @@ fn content(value: &Value, to: ProxyProtocol, assistant: bool) -> Result<Value, C
                 file["type"] = json!("input_file");
                 file
             }
+            (CC, "refusal") => json!({"type":"text", "text":part["refusal"]}),
             (CC, "input_text" | "output_text") => json!({"type":"text", "text":part["text"]}),
             (CC, "input_image") if part.get("image_url").is_some() => {
                 let mut image = json!({"type":"image_url", "image_url":{"url":part["image_url"]}});
@@ -68,7 +69,7 @@ fn content(value: &Value, to: ProxyProtocol, assistant: bool) -> Result<Value, C
                 file.as_object_mut().unwrap().remove("type");
                 json!({"type":"file", "file":file})
             }
-            (_, kind) => return Err(invalid(to, format!("unsupported converted content type: {kind}"))),
+            (_, kind) => return Err(unsupported(if to == CC { RS } else { CC }, to, format!("content type {kind}"))),
         });
     }
     Ok(Value::Array(out))
@@ -140,8 +141,18 @@ pub(crate) fn request(from: ProxyProtocol, payload: Value) -> Result<Value, Conv
                     if !reasoning.is_empty() {messages.push(json!({"type":"reasoning","summary":[{"type":"summary_text","text":reasoning}]}));}
                     let mut clean=message.get("content").cloned().unwrap_or(Value::Null);
                     if let Some(parts)=clean.as_array_mut(){parts.retain(|p|p["type"]!="thinking");}
-                    if let Some(body) = Some(&clean).filter(|v| !v.is_null()) {
-                        messages.push(json!({"type":"message", "role":role, "content":content(body, RS, role == "assistant")?}));
+                    let refusal = (role == "assistant").then(|| message["refusal"].as_str()).flatten().filter(|s| !s.is_empty());
+                    if !clean.is_null() || refusal.is_some() {
+                        let mut body = content(&clean, RS, role == "assistant")?;
+                        if let Some(refusal) = refusal {
+                            body = match body {
+                                Value::Null => json!([]),
+                                Value::String(text) => json!([{"type":"output_text","text":text}]),
+                                other => other,
+                            };
+                            body.as_array_mut().unwrap().push(json!({"type":"refusal","refusal":refusal}));
+                        }
+                        messages.push(json!({"type":"message", "role":role, "content":body}));
                     }
                     if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
                         for call in calls { messages.push(call_to_responses(call)?); }
@@ -251,12 +262,7 @@ pub(crate) fn request(from: ProxyProtocol, payload: Value) -> Result<Value, Conv
                                 }
                             }
                         }
-                        kind => {
-                            return Err(invalid(
-                                RS,
-                                format!("unsupported converted input item: {kind}"),
-                            ))
-                        }
+                        kind => return Err(unsupported(RS, CC, format!("input item {kind}"))),
                     }
                 }
                 if !tool_images.is_empty() {
@@ -301,7 +307,11 @@ pub(crate) fn request(from: ProxyProtocol, payload: Value) -> Result<Value, Conv
         } else {
             let kind = string(choice.get("type"));
             if !matches!(kind, "function" | "custom") {
-                return Err(invalid(from, "unsupported tool_choice"));
+                return Err(unsupported(
+                    from,
+                    if from == CC { RS } else { CC },
+                    "tool_choice",
+                ));
             }
             if from == CC {
                 json!({"type":kind, "name":choice[kind]["name"]})

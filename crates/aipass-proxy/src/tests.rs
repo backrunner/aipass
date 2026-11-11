@@ -5,8 +5,11 @@ mod concurrency;
 mod hold_timeout;
 mod image_api;
 mod local_proxy_review;
+mod magpie_followup;
+mod magpie_review;
 mod model_routes;
 mod proxy_settings;
+mod review_followup;
 mod runtime_status;
 mod stability;
 mod subscriptions;
@@ -1267,62 +1270,32 @@ fn forbidden_insufficient_balance_fails_over_before_returning_an_empty_response(
 }
 
 #[test]
-fn successful_empty_upstream_body_fails_over_before_returning_to_client() {
-    let primary = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let primary_addr = primary.local_addr().unwrap();
-    let primary_thread = std::thread::spawn(move || {
-        let (mut stream, _) = primary.accept().unwrap();
-        let _ = read_http_request(&mut stream);
-        write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            )
-            .unwrap();
-    });
-
+fn successful_empty_upstream_body_never_replays_generation() {
+    let (primary_addr, primary) = mock_upstream("200 OK", "application/json", String::new());
     let fallback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let fallback_addr = fallback.local_addr().unwrap();
-    let fallback_thread = std::thread::spawn(move || {
-        let (mut stream, _) = fallback.accept().unwrap();
-        let _ = read_http_request(&mut stream);
-        let body = r#"{"status":"completed","source":"fallback"}"#;
-        write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-            .unwrap();
-    });
-
-    let bind_addr = available_addr();
-    let temp = tempfile::tempdir().unwrap();
-    let usage = Arc::new(UsageStore::open(temp.path().join("usage.sqlite")).unwrap());
-    let token = "aipass_empty_body_fallback_test";
+    let token = "aipass_empty_body_test";
     let route = fallback_route(
         token,
-        &[primary_addr, fallback_addr],
+        &[primary_addr, fallback.local_addr().unwrap()],
         RetryPolicy {
             max_attempts: 2,
             ..RetryPolicy::default()
         },
     );
-    let _proxy = ProxyHandle::start(
-        RuntimeConfig::from_routes(bind_addr.to_string(), vec![route]),
-        usage,
-    )
-    .unwrap();
-
-    let response = reqwest::blocking::Client::new()
-        .post(format!("http://{bind_addr}/v1/responses"))
+    let proxy = local_proxy_review::direct_proxy(route);
+    let response = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap()
+        .post(format!("http://{}/v1/responses", proxy.bind_addr))
         .bearer_auth(token)
         .json(&serde_json::json!({"model":"empty-body-test","input":[]}))
         .send()
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.text().unwrap().contains("fallback"));
-    primary_thread.join().unwrap();
-    fallback_thread.join().unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    primary.join().unwrap();
+    mock_upstream::assert_no_api_request(&fallback);
 }
 
 #[test]
@@ -3915,18 +3888,9 @@ fn anthropic_client_to_responses_upstream_non_streaming() {
 }
 
 #[test]
-fn invalid_converted_response_fails_over_without_recording_success() {
+fn invalid_converted_response_stops_without_recording_success() {
     let (bad_addr, bad) = mock_upstream("200 OK", "application/json", "not json".into());
-    let (good_addr, good) = mock_upstream(
-        "200 OK",
-        "application/json",
-        serde_json::json!({
-            "id":"msg_ok", "type":"message", "role":"assistant", "model":"test",
-            "content":[{"type":"text","text":"fallback"}],
-            "stop_reason":"end_turn", "usage":{"input_tokens":5,"output_tokens":2}
-        })
-        .to_string(),
-    );
+    let fallback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let token = "conversion_failure_test";
     let route = conversion_route(
         token,
@@ -3939,7 +3903,7 @@ fn invalid_converted_response_fails_over_without_recording_success() {
                 ProxyProtocol::OpenAiChatCompletions,
             ),
             conversion_target(
-                format!("http://{good_addr}/v1"),
+                format!("http://{}/v1", fallback.local_addr().unwrap()),
                 1,
                 ProxyProtocol::AnthropicMessages,
             ),
@@ -3954,10 +3918,9 @@ fn invalid_converted_response_fails_over_without_recording_success() {
             .bearer_auth(token)
             .json(&serde_json::json!({"model":"test","messages":[{"role":"user","content":"hello"}],"max_tokens":32}))
             .send().unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.text().unwrap().contains("fallback"));
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     bad.join().unwrap();
-    good.join().unwrap();
+    mock_upstream::assert_no_api_request(&fallback);
     for _ in 0..100 {
         if proxy.status().requests == 1 {
             break;
@@ -3965,7 +3928,7 @@ fn invalid_converted_response_fails_over_without_recording_success() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(proxy.status().requests, 1);
-    assert_eq!(proxy.status().failures, 0);
+    assert_eq!(proxy.status().failures, 1);
     assert!(proxy.status().degraded_target_ids.contains(&failed_id));
     let conn = proxy.state.usage.connection.lock().unwrap();
     let (failed, succeeded): (i64, i64) = conn
@@ -3975,7 +3938,7 @@ fn invalid_converted_response_fails_over_without_recording_success() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((failed, succeeded), (1, 1));
+    assert_eq!((failed, succeeded), (1, 0));
 }
 
 #[test]

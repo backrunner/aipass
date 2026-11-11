@@ -247,7 +247,7 @@ mod tests {
         for client in [false, true] {
             let script = r#"read -r input
 printf '%s\n%s\n%s\n' "$DISABLE_PROMPT_CACHING" "$CLAUDE_CODE_EXTRA_BODY" "$input" > request-cache
-printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_cache","content":[],"usage":{}}}}' '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}' '{"type":"stream_event","event":{"type":"message_stop"}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_cache","content":[],"usage":{}}}}' '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}' '{"type":"stream_event","event":{"type":"message_stop"}}' '{"type":"result","is_error":false}'
 while read -r input; do :; done
 "#;
             let (_dir, bridge, target) = super::super::tests::fixture(script);

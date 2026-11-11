@@ -418,6 +418,8 @@ pub(super) async fn generate(c: &mut Context, m: &Value, body: Value) -> Result<
 
 type Upload = mpsc::Sender<std::result::Result<Vec<u8>, std::io::Error>>;
 #[cfg(test)]
+mod test_server;
+#[cfg(test)]
 async fn open(c: &Context, base: &str, first: Vec<u8>) -> Result<(Upload, Response)> {
     open_transport(&c.client, c.token()?, base, first).await
 }
@@ -466,7 +468,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
+            let socket = test_server::accept(&listener).await.unwrap();
             hyper::server::conn::http2::Builder::new(TokioExecutor::new())
                 .serve_connection(
                     TokioIo::new(socket),
@@ -505,6 +507,7 @@ mod tests {
                 .await
                 .unwrap();
         });
+        test_server::probe(&format!("http://{address}")).await;
         let (c, _input, _output) = super::super::tests::context(
             Client::builder()
                 .no_proxy()

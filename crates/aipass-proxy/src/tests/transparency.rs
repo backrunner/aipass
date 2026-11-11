@@ -45,6 +45,7 @@ fn client_headers() -> HeaderMap {
         ("authorization", "Bearer local-token"),
         ("x-api-key", "local-token"),
         ("api-key", "local-token"),
+        ("x-goog-api-key", "local-google-token"),
         ("user-agent", "codex_cli_rs/1.0.0 (Mac OS; arm64)"),
         ("x-user-agent", "client-sdk/1.0"),
         ("originator", "codex_cli_rs"),
@@ -104,6 +105,12 @@ fn client_identity_wins_without_leaking_proxy_identity_or_local_auth() {
             "x-api-key",
             "upstream-secret",
         ),
+        (
+            ProxyProtocol::OpenAiChatCompletions,
+            "google_api_key",
+            "x-goog-api-key",
+            "upstream-secret",
+        ),
     ] {
         let mut target = test_target("https://provider.test/v1".into(), 0);
         target.config.auth_scheme = scheme.into();
@@ -119,7 +126,7 @@ fn client_identity_wins_without_leaking_proxy_identity_or_local_auth() {
             assert_eq!(headers[name], client_headers()[name]);
         }
         assert_eq!(headers[auth_name], auth_value);
-        for name in ["authorization", "api-key", "x-api-key"] {
+        for name in ["authorization", "api-key", "x-api-key", "x-goog-api-key"] {
             assert_eq!(headers.contains_key(name), name == auth_name);
         }
         assert_eq!(headers["chatgpt-account-id"], "provider-account");

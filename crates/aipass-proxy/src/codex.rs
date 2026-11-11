@@ -176,10 +176,16 @@ pub(crate) fn collect_response(bytes: &[u8]) -> Result<Bytes, (bool, &'static st
     let mut output = std::collections::BTreeMap::new();
     let mut terminal = None;
     let mut offset = 0;
+    let mut committed = false;
     while offset < bytes.len() {
         let end = sse_event_boundary_end(&bytes[offset..]).map_or(bytes.len(), |end| offset + end);
         let event = &bytes[offset..end];
         offset = end;
+        committed |= sse_event_reports_output(ProxyProtocol::OpenAiResponses, event)
+            || sse_event_reports_completion(ProxyProtocol::OpenAiResponses, event);
+        if sse_event_reports_error(event) {
+            return Err((!committed, "Codex upstream returned an error"));
+        }
         let Some(data) = sse_event_data(event) else {
             continue;
         };
@@ -189,9 +195,6 @@ pub(crate) fn collect_response(bytes: &[u8]) -> Result<Bytes, (bool, &'static st
         let value: Value =
             serde_json::from_slice(&data).map_err(|_| (false, "invalid Codex stream event"))?;
         match value.get("type").and_then(Value::as_str) {
-            Some("error" | "response.failed") => {
-                return Err((true, "Codex upstream returned an error"))
-            }
             Some("response.output_item.done") => {
                 let index = value
                     .get("output_index")

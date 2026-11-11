@@ -43,12 +43,7 @@ pub(super) async fn run_http_attempt(ctx: &AttemptContext<'_>) -> AttemptDisposi
                 payload,
             ) {
                 Ok(value) => value,
-                Err(error) => {
-                    return AttemptDisposition::Abort(error_response(
-                        StatusCode::BAD_REQUEST,
-                        &error.to_string(),
-                    ))
-                }
+                Err(error) => return ctx.conversion_error(error),
             }
         };
         if let Some(model) = &ctx.target.model_override {
@@ -62,6 +57,17 @@ pub(super) async fn run_http_attempt(ctx: &AttemptContext<'_>) -> AttemptDisposi
                 ));
             };
             object.remove("_aipass_client_cache");
+            object.remove("_aipass_claude_session");
+            if let Some(options) = ctx.incoming_headers.get("x-aipass-claude-session") {
+                let options = serde_json::from_slice::<serde_json::Value>(options.as_bytes()).ok();
+                let Some(options) = options.filter(serde_json::Value::is_object) else {
+                    return AttemptDisposition::Abort(error_response(
+                        StatusCode::BAD_REQUEST,
+                        "x-aipass-claude-session must be a JSON object",
+                    ));
+                };
+                object.insert("_aipass_claude_session".into(), options);
+            }
             if ctx
                 .incoming_headers
                 .get("x-aipass-cache-marks")

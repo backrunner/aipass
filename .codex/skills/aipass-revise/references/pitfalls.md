@@ -197,6 +197,28 @@ Newest entries last within each section.
 - **Guardrail**: implement complete reversible tool mappings or reject the request; never silently drop executable capabilities or invocation history.
 - **Watch points**: `crates/aipass-proxy-conversion/src/request.rs`, native Responses routing, and converted WS requests.
 
+
+### Conversion incompatibility and submitted generation need different fallback rules
+- **Symptom**: unsupported content could disappear; a local conversion error stopped fallback, while failed response snapshots containing tool calls could be replayed. Mixed tool-result/user messages could violate Chat tool ordering.
+- **Root cause**: request filtering in `aipass-proxy-conversion/src/request.rs`, per-chunk choice/identity handling in `stream/chat_messages.rs`, string-only subscription preparation errors, and error-frame checks preceding output evidence in `aipass-proxy/src/sse.rs`.
+- **Fix**: classify unsupported target features separately, skip them before dispatch without health/attempt penalties, preserve tool-result order and stream identities, and inspect accumulated output even inside error envelopes, including Codex's buffered collector. Carry typed preparation failures through a single community worker prepared stage; strip trusted routing markers from remote headers. Count success only after downstream conversion succeeds, retain original-wire usage, and acknowledge accounting before exposing a terminal/error. Reconcile final snapshots with previously delivered prefixes instead of dropping unseen suffixes.
+- **Guardrail**: exercise all three protocols with buffered/streaming and silent retry on/off through multiple targets. Assert original history/tool IDs and target-specific credentials/model overrides. Prove tool/output-bearing failures never contact the backup, local incompatibilities still can, and malformed input fails promptly. Cover cancellation, configuration changes, pending upstreams after conversion failure, duplicate prepared frames, delayed tool IDs and each SSE byte boundary. Release the converter's upstream receiver before awaiting accounting so early errors cannot deadlock. Do not run installed vendor CLIs or account-backed tests when prohibited.
+- **Watch points**: conversion request/response/SSE paths, `SubscriptionCodec`, community `generate`/`prepared_wire`, Codex `collect_response`, HTTP prefetch/buffering, converted usage accounting, WebSocket submission and affinity. See `docs/protocol-conversion-review.md`, `review_tests.rs`, both `review_followup.rs` modules and `tests/magpie_review.rs`.
+
+### Successful HTTP status does not authorize replay after invalid output
+- **Symptom**: an empty HTTP 200 body or response conversion failure sent the generation to another target, even though the first target might already have executed tools.
+- **Root cause**: `forward/response.rs` treated missing recognizable output as proof that generation had not run; older tests encoded that assumption.
+- **Fix**: mark these replies as submitted failures and stop the current request. Keep fallback for explicit rejections and local conversion incompatibilities before dispatch.
+- **Guardrail**: assert the backup receives no API request for empty, non-JSON, empty-object and null successful bodies across protocols and silent retry settings. Keep attempt success at zero and preserve target failure accounting.
+- **Watch points**: HTTP body collection, response conversion, SSE prefetch/silent buffering and Codex collection; `tests/review_followup.rs` and native response tests.
+
+### SSE framing and error semantics must agree across converters
+- **Symptom**: heartbeats aborted valid conversions; BOM/CR-only framing lost events; `error: null` caused false failures while explicit failures without details could become normal termination.
+- **Root cause**: independent SSE parsers and error-field presence checks in `stream.rs`, `stream/chat_messages.rs`, `openai/stream.rs` and proxy `sse.rs`.
+- **Fix**: accept standard line endings/BOM, ignore data-less control frames, and share failure normalization across native and cross-protocol converters. Preserve errors signaled by either the SSE event name or payload type/status.
+- **Guardrail**: run all converter pairs against comments, optional null errors and failures with missing details. Split hand-authored Unicode frames at one-byte boundaries and verify completion, output and fallback evidence across LF/CRLF/CR. Match repeated/reset event fields and generic `message` envelopes in prefetch and conversion. A data-less error event must never trigger retry.
+- **Watch points**: protocol conversion, subscription stream codecs, HTTP/WebSocket error detection, usage accounting and the two `review_followup.rs` suites.
+
 ### Protocol failures need comparable metadata across transports
 - **Symptom**: Codex reported missing terminal tools while proxy status alone could not distinguish dropped tool definitions, malformed Responses events, and WS transport failures.
 - **Root cause**: request diagnostics omitted tool shape and event lifecycle; WS connector errors were reduced to HTTP status, and mixed WS requests logged a UUID before replacing it for usage accounting.
@@ -1233,10 +1255,59 @@ Newest entries last within each section.
 - **Symptom**: All native tools disabled also removed subscription web search; simply enabling all tools would execute local actions inside the hidden bridge workspace.
 - **Root cause**: `claude_bridge.rs` used an empty `--tools` list without an explicitly requested search exception; stream completion assumed one assistant message per public reply.
 - **Fix**: Whitelist only `WebSearch` for native search declarations, exclude it from caller MCP tools, merge internal search messages and accumulate usage. Gateway search reuses Rust routing and an account-scoped memory ledger.
-- **Guardrail**: Keep Bash/Read/Write off. A caller function named WebSearch grants no native capability. Honor disabled/forced caller tools, preserve account identity, bound hidden search rounds, and reject unsupported search constraints. Run `cargo test -p aipass-agent claude_bridge` and `cargo test -p aipass-proxy search`.
-- **Watch points**: `claude_bridge/{native_tools,stream}`, proxy `search/{wire,gateway,history,mcp}`, HTTP and adapted WebSocket forwarding, configuration refresh and vault lock.
+- **Guardrail**: Keep Bash/Read/Write off for ordinary inference. Enable the full native tool set only with explicit caller cwd/permissions and a stable session ID. A caller function named WebSearch grants no native capability. Preserve account identity, bound hidden tool rounds, and reject unsupported search constraints. Never return a native executed tool as a client-executable tool call. Run `cargo test -p aipass-agent claude_bridge` and `cargo test -p aipass-proxy search` with synthetic CLIs only.
+- **Watch points**: `claude_bridge/{acp,session_options,native_tools,stream}`, proxy `search/{wire,gateway,history,mcp}`, HTTP and adapted WebSocket forwarding, configuration refresh and vault lock.
+
+### ACP turns must distinguish model messages from completed agent work
+- **Symptom**: An internal tool round can finish before the agent turn, and a foreign-provider turn can make a cached native conversation stale.
+- **Root cause**: Treating native `message_stop` as completion and matching pending tools only by ID loses the agent result boundary and caller history binding.
+- **Fix**: Wait for the native result, bind continuations to the exact history and execution options, and hand off changed history with portable role/content records. Preserve permission requests as explicit caller continuations.
+- **Guardrail**: Do not replay unresolved tools on another account, evict parked interactions, fabricate vendor transcripts, or automatically approve native permission/input requests. Default unit tests must not discover an installed Claude CLI or use real account credentials.
+- **Watch points**: `claude_bridge/{handoff,interactions,checkpoint,stream}`, `acp/{events,permissions,runtime_tests}`, `claude_cli::candidates`, proxy `forward/http_attempt` and model protocol conversion.
+
+### Reused Claude sessions need segment ownership and typed preflight failures
+- **Symptom**: Dropping a completed-but-unconsumed HTTP body killed a newer turn; valid unsupported controls stopped group fallback; malformed native usage panicked the reader and stranded the response.
+- **Root cause**: Cancellation was keyed only by process/session, all preflight errors became local client rejections, and mutable JSON indexing assumed object-shaped native frames.
+- **Fix**: Give each HTTP segment its own identity and check it in both body-drop and failed backpressured-send cleanup. Distinguish invalid caller input from target capability gaps before account/process access. Validate native message, usage, block and delta shapes before mutation; close the stream and release the run on malformed input.
+- **Guardrail**: Test overlapping segments with a full output queue, malformed frames that previously panicked, and malformed requests that preserve cached runs. Exercise actual group fallback for all three inbound protocols and both delivery modes with `max_attempts=1`, no child spawn, preserved controls and unchanged target health. Never silently accept a serial tool constraint the target cannot enforce.
+- **Watch points**: `claude_bridge/{preflight,stream,native_tools}`, `claude_bridge/tests/{review,routing}`, `SubscriptionResponse::incompatible_target`.
+
+### Magpie fix comparisons must cover native passthrough and caller metadata
+- **Symptom**: Unsigned reasoning was treated as account-bound and replayed to Claude; Google caller keys leaked to another provider; root tool unions and sibling continuation content could be accepted without being honored.
+- **Root cause**: Native Messages bypassed cross-protocol cleanup, signature checks disagreed on whitespace, the header denylist omitted `x-goog-api-key`, and Claude preflight did not cover schema roots or sibling tool-result blocks.
+- **Fix**: Share the signature predicate and normalize explicitly identified Claude Messages requests in HTTP/subscription preparation, preserving signed/redacted and non-Claude histories. Strip incoming credentials for every supported authentication scheme. Skip unsupported Claude schema roots before startup; reject mixed pending continuations before consuming results instead of dropping user content.
+- **Guardrail**: Check native and converted routes, buffered and streamed delivery, and all authentication schemes. Keep arbitrary tool JSON untouched. Preserve exact schemas during fallback; do not flatten constraints without equivalent validation. Test that invalid continuations leave calls pending and embedded result images still work.
+- **Watch points**: `reasoning`, proxy `provider`, `forward/prepare`, `SubscriptionCodec`, `model_routes`, `upstream`, Claude preflight and `tests/magpie_followup`.
+
+### One-connection H2 fixtures can accept a local HTTP/1 probe first
+- **Symptom**: Cursor's loopback upload/pool tests intermittently failed before receiving request headers, with an H2 `PROTOCOL_ERROR`.
+- **Root cause**: `subscriptions/cursor.rs` and `cursor/pool/tests.rs` handed the listener's first accepted socket to an H2-only server. A failure capture showed that socket began `GET / HTTP/1.1`, not an H2 preface; successful later runs had not revealed the competing connection.
+- **Fix**: The shared test server answers only a bodyless, unauthenticated root discovery probe and accepts the intended H2 connection afterward. Both fixtures inject the probe before their own request; removing the filter makes the regression fail.
+- **Guardrail**: Classify a failing connection from captured bytes, not a passing retry. Do not ignore arbitrary errors, authenticated requests or non-root traffic. Keep malformed H2 prefaces visible to the H2 parser, and bound fixture accepts/headers. Production Cursor transport is unchanged.
+- **Watch points**: `subscriptions/cursor/test_server`, both Cursor H2 fixtures, and loopback mock servers that accept one connection.
+
+### Provider reply labels and converted finish reasons need wire evidence
+- **Symptom**: JSON-labeled SSE became a 502 or waited for EOF; thinking usage disappeared; converted plain text ended as tool work; Mistral received replay fields outside its content schema.
+- **Root cause**: `forward/response.rs` trusted Content-Type alone; response usage helpers omitted reasoning details; Chat stop mapping ignored emitted calls; the Mistral profile only normalized token limits.
+- **Fix**: Inspect bounded, uncompressed SSE prefixes without losing bytes, preserve reasoning usage across all conversions, base converted Messages stop reasons on actual calls, reject unsupported legacy output, and adapt Mistral reasoning after request conversion. Type provider-specific incompatibilities so fallback keeps the original body and attempt budget.
+- **Guardrail**: Exercise native and translated HTTP paths, both retry modes and every chunk split; hold upstream completion until the client acknowledges content. Assert errors before output can fall back while errors after output cannot. Preserve explicit zero usage without billing reasoning twice. Test profile normalization after each inbound conversion, plus unchanged generic providers and malformed/conflicting inputs.
+- **Watch points**: `forward/{prepare,response}`, `forward/response/sniff`, `provider`, conversion `response`, `stream/chat_messages`, `usage/tests`, and proxy `tests/magpie_followup`.
+
+### Mixed groups need portable completed history and equivalent stream framing
+- **Symptom**: Old provider-owned tool IDs pinned every later turn, while native tool activity disappeared through OpenAI streaming conversion. Multiple text blocks could also invalidate a legitimate permission continuation.
+- **Root cause**: History ownership scanned completed rounds, synthesized text was emitted only in populated block-start events, and streamed Chat text lacked the non-streaming block separator.
+- **Fix**: Normalize completed group history before both ownership checks and transport dispatch. Preserve active calls and opaque server references. Emit text/input deltas and compare the exact portable assistant text/tool shape across protocols.
+- **Guardrail**: Run the actual proxy and Claude ACP bridge with synthetic processes through Messages/Chat/Responses, streaming and buffered, across Claude/OpenAI/Gemini and back. Assert tool context survives, unavailable owners cannot reroute approvals, Gemini signatures are restored only during their bound round, and edited text/arguments still fail continuation checks. Do not test with installed CLIs or developer credentials.
+- **Watch points**: `model_routes/history`, `forward` replayable bodies, `claude_bridge/{stream,handoff}`, `stream/chat_messages` and `claude_bridge/tests/routing`.
 
 ## Tool integration
+
+### Native Claude work can outlive the HTTP turn
+- **Symptom**: Subagent caller tools can stall, plan/question approvals can resume incorrectly, and idle background output can close or reroute its native session.
+- **Root cause**: `claude_bridge/stream.rs` treated absent HTTP receivers as disconnection; `acp/events.rs` ignored sidechain caller tools and conflated foreground/autonomous results. Group history aliases also differed from cached native history hashes.
+- **Fix**: Preserve child caller-tool continuations, validate question answers before consumption, await plan-mode acknowledgement, buffer idle output with backpressure, and bind outstanding background work to its session owner. Share transcript aliases between routing and history matching.
+- **Guardrail**: Compare native lifecycle changes with pinned vendor/reference sources. Test cancelled/invalid answers, failed mode acknowledgements, interleaved child tools, empty rosters before task notifications, and autonomous results before a new foreground turn. Run the real mixed-group proxy matrix with synthetic processes only. Never advertise task-specific stop unless it is implemented.
+- **Watch points**: `claude_bridge/acp/{events,lifecycle,permissions}`, `native_tools`, `interactions`, `checkpoint`, `SubscriptionBackend::history_owner_for_session`, community dispatch and `claude_bridge/tests/{paseo,routing}`.
 
 ### Cursor IDE, regular CLI and Local runtime have different BYOK contracts
 - **Symptom**: Cursor Local's Anthropic integration requested `/v1/messages/messages`; config-only tests passed while the official runtime failed the endpoint contract.
@@ -1289,7 +1360,7 @@ Newest entries last within each section.
 - **Evidence**: A disposable loopback observer received `GET / HTTP/1.1` with `User-Agent: LocalStack/1.0` from the running local service scanner.
 - **Fix**: Reuse probe-aware accepts in Agent proxy fixtures and keep unauthenticated root discovery out of image fixture request counters. Preserve assertions for authenticated root and every API-path request.
 - **Guardrail**: Inject discovery before the intended request in a regression test and prove authenticated/API traffic is still captured. Do not stop unrelated apps, retry until green, or relax production proxy behavior to repair test isolation.
-- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs, proxy/tests/image_api.rs and subscriptions/cli_accounts/grok/process_tests.rs (empty TCP and unauthenticated root probes must not consume the single-use grant).
+- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs, proxy/tests/image_api.rs, proxy/search/tests/probes.rs (search redirect and oversize-query negative assertions) and subscriptions/cli_accounts/grok/process_tests.rs (empty TCP and unauthenticated root probes must not consume the single-use grant).
 
 
 ### Extension detection must pair each extension with its own host

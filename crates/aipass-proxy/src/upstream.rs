@@ -246,6 +246,7 @@ pub(crate) fn build_upstream_headers(
             && name != header::AUTHORIZATION
             && name != "x-api-key"
             && name != "api-key"
+            && name != "x-goog-api-key"
             && name != header::ACCEPT_ENCODING
             && name != header::CONTENT_LENGTH
             && name != header::HOST
