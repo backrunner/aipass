@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-agent"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-agent-protocol"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-config-writers",
  "aipass-provider-registry",
@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-cli"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-config-writers"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-crypto",
  "aipass-provider-registry",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-crypto"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-desktop"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-mcp-proxy"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-native-host"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-provider-registry"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-proxy"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-proxy-conversion",
  "bytes",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-proxy-conversion"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "crc32fast",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-storage"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-sync"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-storage",
  "anyhow",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "aipass-vault"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "aipass-crypto",
  "aipass-provider-registry",
