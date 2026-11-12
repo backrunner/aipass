@@ -84,6 +84,7 @@
     VaultAuthTaskStatus,
     VaultStatus
   } from "./lib/types";
+  import { runServerMutation } from "./lib/services/serverMutation";
   import { passwordStrength, unlockErrorMessage } from "./lib/utils/auth";
   import { domainOverride, emptyDraft, entryMatchesFilter, mergeHeaderPairs, providerCounts as buildProviderCounts, summaryToEntry } from "./lib/utils/providers";
   import { importCcSwitchConfigurations } from "./lib/utils/official-accounts";
@@ -2207,107 +2208,82 @@
     if (link) openCcSwitchForm(link);
   }
 
-  async function saveServerConfig(config: ProxyConfig): Promise<boolean> {
-    if (serverBusy) return false;
-    serverBusy = "save";
-    beginServerMutation();
-    const revision = serverMutationVersion;
-    const current = () => revision === serverMutationVersion && !status.locked;
-    let saved = false;
-    clearError();
-    try {
+  const serverMutationHost = {
+    get busy() { return serverBusy; },
+    set busy(value: string) { serverBusy = value; },
+    get locked() { return status.locked || !status.exists; },
+    get revision() { return serverMutationVersion; },
+    begin: beginServerMutation,
+    finish: endServerMutation,
+    clearError,
+    reportError: (error: string, operation: string) => reportError(error, operation === "save" && showSettings ? "settings" : undefined)
+  };
+
+  function saveServerConfig(config: ProxyConfig): Promise<boolean> {
+    return runServerMutation(serverMutationHost, "save", async current => {
       const next = await invokeTauri<ProxyConfig>("server_config_set", { config });
       if (!current()) return false;
       serverConfig = next;
-      saved = true;
-      const nextStatus = await invokeTauri<ProxyStatus>("server_status");
-      if (!current()) return false;
-      serverStatus = nextStatus;
-      return true;
-    } catch (err) {
-      if (current()) reportError(String(err), showSettings ? "settings" : undefined);
-      return saved && current();
-    } finally {
-      endServerMutation();
-      serverBusy = "";
-    }
+      try {
+        const nextStatus = await invokeTauri<ProxyStatus>("server_status");
+        if (!current()) return false;
+        serverStatus = nextStatus;
+      } catch (error) {
+        // Saving succeeded even if the following status refresh failed.
+        if (current()) serverMutationHost.reportError(String(error), "save");
+      }
+      return current();
+    });
   }
 
   async function startServer() {
-    if (serverBusy) return;
-    serverBusy = "start";
-    beginServerMutation();
-    clearError();
-    try {
-      serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
-      serverStatus = await invokeTauri<ProxyStatus>("server_start");
-      serverConfig = { ...serverConfig, enabled: serverStatus.enabled };
-    } catch (err) {
-      reportError(String(err));
-    } finally {
-      endServerMutation();
-      serverBusy = "";
-    }
+    await runServerMutation(serverMutationHost, "start", async current => {
+      const config = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
+      if (!current()) return false;
+      serverConfig = config;
+      const next = await invokeTauri<ProxyStatus>("server_start");
+      if (!current()) return false;
+      serverStatus = next;
+      serverConfig = { ...serverConfig, enabled: next.enabled };
+      return true;
+    });
   }
 
   async function stopServer() {
-    if (serverBusy) return;
-    serverBusy = "stop";
-    beginServerMutation();
-    clearError();
-    try {
-      serverStatus = await invokeTauri<ProxyStatus>("server_stop");
+    await runServerMutation(serverMutationHost, "stop", async current => {
+      const next = await invokeTauri<ProxyStatus>("server_stop");
+      if (!current()) return false;
+      serverStatus = next;
       serverConfig = { ...serverConfig, enabled: false };
-    } catch (err) {
-      reportError(String(err));
-    } finally {
-      endServerMutation();
-      serverBusy = "";
-    }
+      return true;
+    });
   }
 
   async function rotateServerToken(routeId: string) {
-    if (serverBusy) return;
-    serverBusy = `token:${routeId}`;
-    beginServerMutation();
-    clearError();
-    try {
-      serverConfig = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
+    await runServerMutation(serverMutationHost, `token:${routeId}`, async current => {
+      const config = await invokeTauri<ProxyConfig>("server_config_set", { config: serverConfig });
+      if (!current()) return false;
+      serverConfig = config;
       const result = await invokeTauri<ServerTokenResponse>("server_token_rotate", { routeId });
+      if (!current()) return false;
       serverConfig = {
         ...serverConfig,
-        routes: serverConfig.routes.map((route) =>
-          route.id === routeId
-            ? { ...route, token: result.token }
-            : route
-        )
+        routes: serverConfig.routes.map(route => route.id === routeId ? { ...route, token: result.token } : route)
       };
-    } catch (err) {
-      reportError(String(err));
-    } finally {
-      endServerMutation();
-      serverBusy = "";
-    }
+      return true;
+    });
   }
 
-  async function clearServerUsage(): Promise<boolean> {
-    if (serverBusy) return false;
-    serverBusy = "clear-usage";
-    beginServerMutation();
-    clearError();
-    try {
+  function clearServerUsage(): Promise<boolean> {
+    return runServerMutation(serverMutationHost, "clear-usage", async current => {
       await invokeTauri<void>("server_usage_clear");
+      if (!current()) return false;
       await loadServer();
+      if (!current()) return false;
       notice = localizedMessage("notice.usageCleared");
       setTimeout(() => (notice = ""), 1800);
       return true;
-    } catch (err) {
-      reportError(String(err));
-      return false;
-    } finally {
-      endServerMutation();
-      serverBusy = "";
-    }
+    });
   }
 
   async function copyServerToken(token: string) {
