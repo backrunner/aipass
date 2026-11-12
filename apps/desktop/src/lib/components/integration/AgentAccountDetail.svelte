@@ -25,7 +25,7 @@
   onDestroy(() => { alive = false; });
   async function loadUsage() {
     usageLoading = true; usageFailed = false;
-    try { const value = await invokeTauri<ServerUsageSummary>("server_usage_summary", { days: 7, timezoneOffsetMinutes: new Date().getTimezoneOffset() }); if (alive) summary = value; }
+    try { const value = await invokeTauri<ServerUsageSummary>("server_usage_summary", { days: 7, timezoneOffsetMinutes: -new Date().getTimezoneOffset(), granularity: "day" }); if (alive) summary = value; }
     catch { if (alive) usageFailed = true; }
     finally { if (alive) usageLoading = false; }
   }

@@ -9,7 +9,8 @@
   export let hourlySeries: UsageTimeseriesPoint[] = [];
 
   export let range: UsageRange = 7;
-  let hoveredPoint: UsageTimeseriesPoint | undefined;
+  // Retain a bucket identity, not a point object from the previous refresh.
+  let hoveredDate: string | undefined;
   let tooltipLeft = 50;
   let tooltipWidth = 310;
 
@@ -126,13 +127,12 @@
       .reduce((sum, segment) => sum + segment.tokenCount, 0);
   }
 
-  function showTooltip(point: UsageTimeseriesPoint, index: number) {
-    hoveredPoint = point;
-    tooltipLeft = ((Y_AXIS_WIDTH + index * barSlot + barSlot / 2) / CHART_WIDTH) * 100;
+  function showTooltip(point: UsageTimeseriesPoint) {
+    hoveredDate = point.date;
   }
 
   function hideTooltip() {
-    hoveredPoint = undefined;
+    hoveredDate = undefined;
   }
 
   $: { range; hideTooltip(); }
@@ -143,6 +143,10 @@
   $: totalCostMicros = points.reduce((sum, point) => sum + point.estimatedCostMicros, 0);
   $: hasData = totalRequests > 0 || totalTokens > 0;
   $: barSlot = (CHART_WIDTH - Y_AXIS_WIDTH) / Math.max(1, points.length);
+  $: hoveredIndex = points.findIndex(point => point.date === hoveredDate);
+  $: hoveredPoint = hasData && hoveredIndex >= 0 ? points[hoveredIndex] : undefined;
+  $: if (!hasData || hoveredIndex < 0) hideTooltip();
+  $: tooltipLeft = ((Y_AXIS_WIDTH + hoveredIndex * barSlot + barSlot / 2) / CHART_WIDTH) * 100;
   $: barWidth = Math.max(2, barSlot * 0.62);
   $: labelEvery = range === 7 ? 1 : range === "24h" ? 4 : 5;
   $: yTicks = [
@@ -203,9 +207,9 @@
             )}
             <g
               class="bar-group"
-              on:mouseenter={() => showTooltip(point, index)}
+              on:mouseenter={() => showTooltip(point)}
               on:mouseleave={hideTooltip}
-              on:focus={() => showTooltip(point, index)}
+              on:focus={() => showTooltip(point)}
               on:blur={hideTooltip}
               role="button"
               tabindex="0"

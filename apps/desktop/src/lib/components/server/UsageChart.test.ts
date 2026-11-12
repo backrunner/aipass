@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { flushSync, mount, unmount } from "svelte";
+import { fromStore, writable } from "svelte/store";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { UsageTimeseriesPoint } from "../../types";
@@ -207,4 +208,43 @@ test("distinguishes missing model names from a model named unknown", () => {
   }]);
   expect(document.querySelectorAll("rect.bar-segment")).toHaveLength(2);
   expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
+});
+
+test("refreshes a focused tooltip with its bucket and clears it when usage is removed", () => {
+  const date = todayLocal();
+  const source = writable([point(date, 1200, 3)]);
+  const current = fromStore(source);
+  app = mount(UsageChart, { target: document.body, props: { get series() { return current.current; } } }) as never;
+  flushSync();
+  document.querySelectorAll(".bar-group").item(6).dispatchEvent(new FocusEvent("focus"));
+  flushSync();
+  expect(document.querySelector(".chart-tooltip")?.textContent).toContain(formatCompact(1200));
+  source.set([point(date, 2400, 6)]);
+  flushSync();
+  expect(document.querySelector(".chart-tooltip")?.textContent).toContain(formatCompact(2400));
+  expect(document.querySelector(".chart-tooltip")?.textContent).not.toContain(formatCompact(1200));
+  expect(document.querySelector(".chart-summary")?.textContent).toContain(formatCompact(2400));
+  source.set([]);
+  flushSync();
+  expect(document.querySelector(".chart-tooltip")).toBeNull();
+  source.set([point(date, 3600, 9)]);
+  flushSync();
+  expect(document.querySelector(".chart-tooltip")).toBeNull();
+});
+
+test("drops the hovered bucket when it leaves the refreshed date window", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 10, 12, 12));
+  const source = writable([point("2026-11-06", 1200)]);
+  const current = fromStore(source);
+  app = mount(UsageChart, { target: document.body, props: { get series() { return current.current; } } }) as never;
+  flushSync();
+  document.querySelector(".bar-group")!.dispatchEvent(new MouseEvent("mouseenter"));
+  flushSync();
+  expect(document.querySelector(".chart-tooltip")?.textContent).toContain("2026-11-06");
+  vi.setSystemTime(new Date(2026, 10, 13, 12));
+  source.set([point("2026-11-13", 2400)]);
+  flushSync();
+  expect(document.querySelector(".chart-tooltip")).toBeNull();
+  expect(document.querySelector(".chart-summary")?.textContent).toContain(formatCompact(2400));
 });
