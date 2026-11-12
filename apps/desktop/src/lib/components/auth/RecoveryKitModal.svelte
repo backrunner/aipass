@@ -2,6 +2,7 @@
   import { Button } from "@aipass/ui";
   import { Dialog } from "bits-ui";
   import { Check, Copy, Download, KeyRound } from "lucide-svelte";
+  import { onDestroy } from "svelte";
 
   import { t } from "../../stores/i18n";
   import type { MaybePromise } from "../../types";
@@ -15,8 +16,14 @@
   let confirmed = false;
   let dialogOpen = true;
   let closing = false;
+  let lastRecoveryKey = recoveryKey;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(() => clearTimeout(closeTimer));
 
-  $: if (!recoveryKey) {
+  $: if (recoveryKey !== lastRecoveryKey) {
+    lastRecoveryKey = recoveryKey;
+    clearTimeout(closeTimer);
+    closeTimer = undefined;
     confirmed = false;
     closing = false;
     dialogOpen = true;
@@ -34,7 +41,7 @@
     }
     closing = true;
     dialogOpen = false;
-    setTimeout(() => onAcknowledge(), 220);
+    closeTimer = setTimeout(() => onAcknowledge(), 220);
   }
 
   function confirm() {
