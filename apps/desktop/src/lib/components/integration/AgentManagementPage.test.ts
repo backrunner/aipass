@@ -26,7 +26,9 @@ test("installed Agents switch through the import gate only after preview confirm
   setLocale("en"); const invoke = invokeFixture(); const refresh = vi.fn(async () => {});
   app = mount(AgentManagementPage, { target: document.body, props: { entries: [entry], invokeTauri: invoke as never, onRefreshEntries: refresh } });
   await settled(); expect(document.querySelectorAll(".agent-row")).toHaveLength(1); expect(document.body.textContent).toContain("Codex");
-  await prepare(); expect(document.body.textContent).toContain("imported before switching");
+  await prepare();
+  expect(document.querySelector(".preview-dialog-content")?.textContent).toContain(preview.targetPath);
+  expect(document.querySelector(".dialog-actions .btn-primary")?.textContent?.trim()).toBe("Import and switch");
   expect(invoke.mock.calls.some(([command]) => command === "agent_management_apply")).toBe(false);
   document.querySelector<HTMLButtonElement>(".dialog-actions .btn-primary")!.click();
   await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("agent_management_apply", { request: { tool: "codex", id: "api", secretId: "key", mode: "plaintext", codexApiKeyMode: "auth_json", previewId: "snapshot" } }));
