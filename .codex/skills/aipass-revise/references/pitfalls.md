@@ -261,6 +261,20 @@ Newest entries last within each section.
 - **Guardrail**: bind confirmation to the request that produced its preview. Include provider/route identity and write mode in invalidation; ignore late success and failure. Cover provider changes, mode changes and repeated confirmation in integration tests.
 - **Watch points**: provider and proxy route integrations, Codex mode selection, direct configuration versus local proxy tokens, and English/Chinese security copy.
 
+### Integration discovery invalidation must release pending UI state
+- **Symptom**: an Agent disappearing during preview or apply left its write action disabled after rediscovery; a stale completion could outlive a newer preview.
+- **Root cause**: the pre-fix `apps/desktop/src/lib/components/integration/IntegrationCard.svelte:96` missing-tool branch invalidated the generation without clearing `confirming` and per-tool busy state; `pendingTool` was only registered after preview completed.
+- **Fix**: track the pending tool before awaiting and share one complete preview invalidation path with selection changes. Ignore late completions using the existing generation check.
+- **Guardrail**: test removal/rediscovery during both preview and apply, including an old response arriving while a new preview is pending. Invalidating UI state does not cancel an already-submitted backend write.
+- **Watch points**: `IntegrationCard.test.ts`, provider quick integration, local-proxy quick integration, installed-tool detection refreshes.
+
+### Proxy previews must include the configuration behind the route ID
+- **Symptom**: changing a proxy address, token or protocol kept the same route ID and left its old integration preview confirmable.
+- **Root cause**: `apps/desktop/src/lib/components/server/ServerDetailPane.svelte:243` used only the route ID as its invalidation key while apply regenerated configuration from current Agent state.
+- **Fix**: bind the preview generation to the route configuration, bind address and effective model; reuse IntegrationCard invalidation for open and pending previews.
+- **Guardrail**: change configuration without changing route identity during an open preview and a delayed preview request; require dismissal, no stale response reopening and no apply call. Cover address, token and protocol in `ServerDetailPane.test.ts`.
+- **Watch points**: provider integration reset keys, proxy route targets/default models, preview/apply closures and external Agent refreshes.
+
 ### Structured secrets must be redacted before diffing
 - **Symptom**: TOML multiline tokens appeared in full-file previews and continuation lines of diffs.
 - **Root cause**: Agent preview redaction used a regex matching only ordinary quoted values after generating a raw diff.
@@ -747,6 +761,34 @@ Newest entries last within each section.
 - **Watch points**: `crates/aipass-agent/src/language.rs`, `crates/aipass-agent-protocol/src/lib.rs`, `apps/desktop/src/App.svelte`, `apps/desktop/src-tauri/src/tray.rs`, Swift tray DTO/view, native-host ping, and `packages/ui/src/locales/`.
 
 ## Desktop operation feedback
+
+### Proxy UI mutations must stop continuing after session invalidation
+- **Symptom**: locking while proxy configuration was saving still dispatched a later start command; old failures could appear on the auth screen.
+- **Root cause**: `apps/desktop/src/App.svelte:2236` start/stop/token/clear paths lacked the mutation-revision guards already used by saveServerConfig.
+- **Fix**: extract UI operation ownership to `services/serverMutation.ts`; check the session/revision after every await before publishing data, issuing the next command or showing feedback.
+- **Guardrail**: suspend the save, lock, then resolve it and assert no start/token command. Reject stale errors even after re-unlock. Keep Agent authorization authoritative; UI invalidation cannot cancel an already-dispatched write.
+- **Watch points**: App proxy callbacks, `clearSensitiveUnlockedState`, status/usage refreshes, `App.test.ts` and `serverMutation.test.ts`.
+
+### Dialog close timers belong to the mounted content identity
+- **Symptom**: a removed provider dialog called onClose later; replacing a recovery kit retained confirmation and let the old acknowledgement dismiss the new kit.
+- **Root cause**: `providers/ProviderModal.svelte:35` and `auth/RecoveryKitModal.svelte:37` scheduled unowned 220 ms close timers; recovery state reset only on an empty key.
+- **Fix**: cancel close callbacks on unmount; cancel and reset confirmation/open state whenever recovery content changes.
+- **Guardrail**: close then tear down a modal before its animation ends; replace recovery content during closing and require a fresh unchecked acknowledgement. Keep animation duration unchanged.
+- **Watch points**: provider/recovery modal regression tests and any dialog that delays a parent callback until its exit animation finishes.
+
+### Background refresh must not erase completed authentication feedback
+- **Symptom**: GPUI could show no error after a wrong password if the background refresh deadline elapsed at the same time.
+- **Root cause**: `apps/desktop-native/src/desktop.rs:303` update_session submitted Refresh, which cleared session.error, before copying the auth message to the view.
+- **Fix**: capture the localized auth error before scheduling a new refresh. Authentication, IPC and polling authority remain unchanged.
+- **Guardrail**: complete a rejected password request with an overdue background refresh and assert the localized error remains visible and the workspace stays hidden.
+- **Watch points**: native desktop update_session, Session::submit error reset and GPUI password_error_survives regression.
+
+### Native transitions must retain a mounted focus path and invalidate old callbacks
+- **Symptom**: the GPUI migration preview routed window shortcuts to its hidden password input; after locking from search, quit no longer responded. A delayed unlock cover callback could also restore a workspace after a newer lock unless its ownership was checked.
+- **Root cause**: retained entities can hold focus while absent from the rendered tree, and animation completion outlives the transition that scheduled it.
+- **Fix**: keep window actions on a mounted desktop focus handle, move focus to the password input when authentication is shown, and replace transition subscriptions together with a generation token. Ignore repeated lock activation without restarting its clock.
+- **Guardrail**: test shortcuts from initial workspace and search, typing after lock, repeated activation, skipped timeline frames, reduced motion, and callbacks delivered from a superseded unlock. Curve tests and fixed-time screenshots do not establish live display cadence; record their evidence separately.
+- **Watch points**: `apps/desktop-native/src/desktop.rs`, `curtain.rs`, `motion.rs`, native window inspection and the strict animation capture harness. Production lock failure and Agent integration acceptance remain separate.
 
 ### Status request failures do not establish a storage failure
 - **Symptom**: Claude Code displayed Storage unavailable when its status request actually failed with `Claude account identity unavailable`.
@@ -1412,3 +1454,59 @@ Newest entries last within each section.
 - **Fix**: replace TOML parse failures with a fixed diagnostic, preserving the configuration and encrypted recovery data.
 - **Guardrail**: malformed configuration containing a synthetic credential must fail without including that credential in the formatted error chain. Keep native platform fixture imports explicit; macOS Clippy cannot compile Windows-only test modules.
 - **Watch points**: `proxy_recovery/merge.rs`, the uninstall entry point and native Windows CI.
+
+### JSON object iteration must not define allowance presentation order
+- **Symptom**: adding the GPUI workspace member reordered Copilot quota windows and premium-model lists, and broke Claude cache and streaming-conversion fixtures.
+- **Root cause**: Cargo feature unification enabled serde_json preserve_order; quota normalization implicitly depended on its default sorted map while the fixture compared serialized key order.
+- **Fix**: sort quota windows, Codex buckets and scoped model IDs explicitly; compare the cache and streaming fixtures as structured JSON while preserving environment, payload and event assertions.
+- **Guardrail**: exercise reversed vendor object insertion order with the full workspace feature graph. Assert presentation order explicitly and compare JSON semantics when key order is immaterial.
+- **Watch points**: `subscriptions/cli_accounts/quota.rs`, `claude_bridge/cache.rs`, `aipass-proxy/src/tests/streaming_tool_call.rs`, new workspace dependencies and their unified serde_json features.
+
+### Native locale lookup must resolve shared aliases
+- **Symptom**: the GPUI reset panel rendered `auth.reset.cancel` instead of the translated Cancel label.
+- **Root cause**: native `locale.rs` embedded the language dictionaries but skipped `aliases.json`, unlike the shared Svelte translator.
+- **Fix**: seed English fallback, overlay the selected locale, then resolve the shared canonical aliases before rendering.
+- **Guardrail**: require every shared alias to resolve to its canonical value in both native locales; keep `shared_aliases_resolve_in_both_native_locales` alongside the shared UI alias checks.
+- **Watch points**: `apps/desktop-native/src/locale.rs`, `packages/ui/src/i18n.ts` and `packages/ui/src/locales/aliases.json`.
+
+### Native feedback parity needs timed interaction and focused rendering
+- **Symptom**: a static toast capture missed the invisible close SVG and absent scroll fade; a later real keyboard check found that stacked focus shadows filled the button blue instead of outlining it.
+- **Root cause**: native SVG color and shadow painting do not reproduce CSS inheritance/outline semantics. Scroll extents must be available when the fade paints, and GPUI focus-event tests need an active window.
+- **Fix**: set SVG colors explicitly, paint the fade from current scroll extents, use a transparent bordered quad for the external focus ring, and activate the test window before checking pause/resume behavior.
+- **Guardrail**: verify pointer and keyboard pause beyond the dismissal lifetime, replacement, close, long-content scroll and focused/hovered styles in a real window. Keep baseline behavior tests separate from native acceptance; a static screenshot or source inventory does not prove timers, data refresh or updater lifecycle parity.
+- **Watch points**: `apps/desktop-native/src/toast.rs`, `feedback.rs`, `toast/tests.rs`, `tests/desktop-parity/audit-dynamics.mjs`, `audit-update-motion.mjs` and the dynamic migration inventory.
+
+### Populated usage views need shared time windows and fresh tooltip identities
+- **Symptom**: Agent usage sent UTC-minus-local while the proxy page sent local-minus-UTC; a chart tooltip retained old totals after the visible bars refreshed. A long provider form could report a save error below its scroll viewport.
+- **Root cause**: separate callers inverted the timezone differently, hover state retained a snapshot object, and validation only checked that an error node existed.
+- **Fix**: use local-minus-UTC and explicit daily granularity for Agent usage; resolve hovered buckets by date from the current series; scroll new form errors into the visible form body.
+- **Guardrail**: test positive, negative, fractional-hour and zero offsets; refresh and expire a focused chart bucket; verify error bounds inside the scroll viewport. Exercise populated multi-key and archived-provider fixtures, confirm/cancel/failure/restore, and horizontally scroll the entire usage table. Keep original baseline defects and Svelte fixes separate from GPUI acceptance.
+- **Watch points**: `AgentAccountDetail.svelte`, `UsageChart.svelte`, `ProviderModal.svelte`, `serverUsage.ts`, `tests/desktop-parity/audit-business.mjs`.
+
+### Native provider edits must preserve Agent state and acknowledge writes separately
+- **Symptom**: an early native prototype treated a successful add followed by a failed list refresh as a failed save; retrying could duplicate the entry. Editing a long-lived snapshot could also restore stale runtime preferences or split escaped tags and endpoint query strings.
+- **Root cause**: `desktop-native/src/session.rs::AgentTransport` coupled mutation completion to catalog refresh; `catalog/draft.rs` initially serialized untouched preferences and parsed fields with plain comma splitting.
+- **Fix**: publish the mutation acknowledgement independently, then refresh. Clear catalog, forms, selection and input history on lock and ignore stale generations. Omit untouched concurrency/WebSocket/account identity updates, refresh background-owned metadata without replacing draft fields, and preserve escaped lists and endpoint IDs.
+- **Guardrail**: run the isolated real Agent provider workflow, including lock/unlock and durable restore. Regress mutation success plus refresh failure, late acknowledgement after lock, background refresh during editing, multiple endpoints and escaped lists. Require populated minimum-window captures; flex cards must retain their height inside scroll containers. Treat offscreen captures and GPUI test input as separate from real-window acceptance.
+- **Watch points**: native `session.rs`, `catalog/draft.rs`, `catalog/lists.rs`, `providers/form.rs`, `workspace/providers.rs`, `tests/provider_agent.rs`, shared `ProviderItemFields.svelte` and `packages/ui` list codecs.
+
+### Credential editors must invalidate on selection changes and order composite saves
+- **Symptom**: metadata search could select a different provider while retaining the previous native inline editor. A key read that finishes after cancel, replacement or lock must not refill a new editor; saving the provider while a key is still being edited can lose the key draft.
+- **Root cause**: selection cleanup was tied to row clicks, and credential operations needed their own generation in addition to the session lock generation.
+- **Fix**: bind operations and replies to provider ID plus generation, use exact secret IDs for reads and mutations, invalidate on every selection/removal path, and clear inputs plus undo history. Save a pending key first and submit the provider only after its durable acknowledgement. Keep subscription credentials out of the generic API-key editor.
+- **Guardrail**: test cancel/switch/fingerprint replacement/lock with delayed reads, failed saves and retries, combined provider/key saves, timed hiding and real horizontal scroll extents. Run disposable authenticated Agent CRUD with duplicate labels, ID/label collisions, metadata inheritance and durable unlock. Preserve failed capture rounds and compare minimum-window field bounds; rendering alone does not certify native input or animation.
+- **Watch points**: native `credentials.rs`, `providers/credentials`, `workspace/providers.rs`, `session.rs`, and `tests/provider_agent/credentials.rs`.
+
+### Native integration detection and preimages must use explicit contracts
+- **Symptom**: a first native catalog hid multiword tools despite positive installation detections; generic quick writes accepted a preview ID without checking its preimage.
+- **Root cause**: config-writer `ToolId` uses snake_case while Agent `ToolConfigTool` uses kebab-case. The generic handler validated preimages only for managed switching, although Quick Integration also sends preview IDs.
+- **Fix**: map the tool enums explicitly and reuse `ToolDetection::is_installed`. Validate any supplied preview ID before writing; keep managed credential preservation as a separate step. Bind the native confirmation to the exact provider, secret ID, mode and displayed preview ID, and discard it after selection/metadata changes or lock.
+- **Guardrail**: cover every automatic tool ID, stale config-only detections, Cursor local runtime, per-key protocol inheritance and missing models. Test external-file changes and credential rotation between preview and apply, byte-preserving rejection, encrypted backups and rollback through the Agent handler. Keep real authenticated IPC evidence separate from handler tests: an isolated HOME without a Keychain must fail closed, never disable recovery safeguards to obtain a passing write.
+- **Watch points**: native `integration/catalog.rs`, `integrations.rs`, `session.rs`, Agent `handlers/tools.rs`, `handlers/tools/tests.rs` and `tests/provider_agent/integration.rs`.
+
+### File existence is not fixture publication
+- **Symptom**: the Claude plan-approval regression occasionally parsed an empty `mode.json` during the full parallel workspace suite.
+- **Root cause**: the shell opened the final path before writing, while the test waited only for path existence. Its acknowledgement file had the same race in the opposite direction.
+- **Fix**: write each fixture message to a sibling temporary path and rename it after writing. Preserve the production acknowledgement ordering and test assertions.
+- **Guardrail**: do not replace content readiness with longer sleeps or weaken the permission checks. For isolated macOS suites, use a short temporary directory for Unix sockets and clear global XDG overrides so per-vault test homes remain independent.
+- **Watch points**: `crates/aipass-agent/src/claude_bridge/tests/paseo.rs`, Agent tool home overrides and local validation wrappers.

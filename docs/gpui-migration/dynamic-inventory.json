@@ -1,0 +1,1386 @@
+{
+  "standard": "dynamic-behavior-v1",
+  "acceptance": "unaccepted",
+  "evidenceBoundary": "Source inventory is not runtime coverage or native presentation acceptance.",
+  "contracts": [
+    {
+      "id": "error-toast",
+      "source": "ErrorToast.svelte",
+      "timing": "6000ms; hover/focus pause; full 6000ms after both leave; replacement cancels old timer",
+      "native": "implemented-unaccepted"
+    },
+    {
+      "id": "proxy-status",
+      "source": "App.svelte / ProxyStatusGrid.svelte",
+      "timing": "500ms while visible and unlocked; one in-flight status request; counters are immediate",
+      "native": "missing"
+    },
+    {
+      "id": "proxy-usage",
+      "source": "App.svelte / UsageChart.svelte",
+      "timing": "2000ms full-page refresh; periods publish together; no bar-height tween; hover filter/opacity 100ms",
+      "native": "missing",
+      "baselineDefect": "focused/hovered tooltip retains stale point after refresh"
+    },
+    {
+      "id": "proxy-logs",
+      "source": "ProxyLogsDialog.svelte",
+      "timing": "2000ms after previous completion; generation guards; keep data on error; follow tail only within 32px; spinner 1000ms",
+      "native": "missing"
+    },
+    {
+      "id": "update-progress",
+      "source": "UpdateNotification.svelte / ProgressButton.svelte",
+      "timing": "width 180ms ease-out; indeterminate 1200ms ease-in-out with 42% fill; reduced motion static and near-instant width",
+      "native": "missing"
+    },
+    {
+      "id": "update-lifecycle",
+      "source": "App.svelte / SettingsPanel.svelte / updates.ts",
+      "timing": "background results wait for unlock; locking closes confirmation; delayed proxy probe rechecks visibility; install disables actions; failure restores retry",
+      "native": "missing"
+    },
+    {
+      "id": "channel-indicator",
+      "source": "ChannelIndicator.svelte",
+      "timing": "1500ms linear spin while active; static reduced motion",
+      "native": "missing"
+    },
+    {
+      "id": "sync-indicator",
+      "source": "SyncStatusPill.svelte",
+      "timing": "1200ms ease-in-out pulse; state text and colors",
+      "native": "missing"
+    },
+    {
+      "id": "settings-drawer",
+      "source": "SettingsPanel.svelte",
+      "timing": "overlay 240/220ms; drawer 380/280ms; no animation with reduced motion",
+      "native": "missing"
+    },
+    {
+      "id": "route-dialog",
+      "source": "ProxyRouteGroupDialog.svelte",
+      "timing": "overlay 220/200ms; content 260/200ms; close callback 220ms; switch transform 150-160ms",
+      "native": "missing"
+    },
+    {
+      "id": "usage-range-menu",
+      "source": "UsageRangeMenu.svelte",
+      "timing": "180ms delayed hover close",
+      "native": "missing"
+    },
+    {
+      "id": "transient-success-notices",
+      "source": "App.svelte",
+      "timing": "per-operation 1800/2200/2400ms; inspect overlapping notices for stale clears",
+      "native": "missing"
+    }
+  ],
+  "surfaceCount": 54,
+  "markerCount": 231,
+  "surfaces": [
+    {
+      "path": "apps/desktop/src/App.svelte",
+      "sha256": "73ec81a43c747077962413aeaa596943209f4a6162709146e66f413e0c9277ad",
+      "markers": [
+        {
+          "line": 115,
+          "text": "return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));"
+        },
+        {
+          "line": 380,
+          "text": "serverPollTimer = setInterval(() => void loadServer(), 2000);"
+        },
+        {
+          "line": 381,
+          "text": "serverStatusTimer = setInterval(() => {"
+        },
+        {
+          "line": 390,
+          "text": "usageRefreshTimer = setInterval(() => void refreshProviderUsage(), 5 * 60 * 1000);"
+        },
+        {
+          "line": 506,
+          "text": "updateCheckTimer = setTimeout(() => {"
+        },
+        {
+          "line": 804,
+          "text": "sessionPollTimer = setInterval(reconcileVisibleVaultStatus, 2000);"
+        },
+        {
+          "line": 1060,
+          "text": "setTimeout(() => {"
+        },
+        {
+          "line": 1282,
+          "text": "searchTimer = setTimeout(() => {"
+        },
+        {
+          "line": 1421,
+          "text": "setTimeout(() => (notice = \"\"), 2200);"
+        },
+        {
+          "line": 1643,
+          "text": "revealTimer = setTimeout(() => {"
+        },
+        {
+          "line": 1664,
+          "text": "setTimeout(() => {"
+        },
+        {
+          "line": 1697,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 1734,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 1762,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 1774,
+          "text": "setTimeout(() => {"
+        },
+        {
+          "line": 2156,
+          "text": "setTimeout(() => (notice = \"\"), 2400);"
+        },
+        {
+          "line": 2302,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2327,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2416,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2435,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2470,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2533,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2551,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2639,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2785,
+          "text": "setTimeout(() => (notice = \"\"), 2400);"
+        },
+        {
+          "line": 2807,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 2901,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 3087,
+          "text": "setTimeout(() => (notice = \"\"), 1800);"
+        },
+        {
+          "line": 3597,
+          "text": "animation: boot-spin 800ms linear infinite;"
+        },
+        {
+          "line": 3600,
+          "text": "@keyframes boot-spin {"
+        },
+        {
+          "line": 3608,
+          "text": "animation: none;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/AuthScreen.svelte",
+      "sha256": "985d877f8461dda937d1073ba3ee38bcc8338ebc612a8a696423e5f8e350c77f",
+      "markers": [
+        {
+          "line": 333,
+          "text": "transition: border-color 120ms ease, box-shadow 120ms ease;"
+        },
+        {
+          "line": 364,
+          "text": "transition: background-color 80ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/HeroBackground.svelte",
+      "sha256": "0755d70d26d33abed520e6e44306291c11c4e4462a22491dacb30eda3e5d48c3",
+      "markers": [
+        {
+          "line": 60,
+          "text": "animation: drift-a 18s ease-in-out infinite alternate;"
+        },
+        {
+          "line": 70,
+          "text": "animation: drift-b 22s ease-in-out infinite alternate;"
+        },
+        {
+          "line": 80,
+          "text": "animation: drift-c 26s ease-in-out infinite alternate;"
+        },
+        {
+          "line": 91,
+          "text": "transition: transform 700ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 96,
+          "text": "animation: wave-drift 5s linear infinite;"
+        },
+        {
+          "line": 100,
+          "text": "animation-duration: 7s;"
+        },
+        {
+          "line": 101,
+          "text": "animation-direction: alternate;"
+        },
+        {
+          "line": 105,
+          "text": "animation-duration: 4.5s;"
+        },
+        {
+          "line": 106,
+          "text": "animation-direction: alternate-reverse;"
+        },
+        {
+          "line": 109,
+          "text": "@keyframes drift-a {"
+        },
+        {
+          "line": 118,
+          "text": "@keyframes drift-b {"
+        },
+        {
+          "line": 127,
+          "text": "@keyframes drift-c {"
+        },
+        {
+          "line": 136,
+          "text": "@keyframes wave-drift {"
+        },
+        {
+          "line": 148,
+          "text": "animation: none !important;"
+        },
+        {
+          "line": 152,
+          "text": "transition: none;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/PasswordField.svelte",
+      "sha256": "a20dfc9a6a7e553efceaac4f9634f09babd83d6d44393ba9492a4dc484abf20e",
+      "markers": [
+        {
+          "line": 63,
+          "text": "transition: border-color 120ms ease, box-shadow 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/PasswordStrengthMeter.svelte",
+      "sha256": "cde84bf826d898da47bf97286c23b2f0dcde89f64744631dd3546fc1d3fc8eed",
+      "markers": [
+        {
+          "line": 50,
+          "text": "transition: background-color 120ms ease, border-color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/RecoveryKitModal.svelte",
+      "sha256": "92c741dfc75769f5fe6125ef162b0ff5f0b834042b230ba08745ee99e5791b1e",
+      "markers": [
+        {
+          "line": 37,
+          "text": "setTimeout(() => onAcknowledge(), 220);"
+        },
+        {
+          "line": 92,
+          "text": "animation: recovery-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 96,
+          "text": "animation: recovery-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 114,
+          "text": "animation: recovery-content-in 280ms cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 118,
+          "text": "animation: recovery-content-out 220ms cubic-bezier(0.4, 0, 0.85, 0.4);"
+        },
+        {
+          "line": 178,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 205,
+          "text": "@keyframes recovery-overlay-in {"
+        },
+        {
+          "line": 210,
+          "text": "@keyframes recovery-overlay-out {"
+        },
+        {
+          "line": 215,
+          "text": "@keyframes recovery-content-in {"
+        },
+        {
+          "line": 226,
+          "text": "@keyframes recovery-content-out {"
+        },
+        {
+          "line": 242,
+          "text": "animation: none !important;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/UnlockTransition.svelte",
+      "sha256": "af39410597feef1fe19d305ba70ed27d9c558f0f1f28404046db4e5f1580f1c3",
+      "markers": [
+        {
+          "line": 31,
+          "text": "requestAnimationFrame(() => {"
+        },
+        {
+          "line": 38,
+          "text": "const coverTimer = setTimeout(onCovered, COVERED_AT_MS);"
+        },
+        {
+          "line": 80,
+          "text": "animation: rise 1200ms forwards;"
+        },
+        {
+          "line": 86,
+          "text": "animation-name: descend;"
+        },
+        {
+          "line": 138,
+          "text": "@keyframes rise {"
+        },
+        {
+          "line": 141,
+          "text": "animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 145,
+          "text": "animation-timing-function: linear;"
+        },
+        {
+          "line": 149,
+          "text": "animation-timing-function: cubic-bezier(0.64, 0, 0.78, 0);"
+        },
+        {
+          "line": 156,
+          "text": "@keyframes descend {"
+        },
+        {
+          "line": 159,
+          "text": "animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 163,
+          "text": "animation-timing-function: linear;"
+        },
+        {
+          "line": 167,
+          "text": "animation-timing-function: cubic-bezier(0.64, 0, 0.78, 0);"
+        },
+        {
+          "line": 176,
+          "text": "animation: none;"
+        }
+      ],
+      "nativeStatus": "partial-unaccepted"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/AgentManagementPage.svelte",
+      "sha256": "46fd571ee3578152fdf9561929b69d819d4d6a5ab4edf55c32c0523a3dd1053c",
+      "markers": [
+        {
+          "line": 215,
+          "text": ":global(.spinning) { animation: agent-scan 1s linear infinite; }"
+        },
+        {
+          "line": 216,
+          "text": "@keyframes agent-scan { to { transform: rotate(360deg); } }"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationCard.svelte",
+      "sha256": "20d7374a5983718c22ab00b7bee43c14d9faa1382a402c9a74e3119bb210b998",
+      "markers": [
+        {
+          "line": 157,
+          "text": "appliedTimers[tool.id] = setTimeout(() => dismissApplied(tool), APPLIED_NOTICE_MS);"
+        },
+        {
+          "line": 298,
+          "text": "animation: integration-scan-spin 800ms linear infinite;"
+        },
+        {
+          "line": 302,
+          "text": "@keyframes integration-scan-spin {"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationPreviewDialog.svelte",
+      "sha256": "0a20cc503affae65075de4b24a9af6ecabd917b4589808092b8f9064c72563cd",
+      "markers": [
+        {
+          "line": 167,
+          "text": "animation: preview-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 171,
+          "text": "animation: preview-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 192,
+          "text": "animation: preview-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 196,
+          "text": "animation: preview-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4);"
+        },
+        {
+          "line": 199,
+          "text": "@keyframes preview-overlay-in {"
+        },
+        {
+          "line": 204,
+          "text": "@keyframes preview-overlay-out {"
+        },
+        {
+          "line": 209,
+          "text": "@keyframes preview-content-in {"
+        },
+        {
+          "line": 220,
+          "text": "@keyframes preview-content-out {"
+        },
+        {
+          "line": 324,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/ToolLoginDialog.svelte",
+      "sha256": "0ec84ad74a150c9961e3c4ad3734d481722e85c8c08a82f9125baf7dfe50d8a2",
+      "markers": [
+        {
+          "line": 19,
+          "text": "function schedule() { timer = setTimeout(() => void poll(), 1000); }"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/pricing/PricingGroupDialog.svelte",
+      "sha256": "74f480ead421bce619352cba46a33248cbea6155711c153faa2a3129b6ce8395",
+      "markers": [
+        {
+          "line": 172,
+          "text": "setTimeout(() => onClose(), 220);"
+        },
+        {
+          "line": 446,
+          "text": "animation: dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 450,
+          "text": "animation: dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 466,
+          "text": "animation: dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 470,
+          "text": "animation: dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4);"
+        },
+        {
+          "line": 473,
+          "text": "@keyframes dialog-overlay-in {"
+        },
+        {
+          "line": 478,
+          "text": "@keyframes dialog-overlay-out {"
+        },
+        {
+          "line": 483,
+          "text": "@keyframes dialog-content-in {"
+        },
+        {
+          "line": 494,
+          "text": "@keyframes dialog-content-out {"
+        },
+        {
+          "line": 510,
+          "text": "animation: none !important;"
+        },
+        {
+          "line": 542,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 607,
+          "text": "transition: border-color 120ms ease, box-shadow 120ms ease;"
+        },
+        {
+          "line": 662,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 715,
+          "text": "transition: background-color 80ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ClaudeConnectPane.svelte",
+      "sha256": "e1b0715d31aabb1fe009fbc3a7835598ce835bcb23b2775dc795652045e12a88",
+      "markers": [
+        {
+          "line": 62,
+          "text": "timer = setTimeout(poll, 500);"
+        },
+        {
+          "line": 86,
+          "text": "timer = setTimeout(poll, 1000);"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ClaudeQuotaTracker.svelte",
+      "sha256": "df77c2698061b599462670463692c5de2c62840198ffb231221c56f0a7e95491",
+      "markers": [
+        {
+          "line": 181,
+          "text": "transition: width 300ms ease, background-color 300ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CommunityConnectDialog.svelte",
+      "sha256": "74713fad07ec8d92f9b38b54446014d9f5d337570786d6d33f9099d4d123170e",
+      "markers": [
+        {
+          "line": 84,
+          "text": "timer = setTimeout(() => { void poll(ticket, requestEpoch); }, 1000);"
+        },
+        {
+          "line": 232,
+          "text": ".provider-option { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px; border-radius: var(--radius); text-align: left; color: var(--text-secondary); font-size: 12px; transition: background 120ms ease, color 120ms ease; }"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CredentialManager.svelte",
+      "sha256": "0cd66387a2f66dad283cc50db6e7324d1047c626f3f6d11f31d9bdb779d4c853",
+      "markers": [
+        {
+          "line": 193,
+          "text": "transition: border-color 150ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CredentialPicker.svelte",
+      "sha256": "ac38945a6656546810162ec74775ef50367eabadc6037b2eae756faccb2d0073",
+      "markers": [
+        {
+          "line": 71,
+          "text": "cursor: pointer; text-align: left; transition: border-color 120ms ease, background 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CustomHeadersConfig.svelte",
+      "sha256": "e19825da3faf3864aac4eb3fbbca00002b42c974100b8cd388c33e4675b7e00c",
+      "markers": [
+        {
+          "line": 171,
+          "text": "transition: opacity 150ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderDetailPane.svelte",
+      "sha256": "9b398cf4bfa7c804fb5b5f944c77f0507f4153e1f3f9dadc45da3c25517a844d",
+      "markers": [
+        {
+          "line": 863,
+          "text": "animation: detail-in 280ms cubic-bezier(0.32, 0.72, 0, 1);"
+        },
+        {
+          "line": 866,
+          "text": "@keyframes detail-in {"
+        },
+        {
+          "line": 879,
+          "text": "animation: none;"
+        },
+        {
+          "line": 960,
+          "text": "transition: background-color 80ms ease, color 120ms ease, border-color 120ms ease;"
+        },
+        {
+          "line": 1057,
+          "text": "transition: background-color 80ms ease;"
+        },
+        {
+          "line": 1085,
+          "text": "animation: kv-copy-flash 900ms ease-out;"
+        },
+        {
+          "line": 1088,
+          "text": "animation: none;"
+        },
+        {
+          "line": 1121,
+          "text": "@keyframes kv-copy-flash {"
+        },
+        {
+          "line": 1146,
+          "text": "transition: opacity 120ms ease, color 120ms ease;"
+        },
+        {
+          "line": 1174,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 1203,
+          "text": "transition: color 120ms ease;"
+        },
+        {
+          "line": 1303,
+          "text": "transition: border-color 120ms ease, box-shadow 120ms ease;"
+        },
+        {
+          "line": 1369,
+          "text": "transition: background-color 80ms ease, color 120ms ease, border-color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderHealthMonitor.svelte",
+      "sha256": "7c0e7ecaa19fe1591489522c9e5f333a6941b6bfdbec3cb46329fe6191828aaf",
+      "markers": [
+        {
+          "line": 185,
+          "text": "animation: pulse 2s ease-in-out infinite;"
+        },
+        {
+          "line": 188,
+          "text": "@keyframes pulse {"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderModal.svelte",
+      "sha256": "5bf926c6c057545fcd7a19e5c9c846e76b4cf228e556d1bae13cdfede65038af",
+      "markers": [
+        {
+          "line": 32,
+          "text": "setTimeout(() => onClose(), 220);"
+        },
+        {
+          "line": 114,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderUsageProbeDialog.svelte",
+      "sha256": "80a131a7cac7c0753d189f5c16f1b0d69c810826f26673dfd36d375bd039f4e4",
+      "markers": [
+        {
+          "line": 294,
+          "text": "animation: usage-overlay-in 180ms ease;"
+        },
+        {
+          "line": 310,
+          "text": "animation: usage-content-in 220ms cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 313,
+          "text": "@keyframes usage-overlay-in {"
+        },
+        {
+          "line": 318,
+          "text": "@keyframes usage-content-in {"
+        },
+        {
+          "line": 366,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 402,
+          "text": "transition: border-color 120ms ease, box-shadow 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/QuotaDisplay.svelte",
+      "sha256": "4bd73c533432731cb0854b961655b16839648426f892e1dc2a5e402c2a4fdfc4",
+      "markers": [
+        {
+          "line": 163,
+          "text": "transition: width 300ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/RoutingStrategyConfig.svelte",
+      "sha256": "2044884d416d18e602d10598ab281f66a81516e9eb7db2388ba15f901c92f3b1",
+      "markers": [
+        {
+          "line": 193,
+          "text": "transition: border-color 150ms ease, background-color 150ms ease;"
+        },
+        {
+          "line": 228,
+          "text": "transition: border-color 150ms ease, background-color 150ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionDisplay.svelte",
+      "sha256": "cfa5cd5f8ff8d7f94ccf40e180db196492e553d23a0ec3920b4677ea78a13904",
+      "markers": [
+        {
+          "line": 196,
+          "text": "transition: width 300ms ease, background-color 300ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionImportDialog.svelte",
+      "sha256": "6887b05e159474b1388514ebc067c8e5763e5bea83e7d88a759d2441ab3f9450",
+      "markers": [
+        {
+          "line": 77,
+          "text": "if (busy) timer = setTimeout(() => { void poll(ticket, epoch); }, 1000);"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/WebhookNotificationConfig.svelte",
+      "sha256": "b94c9419caafc5ee91ec5182112b486180ee7feaa1d7330b00722fe60291f5cb",
+      "markers": [
+        {
+          "line": 256,
+          "text": "transition: opacity 150ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ChannelIndicator.svelte",
+      "sha256": "c600369ad8c079a4a7f0361707dcf6dd9599eeb372989aa2fbf8d536c6c6d79e",
+      "markers": [
+        {
+          "line": 65,
+          "text": ":global(.channel-indicator.active svg) { animation: channel-spin 1.5s linear infinite; }"
+        },
+        {
+          "line": 80,
+          "text": "@keyframes channel-spin { to { transform: rotate(360deg); } }"
+        },
+        {
+          "line": 82,
+          "text": ":global(.channel-indicator.active svg) { animation: none; }"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ProxyLogsDialog.svelte",
+      "sha256": "854b52ee781efd32f81095c01c6457c720a228a9b9b6960264204546f9a68f43",
+      "markers": [
+        {
+          "line": 105,
+          "text": "refreshTimer = setTimeout(refresh, 2000);"
+        },
+        {
+          "line": 272,
+          "text": ":global(.proxy-log-spinner) { flex: 0 0 auto; animation: proxy-log-spin 1s linear infinite; }"
+        },
+        {
+          "line": 273,
+          "text": "@keyframes proxy-log-spin { to { transform: rotate(360deg); } }"
+        },
+        {
+          "line": 275,
+          "text": ":global(.proxy-log-spinner) { animation: none; }"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ServerDetailPane.svelte",
+      "sha256": "f42ccddebaca95f3584cffc2459551962b8e7455854281222b8b304867448c45",
+      "markers": [
+        {
+          "line": 313,
+          "text": ":global(.logs-opening) { animation: logs-opening-spin 1s linear infinite; }"
+        },
+        {
+          "line": 314,
+          "text": "@keyframes logs-opening-spin { to { transform: rotate(360deg); } }"
+        },
+        {
+          "line": 316,
+          "text": ":global(.logs-opening) { animation: none; }"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/UsageChart.svelte",
+      "sha256": "d3b41c2c18299b30f7b729ae0d499fbf6e0fe1faa88762fb618802e33362d5e7",
+      "markers": [
+        {
+          "line": 358,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 514,
+          "text": "transition: filter 100ms ease, opacity 100ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/UsageRangeMenu.svelte",
+      "sha256": "057f0899f2c1d0e85115dad66158eb12255671335af351869b38c892aaa791dc",
+      "markers": [
+        {
+          "line": 39,
+          "text": "closeTimer = setTimeout(() => (open = false), 180);"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/ControlPanelSettings.svelte",
+      "sha256": "5d7f8555643b3beab114d48fcaafa8a235f63b71311f35c042621073be552453",
+      "markers": [
+        {
+          "line": 148,
+          "text": "clearCodeTimer = setTimeout(() => accessCode = \"\", 60000);"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/SettingsPanel.svelte",
+      "sha256": "86b15284b4e84eedf196a20257267af06afd52d260260e5e9f1b776a120cb78e",
+      "markers": [
+        {
+          "line": 958,
+          "text": "animation: overlay-in 240ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 962,
+          "text": "animation: overlay-out 220ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 980,
+          "text": "animation: drawer-genie-in 380ms cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 984,
+          "text": "animation: drawer-genie-out 280ms cubic-bezier(0.55, 0, 0.7, 0.2);"
+        },
+        {
+          "line": 987,
+          "text": "@keyframes overlay-in {"
+        },
+        {
+          "line": 996,
+          "text": "@keyframes overlay-out {"
+        },
+        {
+          "line": 1005,
+          "text": "@keyframes drawer-genie-in {"
+        },
+        {
+          "line": 1022,
+          "text": "@keyframes drawer-genie-out {"
+        },
+        {
+          "line": 1043,
+          "text": "animation: none !important;"
+        },
+        {
+          "line": 1069,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 1103,
+          "text": "transition: color 120ms ease, background-color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/AppTitleBar.svelte",
+      "sha256": "088726e2bc3820abbd9638591b5859cb2b792c06920e6dbb03e51cf5960e82cb",
+      "markers": [
+        {
+          "line": 283,
+          "text": "transition: opacity 120ms ease;"
+        },
+        {
+          "line": 326,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 407,
+          "text": "transition: background-color 80ms ease, color 80ms ease;"
+        }
+      ],
+      "nativeStatus": "partial-unaccepted"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/ErrorToast.svelte",
+      "sha256": "c0311b16c73d8e2aafbd6ecbbecee800b6105fa6edd398d5f89d9bc08fb6d3b2",
+      "markers": [
+        {
+          "line": 17,
+          "text": "if (!hovered && !focused) timer = setTimeout(onDismiss, 6000);"
+        }
+      ],
+      "nativeStatus": "implemented-awaiting-native-acceptance"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/SegmentedControl.svelte",
+      "sha256": "8ce91319775a641b0fd5195b9f90962b3d1871f59aaf82da03e15345a242da42",
+      "markers": [
+        {
+          "line": 47,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/SyncStatusPill.svelte",
+      "sha256": "8d155d8f8cd77047570c6e6ea3ffb9e4c50439cee4a5d43b941964cd9a70f3e3",
+      "markers": [
+        {
+          "line": 48,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 69,
+          "text": "animation: pulse 1.2s ease-in-out infinite;"
+        },
+        {
+          "line": 80,
+          "text": "@keyframes pulse {"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/actions/scrollMask.ts",
+      "sha256": "f043396f7d56d0ad82280403902908affaffd0b7785ceebeef664f5d02fceb5f",
+      "markers": [
+        {
+          "line": 52,
+          "text": "if (!destroyed && !frame) frame = requestAnimationFrame(measure);"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/Button.svelte",
+      "sha256": "9b3ded9c4e8adad0fc5b0655efad3a5bb7131e9eb76641db14d7aab3756eeb1f",
+      "markers": [
+        {
+          "line": 40,
+          "text": "transition:"
+        },
+        {
+          "line": 66,
+          "text": "animation: spin 0.7s linear infinite;"
+        },
+        {
+          "line": 71,
+          "text": "@keyframes spin {"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/Collapsible.svelte",
+      "sha256": "cfe4246593d75db003e41fd104c4ccd1a6cd555ed1d9e6e5b8a9a607d0249410",
+      "markers": [
+        {
+          "line": 87,
+          "text": "transition: background-color 120ms ease;"
+        },
+        {
+          "line": 94,
+          "text": ".collapsible-chevron { transition: transform 180ms ease; }"
+        },
+        {
+          "line": 98,
+          "text": ".collapsible-content { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 220ms ease, opacity 180ms ease; }"
+        },
+        {
+          "line": 109,
+          "text": ".collapsible-trigger, .collapsible-chevron, .collapsible-content { transition: none; }"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/Field.svelte",
+      "sha256": "81a8b150921f8b9f4dcddd2ec6a0db1aa5e4ec606ada92b453db9274b37d9be4",
+      "markers": [
+        {
+          "line": 45,
+          "text": "transition: border-color 120ms ease, background-color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/IconButton.svelte",
+      "sha256": "439d6ec2973ab84a72459a65b660111232a8ad7f8f6ec0e92e6f3c24d427c177",
+      "markers": [
+        {
+          "line": 34,
+          "text": "transition:"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/Modal.svelte",
+      "sha256": "210386251de0129166c6da5b963609ed8df4a89b24d54aee2dcae6c0511d0ed0",
+      "markers": [
+        {
+          "line": 37,
+          "text": "requestAnimationFrame(() => { if (origin.isConnected) origin.focus(); });"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/ProgressButton.svelte",
+      "sha256": "cb9d7276ce3d9714747789977546f83fa0ad3adeccd6bd7b8c71222a1e982ddd",
+      "markers": [
+        {
+          "line": 49,
+          "text": "transition:"
+        },
+        {
+          "line": 75,
+          "text": "transition: width 180ms ease-out;"
+        },
+        {
+          "line": 80,
+          "text": "animation: progress-slide 1.2s ease-in-out infinite;"
+        },
+        {
+          "line": 98,
+          "text": "animation: spin 0.7s linear infinite;"
+        },
+        {
+          "line": 158,
+          "text": "@keyframes progress-slide {"
+        },
+        {
+          "line": 170,
+          "text": "@keyframes spin {"
+        },
+        {
+          "line": 179,
+          "text": "animation: none;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/ProviderFormFields.svelte",
+      "sha256": "69051f0d2cc6f011179df8f08ac0d3c6481e1c7b3ac2ac73f7d9ae0b85f1fb7e",
+      "markers": [
+        {
+          "line": 482,
+          "text": "<DropdownMenu.Item class=\"provider-field-menu-item\" onSelect={() => { setTimeout(() => addField(field.id), 0); }}>{$t(field.label)}</DropdownMenu.Item>"
+        },
+        {
+          "line": 540,
+          "text": "transition: background-color 120ms ease;"
+        },
+        {
+          "line": 565,
+          "text": "transition: background-color 120ms ease, box-shadow 120ms ease, color 120ms ease;"
+        },
+        {
+          "line": 681,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 757,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 802,
+          "text": "transition: background-color 80ms ease, border-color 120ms ease, color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/ProviderListPane.svelte",
+      "sha256": "bd5b02915c626cb9023d32d9730445bfa5f21898e83a1d898de72733468b4afb",
+      "markers": [
+        {
+          "line": 255,
+          "text": ":global(.provider-refresh.spinning svg) { animation: refresh-spin 1s linear infinite; }"
+        },
+        {
+          "line": 257,
+          "text": "@keyframes refresh-spin {"
+        },
+        {
+          "line": 321,
+          "text": "transition: background-color 80ms ease;"
+        },
+        {
+          "line": 359,
+          "text": "transition: color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "partial-unaccepted"
+    },
+    {
+      "path": "packages/ui/src/components/ProxyRouteGroupDialog.svelte",
+      "sha256": "0d1a19d3f392f834c6020e37fd0ebe82465099ec2af23d2fe9baaf4b73c7d528",
+      "markers": [
+        {
+          "line": 101,
+          "text": "setTimeout(() => onClose(), 220);"
+        },
+        {
+          "line": 493,
+          "text": "animation: dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 497,
+          "text": "animation: dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1);"
+        },
+        {
+          "line": 513,
+          "text": "animation: dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 514,
+          "text": "transition: width 200ms ease;"
+        },
+        {
+          "line": 518,
+          "text": "animation: dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4);"
+        },
+        {
+          "line": 521,
+          "text": "@keyframes dialog-overlay-in {"
+        },
+        {
+          "line": 526,
+          "text": "@keyframes dialog-overlay-out {"
+        },
+        {
+          "line": 531,
+          "text": "@keyframes dialog-content-in {"
+        },
+        {
+          "line": 542,
+          "text": "@keyframes dialog-content-out {"
+        },
+        {
+          "line": 599,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        },
+        {
+          "line": 706,
+          "text": "transition: opacity 120ms ease, border-color 120ms ease;"
+        },
+        {
+          "line": 808,
+          "text": "transition: transform 160ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/ProxyRouteList.svelte",
+      "sha256": "4cd08e814ded8e3d7060c164deac053ccb7f85e17b6124a09e7f6c39a03d84ba",
+      "markers": [
+        {
+          "line": 210,
+          "text": "transition: background-color 80ms ease;"
+        },
+        {
+          "line": 263,
+          "text": "transition: color 120ms ease;"
+        },
+        {
+          "line": 293,
+          "text": "transition: background-color 150ms ease;"
+        },
+        {
+          "line": 312,
+          "text": "transition: transform 150ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/SearchField.svelte",
+      "sha256": "4a74e256a6d5e7f41979b9f92874e0febf3da2bf144e8d77cd7c347ea6e1ddac",
+      "markers": [
+        {
+          "line": 32,
+          "text": "transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/SelectField.svelte",
+      "sha256": "a75a8ab3ebb62d3dd0db85f1429f5a25d84d115fe157396224b09ceda54d6936",
+      "markers": [
+        {
+          "line": 107,
+          "text": "transition: border-color 120ms ease, background-color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/SidebarItem.svelte",
+      "sha256": "97af9ce5e2dedadf0549dc687a1c983239a5a26c6b12066150efd9bafbd73f0d",
+      "markers": [
+        {
+          "line": 33,
+          "text": "transition: background-color 80ms ease, color 120ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/components/SwitchField.svelte",
+      "sha256": "644b17b85ca8fb51c70350f246b6e1b95f040e8185a2b5817bbf3e9be5c88816",
+      "markers": [
+        {
+          "line": 69,
+          "text": "transition: background-color 150ms ease;"
+        },
+        {
+          "line": 93,
+          "text": "transition: transform 150ms ease;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    },
+    {
+      "path": "packages/ui/src/styles/base.scss",
+      "sha256": "cf7bae55267729e8d66f74d8a60662d9373f836132e973cc7ecfb9cef8801abd",
+      "markers": [
+        {
+          "line": 224,
+          "text": "animation-duration: 0.01ms !important;"
+        },
+        {
+          "line": 225,
+          "text": "animation-iteration-count: 1 !important;"
+        },
+        {
+          "line": 226,
+          "text": "transition-duration: 0.01ms !important;"
+        },
+        {
+          "line": 278,
+          "text": "@keyframes pop-in {"
+        },
+        {
+          "line": 289,
+          "text": "@keyframes pop-out {"
+        },
+        {
+          "line": 305,
+          "text": "animation: pop-in 160ms cubic-bezier(0.22, 1, 0.36, 1);"
+        },
+        {
+          "line": 308,
+          "text": "animation: pop-out 120ms cubic-bezier(0.4, 0, 0.85, 0.4);"
+        },
+        {
+          "line": 317,
+          "text": "animation: none !important;"
+        }
+      ],
+      "nativeStatus": "not-port-verified"
+    }
+  ]
+}
