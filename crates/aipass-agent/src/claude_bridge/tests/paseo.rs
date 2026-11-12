@@ -134,7 +134,8 @@ async fn plan_approval_waits_for_the_native_permission_mode_acknowledgement() {
         let script = r#"read -r input
 printf '%s\n' '{"type":"control_request","request_id":"plan","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"write test"}}}'
 read -r mode
-printf '%s\n' "$mode" > mode.json
+printf '%s\n' "$mode" > mode.pending
+mv mode.pending mode.json
 mode_id=$(printf '%s' "$mode" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 while [ ! -f .ack ]; do sleep 0.01; done
 status=$(cat .ack)
@@ -168,10 +169,11 @@ while read -r input; do :; done
         );
         assert!(!dir.path().join("reply.json").exists());
         std::fs::write(
-            dir.path().join(".ack"),
+            dir.path().join(".ack.pending"),
             if accepted { "success" } else { "error" },
         )
         .unwrap();
+        std::fs::rename(dir.path().join(".ack.pending"), dir.path().join(".ack")).unwrap();
         if accepted {
             let final_response = collect(stream).await;
             assert!(final_response["content"]
