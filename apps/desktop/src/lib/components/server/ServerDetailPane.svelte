@@ -240,7 +240,7 @@
       localProxy
       tools={proxyIntegrationTools}
       detections={toolDetections}
-      resetKey={integrateRoute?.id ?? ""}
+      resetKey={JSON.stringify([integrateRoute, config.bindAddr, routeModel])}
       disabled={Boolean(busy) || !integrateRoute?.token}
       onSetup={tool => setupTool = tool}
       onRefresh={onRefreshToolDetections}
@@ -505,6 +505,9 @@
   .kv-actions {
     display: inline-flex;
     align-items: center;
+    // Reserve the same action column for endpoint (copy) and token (copy/rotate).
+    min-width: 56px;
+    justify-content: flex-end;
     gap: 4px;
   }
 
@@ -558,6 +561,14 @@
       grid-column: 2;
       grid-row: 1;
     }
+  }
+
+  // At the desktop's 960 px minimum, the detail pane is about 388 px.
+  // Keep every action and its label visible without squeezing the heading.
+  @container (max-width: 440px) {
+    .detail-header { grid-template-columns: 1fr; }
+    .actions { grid-column: 1; grid-row: 2; flex-wrap: wrap; }
+    .proxy-meta { grid-row: 3; }
   }
 
   .mono {

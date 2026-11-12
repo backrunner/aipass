@@ -99,3 +99,50 @@ test("guided integrations expose setup without calling the automatic writer", as
   flushSync(); expect(document.querySelectorAll(".tool-side .btn-ghost")).toHaveLength(0);
   writeButton().click(); expect(onSetup).toHaveBeenCalledWith(guided); expect(onPreview).not.toHaveBeenCalled();
 });
+
+test("removing and rediscovering an Agent during apply does not leave integration busy", async () => {
+  setLocale("en");
+  const detections = writable([{ tool: "codex" as const, binaryFound: true }]);
+  const state = fromStore(detections);
+  let finish!: (result: ToolConfigApplyResult) => void;
+  const apply = vi.fn(() => new Promise<ToolConfigApplyResult>(resolve => { finish = resolve; }));
+  const onPreview = vi.fn(async () => ({ preview, apply }));
+  app = mount(IntegrationCard, { target: document.body, props: {
+    tools: [tool], get detections() { return state.current; }, onPreview
+  } });
+  flushSync(); writeButton().click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector(".preview-dialog-content")).toBeTruthy(); });
+  document.querySelector<HTMLButtonElement>(".dialog-actions .btn-primary")!.click(); flushSync();
+  detections.set([]); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  finish(applied); await Promise.resolve(); flushSync();
+  detections.set([{ tool: "codex", binaryFound: true }]); flushSync();
+  expect(writeButton().disabled).toBe(false);
+  writeButton().click();
+  await vi.waitFor(() => { flushSync(); expect(onPreview).toHaveBeenCalledTimes(2); });
+  expect(document.querySelector(".applied-message")).toBeNull();
+});
+
+test("removing an Agent during a pending preview allows a fresh preview after rediscovery", async () => {
+  setLocale("en");
+  const detections = writable([{ tool: "codex" as const, binaryFound: true }]);
+  const state = fromStore(detections);
+  const completions: Array<(plan: { preview: ToolConfigPreview; apply: () => Promise<ToolConfigApplyResult> }) => void> = [];
+  const apply = vi.fn(async () => applied);
+  const onPreview = vi.fn(() => new Promise<{ preview: ToolConfigPreview; apply: () => Promise<ToolConfigApplyResult> }>(resolve => { completions.push(resolve); }));
+  app = mount(IntegrationCard, { target: document.body, props: { tools: [tool], get detections() { return state.current; }, onPreview } });
+  flushSync(); writeButton().click(); flushSync();
+  detections.set([]); flushSync();
+  detections.set([{ tool: "codex", binaryFound: true }]); flushSync();
+  expect(writeButton().disabled).toBe(false);
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  writeButton().click();
+  expect(onPreview).toHaveBeenCalledTimes(2);
+  completions[0]({ preview, apply }); await Promise.resolve(); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  expect(writeButton().disabled).toBe(true);
+  completions[1]({ preview: { ...preview, targetPath: "/fresh/config.toml" }, apply });
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeTruthy(); });
+  expect(document.querySelector(".active-path")?.textContent).toBe("/fresh/config.toml");
+  expect(apply).not.toHaveBeenCalled();
+});

@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
+import { fromStore, writable } from "svelte/store";
+import { defaultRetryPolicy } from "@aipass/schemas";
 
 import type { ProxyConfig, ProxyStatus, ServerUsageSummary } from "../../types";
 import { emptyServerUsage } from "../../services/serverUsage";
@@ -203,4 +205,34 @@ test("stopped address opens on demand and stays editable when saving fails", asy
   document.querySelector(".bind-editor")!.dispatchEvent(new Event("submit", { cancelable: true }));
   await vi.waitFor(() => { flushSync(); expect(document.querySelector(".bind-editor input")).toBeNull(); });
   expect(onSaveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ bindAddr: "127.0.0.1:8989" }));
+});
+
+test.each(["address", "token", "protocol"])("proxy %s changes invalidate both open and pending integration previews", async (change) => {
+  setLocale("en");
+  const initial: ProxyConfig = { ...config, routes: [{ id: "route", name: "Fixture route", token: "synthetic-token", enabled: true,
+    strategy: "fallback", inboundProtocol: "open_ai_responses", upstreamProtocol: "open_ai_responses",
+    conversionEnabled: false, targets: [], retry: defaultRetryPolicy() }] };
+  const store = writable(initial); const state = fromStore(store);
+  const preview = { tool: "codex" as const, mode: "plaintext" as const, entryId: "route", entryTitle: "Fixture route", targetPath: "/synthetic/config.toml", preview: "+ old", summary: "fixture" };
+  const onPreviewIntegration = vi.fn().mockResolvedValue(preview);
+  const onApplyIntegration = vi.fn();
+  app = mount(ServerDetailPane, { target: document.body, props: { get config() { return state.current; }, status,
+    usageByRange: emptyServerUsage(), toolDetections: [{ tool: "codex", binaryFound: true }], onPreviewIntegration, onApplyIntegration } }) as never;
+  const write = () => document.querySelector<HTMLButtonElement>(".tool-side .btn-secondary")!;
+  const changeConfig = () => store.update(value => ({ ...value,
+    bindAddr: change === "address" ? "127.0.0.1:18888" : value.bindAddr,
+    routes: value.routes.map(route => ({ ...route, token: change === "token" ? route.token + "-new" : route.token,
+      upstreamProtocol: change === "protocol" ? "anthropic_messages" : route.upstreamProtocol })) }));
+  flushSync(); write().click();
+  await vi.waitFor(() => { flushSync(); expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeTruthy(); });
+  changeConfig(); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  let resolve!: (value: typeof preview) => void;
+  onPreviewIntegration.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  write().click(); flushSync();
+  store.update(value => ({ ...value, routes: value.routes.map(route => ({ ...route, token: route.token + "-later" })) }));
+  flushSync(); resolve(preview); await Promise.resolve(); flushSync();
+  expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeNull();
+  expect(onApplyIntegration).not.toHaveBeenCalled();
+  expect(write().disabled).toBe(false);
 });

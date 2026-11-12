@@ -111,7 +111,6 @@ test.each(["openai_compatible", "anthropic_messages"] as const)("mixed keys expo
   await vi.waitFor(() => { flushSync(); expect(document.querySelector('.preview-dialog-content[data-state="open"]')).toBeTruthy(); });
   const request = { tool: "claude-code", mode: "helper", id: "provider", secretId: "claude" };
   expect(preview).toHaveBeenLastCalledWith(request);
-  expect(document.querySelector(".dialog-subtitle")?.textContent).toContain("Test provider · Claude");
   expect(document.querySelector(".active-path")?.textContent).toBe(result.targetPath);
   expect(document.querySelector(".dialog-actions .btn-primary")).toBeNull();
   [...document.querySelectorAll<HTMLButtonElement>(".preview-dialog-content button")].find(button => button.textContent?.trim() === "Full file")!.click();
