@@ -1,0 +1,32 @@
+[package]
+name = "aipass-desktop-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+parity-render = ["gpui/test-support", "gpui_platform/test-support"]
+
+[dependencies]
+aipass-agent = { path = "../../crates/aipass-agent" }
+aipass-agent-protocol = { path = "../../crates/aipass-agent-protocol" }
+aipass-config-writers = { path = "../../crates/aipass-config-writers" }
+aipass-vault = { path = "../../crates/aipass-vault" }
+aipass-provider-registry = { path = "../../crates/aipass-provider-registry" }
+anyhow.workspace = true
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders"] }
+gpui-base = "=0.9.1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde_json.workspace = true
+serde.workspace = true
+uuid.workspace = true
+url = "2"
+time.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSUserDefaults", "NSValue"] }

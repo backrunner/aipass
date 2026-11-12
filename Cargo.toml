@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "apps/desktop-native",
   "apps/desktop/src-tauri",
   "crates/aipass-agent",
   "crates/aipass-agent-protocol",
@@ -62,3 +63,11 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 interprocess = "2.2.3"
 rpassword = "7.4.0"
 windows-service = "0.8.1"
+
+# Native background filters operate over Retina-sized surfaces. Keep their
+# rasterizer optimized in development so resizing does not stall asset loading.
+[profile.dev.package.resvg]
+opt-level = 3
+
+[profile.dev.package.tiny-skia]
+opt-level = 3
