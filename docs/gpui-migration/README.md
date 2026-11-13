@@ -1,5 +1,7 @@
 # GPUI migration acceptance
 
+Subscription checkpoint: [component audit and remaining gaps](ui-subscriptions-20261113.md).
+
 Reference: `65a1f1f5a5e1b51311132659f9b972131c8ea551`.
 Worktree: `/Volumes/BRData/projects/aipass-gpui`, branch `refactor/gpui-desktop`.
 
@@ -56,7 +58,88 @@ The native executable is not yet the production desktop entry point.
 `inventory.json` is generated from the immutable reference, never the candidate.
 Pending, absent, skipped or failed evidence blocks acceptance.
 
-## Current evidence (2026-11-11–12)
+The [component and motion validation method](component-validation.md) adds
+per-control geometry and declared-style observations, fixed-time auth background
+samples, source-bound reports and an interactive overlay review. Missing mappings
+and remaining visual differences are explicit failures, not accepted coverage.
+The native root, provider coordinator and background renderer are now split by
+responsibility; the repository size gate continues to enforce the existing limits.
+
+## Current evidence (2026-11-14)
+
+The [provider maintenance follow-up](ui-provider-tools-20261114.md) implements
+Reset Provider, endpoint/usage actions and the separate Notes card, with scoped
+Agent operations, confirmation/failure states and bilingual theme comparisons.
+Its later header correction restores the intended title/description hierarchy
+after user review and adds explicit typography checks against corrected Svelte.
+Actual native interaction remains unaccepted after inconsistent accessibility
+and screenshot responses; new popup presentation timing is also pending.
+
+The [menu and selector follow-up](ui-menus-20261114.md) completes shared popup
+motion and selector geometry/focus work, adds tag filtering and explicitly records
+the menu workflows and provider-detail differences at that checkpoint. Its automated
+checks do not replace real-window acceptance, which awaits the user's return.
+
+The preceding [control and renderer audit](ui-controls-20261114.md) corrects group
+opacity, shadows, disabled/focus states, dropdown navigation and closed-transition
+frame requests. It tightens subscription geometry to 0.75 px and records current
+visual matrices, fresh native control interaction and eight passing Release
+presented-frame cases. Earlier automation rounds with `Hidden` visibility remain
+rejected; the report lists remaining menu-motion parity and acceptance limits.
+
+The preceding [subscription overview and native acceptance](ui-acceptance-20261113.md)
+corrects the overview card, an accessibility focus crash and draft-close state.
+It records refreshed comparisons, native interaction, the resolved Keychain test
+block and eight passing presented-frame cases on the new renderer. Earlier
+failed/interrupted rounds below remain historical evidence.
+
+The [component and background review](ui-review-20261113.md) records 64 auth
+comparison cases, per-control spacing/style probes, 40 provider cases, fixed-time
+background samples and module splits. The reports retain open differences and
+missing mappings; they do not accept the entire UI.
+
+The later [native presentation and consistency checkpoint](ui-performance-20261113.md)
+adds real-window auth interaction, corrects scroll-fade opacity and provider
+dialog constraints, and records eight Release presentation traces. Moving cases
+measure approximately 143 FPS on this machine, but zero-time Metal callbacks
+keep the strict timing gate unaccepted. Geometry and numeric-style matches do
+not waive remaining visual or interaction gaps.
+
+The [optional-field and disclosure checkpoint](ui-optional-fields-20261113.md)
+adds the complete grouped Add field menu, shared folding transitions, hidden
+control cleanup and optional Agent payload mappings. Its 32-case matrix covers
+both sizes, themes and locales, with native interaction evidence kept separate.
+
+The [provider list checkpoint](ui-provider-list-20261113.md) separates neutral
+hover from blue selection and corrects row typography, corners and titlebar
+insets/tracking. Its 24-case matrix maps individual list controls and verifies
+colors as well as geometry; real minimum-size selection checks cover both themes.
+
+The [native updater checkpoint](native-updater-20261113.md) now implements a
+Tauri-independent macOS update path in the isolated GPUI validation app, including
+signed automatic download, manual/cached restart and failed-launch rollback.
+Native computer use is working again for these checks. Isolated managed Agent
+shutdown/restart and singleton handoff have their own runtime evidence;
+production supervisor/tray integration, feeds and non-macOS installers remain
+pending.
+
+## Historical checkpoints (2026-11-11–12)
+
+The delivery checkpoint at `0de4698` contains 11 signed commits pushed to
+`refactor/gpui-desktop`; full Rust/Node checks and the Tauri branch artifact gate
+passed. The subsequent icon/update review verifies the App, DMG and updater ICNS
+against the shared source (16–1024 px), and extends the real packaged runtime gate
+to seven cases, including timer-driven automatic download and tampered-package
+rejection. All seven pass with signature checks enabled. These are the local ad
+hoc signed **Tauri** artifacts, not GPUI updater or production notarization proof.
+Evidence: `artifacts/desktop-parity/icon-updater-20261112-231128/`.
+
+The old GPUI fixture bundle had no App icon and carried an outdated executable.
+The reproducible `package-native.mjs` command below now builds both current
+fixtures with shared icons, version metadata and verified ad hoc signatures.
+Computer use still fails with `native pipe startup failed` after reset and direct
+app selection, so the refreshed GPUI bundle's window restart, Dock presentation,
+screenshots and input have not been accepted. GPUI's updater remains unimplemented.
 
 The latest [native provider implementation](provider-workflow-20261112.md)
 connects populated lists, add/edit forms, favorites, archive, trash and restore
@@ -104,8 +187,9 @@ statistics below remain historical diagnostics, not the current acceptance gate.
   accompanied by element bounds and the test bridge trace. Two viewports,
   two locales, two themes, and three initial screens. These are synthetic
   frontend fixtures, not captures of the packaged Tauri application.
-- The native preview uses GPUI 0.3.12 (`gpui-pre` and its matching platform
-  crate). The empty workspace now includes the sidebar, title/menu, search,
+- This checkpoint used GPUI 0.3.12 (`gpui-pre` and its matching platform
+  crate). The current renderer and maintained patches are documented in
+  [renderer effects](renderer-effects-20261113.md) and [vendor sources](../../vendor/README.md). The empty workspace now includes the sidebar, title/menu, search,
   filter, toolbar and empty-state controls. Authentication includes native
   password inputs, confirmation, reveal/hide and initial setup/unlock screens.
   These are partial implementations: the provider catalog and its basic mutation
@@ -201,8 +285,9 @@ statistics below remain historical diagnostics, not the current acceptance gate.
   `artifacts/desktop-parity/logo-reset-validation-20261112/`.
   The later Svelte corrections use the proportionate desktop checks recorded
   in the populated business review; that earlier full Node gate is historical.
-  The desktop artifact runtime gate and remote CI have not run for the migration.
-  No commit, push or release has been performed.
+  At that earlier checkpoint the artifact runtime gate and remote CI had not run,
+  and no commit, push or release had been performed. See the later delivery and
+  packaged-artifact evidence above; remote CI and release publication remain separate.
 
 ## Reproduce the development checks
 
@@ -218,6 +303,10 @@ node node_modules/vite/bin/vite.js --config tests/desktop-parity/vite.config.mjs
 # In another terminal, while the reference server is running:
 node tests/desktop-parity/capture-reference.mjs
 cargo build -p aipass-desktop-native --features parity-render
+# Build fresh, ad hoc signed macOS comparison apps with the shared App icon:
+node tests/desktop-parity/package-native.mjs artifacts/desktop-parity/NEW-NATIVE-BUNDLES
+# Launch the GPUI comparison executable with the arguments recorded in manifest.json:
+artifacts/desktop-parity/NEW-NATIVE-BUNDLES/AIPass\ GPUI\ Validation.app/Contents/MacOS/aipass-desktop-native --parity-preview
 # Every round name must be new; an existing round is never overwritten.
 node tests/desktop-parity/capture-native.mjs unique-round-name
 # Expanded component/style matrix; successful capture still needs review:
@@ -234,6 +323,12 @@ cargo run -p aipass-desktop --example parity_reference
 # Expected to fail until every native surface has evidence:
 node tests/desktop-parity/audit.mjs
 ```
+
+The native bundle script builds the current GPUI and Tauri fixture executables,
+copies the production ICNS into both apps, declares their icons and versions,
+and verifies ad hoc signatures. It refuses an existing destination and records
+binary/icon hashes in `manifest.json`. These comparison apps do not include a
+production updater; launch/input acceptance remains separate from packaging.
 
 The setup script creates the ignored reference dependency link and is safe to rerun. Later
 captures use timestamped directories and never replace accepted reference images.

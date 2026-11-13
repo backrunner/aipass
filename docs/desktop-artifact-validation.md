@@ -32,18 +32,25 @@ remain required.
   at 960×640, wait for frontend completion and check WebView JavaScript,
   native event-loop and authenticated Agent responsiveness for ten seconds.
 - Open the updater archive's application in tray mode and repeat the observation.
+- Let the shipped frontend's normal background timer discover a higher fixture
+  version and download the supplied signed archive. Require matching cached
+  bytes and version metadata, without an install or restart. Repeat with altered
+  archive bytes and require rejection without a ready cache or application exit.
 - Download the supplied archive from a loopback fixture, verify its original
   updater signature, install it through `install_update`, and require a new
   process to finish startup with the main window visible.
 - Preload the normal pending-update cache and start in tray mode. Require
   `install_pending_update` to install, clear its cache and restart successfully.
 
-The update scenarios reinstall the same signed version into a disposable copy.
+The installation scenarios reinstall the same signed version into a disposable copy.
 This tests the new installer's runtime with the actual archive, without requiring
 an unpublished feed or changing release versions/signatures. Semver ordering and
 channel policy retain their separate unit tests. An older published installer
 that cannot complete an update may still need a manual DMG upgrade; a passing
-new installer cannot repair code already running in an old release.
+new installer cannot repair code already running in an old release. Background
+download cases announce a higher fixture version but never install that payload;
+they validate real automatic discovery, download and signature checks without
+claiming a cross-version upgrade.
 
 The application's explicit `--verify-runtime /tmp/aipass-runtime-*` option is
 accepted only when the running executable is the fixture's own `AIPass.app`.
@@ -86,7 +93,9 @@ rm -rf "$runtime_signing_dir"
 ```
 
 An `.app` path can be supplied for startup-only diagnostics. CI and release jobs
-must supply an artifact directory so both update scenarios are mandatory.
+must supply an artifact directory so automatic download and all installation
+scenarios are mandatory. Run DMG integrity and runtime checks sequentially:
+mounting the same image concurrently can fail with `resource busy`.
 
 The verifier fails on early process exit, startup errors, unresponsive IPC/event
 loops, missing restart, unexpected versions, leftover update caches or altered

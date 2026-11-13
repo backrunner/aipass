@@ -1510,3 +1510,115 @@ Newest entries last within each section.
 - **Fix**: write each fixture message to a sibling temporary path and rename it after writing. Preserve the production acknowledgement ordering and test assertions.
 - **Guardrail**: do not replace content readiness with longer sleeps or weaken the permission checks. For isolated macOS suites, use a short temporary directory for Unix sockets and clear global XDG overrides so per-vault test homes remain independent.
 - **Watch points**: `crates/aipass-agent/src/claude_bridge/tests/paseo.rs`, Agent tool home overrides and local validation wrappers.
+
+### Native comparison bundles must carry current binaries and App icons
+- **Symptom**: an older GPUI comparison App still contained an earlier binary and declared no App icon, although the production Tauri bundle had the complete ICNS.
+- **Root cause**: manually assembled comparison bundles were outside the normal desktop packaging pipeline.
+- **Fix**: `tests/desktop-parity/package-native.mjs` builds both current fixture executables, copies the shared ICNS, writes version/icon metadata, verifies ad hoc signatures and records hashes in a fresh output directory. Set `CFBundleExecutable` to the actual Mach-O and record preview arguments separately; a shell entry that execs another filename loses bundle identity.
+- **Guardrail**: check the actual bundle executable and icon before native review; never infer them from `target/debug` or the production bundle. Keep preview packaging, native interaction and production updater evidence distinct. Automatic update acceptance must include normal frontend timer-driven download and rejection of altered signed bytes, in addition to install/restart scenarios.
+- **Watch points**: native preview packaging, Tauri icon configuration, `scripts/verify-macos-runtime.mjs` and migration evidence manifests.
+
+### Native updater fixtures must remain distinct from the production runtime
+- **Symptom**: a GPUI comparison build can otherwise install the existing Tauri release, or begin pending installation before it renders a window.
+- **Root cause**: renderer migration does not automatically migrate feed targets, startup ownership or Tauri's Agent/tray update guard.
+- **Fix**: native-only target names, a feature-gated isolated validation entry, first-frame worker/readiness callbacks, signed byte revalidation and same-volume exchange with failed-start rollback.
+- **Guardrail**: reject Tauri targets and real vault arguments in native update fixtures. Keep production enablement blocked until native singleton, Agent, proxy, clipboard and tray lifecycle paths are connected. Test cached/manual restart and startup failure using the actual bundle; a metadata-version fixture is not a production binary-version upgrade.
+- **Watch points**: `apps/desktop-native/src/updates`, `main.rs`, `update_ui.rs`, `tests/desktop-parity/native-updater.py`, production feed/package cutover. See `docs/gpui-migration/native-updater-20261113.md`.
+
+### Native decorations must not arrive late or change scroll extents
+- **Symptom**: gradients/shadows appeared after controls; placing a glass canvas inside an auth scroller created extra overflow and a missing-looking card bottom.
+- **Root cause**: asynchronous whole-view SVG assets left the initial frame incomplete; decorations and a border inside the scroller changed its extent (`apps/desktop-native/src/backdrop.rs`, `auth.rs`). Upscaling a tiny opaque base texture also magnified atlas sampling at the window edge.
+- **Fix**: prepare a bounded cached scene before its first paint, retain it during resize preparation, and animate layer transforms. Put auth glass and the frame outside the scroller; release replaced atlas textures. Keep the opaque base at window resolution, and filter premultiplied background colors before restoring GPUI's straight BGRA encoding.
+- **Guardrail**: observe first-frame readiness and preparation time; inspect real scroll edges and resize. Regress resizing back or onward before a scene job completes (`backdrop/tests.rs`); obsolete work must retire without replacing the current scene. Apply capture scroll operations after the final viewport settles. Compare component bounds and original CSS animation times, not only outer pane rectangles. Never count absent or unmapped controls as matching.
+- **Watch points**: `backdrop/scene.rs`, `backdrop/glass.rs`, `auth/surface.rs`, `auth/scroll_fade.rs`, `parity/observation.rs`, `capture-background.mjs`, `component-audit.mjs`.
+
+### Native dialog content must stop backdrop press propagation
+- **Symptom**: an update confirmation button dismissed the dialog without initiating installation.
+- **Root cause**: a plain `Div` popup allowed its click to reach the backdrop's dismiss handler (`apps/desktop-native/src/update_ui.rs`).
+- **Fix**: use `gpui_base::DialogPopup` for updater and provider form content, retaining explicit action and cancellation handlers.
+- **Guardrail**: exercise a real pointer press inside the popup and verify the resulting operation; also test Escape/backdrop dismissal and focus restoration. Do not infer click behavior from a screenshot or direct worker invocation.
+- **Watch points**: `update_ui.rs`, `providers/form.rs`, other native `Dialog::popup` callers and managed updater runtime fixtures.
+
+### Canvas declarations and animation requests do not prove presented output
+- **Symptom**: auth scroll edges appeared as opaque strips despite a declared opacity; fixed-time captures passed while actual presentation had not been measured.
+- **Root cause**: GPUI Canvas calls its paint closure without Div's element-opacity scope. Modern macOS GPUI also receives drawables from `CAMetalDisplayLink`, so observing only `CAMetalLayer.nextDrawable` misses ongoing frames.
+- **Fix**: place fade opacity on a parent Div and inspect rendered scroll edges. Use the isolated Metal command-buffer observer to register `MTLDrawable.addPresentedHandler` and retain actual `presentedTime`, including zero-time callbacks.
+- **Guardrail**: keep geometry/style audit builds separate from release timing. Record window activation, every frame interval and silent tails; never discard dropped callbacks, focus interruptions or failed rounds. A high average FPS is insufficient. Compare nested dialog frame/form constraints separately instead of applying a global positioning offset.
+- **Watch points**: `auth/scroll_fade.rs`, `providers/form.rs`, `tests/desktop-parity/presentation-probe.m`, `presentation-metrics.mjs`, `capture-performance.mjs` and `docs/gpui-migration/ui-performance-20261113.md`.
+
+### Native disclosures need measured layout and explicit hidden interaction state
+- **Symptom**: advanced sections snapped shut, Add field omitted reference options, and fully collapsed controls remained in the native accessibility tree.
+- **Root cause**: independent boolean render branches replaced the shared CSS disclosure; opacity/clipping did not prevent child prepaint from registering focus and AX nodes (`providers/form_fields.rs`, `providers/credentials/view.rs`, `integrations/view.rs`).
+- **Fix**: share height/fade transitions and a measured-body wrapper. Fully closed content only measures; opening content registers even at initial zero height. Use a dedicated grouped field menu with explicit focus, keyboard actions and available-space placement.
+- **Guardrail**: check menu contents and every field's existing Agent DTO mapping, both locales/themes at 960×640, reversal/reduced motion, and real hidden AX nodes. Test actual text input in an activated window after adding an advanced field. Diagnose dialog close reasons before attributing an automation failure to a keyboard or focus bug.
+- **Watch points**: `disclosure.rs`, `disclosure/measured_body.rs`, `providers/optional_fields.rs`, `providers/form/tests.rs`, `catalog/optional.rs`, edit/credential/integration disclosures and `ui-optional-fields-20261113.md`.
+
+### List parity must distinguish hover from selection
+- **Symptom**: two provider rows appeared selected even though only one provider owned the detail view.
+- **Root cause**: native `workspace/provider_list.rs` reused the selected blue for hover; idle geometry and numeric-style checks did not cover state colors. Immediate reference measurements could also precede the hover transition's first frame.
+- **Fix**: match neutral hover, selected-state precedence, transition times and native AX selection; wait for reference transitions before recording endpoint colors.
+- **Guardrail**: compare idle, unselected hover and selected hover in both themes/locales. Check backgrounds, corner radii and text colors separately from geometry; verify pointer hover leaves selection unchanged and click updates exactly one AX selection. Preserve missing observations as failures.
+- **Watch points**: `ProviderListPane.svelte`, `workspace/provider_list.rs`, `workspace/tests.rs`, `component-audit.mjs`, `component-audit.test.mjs` and `capture-providers.mjs`.
+
+### Subscription panels need independent request lifetimes and complete state matrices
+- **Symptom**: opening Connect dropped an independent quota refresh; late account/settings responses could refill retired panels; static minimum-window captures concealed oversized import rows and incomplete settings tabs.
+- **Root cause**: native subscription modal, quota and settings work shared cleanup assumptions (`subscription_ui.rs::abandon`), while geometry checks skipped absent reference selectors and clipped long content.
+- **Fix**: retain independent work, bind replies to account plus generation, distinguish cancellable reads from mutations, and force lock cleanup. Retain failed-save drafts, clear sensitive values/undo on success or retirement, and invalidate only removed sections. Add strict component presence and bottom-scroll checks at both window sizes.
+- **Guardrail**: regress A-B-A selection, late start/cancel, independent refresh, loading dismissal, failed-save retry and lock during save. Compare populated/error/empty states in both themes/locales, including internal fields and scroll ends. Preserve failed rounds and hashes; report unaccepted OAuth CLI integration, renderer differences and unavailable native presentation separately.
+- **Watch points**: native `subscription_ui`, `subscriptions`, `session.rs`, `ProviderRuntimeDialog.svelte`, `OAuthConnectDialog.svelte`, `SubscriptionImportDialog.svelte`, `ProviderIntegration.svelte` and `capture-subscriptions.mjs`.
+
+### Native subscription integration needs a separate lifecycle from API-key writers
+- **Symptom**: OAuth entries had no CLI integration card; login-required results became a dead-end banner. Retiring a view during start or lock could also leave a ticket or in-flight UI marker alive.
+- **Root cause**: `desktop-native/integrations.rs::sync` admitted only API credentials, while its request state supported preview/apply/restore without native login or independent cancellation.
+- **Fix**: use official-provider-to-CLI eligibility and `Official` plans, exact secret IDs, renewed login preimages, Agent login commands, a separate login entity and serialized cleanup. Reconnect uses the CLI-bound account; committed login refreshes the catalog. Lock retires the in-flight marker because Session drops old generations.
+- **Guardrail**: keep OAuth out of generic API writers. Test a viewed account different from the CLI binding, late start after dismissal, cleanup failure behind a new request, lock without the old reply, terminal completion without apply, and code/undo erasure. Never accept unit/offscreen results as live vendor switching or onscreen animation evidence.
+- **Watch points**: `integration/catalog.rs`, `integrations/{native,login,native_tests}.rs`, `session.rs`, `tool_switch/{login,native,restore}.rs`, and `ProviderIntegration.svelte`.
+
+### Compositor transforms must also transform interaction and native geometry
+- **Symptom**: a visually scaled popup could keep its original click regions, portal anchors and native text-input geometry; cached children could retain the previous frame's hit regions.
+- **Root cause**: the renderer's `layer_scale` is paint-only, while GPUI hitboxes, event positions, view-cache keys and platform input handlers use unscaled layout coordinates.
+- **Fix**: pair compositor scale with scoped input transforms, physical clipping, local event coordinates, cache invalidation, accessibility/IME bounds and visual portal anchors. Record transformed comparison geometry and include pinned vendor source hashes in evidence.
+- **Guardrail**: test visual-region clicks and original-region rejection, pixel scrolling, nested/clipped/cached children, portals and IME coordinates. Prove current-frame backdrop sampling with synthetic GPU targets. Re-run the complete visual matrix after renderer changes; do not reuse old screenshot or onscreen performance acceptance for a new renderer.
+- **Watch points**: `composite.rs`, `subscription_ui/motion.rs`, `parity/observation.rs`, `vendor/gpui/src/{input_transform,window,platform,view,element}.rs`, GPUI Base `popup.rs`, and `composite/tests/`.
+
+### Runtime overview acceptance needs whole-page geometry and active accessibility
+- **Symptom**: the overview header, icons and spacing differed from the reference; an empty integration child shifted the card by 18 px at the scroll end. Opening settings with accessibility active crashed, and closing the editor collapsed the overview.
+- **Root cause**: `subscription_ui/options/view.rs` originally combined the summary and editor without independent coverage; SVG color inheritance did not paint the configure icon. `subscription_ui/view.rs` shared the dialog scope's focus handle with its close button, and draft cleanup reset the summary's disclosure state.
+- **Fix**: extract `options/overview.rs`, match the original card/header/row structure, set icon colors explicitly, omit invisible integration children, give the dialog its own focus scope, and discard drafts while retaining saved summary values and expansion.
+- **Guardrail**: compare absolute and relative geometry, numeric styles, corner radii, explicit colors and actual icon pixels in both themes/locales at 960x640 and 1280x820. Numeric spacing alone missed a 10 px card radius against the reference's 12 px. Exercise open, keyboard tabs, scroll and close with native accessibility active; assert cancellation clears editable secrets without changing saved summary values or expansion. Never share one focus handle between two accessibility nodes in a frame.
+- **Watch points**: `capture-runtime-overview.mjs`, `workspace/provider_detail.rs`, `integrations.rs`, `subscription_ui/{view,options}.rs`, and `subscription_ui/options/tests.rs`.
+
+### Control parity requires state pixels and subtree compositing
+- **Symptom**: disabled white labels became blue-tinted, disabled buttons still reacted to hover, and popup/checkbox/focus states differed despite matching outer bounds. CSS shadow radii produced overly diffuse native shadows.
+- **Root cause**: per-primitive opacity blended overlapping foreground/background twice; hover styles survived disabled state. GPUI uses Gaussian sigma where CSS specifies twice sigma. Static screenshots omitted keyboard, selected, hover and closing states.
+- **Fix**: composite opacity once per subtree in GPUI/Apple/WGPU, disallow merging translucent siblings, clear disabled pointer styles, map CSS blur to half its radius, and retain noninteractive menu contents through exit. Match control geometry and native checkbox treatment explicitly.
+- **Guardrail**: compare controls in both themes/locales at minimum and large windows, including foreground pixels, focus rings, menu bounds and check glyphs. Test nested/sibling opacity at 1x/2x, shader layouts and WGSL/WebGL variants; preserve exact vendor sources/patches. Measure tab glyph advances without integer accumulation, keeping labels unwrapped. Inspect each reference menu's computed animation and transform origin: Add field has no menu animation, while runtime selects use top-left scaling. Do not infer motion merely from global menu CSS. Offscreen captures and shader validation do not prove visible presentation or another platform's GPU.
+- **Watch points**: `capture-controls.mjs`, `subscription_ui/{controls,options/fields,options/view}.rs`, `menu/motion.rs`, `theme.rs`, `composite/tests/gpu.rs`, and the pinned GPUI core/Apple/WGPU patches.
+
+### Closed transitions must settle without scheduling new frames
+- **Symptom**: closed menus repeatedly requested frames; dropdown keyboard movement started before the selected item. Native automation also returned an old image while its accessibility tree changed.
+- **Root cause**: sampling an uninitialized closed transition first created enter values, then animated toward different exit values and reset after completion. Dropdown content initially focused its container. In the native diagnostic, GPUI reported `WindowVisibility::Hidden`; a readable AX tree and window image did not establish current presentation.
+- **Fix**: return a settled invisible frame before initializing a closed transition, and focus the selected menu item after opening. Keep input/navigation regressions separate from actual presentation acceptance.
+- **Guardrail**: assert zero frame requests both before opening and after closing, plus reversal and reduced-motion behavior. Test pointer and keyboard opening from a non-first selection; dispatch key down AND key up when the control activates on release. Require visible-window/presentation evidence before diagnosing stale automation coordinates or claiming idle CPU savings; hidden-window CPU is not a visible idle benchmark.
+- **Watch points**: `menu/motion.rs`, `subscription_ui/motion.rs`, `subscription_ui/controls.rs`, `subscription_ui/options/tests.rs`, and `capture-performance.mjs`.
+
+### GPUI sibling popovers need content and trigger checks
+- **Symptom**: menus had fixed widths, wrong row spacing, missing selection/focus and immediate exits; an integration badge filled the row even after popup dimensions matched.
+- **Root cause**: form, credential, integration and workspace controls each styled raw Popover separately. The form anchored to the whole labelled row; acceptance measured outer menu bounds without checking trigger and badge states.
+- **Fix**: share select appearance and popup timing, measure trigger widths, restore selected focus, disable retained exits and resolve compositor origins from popup placement before prepaint. Add dynamic tag identity filtering and separate provider action presentation.
+- **Guardrail**: compare trigger open/keyboard/disabled states, menu contents, faded edge text and row children as well as popup bounds; retain explicit failures for missing actions. Test selected-item navigation, interrupted exit, reduced motion, upward placement, fully visible Home/End targets and stable dynamic option identity. Keep offscreen input and presented-frame acceptance separate.
+- **Watch points**: `menu/{motion,select}.rs`, `providers/form_picker.rs`, `providers/credentials/view.rs`, `integrations/view.rs`, `workspace/{chrome,provider_menu}.rs`, `subscription_ui/controls.rs`, `composite.rs`, and `tests/desktop-parity/capture-menus.mjs`.
+
+### Provider maintenance must retain request identity through refresh
+- **Symptom**: adding missing native maintenance menus exposed partial-reset retries, stale form credentials and late usage results as separate lifecycle cases.
+- **Root cause**: a reset is several existing Agent removals, while catalog refresh and UI requests complete independently (`provider_tools.rs`, `provider_tools_ui.rs`, `desktop/session_sync.rs`). Replacing a confirmed key list with refreshed metadata could include newly added keys; reopening an editor from the old catalog could resurrect removed references.
+- **Fix**: scope requests by provider/generation, retain confirmed key IDs and fingerprints through retry, refresh after partial mutation, and reopen with freshly read metadata. Clear transient token input and undo on submission/close. Defer selected-menu focus until the popup has mounted.
+- **Guardrail**: test changed and newly added keys, partial retries, lock/provider changes, cancellation, late completion, failure transport and edit-to-reset transitions. Keep sequential preflight checks distinct from an atomic Agent transaction. Compare pages at the same reachable scroll offset; different scroll extents must not be hidden with a component-position patch.
+- **Watch points**: `provider_tools{,_ui}/tests.rs`, `tests/provider_agent/tools.rs`, `workspace/{tools,notes}.rs`, `session.rs`, `capture-provider-tools.mjs`, and the Svelte provider actions.
+
+### Matching a broken reference is not typography acceptance
+- **Symptom**: the usage-dialog title and description had the same size, weight and color, and paired geometry checks still passed.
+- **Root cause**: local `.usage-title` and `.usage-subtitle` selectors did not style markup emitted by Bits UI components in `ProviderUsageProbeDialog.svelte`; `provider_tools_ui/view.rs` copied that computed defect instead of reviewing the intended hierarchy.
+- **Fix**: scope global component selectors beneath the header, restore title/description typography and spacing in both implementations, shorten both locales and keep the close button from shrinking.
+- **Guardrail**: inspect title and description separately for size, weight, line height, color and wrapping. Require a visual hierarchy even when reference and candidate share a defect. Record user-directed baseline corrections explicitly; preserve the immutable reference and earlier evidence.
+- **Watch points**: Svelte `Dialog.Title`/`Dialog.Description` callers, native dialog headers, `capture-provider-tools.mjs` typography observations, and `ui-provider-tools-20261114.md`.
