@@ -1,3 +1,4 @@
+use crate::parity::Observe;
 use crate::{backdrop::Backdrop, locale::Locale, theme::Theme};
 use aipass_agent_protocol::SensitiveString;
 use gpui::{
@@ -71,6 +72,10 @@ impl AuthView {
         }
     }
     #[cfg(feature = "parity-render")]
+    pub fn prepare_capture_scroll(&self) {
+        self.scroll.scroll_to_bottom();
+    }
+    #[cfg(feature = "parity-render")]
     pub fn capture_ready(&self) -> Result<bool, String> {
         self.backdrop
             .ready()
@@ -142,7 +147,7 @@ impl AuthView {
             backdrop: Backdrop::new(dark, true),
             shadow: surface::CardShadow::default(),
             scroll: gpui::ScrollHandle::new(),
-            scroll_fade: scroll_fade::ScrollFade::default(),
+            scroll_fade: scroll_fade::ScrollFade,
             scroll_to_end: false,
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -259,7 +264,8 @@ impl AuthView {
                     .line_height(px(15.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(self.theme.secondary)
-                    .child(self.locale.text(label)),
+                    .child(self.locale.text(label))
+                    .observe(format!("{label}-label")),
             )
             .child(
                 div()
@@ -365,8 +371,10 @@ impl AuthView {
                                     cx.notify();
                                 })),
                         )
-                    }),
+                    })
+                    .observe(format!("{label}-input")),
             )
+            .observe(label.to_owned())
     }
 
     fn button(&self, id: &'static str, label: &str, primary: bool, cx: &Context<Self>) -> Button {
@@ -423,9 +431,9 @@ mod tests;
 
 impl Render for AuthView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::parity::record_scroll("auth", &self.scroll, cx);
         if self.scroll_to_end && self.scroll.max_offset().y > px(0.) {
-            self.scroll
-                .set_offset(gpui::point(px(0.), -self.scroll.max_offset().y));
+            self.scroll.scroll_to_bottom();
             self.scroll_to_end = false;
         }
         let (title, description, submit) = match self.mode {
@@ -473,14 +481,16 @@ impl Render for AuthView {
                             .text_size(px(22.))
                             .line_height(px(26.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.locale.text(title)),
+                            .child(self.locale.text(title))
+                            .observe("auth-title"),
                     )
                     .child(
                         div()
                             .text_size(px(13.))
                             .line_height(px(19.5))
                             .text_color(self.theme.secondary)
-                            .child(self.locale.text(description)),
+                            .child(self.locale.text(description))
+                            .observe("auth-description"),
                     ),
             )
             .when(self.mode == Mode::Choose, |el| {
@@ -536,7 +546,8 @@ impl Render for AuthView {
                             el.bg(self.theme.surface.blend(rgb(0x2563eb).opacity(0.45)))
                                 .text_color(self.theme.surface.blend(rgb(0xffffff).opacity(0.45)))
                         })
-                        .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
+                        .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
+                        .observe("auth-submit"),
                 )
                 .child(self.auth_navigation(cx))
             });
@@ -558,24 +569,27 @@ impl Render for AuthView {
                     .relative()
                     .w(px(420.))
                     .max_h_full()
+                    .rounded(px(14.))
+                    .border_1()
+                    .border_color(self.theme.border.opacity(0.7))
                     .flex()
                     .flex_col()
                     .when(f32::from(self.scroll.max_offset().y) <= 1., |el| {
                         el.child(self.shadow.render())
                     })
+                    .child(self.backdrop.glass(self.theme.surface.opacity(0.88), 14.))
                     .child(
                         div()
                             .id("auth-card")
                             .relative()
-                            .w(px(420.))
+                            .w_full()
                             .max_h_full()
                             .overflow_y_scroll()
                             .track_scroll(&self.scroll)
                             .p(px(28.))
-                            .rounded(px(14.))
-                            .border_1()
-                            .border_color(self.theme.border.opacity(0.7))
-                            .bg(self.theme.surface.opacity(0.88))
+                            // Keep the frame outside the scroll viewport: GPUI
+                            // computes extents from content plus padding only.
+                            .rounded(px(13.))
                             .flex()
                             .flex_col()
                             .gap(px(20.))
@@ -598,7 +612,7 @@ impl Render for AuthView {
                                     .child(crate::logo::logo(28., window))
                                     .child("AIPass"),
                             )
-                            .child(form.flex_shrink_0())
+                            .child(form.flex_shrink_0().observe("auth-form"))
                             .when(self.reset_open && self.mode == Mode::Recover, |el| {
                                 el.child(self.reset_panel(window, cx))
                             })

@@ -16,6 +16,10 @@ use std::{
 mod credentials;
 #[path = "provider_agent/integration.rs"]
 mod integration;
+#[path = "provider_agent/subscriptions.rs"]
+mod subscriptions;
+#[path = "provider_agent/tools.rs"]
+mod tools;
 
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
@@ -115,6 +119,7 @@ fn workflow(root: &Path) {
         .max_concurrent_requests
         .is_none_or(|value| value == 0));
     assert_eq!(edited.tags, ["native", "checked"]);
+    subscriptions::workflow(&mut transport, id);
     integration::workflow(&mut transport, root, id);
     let credential_id = credentials::workflow(&mut transport, id);
     applied(&mut transport, Action::Favorite(id, true));
@@ -133,6 +138,7 @@ fn workflow(root: &Path) {
     assert_eq!(snapshot(&mut transport).active[0].id, id);
     transport.execute(Command::Lock).unwrap();
     credentials::locked(&mut transport, id, &credential_id);
+    subscriptions::locked(&mut transport, id);
     let rejected = transport
         .execute(Command::Provider(Action::Favorite(id, false)))
         .err()
@@ -152,6 +158,7 @@ fn workflow(root: &Path) {
     assert_eq!(restored.active[0].id, id);
     assert!(restored.active[0].favorite);
     credentials::persisted(&mut transport, id, &credential_id);
+    tools::workflow(&mut transport);
 }
 
 #[test]

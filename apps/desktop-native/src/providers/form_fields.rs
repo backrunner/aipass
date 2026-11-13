@@ -1,9 +1,10 @@
 use super::{controls::icon, form::LABELS, Form};
+use crate::parity::Observe;
 use aipass_provider_registry::{default_provider_definitions, AuthScheme, InterfaceType};
-use gpui::{div, prelude::*, px, svg, Anchor, AnyElement, Context, Focusable, FontWeight, Window};
+use gpui::{div, prelude::*, px, AnyElement, Context, Focusable, FontWeight, Window};
 use gpui_base::{
     input::{Input, Textarea},
-    Button, Popover,
+    Button,
 };
 
 impl Form {
@@ -23,13 +24,28 @@ impl Form {
                 .focus_handle(cx)
                 .is_focused(window)
         };
+        let advanced_last = [8, 10, 11, 12, 13]
+            .into_iter()
+            .rev()
+            .find(|i| self.visible.contains(i));
+        let last = self.draft.original.is_none()
+            && (index == 2
+                || advanced_last == Some(index)
+                || (index == 9
+                    && advanced_last.is_none()
+                    && !matches!(
+                        self.draft.interface,
+                        InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi
+                    ))
+                || ((3..=6).contains(&index)
+                    && self.visible.iter().rfind(|i| (3..=6).contains(*i)) == Some(&index)));
         div()
             .px(px(16.))
             .py(px(13.))
             .flex()
-            .gap(px(10.))
+            .gap(px(if removable { 8. } else { 10. }))
             .items_center()
-            .border_b_1()
+            .when(!last, |el| el.border_b_1())
             .border_color(t.divider)
             .child(
                 div()
@@ -44,18 +60,32 @@ impl Form {
                                 .text_size(px(11.))
                                 .line_height(px(13.))
                                 .text_color(t.tertiary)
-                                .child(self.locale.text(LABELS[index])),
+                                .child(self.locale.text(LABELS[index]))
+                                .observe(format!("provider-field-{index}-label")),
                         )
                     })
                     .child(
                         div()
                             .relative()
                             .when(index == 2, |el| el.pr(px(34.)))
-                            .h(px(if index == 6 { 64. } else { 28. }))
+                            .h(px(if index == 6 {
+                                if self.draft.original.is_none() {
+                                    88.
+                                } else {
+                                    64.
+                                }
+                            } else {
+                                28.
+                            }))
                             .rounded(px(4.))
                             .border_b_1()
-                            .border_color(if focused { t.accent } else { t.divider })
-                            .bg(if focused { t.surface2 } else { t.surface })
+                            .border_color(if focused {
+                                t.accent
+                            } else {
+                                t.border.opacity(0.58)
+                            })
+                            .bg(if focused { t.surface2 } else { gpui::rgba(0) })
+                            .px(px(1.))
                             .text_size(px(13.))
                             .line_height(px(20.))
                             .child(if index == 6 {
@@ -92,174 +122,53 @@ impl Form {
                                 )
                             }),
                     )
-                    .when(index == 9 && self.draft.original.is_none(), |el| {
-                        el.child(
-                            div()
-                                .text_size(px(11.))
-                                .line_height(px(16.))
-                                .text_color(t.tertiary)
-                                .child(self.locale.text("providerForm.maxConcurrentRequestsHint")),
-                        )
-                    }),
+                    .when(
+                        matches!(index, 9 | 12) && self.draft.original.is_none(),
+                        |el| {
+                            el.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .line_height(px(15.4))
+                                    .text_color(t.tertiary)
+                                    .child(self.locale.text(if index == 12 {
+                                        "providerForm.groupHint"
+                                    } else {
+                                        "providerForm.maxConcurrentRequestsHint"
+                                    })),
+                            )
+                        },
+                    )
+                    .observe(format!("provider-field-{index}-content")),
             )
             .when(removable, |el| {
                 el.child(
                     icon(
                         ("remove-provider-field", index),
                         "x",
-                        self.locale.text("common.remove"),
+                        self.locale
+                            .text("providerForm.removeField")
+                            .replace("{label}", &self.locale.text(LABELS[index])),
                         t,
                     )
                     .disabled(self.busy)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.inputs[index].update(cx, |input, cx| input.set_value("", window, cx));
-                        if index == 6 {
-                            this.notes
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                        }
-                        this.visible.remove(&index);
-                        cx.notify();
+                        this.remove_optional(index, window, cx);
                     })),
                 )
             })
+            .observe(format!("provider-field-{index}"))
             .into_any_element()
     }
 
-    pub(super) fn picker(
-        &self,
-        kind: &'static str,
-        label: String,
-        value: String,
-        options: Vec<(usize, String)>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let t = self.theme;
-        let owner = cx.entity().downgrade();
-        Popover::new(kind)
-            .anchor(Anchor::TopLeft)
-            .offset(px(4.))
-            .open(self.picker == Some(kind))
-            .on_open_change(cx.listener(move |this, open: &bool, _, cx| {
-                this.picker = open.then_some(kind);
-                cx.notify();
-            }))
-            .trigger(if kind == "add-field" {
-                Button::new("provider-add-field")
-                    .disabled(self.busy)
-                    .h(px(32.))
-                    .px(px(12.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(t.border)
-                    .bg(t.surface)
-                    .text_color(t.accent)
-                    .text_size(px(12.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .cursor_pointer()
-                    .accessibility_label(label.clone())
-                    .child(svg().path("plus").size(px(14.)).text_color(t.accent))
-                    .child(label)
-                    .child(
-                        svg()
-                            .path("chevron-down")
-                            .size(px(14.))
-                            .text_color(t.accent),
-                    )
-            } else {
-                Button::new((kind, 1000_usize))
-                    .disabled(self.busy)
-                    .w_full()
-                    .px(px(16.))
-                    .py(px(13.))
-                    .border_b_1()
-                    .border_color(t.divider)
-                    .text_color(t.text)
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .accessibility_label(label.clone())
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(t.surface2))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .line_height(px(13.))
-                                    .text_color(t.tertiary)
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .h(px(28.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .rounded(px(4.))
-                                    .border_b_1()
-                                    .border_color(t.divider)
-                                    .text_size(px(13.))
-                                    .line_height(px(20.))
-                                    .child(div().flex_1().child(value))
-                                    .child(
-                                        svg().path("chevron-down").size(px(14.)).text_color(t.text),
-                                    ),
-                            ),
-                    )
-            })
-            .content(move |_, _, _| {
-                div()
-                    .id((kind, 1001_usize))
-                    .w(px(280.))
-                    .max_h(px(260.))
-                    .overflow_y_scroll()
-                    .p(px(4.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(t.border)
-                    .bg(t.surface)
-                    .flex()
-                    .flex_col()
-                    .children(options.into_iter().map(|(index, label)| {
-                        let owner = owner.clone();
-                        Button::new((kind, index))
-                            .role(gpui::Role::MenuItem)
-                            .w_full()
-                            .px(px(10.))
-                            .py(px(7.))
-                            .rounded(px(6.))
-                            .text_size(px(13.))
-                            .text_color(t.text)
-                            .cursor_pointer()
-                            .hover(move |s| s.bg(t.accent_soft))
-                            .focus(move |s| s.bg(t.accent_soft))
-                            .accessibility_label(label.clone())
-                            .child(label)
-                            .on_click(move |_, window, cx| {
-                                let _ = owner
-                                    .update(cx, |form, cx| form.choose(kind, index, window, cx));
-                            })
-                    }))
-            })
-            .into_any_element()
-    }
-
-    pub(super) fn fields(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn fields(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let card = || {
             div()
                 .flex_shrink_0()
                 .rounded(px(10.))
                 .border_1()
-                .border_color(t.border)
-                .bg(t.surface)
+                .border_color(t.divider)
+                .bg(crate::theme::oklab_mix(t.surface, t.surface2, 0.92))
                 .overflow_hidden()
                 .flex()
                 .flex_col()
@@ -315,26 +224,28 @@ impl Form {
         div().id("provider-form-fields").track_scroll(&self.scroll).flex_1().min_h_0().overflow_y_scroll().p(px(20.)).bg(t.bg).flex().flex_col().gap(px(22.))
             .child(div().flex().flex_col().gap(px(10.)).child(title("providerForm.identity"))
                 .child(card().child(self.picker("provider", self.locale.text("providerForm.provider"), provider,
-                    definitions.into_iter().enumerate().map(|(i, d)| (i, d.display_name.to_owned())).collect(), cx))
+                    definitions.into_iter().enumerate().map(|(i, d)| (i, d.display_name.to_owned())).collect(), window, cx))
                     .child(self.field(0, false, window, cx))
                     .when(!editing, |el| el.child(self.field(1, false, window, cx)).child(self.field(2, false, window, cx)))))
             .when(self.visible.iter().any(|index| (3..=6).contains(index)), |el| el.child(div().flex().flex_col().gap(px(10.))
                 .child(title("providerForm.details"))
                 .child(card().children(self.visible.iter().filter(|index| (3..=6).contains(*index)).map(|index| self.field(*index, true, window, cx))))))
-            .child(card().child(Button::new("provider-advanced").w_full().px(px(16.)).py(px(14.)).flex().items_center().gap(px(8.)).bg(t.surface2)
-                .accessibility_label(self.locale.text("providerForm.advanced")).text_size(px(13.)).font_weight(FontWeight::MEDIUM)
+            .child(card().child(Button::new("provider-advanced").aria_expanded(self.advanced).w_full().px(px(16.)).py(px(12.)).border_b_1().border_color(if self.advanced { t.divider } else { gpui::rgba(0) }).flex().items_center().gap(px(8.))
+                .accessibility_label(self.locale.text("providerForm.advanced")).text_size(px(13.)).line_height(px(18.2)).font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer().child(div().flex_1().child(self.locale.text("providerForm.advanced")))
-                .child(svg().path(if self.advanced { "chevron-down" } else { "chevron-right" }).size(px(14.)).text_color(t.tertiary))
-                .on_click(cx.listener(|this, _, _, cx| { this.advanced = !this.advanced; cx.notify(); })))
-                .when(self.advanced, |el| el
-                    .children(self.visible.iter().filter(|index| (7..=8).contains(*index)).map(|index| self.field(*index, true, window, cx)))
+                .hover(move |s| s.bg(t.surface2)).disabled(self.busy)
+                .child(self.disclosure_frame.chevron(t.tertiary, 15.))
+                .on_click(cx.listener(|this, _, _, cx| { this.advanced = !this.advanced; cx.notify(); }))
+                .observe("provider-advanced-trigger"))
+                .child(self.disclosure_frame.body("provider-advanced-content", div().flex().flex_col()
+                    .when(self.visible.contains(&7), |el| el.child(self.field(7, true, window, cx)))
                     .child(self.picker("interface", self.locale.text("providerForm.interface"), self.locale.text(interfaces[interface_index]),
-                        interfaces.iter().enumerate().map(|(i, key)| (i, self.locale.text(key))).collect(), cx))
+                        interfaces.iter().enumerate().map(|(i, key)| (i, self.locale.text(key))).collect(), window, cx))
                     .child(self.picker("auth", self.locale.text("providerForm.auth"), self.locale.text(auth[auth_index]),
                         auth.iter().enumerate().filter(|(i, _)| {
                             let scheme = [AuthScheme::Bearer, AuthScheme::XApiKey, AuthScheme::GoogleApiKey, AuthScheme::AzureApiKey, AuthScheme::AwsProfile, AuthScheme::CustomHeader][*i].clone();
                             scheme == self.draft.auth || aipass_desktop_native::catalog::draft::auth_compatible(&scheme, &self.draft.interface)
-                        }).map(|(i, key)| (i, self.locale.text(key))).collect(), cx))
+                        }).map(|(i, key)| (i, self.locale.text(key))).collect(), window, cx))
                     .child(self.field(9, false, window, cx))
                     .when(matches!(self.draft.interface, InterfaceType::OpenAiCompatible | InterfaceType::AzureOpenAi), |el| el
                         .child(Button::new("provider-websocket").role(gpui::Role::Switch).disabled(self.busy)
@@ -343,8 +254,9 @@ impl Form {
                             .child(div().flex_1().child(self.locale.text("providerForm.supportsWebsockets")))
                             .child(div().w(px(36.)).h(px(20.)).p(px(2.)).rounded_full().bg(if self.draft.websockets { t.accent } else { t.border })
                                 .flex().when(self.draft.websockets, |el| el.justify_end()).child(div().size(px(16.)).rounded_full().bg(gpui::rgb(0xffffff))))
-                            .on_click(cx.listener(|this, _, _, cx| { this.draft.websockets = !this.draft.websockets; this.draft.websocket_touched = true; cx.notify(); }))))))
-            .child(div().flex().items_start().child(self.picker("add-field", self.locale.text("providerForm.addField"), "+".into(),
-                (3..9).filter(|index| !self.visible.contains(index)).map(|index| (index, self.locale.text(LABELS[index]))).collect(), cx)))
+                            .on_click(cx.listener(|this, _, _, cx| { this.draft.websockets = !this.draft.websockets; this.draft.websocket_touched = true; cx.notify(); }))))
+                    .children([8, 10, 11, 12].into_iter().filter(|i| self.visible.contains(i)).map(|i| self.field(i, true, window, cx)))
+                    .when(self.visible.contains(&13), |el| el.child(self.billing_fields(window, cx))))))
+            .when(self.has_optional_fields(), |el| el.child(div().flex().items_start().child(self.add_field_menu(window, cx))))
     }
 }

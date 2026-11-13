@@ -1,12 +1,55 @@
 //! Layout observations for the synthetic comparison harness. Observers do not
 //! alter layout or inject reference pixels into the renderer.
 use gpui::{App, Bounds, Pixels, Window};
+#[cfg(feature = "parity-render")]
+pub mod control_actions;
+mod observation;
+pub use observation::Observe;
 
 #[cfg(feature = "parity-render")]
 #[derive(Default)]
 pub struct Geometry(pub std::collections::BTreeMap<String, [f32; 4]>);
 #[cfg(feature = "parity-render")]
 impl gpui::Global for Geometry {}
+
+#[cfg(feature = "parity-render")]
+#[derive(Default)]
+pub struct Styles(pub std::collections::BTreeMap<String, serde_json::Value>);
+#[cfg(feature = "parity-render")]
+impl gpui::Global for Styles {}
+
+#[cfg(feature = "parity-render")]
+#[derive(Default)]
+pub struct Scrolls(pub std::collections::BTreeMap<String, [f32; 2]>);
+#[cfg(feature = "parity-render")]
+impl gpui::Global for Scrolls {}
+
+pub fn record_scroll(name: &str, scroll: &gpui::ScrollHandle, cx: &mut App) {
+    #[cfg(feature = "parity-render")]
+    {
+        if !cx.has_global::<Scrolls>() {
+            cx.set_global(Scrolls::default());
+        }
+        cx.global_mut::<Scrolls>().0.insert(
+            name.into(),
+            [
+                f32::from(scroll.offset().y),
+                f32::from(scroll.max_offset().y),
+            ],
+        );
+    }
+    #[cfg(not(feature = "parity-render"))]
+    let _ = (name, scroll, cx);
+}
+
+#[cfg(feature = "parity-render")]
+#[derive(Default)]
+pub struct Backgrounds {
+    pub time_ms: Option<f64>,
+    pub frames: std::collections::BTreeMap<String, serde_json::Value>,
+}
+#[cfg(feature = "parity-render")]
+impl gpui::Global for Backgrounds {}
 
 /// GPUI's Metal readback swaps BGRA to RGBA but retains premultiplied RGB.
 /// PNG stores straight alpha. Convert the representation before encoding;

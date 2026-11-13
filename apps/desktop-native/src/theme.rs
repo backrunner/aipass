@@ -11,6 +11,7 @@ pub struct Theme {
     pub secondary: Rgba,
     pub tertiary: Rgba,
     pub border: Rgba,
+    pub border_strong: Rgba,
     pub divider: Rgba,
     pub accent: Rgba,
     pub accent_soft: Rgba,
@@ -23,6 +24,26 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// CSS outline with an offset, for controls on the standard surface.
+    pub fn outline(self, color: Rgba, width: f32, offset: f32) -> Vec<gpui::BoxShadow> {
+        let mut shadows = vec![gpui_base::box_shadow(
+            0.,
+            0.,
+            0.,
+            width + offset,
+            color.into(),
+        )];
+        if offset > 0. {
+            shadows.push(gpui_base::box_shadow(
+                0.,
+                0.,
+                0.,
+                offset,
+                self.surface.into(),
+            ));
+        }
+        shadows
+    }
     pub fn input_style(self) -> gpui_base::input::InputEditorStyle {
         gpui_base::input::InputEditorStyle {
             foreground: self.text.into(),
@@ -46,6 +67,7 @@ impl Theme {
                 secondary: rgb(0xc8cee0),
                 tertiary: rgb(0x969eb6),
                 border: rgb(0x232b40),
+                border_strong: rgb(0x354160),
                 divider: rgb(0x1c2336),
                 accent: rgb(0x6092ff),
                 accent_soft: rgba(0x6092ff29),
@@ -66,6 +88,7 @@ impl Theme {
                 secondary: rgb(0x383f55),
                 tertiary: rgb(0x636b82),
                 border: rgb(0xe1e4ed),
+                border_strong: rgb(0xc4cad8),
                 divider: rgb(0xedeff5),
                 accent: rgb(0x2563eb),
                 accent_soft: rgba(0x2563eb1a),
@@ -124,4 +147,9 @@ pub(crate) fn oklab_mix(first: Rgba, second: Rgba, weight: f64) -> Rgba {
         b: gamma(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s),
         a: 1.,
     }
+}
+
+/// CSS box-shadow blur is twice the Gaussian sigma consumed by GPUI's shader.
+pub fn shadow_blur(css_radius: f32) -> gpui::Pixels {
+    gpui::px(css_radius / 2.)
 }

@@ -14,7 +14,12 @@ use gpui_base::{
 
 mod chrome;
 use crate::menu;
+mod notes;
+mod provider_detail;
+mod provider_list;
+mod provider_menu;
 mod providers;
+mod tools;
 pub use providers::ProviderFeedback;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
@@ -25,6 +30,7 @@ pub enum WorkspaceEvent {
     Refresh,
     Provider,
     Credential,
+    ProviderTools,
     Integration,
 }
 impl EventEmitter<WorkspaceEvent> for Workspace {}
@@ -33,10 +39,12 @@ pub struct Workspace {
     theme: Theme,
     locale: Locale,
     selected: usize,
+    tag_filter: Option<String>,
     search: Entity<InputState>,
     menu_open: bool,
     filter_open: bool,
     menu_focus: menu::MenuFocus,
+    provider_menu_focus: menu::MenuFocus,
     filter_focus: menu::MenuFocus,
     nav_focus: [gpui::FocusHandle; 11],
     window_controls_focus: [gpui::FocusHandle; 3],
@@ -46,14 +54,23 @@ pub struct Workspace {
     chinese: bool,
     catalog: aipass_desktop_native::catalog::Catalog,
     selected_provider: Option<uuid::Uuid>,
+    hovered_provider: Option<uuid::Uuid>,
     provider_busy: bool,
     provider_menu_open: bool,
     provider_advanced: bool,
+    provider_disclosure: crate::disclosure::Disclosure,
+    detail_scroll: gpui::ScrollHandle,
     provider_action: Option<aipass_desktop_native::catalog::Action>,
     provider_form: Option<Entity<crate::providers::Form>>,
     form_subscription: Option<Subscription>,
+    tools: Entity<crate::provider_tools_ui::Tools>,
+    notes: Entity<notes::Notes>,
+    _tools_subscription: Subscription,
+    _tools_observer: Subscription,
     credentials: Entity<crate::providers::credentials::Credentials>,
     integrations: Entity<crate::integrations::Integrations>,
+    pub(crate) subscriptions: Entity<crate::subscription_ui::Subscriptions>,
+    _subscriptions_observer: Subscription,
     _integrations_subscription: Subscription,
     _credentials_subscription: Subscription,
     _search_subscription: Subscription,
@@ -147,15 +164,30 @@ impl Workspace {
             }
             cx.notify();
         });
+        let tools = cx.new(|cx| crate::provider_tools_ui::Tools::new(dark, chinese, window, cx));
+        let tools_observer = cx.observe(&tools, |_, _, cx| cx.notify());
+        let tools_subscription = cx.subscribe(&tools, |this, tools, _, cx| {
+            if tools.read(cx).has_request() {
+                this.provider_busy = true;
+                cx.emit(WorkspaceEvent::ProviderTools);
+            }
+            cx.notify();
+        });
+        let notes = cx.new(|cx| notes::Notes::new(dark, chinese, window, cx));
+        let subscriptions =
+            cx.new(|cx| crate::subscription_ui::Subscriptions::new(dark, chinese, window, cx));
+        let subscriptions_observer = cx.observe(&subscriptions, |_, _, cx| cx.notify());
         Self {
             theme: Theme::new(dark),
             locale,
             selected: 0,
+            tag_filter: None,
             search,
             menu_open: false,
             filter_open: false,
-            menu_focus: menu::MenuFocus::new(2, cx),
+            menu_focus: menu::MenuFocus::new(3, cx),
             filter_focus: menu::MenuFocus::new(FILTERS.len(), cx),
+            provider_menu_focus: menu::MenuFocus::new(4, cx),
             nav_focus: std::array::from_fn(|_| cx.focus_handle()),
             window_controls_focus: std::array::from_fn(|_| cx.focus_handle()),
             refresh_focus: cx.focus_handle(),
@@ -165,20 +197,29 @@ impl Workspace {
             catalog: Default::default(),
             selected_provider: None,
             provider_busy: false,
+            hovered_provider: None,
             provider_menu_open: false,
             provider_advanced: false,
+            provider_disclosure: Default::default(),
+            detail_scroll: gpui::ScrollHandle::new(),
             provider_action: None,
             provider_form: None,
             form_subscription: None,
+            tools,
+            notes,
+            _tools_subscription: tools_subscription,
+            _tools_observer: tools_observer,
             credentials,
             integrations,
+            subscriptions,
+            _subscriptions_observer: subscriptions_observer,
             _integrations_subscription: integrations_subscription,
             _credentials_subscription: credentials_subscription,
             _search_subscription: search_subscription,
         }
     }
 
-    fn pane(&self) -> Div {
+    fn pane(&self, tint: gpui::Rgba) -> Div {
         div()
             .relative()
             .h_full()
@@ -187,7 +228,7 @@ impl Workspace {
             .rounded(px(14.))
             .border_1()
             .border_color(self.theme.border.opacity(0.6))
-            .bg(self.theme.surface.opacity(0.86))
+            .when(tint.a > 0., |el| el.child(self.backdrop.glass(tint, 14.)))
             .shadow(vec![BoxShadow::new(
                 px(0.),
                 px(1.),
@@ -226,6 +267,7 @@ impl Workspace {
                 this.provider_menu_open = false;
                 this.provider_advanced = false;
                 this.selected = index;
+                this.tag_filter = None;
                 this.select_visible(window, cx);
                 cx.notify();
             }))
@@ -248,10 +290,9 @@ impl Workspace {
 
     fn sidebar(&self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
-        self.pane()
+        self.pane(t.sidebar.opacity(0.88))
             .w(px(width))
             .flex_shrink_0()
-            .bg(t.sidebar.opacity(0.88))
             .flex()
             .flex_col()
             .pt(px(42.))
@@ -448,7 +489,7 @@ impl Render for Workspace {
                     .gap(px(8.))
                     .child(self.sidebar(sidebar, cx))
                     .child(
-                        self.pane()
+                        self.pane(t.surface.opacity(0.86))
                             .w(px(list))
                             .flex_shrink_0()
                             .child(self.toolbar(window, cx))
@@ -457,22 +498,24 @@ impl Render for Workspace {
                             .child(if self.visible_providers(cx).is_empty() {
                                 self.empty(title, desc, false, cx).into_any_element()
                             } else {
-                                self.provider_list(cx).into_any_element()
+                                self.provider_list(window, cx).into_any_element()
                             }),
                     )
                     .child(
-                        self.pane()
-                            .bg(if self.visible_providers(cx).is_empty() {
-                                rgba(0x00000000)
-                            } else {
-                                t.surface
-                            })
-                            .flex_1()
-                            .child(self.provider_detail(window, cx)),
+                        self.pane(if self.visible_providers(cx).is_empty() {
+                            rgba(0x00000000)
+                        } else {
+                            t.surface.opacity(0.86)
+                        })
+                        .flex_1()
+                        .child(self.provider_detail(window, cx)),
                     ),
             )
             .child(self.titlebar(sidebar, list, window, cx))
             .children(self.integrations.read(cx).modal())
+            .children(self.integrations.read(cx).login_modal())
+            .child(self.subscriptions.clone())
+            .child(self.tools.clone())
             .children(
                 self.provider_form
                     .clone()

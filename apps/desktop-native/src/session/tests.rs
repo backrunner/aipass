@@ -47,6 +47,69 @@ fn fixture() -> (
     )
 }
 
+#[test]
+fn integration_transport_failure_keeps_scope_and_successful_login_requests_catalog_refresh() {
+    let (mut session, commands, results) = fixture();
+    session.status = Some(status(false));
+    let scope = crate::integration::Scope {
+        entry: Uuid::new_v4(),
+        generation: 42,
+    };
+    let ticket = Uuid::new_v4();
+    for success in [false, true] {
+        assert!(session.submit(Command::Integration(Box::new(
+            crate::integration::Request {
+                scope,
+                operation: crate::integration::Operation::LoginPoll(ticket),
+            }
+        ))));
+        commands.recv_timeout(Duration::from_secs(1)).unwrap();
+        if success {
+            results
+                .send(Ok(Reply::Integration(Box::new(
+                    crate::integration::Completion {
+                        scope,
+                        result: Ok(crate::integration::Outcome::Login(
+                            aipass_agent_protocol::ToolConfigLoginStatus {
+                                ticket,
+                                status: "complete".into(),
+                                url: None,
+                                user_code: None,
+                                requires_code: false,
+                                message: None,
+                                result: Some(aipass_agent_protocol::ToolConfigApplyResponse {
+                                    outcome: aipass_agent_protocol::ToolConfigOutcome::Applied,
+                                    message: None,
+                                    tool: aipass_agent_protocol::ToolConfigTool::Codex,
+                                    mode: aipass_agent_protocol::ToolConfigMode::Official,
+                                    entry_id: scope.entry,
+                                    entry_title: "fixture".into(),
+                                    operation_id: Uuid::new_v4(),
+                                    target_path: String::new(),
+                                    backup_path: String::new(),
+                                    summary: String::new(),
+                                }),
+                            },
+                        )),
+                    },
+                ))))
+                .unwrap();
+        } else {
+            results
+                .send(Err(AgentCommandError {
+                    code: Some(AgentErrorCode::ServiceUnavailable),
+                    message: "offline".into(),
+                }))
+                .unwrap();
+        }
+        settle(&mut session);
+        let completion = session.integration_completion.as_ref().unwrap();
+        assert_eq!(completion.scope, scope);
+        assert_eq!(completion.result.is_ok(), success);
+        assert_eq!(session.provider_applied, success);
+    }
+}
+
 fn settle(session: &mut Session) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while session.pending && Instant::now() < deadline {
@@ -57,6 +120,34 @@ fn settle(session: &mut Session) {
         !session.pending,
         "worker failed to complete before test deadline"
     );
+}
+
+#[test]
+fn subscription_startup_failure_returns_to_the_panel_and_lock_rejects_new_work() {
+    use crate::subscriptions::{Kind, Operation, Request};
+    let (mut session, commands, results) = fixture();
+    session.status = Some(status(false));
+    assert!(session.submit(Command::Subscription(Box::new(Request {
+        generation: 42,
+        operation: Operation::Catalog
+    }))));
+    commands.recv_timeout(Duration::from_secs(1)).unwrap();
+    results
+        .send(Err(AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: "synthetic startup failure".into(),
+        }))
+        .unwrap();
+    settle(&mut session);
+    let completion = session.subscription_completion.take().unwrap();
+    assert_eq!(completion.generation, 42);
+    assert_eq!(completion.kind, Kind::Catalog);
+    assert!(completion.result.is_err());
+    session.status = Some(status(true));
+    assert!(!session.submit(Command::Subscription(Box::new(Request {
+        generation: 43,
+        operation: Operation::Catalog
+    }))));
 }
 
 #[test]

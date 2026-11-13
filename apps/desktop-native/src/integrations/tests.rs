@@ -23,7 +23,7 @@ fn make_response(view: &Integrations) -> ToolConfigPreviewResponse {
     }
 }
 
-fn fixture(cx: &mut TestAppContext) -> (Entity<Integrations>, &mut VisualTestContext) {
+pub(super) fn fixture(cx: &mut TestAppContext) -> (Entity<Integrations>, &mut VisualTestContext) {
     cx.update(gpui_base::init);
     let mut view = None;
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -216,8 +216,7 @@ fn key_picker_keyboard_uses_stable_id_and_dismisses(cx: &mut TestAppContext) {
     cx.update(|window, cx| view.read(cx).picker_focus.trigger.clone().focus(window, cx));
     for key in ["enter", "end", "enter"] {
         cx.update(|window, cx| window.draw(cx).clear(cx));
-        let keystroke =
-            cx.update(|_, cx| gpui::Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
         cx.simulate_event(gpui::KeyDownEvent {
             keystroke: keystroke.clone(),
             is_held: false,

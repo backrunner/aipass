@@ -1,6 +1,12 @@
+mod session_sync;
+#[cfg(all(test, feature = "parity-render"))]
+mod tests;
+mod transition;
+mod view;
+
 use crate::{
     auth::{AuthEvent, AuthView, Mode},
-    curtain::{Curtain, CurtainEvent},
+    curtain::Curtain,
     locale::Locale,
     theme::Theme,
     toast::ErrorToast,
@@ -10,7 +16,7 @@ use aipass_desktop_native::{
     motion::Direction,
     session::{Command, Session},
 };
-use gpui::{div, prelude::*, px, rgb, Context, Entity, FocusHandle, Subscription, Task, Window};
+use gpui::{prelude::*, Context, Entity, FocusHandle, Subscription, Task, Window};
 use std::time::{Duration, Instant};
 
 gpui::actions!(desktop, [CloseWindow, LockVault]);
@@ -28,21 +34,24 @@ pub fn init(cx: &mut gpui::App) {
 }
 
 pub struct Desktop {
+    pub(crate) updater: Option<aipass_desktop_native::updates::Worker>,
+    pub(crate) update_focus: gpui::FocusHandle,
+    pub(crate) runtime_gate: Option<std::sync::Arc<aipass_desktop_native::runtime::Gate>>,
     auth: Entity<AuthView>,
     workspace: Entity<Workspace>,
     toast: Entity<ErrorToast>,
     last_toast_error: Option<String>,
     toast_fixture: Option<bool>,
     session: Option<Session>,
-    show_workspace: bool,
+    pub(crate) show_workspace: bool,
     chinese: bool,
     close_requested: bool,
     last_refresh: Instant,
     recovery_confirmed: bool,
-    theme: Theme,
-    locale: Locale,
-    focus: FocusHandle,
-    curtain: Option<Entity<Curtain>>,
+    pub(crate) theme: Theme,
+    pub(crate) locale: Locale,
+    pub(crate) focus: FocusHandle,
+    pub(crate) curtain: Option<Entity<Curtain>>,
     curtain_subscription: Option<Subscription>,
     motion_generation: u64,
     motion_only: bool,
@@ -56,6 +65,30 @@ pub struct Desktop {
 }
 
 impl Desktop {
+    #[cfg(feature = "parity-render")]
+    pub fn prepare_capture_scroll(&self, scenario: &str, cx: &gpui::App) {
+        if scenario.starts_with("subscription-overview") {
+            self.workspace
+                .read(cx)
+                .prepare_subscription_overview_scroll();
+        }
+        if scenario.starts_with("subscription-runtime-") && scenario.ends_with("-bottom") {
+            self.workspace.read(cx).prepare_subscription_scroll(cx);
+        }
+        if scenario.starts_with("providers-notes-") {
+            self.workspace.read(cx).prepare_notes_scroll();
+        }
+        if scenario == "reset-bottom" {
+            self.auth.read(cx).prepare_capture_scroll();
+        }
+        if scenario.starts_with("providers-")
+            && (scenario.ends_with("-advanced")
+                || scenario.ends_with("-menu")
+                || scenario.ends_with("-all"))
+        {
+            self.workspace.read(cx).prepare_form_scroll(cx);
+        }
+    }
     #[cfg(feature = "parity-render")]
     pub fn presentation_state(&self, cx: &gpui::App) -> serde_json::Value {
         serde_json::json!({"workspace": self.show_workspace, "providers": self.workspace.read(cx).presentation_state(cx)})
@@ -173,6 +206,16 @@ impl Desktop {
                             });
                         }
                     }
+                    WorkspaceEvent::ProviderTools => {
+                        if let Some(request) = view.update(cx, |view,cx|view.take_tools_request(cx)) {
+                            if this.session.as_ref().is_some_and(|s|s.is_unlocked()) {
+                                this.pending_command = Some(Command::ProviderTools(Box::new(request)));
+                            } else {
+                                let completion = aipass_desktop_native::provider_tools::Completion { scope: request.scope, mutated: false, result: Err(aipass_agent::AgentCommandError { code: None, message: this.locale.text("tray.agentUnavailable") }) };
+                                view.update(cx, |view,cx|view.complete_tools(completion,window,cx));
+                            }
+                        }
+                    }
                     WorkspaceEvent::Credential => {
                         let request = view.update(cx, |view, cx| view.take_credential_request(cx));
                         if let Some(request) = request {
@@ -216,35 +259,54 @@ impl Desktop {
                         }
                     }
                     WorkspaceEvent::Refresh => {
-                        this.last_refresh = Instant::now() - Duration::from_secs(2)
+                        view.read(cx).subscriptions.clone().update(cx,|view,cx|view.show_import(window,cx));
                     }
+                    WorkspaceEvent::Connect => {view.read(cx).subscriptions.clone().update(cx,|view,cx|view.show(None,None,window,cx));}
                     _ => {}
                 }
                 this.update_session(window, cx);
             });
         let show_workspace = session.is_none()
-            && matches!(
-                scenario,
-                "empty"
-                    | "menu"
-                    | "filter"
-                    | "toast"
-                    | "toast-long"
-                    | "providers"
-                    | "providers-add"
-                    | "providers-edit"
-                    | "providers-add-advanced"
-                    | "providers-edit-advanced"
-                    | "providers-key-add"
-                    | "providers-key-edit"
-                    | "providers-key-billing"
-                    | "providers-key-reveal"
-                    | "providers-integration-diff"
-                    | "providers-integration-full"
-                    | "providers-integration-file2"
-                    | "providers-integration-unchanged"
-                    | "providers-integration-readonly"
-            );
+            && (scenario.starts_with("subscription-")
+                || matches!(
+                    scenario,
+                    "empty"
+                        | "menu"
+                        | "filter"
+                        | "toast"
+                        | "toast-long"
+                        | "providers"
+                        | "providers-reset"
+                        | "providers-reset-error"
+                        | "providers-usage"
+                        | "providers-usage-advanced"
+                        | "providers-usage-result"
+                        | "providers-usage-failed"
+                        | "providers-usage-busy"
+                        | "providers-probe-result"
+                        | "providers-notes-normal"
+                        | "providers-notes-empty"
+                        | "providers-notes-long"
+                        | "providers-list"
+                        | "providers-list-hover"
+                        | "providers-list-selected-hover"
+                        | "providers-add"
+                        | "providers-add-menu"
+                        | "providers-add-all"
+                        | "providers-edit"
+                        | "providers-add-advanced"
+                        | "providers-edit-advanced"
+                        | "providers-key-add"
+                        | "providers-key-edit"
+                        | "providers-key-billing"
+                        | "providers-key-reveal"
+                        | "providers-integration-picker"
+                        | "providers-integration-diff"
+                        | "providers-integration-full"
+                        | "providers-integration-file2"
+                        | "providers-integration-unchanged"
+                        | "providers-integration-readonly"
+                ));
         let motion_only = matches!(scenario, "unlock-motion" | "lock-motion");
         let curtain = motion_only.then(|| {
             cx.new(|_| {
@@ -284,13 +346,29 @@ impl Desktop {
                 .timer(Duration::from_millis(100))
                 .await;
             if this
-                .update_in(cx, |this, window, cx| this.update_session(window, cx))
+                .update_in(cx, |this, window, cx| {
+                    if this
+                        .updater
+                        .as_ref()
+                        .is_some_and(|worker| worker.snapshot().restarting)
+                    {
+                        cx.quit();
+                        return;
+                    }
+                    if this.updater.is_some() {
+                        cx.notify();
+                    }
+                    this.update_session(window, cx);
+                })
                 .is_err()
             {
                 break;
             }
         });
         Self {
+            updater: None,
+            update_focus: cx.focus_handle(),
+            runtime_gate: None,
             auth,
             workspace,
             toast,
@@ -318,563 +396,5 @@ impl Desktop {
             _focus_subscription: focus_subscription,
             _poll: poll,
         }
-    }
-
-    fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.session.is_none() {
-            return true;
-        }
-        self.close_requested = true;
-        self.lock(window, cx);
-        false
-    }
-
-    fn lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .curtain
-            .as_ref()
-            .is_some_and(|curtain| curtain.read(cx).direction == Direction::Lock)
-        {
-            return;
-        }
-        if let Some(session) = &mut self.session {
-            session.submit(Command::Lock);
-        }
-        self.recovery_confirmed = false;
-        self.pending_command = None;
-        self.workspace
-            .update(cx, |view, cx| view.clear_providers(window, cx));
-        self.toast.update(cx, |toast, cx| toast.dismiss(cx));
-        self.last_toast_error = None;
-        self.focus.focus(window, cx);
-        self.auth.update(cx, |auth, cx| {
-            auth.clear(window, cx);
-            auth.mode = Mode::Unlock;
-            auth.set_busy(self.session.is_some(), cx);
-        });
-        if self.close_requested || !self.show_workspace {
-            self.cancel_transition();
-            self.show_workspace = false;
-            self.auth.update(cx, |auth, cx| auth.focus(window, cx));
-        } else {
-            self.start_transition(Direction::Lock, window, cx);
-        }
-        cx.notify();
-    }
-
-    fn cancel_transition(&mut self) {
-        self.motion_generation += 1;
-        self.curtain_subscription = None;
-        self.curtain = None;
-        self.lock_covered = false;
-    }
-
-    fn start_transition(
-        &mut self,
-        direction: Direction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.cancel_transition();
-        let generation = self.motion_generation;
-        let curtain = cx.new(|_| Curtain::new(direction, self.theme));
-        self.curtain_subscription =
-            Some(
-                cx.subscribe_in(&curtain, window, move |this, _, event, window, cx| {
-                    if this.motion_generation != generation {
-                        return;
-                    }
-                    match event {
-                        CurtainEvent::Covered => {
-                            this.lock_covered = direction == Direction::Lock;
-                            this.show_workspace = direction == Direction::Unlock
-                                && this.session.as_ref().is_none_or(Session::is_unlocked);
-                            this.focus.focus(window, cx);
-                            if !this.show_workspace {
-                                this.auth.update(cx, |auth, cx| auth.focus(window, cx));
-                            }
-                        }
-                        CurtainEvent::Done => {
-                            this.curtain = None;
-                            this.curtain_subscription = None;
-                            this.lock_covered = false;
-                        }
-                    }
-                    cx.notify();
-                }),
-            );
-        self.curtain = Some(curtain);
-        cx.notify();
-    }
-
-    fn update_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = &mut self.session else {
-            return;
-        };
-        let changed = session.poll();
-        // Read completion feedback before the next background refresh clears
-        // Session.error. Repeated failures must not restart the toast forever.
-        let completed_error =
-            changed.then(|| session.error.as_ref().map(|error| error.message.clone()));
-        let auth_error = session.error.as_ref().map(|error| {
-            if error.code == Some(aipass_agent_protocol::AgentErrorCode::InvalidPassword) {
-                self.locale.text("error.incorrectMasterPassword")
-            } else {
-                error.message.clone()
-            }
-        });
-        if !session.pending && session.is_unlocked() && !self.close_requested {
-            if let Some(action) = self.pending_command.take() {
-                session.submit(action);
-            }
-        }
-        if !self.close_requested
-            && !session.pending
-            && (session.provider_applied || self.last_refresh.elapsed() >= Duration::from_secs(1))
-        {
-            session.submit(Command::Refresh);
-            self.last_refresh = Instant::now();
-        }
-        if !changed {
-            return;
-        }
-        if self.close_requested
-            && !session.pending
-            && !session.lock_pending
-            && session.error.is_none()
-            && session
-                .status
-                .as_ref()
-                .is_some_and(|status| status.locked || !status.exists)
-        {
-            window.remove_window();
-            cx.quit();
-            return;
-        }
-        let unlocked = session.is_unlocked();
-        if unlocked {
-            self.workspace.update(cx, |view, cx| {
-                if let Some(completion) = session.integration_completion.take() {
-                    view.complete_integration(completion, window, cx);
-                }
-                if let Some(completion) = session.credential_completion.take() {
-                    view.complete_credential(completion, window, cx);
-                }
-                view.sync_providers(
-                    session.catalog.clone(),
-                    ProviderFeedback {
-                        selected: session.selected,
-                        busy: session.foreground_pending || self.pending_command.is_some(),
-                        saved: session.provider_saved,
-                        error: completed_error.clone().flatten(),
-                    },
-                    window,
-                    cx,
-                )
-            });
-        } else {
-            self.pending_command = None;
-            self.workspace
-                .update(cx, |view, cx| view.clear_providers(window, cx));
-        }
-        if unlocked && !self.workspace.read(cx).has_provider_form() {
-            if let Some(error) = completed_error {
-                if error != self.last_toast_error {
-                    if let Some(message) = &error {
-                        self.toast
-                            .update(cx, |toast, cx| toast.show(message.clone(), window, cx));
-                    }
-                    self.last_toast_error = error;
-                }
-            }
-        } else {
-            self.toast.update(cx, |toast, cx| toast.dismiss(cx));
-            self.last_toast_error = None;
-        }
-        let was_unlocked = self.last_unlocked.replace(unlocked);
-        let was_workspace = self.show_workspace;
-        let locking = self
-            .curtain
-            .as_ref()
-            .is_some_and(|curtain| curtain.read(cx).direction == Direction::Lock);
-        let unlocking = self
-            .curtain
-            .as_ref()
-            .is_some_and(|curtain| curtain.read(cx).direction == Direction::Unlock);
-        if locking {
-            self.show_workspace = !self.lock_covered;
-        } else if !unlocking {
-            self.show_workspace = unlocked;
-        }
-        self.auth.update(cx, |auth, cx| {
-            auth.set_busy(session.foreground_pending || session.lock_pending, cx);
-            if let Some(status) = &session.status {
-                auth.sync_exists(status.exists, window, cx);
-            }
-            if unlocked {
-                auth.clear(window, cx);
-            }
-            if let Some(error) = auth_error {
-                auth.error = error;
-            }
-        });
-        if was_unlocked == Some(false) && unlocked && !self.close_requested {
-            self.show_workspace = false;
-            self.start_transition(Direction::Unlock, window, cx);
-        } else if !unlocked && unlocking {
-            // Invalidation cancels the previous unlock callback immediately.
-            self.cancel_transition();
-            self.show_workspace = false;
-        }
-        if was_workspace != self.show_workspace {
-            self.focus.focus(window, cx);
-            if !self.show_workspace {
-                self.auth.update(cx, |auth, cx| auth.focus(window, cx));
-            }
-        }
-        cx.notify();
-    }
-}
-
-impl Render for Desktop {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.motion_only {
-            return div()
-                .size_full()
-                .relative()
-                .rounded(px(12.))
-                .overflow_hidden()
-                .bg(self.theme.bg)
-                .children(self.curtain.clone())
-                .into_any_element();
-        }
-        let recovery = self
-            .session
-            .as_ref()
-            .and_then(|s| s.recovery.as_ref())
-            .map(|key| key.expose().to_owned());
-        let root = div()
-            .id("desktop")
-            .track_focus(&self.focus)
-            .size_full()
-            .font_weight(gpui::FontWeight::NORMAL)
-            .font_features(gpui::FontFeatures(std::sync::Arc::new(vec![
-                ("ss01".into(), 1),
-                ("cv11".into(), 1),
-            ])))
-            .relative()
-            .rounded(px(12.))
-            .overflow_hidden()
-            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
-                if this.request_close(window, cx) {
-                    window.remove_window();
-                    cx.quit();
-                }
-            }))
-            .on_action(cx.listener(|this, _: &LockVault, window, cx| this.lock(window, cx)))
-            .child(if self.show_workspace {
-                self.workspace.clone().into_any_element()
-            } else {
-                self.auth.clone().into_any_element()
-            })
-            .when(!self.show_workspace, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .left(px(19.))
-                        .top(px(19.))
-                        .flex()
-                        .gap(px(8.))
-                        .children([0xff5f57, 0xfebc2e, 0x28c840].into_iter().enumerate().map(
-                            |(index, color)| {
-                                div()
-                                    .id(("window-control", index))
-                                    .size(px(12.))
-                                    .rounded_full()
-                                    .bg(rgb(color))
-                                    .border_1()
-                                    .border_color(gpui::rgba(0x00000026))
-                                    .on_click(move |_, window, cx| match index {
-                                        0 => window.dispatch_action(Box::new(CloseWindow), cx),
-                                        1 => window.minimize_window(),
-                                        _ => window.zoom_window(),
-                                    })
-                            },
-                        )),
-                )
-            })
-            .when_some(recovery, |el, key| {
-                el.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .bg(gpui::rgba(0x080c188c))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .w(px(440.))
-                                .p(px(28.))
-                                .rounded(px(14.))
-                                .bg(self.theme.surface)
-                                .text_color(self.theme.text)
-                                .flex()
-                                .flex_col()
-                                .gap(px(14.))
-                                .child(
-                                    div()
-                                        .text_size(px(18.))
-                                        .child(self.locale.text("recovery.title")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .child(self.locale.text("recovery.shortDesc")),
-                                )
-                                .child(
-                                    div()
-                                        .p(px(14.))
-                                        .rounded(px(8.))
-                                        .bg(self.theme.surface2)
-                                        .font_family("Menlo")
-                                        .text_size(px(13.))
-                                        .child(key),
-                                )
-                                .child(
-                                    div()
-                                        .id("recovery-confirm")
-                                        .cursor_pointer()
-                                        .text_size(px(12.))
-                                        .child(format!(
-                                            "{} {}",
-                                            if self.recovery_confirmed {
-                                                "☑"
-                                            } else {
-                                                "☐"
-                                            },
-                                            self.locale.text("recovery.ack")
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.recovery_confirmed = !this.recovery_confirmed;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .id("recovery-continue")
-                                        .h(px(36.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(8.))
-                                        .bg(rgb(0x2563eb))
-                                        .text_color(rgb(0xffffff))
-                                        .when(!self.recovery_confirmed, |el| el.opacity(0.5))
-                                        .child(self.locale.text("recovery.continue"))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            if this.recovery_confirmed {
-                                                if let Some(session) = &mut this.session {
-                                                    session.recovery = None;
-                                                }
-                                                this.recovery_confirmed = false;
-                                                cx.notify();
-                                            }
-                                        })),
-                                ),
-                        ),
-                )
-            })
-            .children(self.curtain.clone())
-            .child(self.toast.clone());
-        #[cfg(feature = "parity-render")]
-        let root = root.on_action(cx.listener(|this, _: &ReplayToast, window, cx| {
-            if let Some(long) = this.toast_fixture.filter(|_| this.session.is_none()) {
-                this.toast.update(cx, |toast, cx| {
-                    toast.show(
-                        crate::toast::fixture_message(this.chinese, long),
-                        window,
-                        cx,
-                    )
-                });
-            }
-        }));
-        #[cfg(not(feature = "parity-render"))]
-        let _ = self.toast_fixture;
-        root.into_any_element()
-    }
-}
-
-#[cfg(all(test, feature = "parity-render"))]
-mod tests {
-    use super::*;
-
-    struct RejectPassword;
-    impl aipass_desktop_native::session::Transport for RejectPassword {
-        fn execute(
-            &mut self,
-            command: Command,
-        ) -> Result<aipass_desktop_native::session::Reply, aipass_agent::AgentCommandError>
-        {
-            if matches!(command, Command::Unlock(_)) {
-                return Err(aipass_agent::AgentCommandError {
-                    code: Some(aipass_agent_protocol::AgentErrorCode::InvalidPassword),
-                    message: "synthetic password rejection".into(),
-                });
-            }
-            Ok(aipass_desktop_native::session::Reply::Snapshot {
-                status: aipass_agent_protocol::SessionStatus {
-                    exists: true,
-                    locked: true,
-                    policy: Default::default(),
-                    last_lock_reason: None,
-                    vault_namespace: None,
-                    initial_sync_pending: false,
-                    initial_sync_failed: false,
-                    sync_revision: 0,
-                    sync_status: None,
-                },
-                entries: vec![],
-            })
-        }
-    }
-
-    #[gpui::test]
-    fn password_error_survives_a_background_refresh_due_on_completion(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let (desktop, cx) = workspace(cx);
-        cx.update(|_, cx| {
-            desktop.update(cx, |view, _| {
-                let mut session = Session::new(RejectPassword).unwrap();
-                assert!(session.submit(Command::Unlock("synthetic-password".into())));
-                view.session = Some(session);
-                view.show_workspace = false;
-                view.last_refresh = Instant::now() - Duration::from_secs(2);
-            })
-        });
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let completed = cx.update(|window, cx| {
-                desktop.update(cx, |view, cx| {
-                    view.update_session(window, cx);
-                    !view.session.as_ref().unwrap().foreground_pending
-                })
-            });
-            if completed {
-                break;
-            }
-            assert!(Instant::now() < deadline, "auth worker failed to complete");
-            std::thread::yield_now();
-        }
-        cx.update(|_, cx| {
-            let view = desktop.read(cx);
-            assert_eq!(
-                view.auth.read(cx).error,
-                view.locale.text("error.incorrectMasterPassword")
-            );
-            assert!(!view.auth.read(cx).busy);
-            assert!(!view.show_workspace);
-        });
-    }
-
-    fn workspace(cx: &mut gpui::TestAppContext) -> (Entity<Desktop>, &mut gpui::VisualTestContext) {
-        cx.update(|cx| {
-            gpui_base::init(cx);
-            init(cx);
-        });
-        let mut desktop = None;
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            let view = cx.new(|cx| Desktop::new(None, "empty", false, false, window, cx));
-            desktop = Some(view.clone());
-            gpui_base::Root::new(view, window, cx)
-        });
-        (desktop.unwrap(), cx)
-    }
-
-    #[gpui::test]
-    fn lock_keeps_workspace_until_cover_and_repeated_lock_does_not_restart(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let (desktop, cx) = workspace(cx);
-        let curtain = cx.update(|window, cx| {
-            desktop.update(cx, |view, cx| {
-                view.lock(window, cx);
-                let curtain = view.curtain.clone().unwrap();
-                curtain.update(cx, |curtain, _| curtain.freeze_at(0.));
-                assert!(view.show_workspace);
-                view.lock(window, cx);
-                assert_eq!(
-                    view.curtain.as_ref().unwrap().entity_id(),
-                    curtain.entity_id()
-                );
-                curtain
-            })
-        });
-        cx.update(|_, cx| curtain.update(cx, |_, cx| cx.emit(CurtainEvent::Covered)));
-        assert!(!desktop.read_with(cx, |view, _| view.show_workspace));
-        cx.update(|_, cx| curtain.update(cx, |_, cx| cx.emit(CurtainEvent::Done)));
-        assert!(desktop.read_with(cx, |view, _| view.curtain.is_none()));
-    }
-
-    #[gpui::test]
-    fn superseded_unlock_events_cannot_reveal_or_finish_the_later_lock(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let (desktop, cx) = workspace(cx);
-        let unlock = cx.update(|window, cx| {
-            desktop.update(cx, |view, cx| {
-                view.show_workspace = false;
-                view.start_transition(Direction::Unlock, window, cx);
-                let curtain = view.curtain.clone().unwrap();
-                curtain.update(cx, |curtain, _| curtain.freeze_at(0.));
-                curtain
-            })
-        });
-        cx.update(|_, cx| unlock.update(cx, |_, cx| cx.emit(CurtainEvent::Covered)));
-        assert!(desktop.read_with(cx, |view, _| view.show_workspace));
-        let lock = cx.update(|window, cx| {
-            desktop.update(cx, |view, cx| {
-                view.lock(window, cx);
-                let curtain = view.curtain.clone().unwrap();
-                curtain.update(cx, |curtain, _| curtain.freeze_at(0.));
-                curtain
-            })
-        });
-        cx.update(|_, cx| lock.update(cx, |_, cx| cx.emit(CurtainEvent::Covered)));
-        cx.update(|_, cx| {
-            unlock.update(cx, |_, cx| {
-                cx.emit(CurtainEvent::Covered);
-                cx.emit(CurtainEvent::Done);
-            })
-        });
-        assert!(desktop.read_with(cx, |view, _| !view.show_workspace
-            && view.curtain.as_ref().unwrap().entity_id() == lock.entity_id()));
-    }
-
-    #[gpui::test]
-    fn initial_workspace_focus_routes_window_actions(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            gpui_base::init(cx);
-            init(cx);
-            cx.set_reduce_motion(true);
-        });
-        let mut desktop = None;
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            let view = cx.new(|cx| Desktop::new(None, "empty", false, false, window, cx));
-            desktop = Some(view.clone());
-            gpui_base::Root::new(view, window, cx)
-        });
-        let desktop = desktop.unwrap();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        assert!(desktop.read_with(cx, |desktop, _| desktop.show_workspace));
-        cx.simulate_keystrokes("cmd-l");
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        assert!(!desktop.read_with(cx, |desktop, _| desktop.show_workspace));
-        cx.update(|window, cx| {
-            let view = desktop.read(cx);
-            assert!(view.focus.contains_focused(window, cx));
-            assert!(!view.focus.is_focused(window));
-        });
     }
 }

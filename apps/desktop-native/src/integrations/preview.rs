@@ -266,7 +266,9 @@ impl Render for Preview {
                                                                 .opacity(0.08)
                                                                 .into(),
                                                             offset: gpui::point(px(0.), px(1.)),
-                                                            blur_radius: px(2.),
+                                                            blur_radius: crate::theme::shadow_blur(
+                                                                2.,
+                                                            ),
                                                             spread_radius: px(0.),
                                                             inset: false,
                                                         }])
@@ -333,7 +335,7 @@ impl Render for Preview {
                                             el.shadow(vec![gpui::BoxShadow {
                                                 color: gpui::rgb(0x0f1110).opacity(0.08).into(),
                                                 offset: gpui::point(px(0.), px(1.)),
-                                                blur_radius: px(2.),
+                                                blur_radius: crate::theme::shadow_blur(2.),
                                                 spread_radius: px(0.),
                                                 inset: false,
                                             }])
@@ -435,7 +437,13 @@ impl Render for Preview {
                     let _ = owner.update(cx, |_, cx| cx.emit(Event::Close));
                 }
             })
-            .backdrop(div().absolute().inset_0().bg(gpui::rgba(0x0f111073)))
+            .backdrop(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(gpui::rgba(0x0f111073))
+                    .backdrop_blur(px(4.)),
+            )
             .popup(
                 div()
                     .w(px(1120.).min(window.viewport_size().width - px(48.)))

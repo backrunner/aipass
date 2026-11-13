@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 pub mod draft;
 mod lists;
+pub mod optional;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Catalog {

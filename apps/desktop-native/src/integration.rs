@@ -1,8 +1,8 @@
 //! Quick Integration uses existing Agent plans and encrypted backup/rollback.
 use aipass_agent::{AgentClient, AgentCommandError};
 use aipass_agent_protocol::{
-    AgentRequest, ToolConfigApplyResponse, ToolConfigPreviewResponse, ToolConfigRequest,
-    ToolConfigStatus, ToolConfigTool,
+    AgentRequest, SensitiveString, ToolConfigApplyResponse, ToolConfigLoginStatus,
+    ToolConfigPreviewResponse, ToolConfigRequest, ToolConfigStatus, ToolConfigTool,
 };
 use aipass_config_writers::ToolDetection;
 use uuid::Uuid;
@@ -21,6 +21,10 @@ pub enum Operation {
     Preview(ToolConfigRequest),
     Apply(ToolConfigRequest),
     Rollback(Uuid),
+    LoginStart(ToolConfigRequest),
+    LoginPoll(Uuid),
+    LoginCode(Uuid, SensitiveString),
+    LoginCancel(Uuid),
 }
 pub struct Request {
     pub scope: Scope,
@@ -33,6 +37,9 @@ pub enum Outcome {
     },
     Preview(ToolConfigPreviewResponse),
     Applied(ToolConfigApplyResponse),
+    Login(ToolConfigLoginStatus),
+    CodeSent,
+    Cancelled,
 }
 pub struct Completion {
     pub scope: Scope,
@@ -85,6 +92,18 @@ impl Request {
             Operation::Rollback(operation_id) => client
                 .request(&AgentRequest::ToolConfigRollback { operation_id })
                 .map(Outcome::Applied),
+            Operation::LoginStart(request) => client
+                .request(&AgentRequest::ToolConfigLoginStart { request })
+                .map(Outcome::Login),
+            Operation::LoginPoll(ticket) => client
+                .request(&AgentRequest::ToolConfigLoginPoll { ticket })
+                .map(Outcome::Login),
+            Operation::LoginCode(ticket, code) => client
+                .request::<serde_json::Value>(&AgentRequest::ToolConfigLoginCode { ticket, code })
+                .map(|_| Outcome::CodeSent),
+            Operation::LoginCancel(ticket) => client
+                .request::<serde_json::Value>(&AgentRequest::ToolConfigLoginCancel { ticket })
+                .map(|_| Outcome::Cancelled),
         };
         Completion {
             scope: self.scope,

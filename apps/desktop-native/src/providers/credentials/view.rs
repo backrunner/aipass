@@ -1,4 +1,5 @@
 use super::*;
+use crate::parity::Observe;
 use crate::providers::{
     controls::{button, icon},
     presentation,
@@ -88,108 +89,176 @@ impl Credentials {
             .child(self.input(index, window, cx))
     }
 
-    fn picker(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn picker(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::menu::select;
         let t = self.theme;
-        let focus = self.picker_focus.clone();
+        let mut focus = self.picker_focus.clone();
+        let scroll_state = window.use_keyed_state("credential-picker-scroll", cx, |_, _| {
+            gpui::ScrollHandle::new()
+        });
+        let scroll = scroll_state.read(cx).clone();
+        focus.scroll = Some(scroll.clone());
         let before = self.inputs[1].read(cx).focus_handle(cx);
         let after = self.inputs[2].read(cx).focus_handle(cx);
         let owner = cx.entity().downgrade();
         let close = owner.clone();
-        let selected = self.interface.clone();
+        let selected = INTERFACES
+            .iter()
+            .position(|i| *i == self.interface)
+            .unwrap_or(0);
+        let initial_focus = focus.clone();
+        let keyboard_focus = initial_focus.clone();
         let options: Vec<_> = INTERFACES
             .iter()
             .map(|i| self.locale.text(presentation::protocol_key(i)))
             .collect();
-        Popover::new("credential-interface-picker")
-            .track_focus(&self.picker_focus.container)
-            .anchor(Anchor::TopLeft)
-            .offset(px(4.))
-            .open(self.picker_open)
-            .on_open_change(cx.listener(|this, open: &bool, _, cx| {
-                this.picker_open = *open && !this.busy();
-                cx.notify();
-            }))
-            .trigger(
-                Button::new("credential-interface")
-                    .track_focus(&self.picker_focus.trigger)
-                    .disabled(self.busy())
-                    .w_full()
-                    .h(px(34.))
-                    .px(px(10.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(t.border)
-                    .bg(t.surface)
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .text_size(px(13.))
-                    .text_color(t.text)
-                    .accessibility_label(self.locale.text("providerDetail.keyFormat"))
-                    .child(
-                        div().flex_1().min_w_0().text_ellipsis().child(
-                            self.locale
-                                .text(presentation::protocol_key(&self.interface)),
-                        ),
-                    )
-                    .child(
-                        svg()
-                            .path("chevron-down")
-                            .size(px(14.))
-                            .text_color(t.tertiary),
-                    ),
-            )
-            .content(move |_, _, _| {
-                focus
-                    .surface("credential-interfaces", after, before, move |_, cx| {
-                        let _ = close.update(cx, |this, cx| {
-                            this.picker_open = false;
-                            cx.notify();
-                        });
-                    })
-                    .w(px(220.))
-                    .p(px(4.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(t.border)
-                    .bg(t.surface)
-                    .flex()
-                    .flex_col()
-                    .children(options.into_iter().enumerate().map(|(index, label)| {
-                        let owner = owner.clone();
-                        Button::new(("credential-interface-option", index))
-                            .track_focus(&focus.items[index])
-                            .role(gpui::Role::MenuItem)
+        let open = self.picker_open && !self.busy();
+        let motion = crate::menu::motion::sample("credential-picker-motion", open, window, cx);
+        let origin = crate::menu::motion::Origin::new(false);
+        let track_origin = origin.clone();
+        let bounds = self.picker_bounds.clone();
+        let width = bounds.get().size.width.max(px(1.));
+        div()
+            .w_full()
+            .on_children_prepainted(move |children, _, cx| {
+                if let Some(rect) = children.first() {
+                    bounds.set(*rect);
+                    crate::parity::record_bounds("menu-credential-trigger", *rect, cx);
+                }
+            })
+            .child(
+                Popover::new("credential-interface-picker")
+                    .on_position(move |position, trigger| track_origin.resolve(position, trigger))
+                    .track_focus(&self.picker_focus.container)
+                    .anchor(Anchor::TopLeft)
+                    .offset(px(4.))
+                    .open(open)
+                    .retain_content(motion.visible)
+                    .on_open_change(cx.listener(move |this, open: &bool, window, cx| {
+                        this.picker_open = *open && !this.busy();
+                        if this.picker_open {
+                            initial_focus.focus_item(selected, window, cx);
+                        }
+                        cx.notify();
+                    }))
+                    .trigger(
+                        Button::new("credential-interface")
+                            .track_focus(&self.picker_focus.trigger)
+                            .disabled(self.busy())
+                            .w_full()
+                            .h(px(34.))
                             .px(px(10.))
-                            .py(px(8.))
-                            .rounded(px(6.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(t.border)
+                            .bg(t.surface)
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
                             .text_size(px(13.))
+                            .line_height(px(16.))
                             .text_color(t.text)
-                            .accessibility_label(label.clone())
-                            .bg(if INTERFACES[index] == selected {
-                                t.accent_soft
-                            } else {
-                                gpui::rgba(0)
+                            .hover(move |s| {
+                                s.border_color(if open { t.accent } else { t.border_strong })
                             })
-                            .hover(move |s| s.bg(t.accent_soft))
-                            .focus(move |s| s.bg(t.accent_soft))
-                            .child(label)
-                            .on_click(move |_, window, cx| {
-                                let _ = owner.update(cx, |this, cx| {
-                                    if this.busy() {
-                                        return;
+                            .focus_visible(move |s| {
+                                s.border_color(t.accent)
+                                    .shadow(t.outline(t.focus_ring, 3., 0.))
+                            })
+                            .when(open, |el| {
+                                el.border_color(t.accent)
+                                    .shadow(t.outline(t.focus_ring, 3., 0.))
+                            })
+                            .accessibility_label(self.locale.text("providerDetail.keyFormat"))
+                            .on_key_down(cx.listener(
+                                move |this, event: &gpui::KeyDownEvent, window, cx| {
+                                    if !this.busy()
+                                        && !this.picker_open
+                                        && matches!(event.keystroke.key.as_str(), "down" | "up")
+                                    {
+                                        this.picker_open = true;
+                                        let focus = keyboard_focus.clone();
+                                        window.on_next_frame(move |window, cx| {
+                                            focus.focus_item(selected, window, cx)
+                                        });
+                                        cx.stop_propagation();
+                                        cx.notify();
                                     }
-                                    this.interface = INTERFACES[index].clone();
+                                },
+                            ))
+                            .child(
+                                div().flex_1().min_w_0().text_ellipsis().child(
+                                    self.locale
+                                        .text(presentation::protocol_key(&self.interface)),
+                                ),
+                            )
+                            .child(
+                                svg()
+                                    .path("chevron-down")
+                                    .size(px(14.))
+                                    .text_color(t.tertiary),
+                            ),
+                    )
+                    .content(move |_, _, _| {
+                        let menu =
+                            focus.surface("credential-interfaces", after, before, move |_, cx| {
+                                let _ = close.update(cx, |this, cx| {
                                     this.picker_open = false;
-                                    this.picker_focus.trigger.focus(window, cx);
                                     cx.notify();
                                 });
-                            })
-                    }))
-            })
+                            });
+                        let content = select::surface(menu, width, t)
+                            .child(
+                                div()
+                                    .id("credential-select-viewport")
+                                    .flex_shrink_0()
+                                    .max_h(px(278.))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&scroll)
+                                    .flex()
+                                    .flex_col()
+                                    .children(options.into_iter().enumerate().map(
+                                        |(index, label)| {
+                                            let owner = owner.clone();
+                                            select::item(
+                                                ("credential-interface-option", index),
+                                                index == selected,
+                                                t,
+                                            )
+                                            .disabled(!open)
+                                            .track_focus(&focus.items[index])
+                                            .accessibility_label(label.clone())
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .text_ellipsis()
+                                                    .child(label),
+                                            )
+                                            .child(select::indicator(index == selected, t))
+                                            .on_click(move |_, window, cx| {
+                                                let _ = owner.update(cx, |this, cx| {
+                                                    if this.busy() || !this.picker_open {
+                                                        return;
+                                                    }
+                                                    this.interface = INTERFACES[index].clone();
+                                                    this.picker_open = false;
+                                                    this.picker_focus.trigger.focus(window, cx);
+                                                    cx.notify();
+                                                });
+                                            })
+                                            .observe(format!("menu-credential-option-{index}"))
+                                        },
+                                    )),
+                            )
+                            .observe("menu-credential-content");
+                        motion
+                            .wrap_positioned(crate::menu::select::fade(content, scroll, t), origin)
+                    }),
+            )
     }
 
-    fn editor_view(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+    fn editor_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let editing = self.editor.as_ref().is_some_and(Option::is_some);
         let billing: Vec<_> = (5..8)
@@ -261,7 +330,7 @@ impl Credentials {
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(div().flex_1().min_w_0().child(self.picker(cx)))
+                    .child(div().flex_1().min_w_0().child(self.picker(window, cx)))
                     .child(div().flex_1().min_w_0().child(self.input(2, window, cx))),
             )
             .child(
@@ -289,6 +358,7 @@ impl Credentials {
                         .bg(t.surface)
                         .child(
                             Button::new("credential-billing")
+                                .aria_expanded(self.billing_open)
                                 .disabled(self.busy())
                                 .w_full()
                                 .px(px(12.))
@@ -325,23 +395,15 @@ impl Credentials {
                                             div().min_w_0().text_ellipsis().child(value)
                                         })),
                                 )
-                                .child(
-                                    svg()
-                                        .path(if self.billing_open {
-                                            "chevron-down"
-                                        } else {
-                                            "chevron-right"
-                                        })
-                                        .size(px(15.))
-                                        .text_color(t.tertiary),
-                                )
+                                .child(self.disclosure_frame.chevron(t.tertiary, 15.))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.billing_open = !this.billing_open;
                                     cx.notify();
                                 })),
                         )
-                        .when(self.billing_open, |el| {
-                            el.child(
+                        .child(
+                            self.disclosure_frame.body(
+                                "credential-billing-content",
                                 div()
                                     .p(px(12.))
                                     .flex()
@@ -355,8 +417,8 @@ impl Credentials {
                                             .child(self.field(6, window, cx)),
                                     )
                                     .child(self.field(7, window, cx)),
-                            )
-                        }),
+                            ),
+                        ),
                 )
             })
             .into_any_element()
@@ -559,6 +621,7 @@ impl Credentials {
 
 impl Render for Credentials {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.disclosure_frame = self.disclosure.sample(self.billing_open, window, cx);
         if self.entry.is_none() {
             return div();
         }

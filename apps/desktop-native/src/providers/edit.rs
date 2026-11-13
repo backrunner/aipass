@@ -1,10 +1,10 @@
 use super::{controls::button, presentation, Form, FormEvent};
 use aipass_provider_registry::{default_provider_definitions, AuthScheme, InterfaceType};
-use gpui::{div, prelude::*, px, svg, AnyElement, Context, FontWeight, Window};
+use gpui::{div, prelude::*, px, AnyElement, Context, FontWeight, Window};
 use gpui_base::{input::Input, Button};
 
 impl Form {
-    pub(super) fn edit(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn edit(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let entry = self
             .draft
             .original
@@ -138,6 +138,7 @@ impl Form {
                             .child(self.field(5, false, window, cx))
                             .child(
                                 Button::new("provider-edit-advanced")
+                                    .aria_expanded(self.advanced)
                                     .w_full()
                                     .px(px(16.))
                                     .py(px(13.))
@@ -151,22 +152,16 @@ impl Form {
                                             .flex_1()
                                             .child(self.locale.text("providerForm.advanced")),
                                     )
-                                    .child(
-                                        svg()
-                                            .path(if self.advanced {
-                                                "chevron-down"
-                                            } else {
-                                                "chevron-right"
-                                            })
-                                            .size(px(14.))
-                                            .text_color(t.tertiary),
-                                    )
+                                    .child(self.disclosure_frame.chevron(t.tertiary, 14.))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.advanced = !this.advanced;
                                         cx.notify();
                                     })),
                             )
-                            .when(self.advanced, |el| el.child(self.edit_advanced(window, cx))),
+                            .child(self.disclosure_frame.body(
+                                "provider-edit-advanced-content",
+                                self.edit_advanced(window, cx),
+                            )),
                     )
                     .child(
                         card()
@@ -177,7 +172,7 @@ impl Form {
             .into_any_element()
     }
 
-    fn edit_advanced(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+    fn edit_advanced(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let definitions = default_provider_definitions();
         let provider = definitions
             .iter()
@@ -225,6 +220,7 @@ impl Form {
                         .enumerate()
                         .map(|(i, d)| (i, d.display_name.to_owned()))
                         .collect(),
+                    window,
                     cx,
                 ),
             )
@@ -241,6 +237,7 @@ impl Form {
                             (i, self.locale.text(presentation::protocol_key(interface)))
                         })
                         .collect(),
+                    window,
                     cx,
                 ),
             )
@@ -261,6 +258,7 @@ impl Form {
                         })
                         .map(|(i, _)| (i, self.locale.text(keys[i])))
                         .collect(),
+                    window,
                     cx,
                 ),
             )

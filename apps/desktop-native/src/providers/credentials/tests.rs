@@ -4,8 +4,7 @@ use aipass_desktop_native::catalog::Catalog;
 use gpui::{TestAppContext, VisualTestContext};
 
 fn press(cx: &mut VisualTestContext, key: &str) {
-    let keystroke =
-        cx.update(|_, cx| gpui::Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
     cx.simulate_event(gpui::KeyDownEvent {
         keystroke: keystroke.clone(),
         is_held: false,
@@ -344,7 +343,10 @@ fn protocol_picker_keyboard_commits_the_exact_option_and_dismisses(cx: &mut Test
     assert!(view.read_with(cx, |view, _| !view.picker_open
         && view.interface == InterfaceType::CustomHttp));
     press(cx, "enter");
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        assert!(view.read(cx).picker_focus.items[5].is_focused(window));
+    });
     press(cx, "home");
     press(cx, "down");
     press(cx, "enter");

@@ -14,6 +14,22 @@ macro_rules! icons {
     }
 }
 icons!(
+    "send",
+    "info",
+    "bell",
+    "clock-3",
+    "circle-dollar-sign",
+    "settings-2",
+    "arrow-left",
+    "arrow-right",
+    "check",
+    "checkbox-check",
+    "copy",
+    "external-link",
+    "folder-open",
+    "gauge",
+    "globe",
+    "log-in",
     "pencil",
     "undo-2",
     "chevron-right",
@@ -33,6 +49,7 @@ icons!(
     "search",
     "list-filter",
     "refresh-cw",
+    "rotate-ccw",
     "ellipsis",
     "chevron-down",
     "chevron-up",
@@ -49,6 +66,14 @@ icons!(
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(bytes) = crate::provider_icon::asset(path) {
+            // Colored SVGs pass through the image decoder; give it enough pixels for
+            // 48px identities on Retina instead of rasterizing the source's 1em.
+            let svg = std::str::from_utf8(bytes)?
+                .replace("width=\"1em\"", "width=\"192\"")
+                .replace("height=\"1em\"", "height=\"192\"");
+            return Ok(Some(Cow::Owned(svg.into_bytes())));
+        }
         let tool = match path {
             "tool-codex" => {
                 Some(include_bytes!("../../desktop/public/tool-icons/codex.svg").as_slice())

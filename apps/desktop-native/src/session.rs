@@ -18,7 +18,9 @@ pub enum Command {
     Refresh,
     Provider(ProviderAction),
     Credential(Box<crate::credentials::Request>),
+    ProviderTools(Box<crate::provider_tools::Request>),
     Integration(Box<crate::integration::Request>),
+    Subscription(Box<crate::subscriptions::Request>),
     Unlock(SensitiveString),
     Create {
         password: SensitiveString,
@@ -34,7 +36,9 @@ pub enum Command {
 
 pub enum Reply {
     Credential(crate::credentials::Completion),
+    ProviderTools(Box<crate::provider_tools::Completion>),
     Integration(Box<crate::integration::Completion>),
+    Subscription(Box<crate::subscriptions::Completion>),
     ProviderApplied {
         selected: Option<Uuid>,
         saved: bool,
@@ -59,11 +63,30 @@ pub trait Transport: Send + 'static {
 }
 
 /// Does not invent an IPC endpoint or install a second credential authority.
-pub struct AgentTransport(AgentClient);
+pub struct AgentTransport(
+    AgentClient,
+    std::sync::Arc<crate::runtime::Gate>,
+    Option<std::sync::Arc<crate::runtime::agent::AgentServices>>,
+);
 
 impl AgentTransport {
     pub fn for_vault(path: PathBuf) -> anyhow::Result<Self> {
-        Ok(Self(AgentClient::for_vault(path)?))
+        Ok(Self(
+            AgentClient::for_vault(path)?,
+            Default::default(),
+            None,
+        ))
+    }
+
+    pub fn with_runtime(client: AgentClient, gate: std::sync::Arc<crate::runtime::Gate>) -> Self {
+        Self(client, gate, None)
+    }
+
+    pub fn managed(
+        services: std::sync::Arc<crate::runtime::agent::AgentServices>,
+        gate: std::sync::Arc<crate::runtime::Gate>,
+    ) -> Self {
+        Self(services.client.clone(), gate, Some(services))
     }
 
     fn snapshot(&self) -> Result<Reply, AgentCommandError> {
@@ -92,8 +115,24 @@ impl AgentTransport {
 
 impl Transport for AgentTransport {
     fn execute(&mut self, command: Command) -> Result<Reply, AgentCommandError> {
+        let _guard = self.1.enter().map_err(|error| AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: error.to_string(),
+        })?;
+        if let Some(services) = &self.2 {
+            services.ensure_ready().map_err(|error| AgentCommandError {
+                code: Some(AgentErrorCode::ServiceUnavailable),
+                message: error.to_string(),
+            })?;
+        }
         match command {
             Command::Refresh => self.snapshot(),
+            Command::Subscription(request) => {
+                Ok(Reply::Subscription(Box::new(request.execute(&self.0))))
+            }
+            Command::ProviderTools(request) => {
+                Ok(Reply::ProviderTools(Box::new(request.execute(&self.0))))
+            }
             Command::Credential(request) => Ok(Reply::Credential(request.execute(&self.0))),
             Command::Integration(request) => {
                 Ok(Reply::Integration(Box::new(request.execute(&self.0))))
@@ -163,8 +202,10 @@ pub struct Session {
     pub selected: Option<Uuid>,
     pub provider_saved: bool,
     pub provider_applied: bool,
+    pub tools_completion: Option<crate::provider_tools::Completion>,
     pub credential_completion: Option<crate::credentials::Completion>,
     pub integration_completion: Option<crate::integration::Completion>,
+    pub subscription_completion: Option<crate::subscriptions::Completion>,
     pub recovery: Option<SensitiveString>,
     pub error: Option<AgentCommandError>,
     pub pending: bool,
@@ -180,7 +221,52 @@ impl Session {
             .name("desktop-agent-client".into())
             .spawn(move || {
                 while let Ok(job) = jobs.recv() {
+                    let subscription = match &job.command {
+                        Command::Subscription(request) => {
+                            Some((request.generation, request.operation.kind()))
+                        }
+                        _ => None,
+                    };
+                    let integration = match &job.command {
+                        Command::Integration(request) => Some(request.scope),
+                        _ => None,
+                    };
+                    let tools = match &job.command {
+                        Command::ProviderTools(request) => Some(request.scope),
+                        _ => None,
+                    };
                     let result = transport.execute(job.command);
+                    let result = match (tools, result) {
+                        (Some(scope), Err(error)) => Ok(Reply::ProviderTools(Box::new(
+                            crate::provider_tools::Completion {
+                                scope,
+                                mutated: false,
+                                result: Err(error),
+                            },
+                        ))),
+                        (_, result) => result,
+                    };
+                    // Startup/transport errors still belong to the requesting panel.
+                    // Otherwise its pending state would survive without a reply.
+                    let result = match (subscription, result) {
+                        (Some((generation, kind)), Err(error)) => Ok(Reply::Subscription(
+                            Box::new(crate::subscriptions::Completion {
+                                generation,
+                                kind,
+                                result: Err(error),
+                            }),
+                        )),
+                        (_, result) => result,
+                    };
+                    let result = match (integration, result) {
+                        (Some(scope), Err(error)) => Ok(Reply::Integration(Box::new(
+                            crate::integration::Completion {
+                                scope,
+                                result: Err(error),
+                            },
+                        ))),
+                        (_, result) => result,
+                    };
                     // A view can disappear while authentication is in flight. Still
                     // execute its already-queued lock before dropping the transport.
                     let _ = completed.send(Completion {
@@ -198,8 +284,10 @@ impl Session {
             selected: None,
             provider_saved: false,
             provider_applied: false,
+            tools_completion: None,
             credential_completion: None,
             integration_completion: None,
+            subscription_completion: None,
             recovery: None,
             error: None,
             pending: false,
@@ -219,7 +307,11 @@ impl Session {
     pub fn submit(&mut self, command: Command) -> bool {
         if matches!(
             command,
-            Command::Provider(_) | Command::Credential(_) | Command::Integration(_)
+            Command::Provider(_)
+                | Command::ProviderTools(_)
+                | Command::Credential(_)
+                | Command::Integration(_)
+                | Command::Subscription(_)
         ) && !self.is_unlocked()
         {
             return false;
@@ -238,8 +330,10 @@ impl Session {
             self.catalog = Catalog::default();
             self.selected = None;
             self.recovery = None;
+            self.tools_completion = None;
             self.credential_completion = None;
             self.integration_completion = None;
+            self.subscription_completion = None;
             if let Some(status) = &mut self.status {
                 status.locked = true;
             }
@@ -265,8 +359,10 @@ impl Session {
     pub fn poll(&mut self) -> bool {
         self.provider_saved = false;
         self.provider_applied = false;
+        self.tools_completion = None;
         self.credential_completion = None;
         self.integration_completion = None;
+        self.subscription_completion = None;
         self.selected = None;
         let mut changed = false;
         loop {
@@ -279,7 +375,56 @@ impl Session {
                     self.foreground_pending = false;
                     changed = true;
                     match completion.result {
+                        Ok(Reply::Subscription(completion)) => {
+                            if completion
+                                .result
+                                .as_ref()
+                                .is_err_and(|error| error.code == Some(AgentErrorCode::Locked))
+                            {
+                                self.catalog = Catalog::default();
+                                self.recovery = None;
+                                if let Some(status) = &mut self.status {
+                                    status.locked = true;
+                                }
+                            }
+                            if let Ok(crate::subscriptions::Outcome::Login(login)) =
+                                &completion.result
+                            {
+                                if login.entry_id.is_some() {
+                                    self.provider_applied = true;
+                                }
+                            }
+                            if let (
+                                crate::subscriptions::Kind::Refresh(id),
+                                Ok(crate::subscriptions::Outcome::Refreshed(snapshot)),
+                            ) = (&completion.kind, &completion.result)
+                            {
+                                for entry in self
+                                    .catalog
+                                    .active
+                                    .iter_mut()
+                                    .chain(self.catalog.archived.iter_mut())
+                                    .chain(self.catalog.trash.iter_mut())
+                                    .filter(|e| e.id == *id)
+                                {
+                                    entry.subscription = Some(snapshot.clone());
+                                }
+                            }
+                            if matches!(
+                                completion.result,
+                                Ok(crate::subscriptions::Outcome::Import(_)
+                                    | crate::subscriptions::Outcome::Refreshed(_))
+                            ) {
+                                self.provider_applied = true;
+                            }
+                            self.subscription_completion = Some(*completion);
+                        }
                         Ok(Reply::Integration(completion)) => {
+                            if matches!(&completion.result, Ok(crate::integration::Outcome::Login(status))
+                                if status.result.as_ref().is_some_and(|r| r.outcome == aipass_agent_protocol::ToolConfigOutcome::Applied))
+                            {
+                                self.provider_applied = true;
+                            }
                             if completion
                                 .result
                                 .as_ref()
@@ -292,6 +437,35 @@ impl Session {
                                 }
                             }
                             self.integration_completion = Some(*completion);
+                        }
+                        Ok(Reply::ProviderTools(completion)) => {
+                            self.provider_applied = completion.mutated;
+                            if let Ok(crate::provider_tools::Outcome::Reset(entry)) =
+                                &completion.result
+                            {
+                                for current in self
+                                    .catalog
+                                    .active
+                                    .iter_mut()
+                                    .chain(self.catalog.archived.iter_mut())
+                                {
+                                    if current.id == entry.id {
+                                        *current = *entry.clone();
+                                    }
+                                }
+                            }
+                            if completion
+                                .result
+                                .as_ref()
+                                .is_err_and(|error| error.code == Some(AgentErrorCode::Locked))
+                            {
+                                self.catalog = Catalog::default();
+                                self.recovery = None;
+                                if let Some(status) = &mut self.status {
+                                    status.locked = true;
+                                }
+                            }
+                            self.tools_completion = Some(*completion);
                         }
                         Ok(Reply::Credential(completion)) => {
                             self.provider_applied = matches!(
@@ -407,8 +581,10 @@ impl Session {
         self.catalog = Catalog::default();
         self.selected = None;
         self.recovery = None;
+        self.tools_completion = None;
         self.credential_completion = None;
         self.integration_completion = None;
+        self.subscription_completion = None;
         if let Some(status) = &mut self.status {
             status.locked = true;
         }

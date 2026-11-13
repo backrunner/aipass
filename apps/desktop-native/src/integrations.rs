@@ -6,9 +6,13 @@ use aipass_agent_protocol::{
 use aipass_desktop_native::integration::{catalog, Completion, Operation, Outcome, Request, Scope};
 use aipass_vault::EntrySummary;
 use gpui::{prelude::*, Context, Entity, EventEmitter, Subscription, Task, Window};
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 #[cfg(feature = "parity-render")]
 mod fixtures;
+mod login;
+mod native;
+#[cfg(all(test, feature = "parity-render"))]
+mod native_tests;
 mod preview;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
@@ -19,7 +23,10 @@ impl EventEmitter<RequestEvent> for Integrations {}
 enum Pending {
     Scan,
     Preview(ToolConfigRequest, bool),
-    Apply,
+    Apply(ToolConfigRequest, bool),
+    Reconnect(ToolConfigRequest),
+    PrepareLogin(ToolConfigRequest, bool),
+    Login,
     Restore,
 }
 
@@ -33,10 +40,16 @@ pub struct Integrations {
     statuses: Vec<ToolConfigStatus>,
     scanned: bool,
     expanded: bool,
+    disclosure: crate::disclosure::Disclosure,
     picker_open: bool,
     picker_focus: crate::menu::MenuFocus,
+    picker_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     pending: Option<Pending>,
-    request: Option<Request>,
+    requests: VecDeque<Request>,
+    in_flight: Option<Scope>,
+    login_plan: Option<ToolConfigRequest>,
+    login: Option<Entity<login::Login>>,
+    login_subscription: Option<Subscription>,
     plan: Option<ToolConfigRequest>,
     preview: Option<Entity<preview::Preview>>,
     preview_subscription: Option<Subscription>,
@@ -64,10 +77,16 @@ impl Integrations {
             statuses: vec![],
             scanned: false,
             expanded: true,
+            disclosure: Default::default(),
             picker_open: false,
             picker_focus: crate::menu::MenuFocus::new(0, cx),
+            picker_bounds: Default::default(),
             pending: None,
-            request: None,
+            requests: VecDeque::new(),
+            in_flight: None,
+            login_plan: None,
+            login: None,
+            login_subscription: None,
             plan: None,
             preview: None,
             preview_subscription: None,
@@ -83,18 +102,28 @@ impl Integrations {
         }
     }
     pub fn has_request(&self) -> bool {
-        self.request.is_some()
+        self.in_flight.is_none() && !self.requests.is_empty()
     }
     pub fn take_request(&mut self) -> Option<Request> {
-        self.request.take()
+        if self.in_flight.is_some() {
+            return None;
+        }
+        let request = self.requests.pop_front()?;
+        self.in_flight = Some(request.scope);
+        Some(request)
     }
     pub fn modal(&self) -> Option<Entity<preview::Preview>> {
         self.preview.clone()
     }
-    fn invalidate(&mut self) {
+    pub fn is_visible(&self) -> bool {
+        self.entry.is_some()
+    }
+    fn invalidate(&mut self, cx: &mut Context<Self>) {
+        self.retire_login(cx);
         self.generation = self.generation.wrapping_add(1);
         self.pending = None;
-        self.request = None;
+        self.requests
+            .retain(|r| matches!(r.operation, Operation::LoginCancel(_)));
         self.plan = None;
         self.preview = None;
         self.preview_subscription = None;
@@ -105,7 +134,10 @@ impl Integrations {
         self.picker_open = false;
     }
     pub fn clear(&mut self, cx: &mut Context<Self>) {
-        self.invalidate();
+        self.invalidate(cx);
+        // Session lock retires its generation and may discard the old reply.
+        self.in_flight = None;
+        self.requests.clear();
         self.entry = None;
         self.context.clear();
         self.secret_id = None;
@@ -115,8 +147,10 @@ impl Integrations {
         cx.notify();
     }
     pub fn sync(&mut self, entry: Option<EntrySummary>, blocked: bool, cx: &mut Context<Self>) {
-        let entry =
-            entry.filter(|e| e.credential_kind == aipass_provider_registry::CredentialKind::Api);
+        let entry = entry.filter(|e| {
+            e.credential_kind == aipass_provider_registry::CredentialKind::Api
+                || catalog::native_tool(e).is_some()
+        });
         let context = entry
             .as_ref()
             .map(|e| {
@@ -125,6 +159,8 @@ impl Integrations {
                     e.title,
                     e.provider_id,
                     e.credential_kind,
+                    e.provider_kind,
+                    e.account_identity,
                     e.interface_type,
                     e.auth_scheme,
                     e.endpoints,
@@ -137,7 +173,7 @@ impl Integrations {
             .unwrap_or_default();
         if self.context != context {
             let switched = self.entry.as_ref().map(|e| e.id) != entry.as_ref().map(|e| e.id);
-            self.invalidate();
+            self.invalidate(cx);
             if switched {
                 self.codex_mode = CodexApiKeyMode::AuthJson;
                 self.expanded = true;
@@ -170,13 +206,18 @@ impl Integrations {
             return;
         };
         self.generation = self.generation.wrapping_add(1);
-        self.request = Some(Request {
+        self.requests.push_back(Request {
             scope: Scope {
                 entry: entry.id,
                 generation: self.generation,
             },
             operation,
         });
+        if matches!(pending, Pending::Login) {
+            if let Some(login) = &self.login {
+                login.update(cx, |view, cx| view.set_busy(true, cx));
+            }
+        }
         self.pending = Some(pending);
         self.error.clear();
         cx.emit(RequestEvent);
@@ -200,7 +241,7 @@ impl Integrations {
         {
             return;
         }
-        self.invalidate();
+        self.invalidate(cx);
         self.secret_id = Some(id);
         cx.notify();
     }
@@ -208,7 +249,7 @@ impl Integrations {
         if self.busy() {
             return;
         }
-        self.invalidate();
+        self.invalidate(cx);
         self.codex_mode = mode;
         cx.notify();
     }
@@ -216,6 +257,12 @@ impl Integrations {
         let Some(entry) = &self.entry else {
             return vec![];
         };
+        if let Some(tool) = catalog::native_tool(entry) {
+            return catalog::installed(&tool, &self.detections)
+                .then_some(tool)
+                .into_iter()
+                .collect();
+        }
         catalog::AUTOMATIC
             .iter()
             .filter(|(tool, _)| {
@@ -236,7 +283,9 @@ impl Integrations {
                 e.secret_refs
                     .iter()
                     .find(|s| Some(&s.id) == self.secret_id.as_ref())
-                    .is_some_and(|s| catalog::ready(tool, e, s))
+                    .is_some_and(|s| {
+                        catalog::native_tool(e).as_ref() == Some(tool) || catalog::ready(tool, e, s)
+                    })
             })
     }
     fn show_preview(&mut self, tool: ToolConfigTool, readonly: bool, cx: &mut Context<Self>) {
@@ -246,14 +295,7 @@ impl Integrations {
         self.plan = None;
         self.preview = None;
         self.preview_subscription = None;
-        let request = ToolConfigRequest {
-            id: self.entry.as_ref().unwrap().id,
-            secret_id: self.secret_id.clone(),
-            mode: catalog::default_mode(&tool),
-            codex_api_key_mode: (tool == ToolConfigTool::Codex).then(|| self.codex_mode.clone()),
-            tool,
-            preview_id: None,
-        };
+        let request = self.request_for(tool).unwrap();
         self.send(
             Operation::Preview(request.clone()),
             Pending::Preview(request, readonly),
@@ -282,7 +324,11 @@ impl Integrations {
                 cx.notify();
             });
         }
-        self.send(Operation::Apply(request), Pending::Apply, cx);
+        self.send(
+            Operation::Apply(request.clone()),
+            Pending::Apply(request, false),
+            cx,
+        );
     }
     fn restore(&mut self, tool: &ToolConfigTool, cx: &mut Context<Self>) {
         let Some(status) = self
@@ -302,15 +348,37 @@ impl Integrations {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.in_flight == Some(completion.scope) {
+            self.in_flight = None;
+        }
+        if matches!(completion.result, Ok(Outcome::Cancelled)) {
+            if self.has_request() {
+                cx.emit(RequestEvent);
+            }
+            return;
+        }
         if self.entry.as_ref().map(|e| e.id) != Some(completion.scope.entry)
             || completion.scope.generation != self.generation
         {
+            if let Ok(Outcome::Login(status)) = completion.result {
+                self.cancel_ticket(status.ticket, cx);
+            }
+            if self.has_request() {
+                cx.emit(RequestEvent);
+            }
             return;
         }
         let Some(pending) = self.pending.take() else {
             return;
         };
         self.blocked = false;
+        if self.complete_native(&pending, &completion.result, window, cx) {
+            if self.has_request() {
+                cx.emit(RequestEvent);
+            }
+            cx.notify();
+            return;
+        }
         match completion.result {
             Ok(Outcome::Scanned {
                 detections,
@@ -371,7 +439,7 @@ impl Integrations {
                     } else {
                         "integration.restartCli"
                     });
-                    if matches!(pending, Pending::Apply) {
+                    if matches!(pending, Pending::Apply(_, _)) {
                         self.applied = Some(result);
                         self.message_timer = Some(cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(Duration::from_secs(4)).await;
@@ -390,6 +458,7 @@ impl Integrations {
                     });
                 }
             }
+            Ok(Outcome::Login(_) | Outcome::CodeSent | Outcome::Cancelled) => {}
             Err(error) => {
                 self.scanned = true;
                 self.preview = None;
@@ -397,6 +466,9 @@ impl Integrations {
                 self.preview_subscription = None;
                 self.error = error.message;
             }
+        }
+        if self.has_request() {
+            cx.emit(RequestEvent);
         }
         cx.notify();
     }

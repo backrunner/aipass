@@ -9,7 +9,8 @@ impl Integrations {
     pub fn fixture(&mut self, scenario: &str, window: &mut Window, cx: &mut Context<Self>) {
         // Discard the queued scan before the fixture's deferred event is delivered.
         self.pending = None;
-        self.request = None;
+        self.requests.clear();
+        self.in_flight = None;
         self.blocked = false;
         self.scanned = true;
         if !scenario.starts_with("providers-integration-") {
@@ -23,6 +24,9 @@ impl Integrations {
             config_path: Some("/synthetic/.codex/config.toml".into()),
         }];
         self.expanded = true;
+        if scenario == "providers-integration-picker" {
+            return;
+        }
         self.select_secret("key-a".into(), cx);
         self.show_preview(ToolConfigTool::Codex, scenario.ends_with("-readonly"), cx);
         let request = self.take_request().unwrap();

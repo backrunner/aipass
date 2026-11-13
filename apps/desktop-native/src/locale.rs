@@ -43,8 +43,14 @@ mod tests {
         for chinese in [false, true] {
             let locale = Locale::new(chinese);
             for source in [
+                include_str!("provider_tools_ui.rs"),
+                include_str!("provider_tools_ui/fields.rs"),
+                include_str!("provider_tools_ui/view.rs"),
+                include_str!("provider_tools_ui/results.rs"),
                 include_str!("providers/form.rs"),
                 include_str!("providers/form_fields.rs"),
+                include_str!("providers/form_picker.rs"),
+                include_str!("providers/optional_fields.rs"),
                 include_str!("providers/edit.rs"),
                 include_str!("providers/presentation.rs"),
                 include_str!("workspace/providers.rs"),

@@ -31,6 +31,15 @@ pub struct Form {
     pub(super) advanced: bool,
     pub(super) visible: BTreeSet<usize>,
     pub(super) picker: Option<&'static str>,
+    pub(super) field_menu: crate::menu::MenuFocus,
+    pub(super) picker_focus: std::collections::BTreeMap<&'static str, crate::menu::MenuFocus>,
+    pub(super) picker_bounds: std::collections::BTreeMap<
+        &'static str,
+        std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
+    >,
+    pub(super) field_menu_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
+    pub(super) disclosure: crate::disclosure::Disclosure,
+    pub(super) disclosure_frame: crate::disclosure::Frame,
     pub(super) revealed: bool,
     pub(super) busy: bool,
     pub error: String,
@@ -42,7 +51,7 @@ pub struct Form {
     _subscriptions: Vec<Subscription>,
 }
 
-pub(super) const LABELS: [&str; 10] = [
+pub(super) const LABELS: [&str; 16] = [
     "providerForm.title",
     "providerForm.secretLabel",
     "providerForm.apiKey",
@@ -53,13 +62,36 @@ pub(super) const LABELS: [&str; 10] = [
     "providerForm.domains",
     "providerForm.consoleUrl",
     "providerForm.maxConcurrentRequests",
+    "providerForm.modelAliases",
+    "providerForm.customHeaders",
+    "providerForm.group",
+    "providerForm.gatewayRate",
+    "providerForm.billingCurrency",
+    "providerForm.billingUnitPrice",
 ];
 
 impl Form {
     #[cfg(feature = "parity-render")]
+    pub fn prepare_capture_scroll(&self) {
+        self.scroll
+            .set_offset(gpui::point(gpui::px(0.), -self.scroll.max_offset().y));
+    }
+    #[cfg(feature = "parity-render")]
     pub fn preview_advanced(&mut self) {
         self.advanced = true;
         self.scroll_to_end = true;
+    }
+    #[cfg(feature = "parity-render")]
+    pub fn preview_optional(&mut self, scenario: &str) {
+        self.scroll_to_end = true;
+        match scenario {
+            "providers-add-menu" => self.picker = Some("add-field"),
+            "providers-add-all" => {
+                self.visible.extend(super::optional_fields::OPTIONAL);
+                self.advanced = true;
+            }
+            _ => {}
+        }
     }
     pub fn is_editing(&self) -> bool {
         self.draft.original.is_some()
@@ -74,6 +106,8 @@ impl Form {
         let draft = Draft::new(entry);
         let theme = Theme::new(dark);
         let locale = Locale::new(chinese);
+        crate::menu::init(cx);
+        super::optional_fields::init(cx);
         let values = [
             &draft.title,
             &draft.secret_label,
@@ -85,6 +119,12 @@ impl Form {
             &draft.domains,
             &draft.console,
             &draft.concurrency,
+            &String::new(),
+            &String::new(),
+            &String::new(),
+            &String::new(),
+            &String::new(),
+            &String::new(),
         ];
         let inputs: Vec<_> = values
             .iter()
@@ -101,6 +141,12 @@ impl Form {
                         7 => locale.text("providerForm.domainFromApi"),
                         8 => "https://console.example.com".into(),
                         9 => locale.text("providerForm.unlimitedConcurrency"),
+                        10 => "fast=gpt-4o-mini".into(),
+                        11 => "x-version=1".into(),
+                        12 => locale.text("providerForm.gatewayGroupPlaceholder"),
+                        13 => "1x".into(),
+                        14 => "USD".into(),
+                        15 => "$0.002 / 1k".into(),
                         _ => String::new(),
                     };
                     let mut input = InputState::new(window, cx)
@@ -168,6 +214,25 @@ impl Form {
             advanced: false,
             visible,
             picker: None,
+            picker_focus: [
+                (
+                    "provider",
+                    aipass_provider_registry::default_provider_definitions().len(),
+                ),
+                ("interface", 6),
+                ("auth", 6),
+            ]
+            .into_iter()
+            .map(|(key, count)| (key, crate::menu::MenuFocus::new(count, cx)))
+            .collect(),
+            picker_bounds: ["provider", "interface", "auth"]
+                .into_iter()
+                .map(|key| (key, Default::default()))
+                .collect(),
+            field_menu: crate::menu::MenuFocus::new(16, cx),
+            field_menu_bounds: Default::default(),
+            disclosure: Default::default(),
+            disclosure_frame: Default::default(),
             revealed: false,
             busy: false,
             error: String::new(),
@@ -293,6 +358,14 @@ impl Form {
         draft.console = value(8);
         draft.concurrency = value(9);
         draft.concurrency_touched = self.draft.concurrency_touched;
+        draft.add_fields = aipass_desktop_native::catalog::optional::AddFields {
+            aliases: value(10),
+            headers: value(11).into(),
+            group: value(12),
+            rate: value(13),
+            currency: value(14),
+            unit_price: value(15),
+        };
         match draft.into_action() {
             Ok(action) => {
                 self.action = Some(action);
@@ -363,6 +436,9 @@ impl Form {
                     .clone()
             }
             "add-field" => {
+                if self.busy || !super::optional_fields::OPTIONAL.contains(&index) {
+                    return;
+                }
                 self.visible.insert(index);
                 if index >= 7 {
                     self.advanced = true;
@@ -388,6 +464,7 @@ mod tests;
 
 impl Render for Form {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.disclosure_frame = self.disclosure.sample(self.advanced, window, cx);
         if self.scroll_to_end && self.scroll.max_offset().y > px(0.) {
             self.scroll
                 .set_offset(gpui::point(px(0.), -self.scroll.max_offset().y));
@@ -420,11 +497,10 @@ impl Render for Form {
             }))
             .flex()
             .flex_col()
+            .flex_shrink_0()
             .min_h_0()
             .overflow_hidden()
-            .rounded(px(14.))
-            .border_1()
-            .border_color(t.border)
+            .rounded(px(13.))
             .bg(t.surface)
             .text_color(t.text)
             .w_full()
@@ -519,13 +595,40 @@ impl Render for Form {
             .accessibility_label(title)
             .close_on_escape(!self.busy)
             .close_on_backdrop_press(!self.busy)
-            .on_open_change(move |open, _, _, cx| {
+            .on_open_change(move |open, _, window, cx| {
                 if !open {
-                    let _ = owner.update(cx, |_, cx| cx.emit(FormEvent::Close));
+                    let _ = owner.update(cx, |this, cx| {
+                        if this.picker.take().is_some() {
+                            this.field_menu.trigger.focus(window, cx);
+                            cx.notify();
+                        } else {
+                            cx.emit(FormEvent::Close);
+                        }
+                    });
                 }
             })
-            .backdrop(div().absolute().inset_0().bg(gpui::rgba(0x0f111073)))
-            .popup(div().w(px(540.)).child(content))
+            .backdrop(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(gpui::rgba(0x0f111073))
+                    .backdrop_blur(px(4.)),
+            )
+            .popup(
+                gpui_base::DialogPopup::new()
+                    .w(px(540.))
+                    // Match the reference's independently constrained outer
+                    // frame and inner form, including its border clipping.
+                    .max_h(window.viewport_size().height - px(32.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(14.))
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(t.surface)
+                    .overflow_hidden()
+                    .child(content),
+            )
             .into_any_element()
     }
 }

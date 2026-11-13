@@ -39,8 +39,7 @@ fn diff_has_scroll_extent_and_file_mode_navigation_resets_scroll(cx: &mut TestAp
     for (side, key) in [(0, "right"), (1, "pagedown")] {
         cx.update(|window, cx| preview.read(cx).panes[side].clone().focus(window, cx));
         cx.update(|window, cx| window.draw(cx).clear(cx));
-        let keystroke =
-            cx.update(|_, cx| gpui::Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
         cx.simulate_event(gpui::KeyDownEvent {
             keystroke: keystroke.clone(),
             is_held: false,
@@ -80,8 +79,7 @@ fn diff_has_scroll_extent_and_file_mode_navigation_resets_scroll(cx: &mut TestAp
     });
     // The complete-file view also needs real keyboard scrolling, not just the
     // shared diff pane handler or direct writes to the scroll handle.
-    let keystroke = cx
-        .update(|_, cx| gpui::Keystroke::parse_with_os("pagedown", cx.platform_info().os).unwrap());
+    let keystroke = gpui::Keystroke::parse("pagedown").unwrap();
     cx.simulate_event(gpui::KeyDownEvent {
         keystroke: keystroke.clone(),
         is_held: false,

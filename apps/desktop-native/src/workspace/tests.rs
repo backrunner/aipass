@@ -14,8 +14,7 @@ fn workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestCont
 }
 
 fn press(cx: &mut VisualTestContext, key: &str) {
-    let keystroke =
-        cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
+    let keystroke = Keystroke::parse(key).unwrap();
     cx.simulate_event(KeyDownEvent {
         keystroke: keystroke.clone(),
         is_held: false,
@@ -23,6 +22,59 @@ fn press(cx: &mut VisualTestContext, key: &str) {
     });
     cx.simulate_event(KeyUpEvent { keystroke });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+#[gpui::test]
+fn provider_hover_is_neutral_and_selection_stays_exclusive(cx: &mut TestAppContext) {
+    use std::time::Duration;
+    let (view, cx) = workspace(cx);
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.preview_providers("providers", window, cx)
+        })
+    });
+    let draw = |cx: &mut VisualTestContext| cx.update(|window, cx| window.draw(cx).clear(cx));
+    let color = |cx: &mut VisualTestContext, index| {
+        cx.update(|_, cx| {
+            cx.global::<crate::parity::Styles>().0[&format!("provider-list-row-{index}")]
+                ["background"]["Color"]["solid"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+    };
+    draw(cx);
+    assert_eq!(color(cx, 0), "#2563eb1a");
+    assert_eq!(color(cx, 1), "#00000000");
+    let second = cx.update(|_, cx| {
+        let b = cx.global::<crate::parity::Geometry>().0["provider-list-row-1"];
+        point(px(b[0] + b[2] / 2.), px(b[1] + b[3] / 2.))
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+        position: second,
+        ..Default::default()
+    });
+    draw(cx);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    draw(cx);
+    let middle = color(cx, 1);
+    let alpha = u8::from_str_radix(&middle[middle.len() - 2..], 16).unwrap();
+    assert!(alpha > 0 && alpha < 255, "hover must fade rather than snap");
+    cx.executor().advance_clock(Duration::from_millis(50));
+    draw(cx);
+    assert_eq!(color(cx, 1), "#f1f3f8ff");
+    assert_eq!(color(cx, 0), "#2563eb1a");
+    assert!(view.read_with(cx, |view, _| view.selected_provider
+        == Some(view.catalog.active[0].id)));
+    cx.simulate_click(second, Default::default());
+    draw(cx);
+    cx.executor().advance_clock(Duration::from_millis(140));
+    draw(cx);
+    assert_eq!(color(cx, 1), "#2563eb1a");
+    assert_eq!(color(cx, 0), "#00000000");
+    assert!(view.read_with(cx, |view, _| view.selected_provider
+        == Some(view.catalog.active[1].id)));
 }
 
 #[gpui::test]
@@ -76,11 +128,11 @@ fn menu_arrows_stop_at_edges_and_tab_returns_to_workspace_order(cx: &mut TestApp
     cx.update(|window, cx| window.draw(cx).clear(cx));
     for (key, index) in [
         ("down", 0),
-        ("down", 1),
-        ("down", 1),
+        ("down", 2),
+        ("down", 2),
         ("home", 0),
         ("up", 0),
-        ("end", 1),
+        ("end", 2),
     ] {
         press(cx, key);
         cx.update(|window, cx| {
@@ -252,6 +304,119 @@ fn search_and_background_removal_close_the_old_provider_and_credential_editors(
                 0
             );
             assert!(view.selected_provider.is_none());
+        })
+    });
+}
+
+#[gpui::test]
+fn tag_filter_uses_tag_identity_and_clears_when_switching_navigation(cx: &mut TestAppContext) {
+    let (view, cx) = workspace(cx);
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |v, cx| v.preview_providers("providers", window, cx));
+        window.draw(cx).clear(cx);
+    });
+    cx.simulate_click(point(px(360.), px(64.)), Default::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    press(cx, "end");
+    press(cx, "enter");
+    cx.update(|window, cx| {
+        view.update(cx, |v, cx| {
+            assert_eq!(v.tag_filter.as_deref(), Some("work"));
+            assert!(!v.filter_open);
+            assert!(v
+                .visible_providers(cx)
+                .iter()
+                .all(|e| e.tags.contains(&"work".to_owned())));
+            // A newly inserted tag must not change the chosen filter by index.
+            v.catalog.active[0].tags.insert(0, "aaa".into());
+            v.select_visible(window, cx);
+            assert_eq!(v.tag_filter.as_deref(), Some("work"));
+            v.nav_focus[1].focus(window, cx);
+            cx.notify();
+        });
+    });
+    press(cx, "enter");
+    assert!(view.read_with(cx, |v, _| v.tag_filter.is_none() && v.selected == 1));
+}
+
+#[gpui::test]
+fn provider_action_menu_uses_keyboard_and_dispatches_once(cx: &mut TestAppContext) {
+    let (view, cx) = workspace(cx);
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |v, cx| {
+            v.preview_providers("providers", window, cx);
+            v.provider_menu_focus.trigger.focus(window, cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+    press(cx, "enter");
+    press(cx, "down");
+    press(cx, "down");
+    press(cx, "down");
+    press(cx, "enter");
+    cx.update(|_,cx| view.update(cx,|v,_| {
+        assert!(!v.provider_menu_open);
+        assert!(v.provider_busy);
+        assert!(matches!(v.take_provider_action(),Some(aipass_desktop_native::catalog::Action::Archive(id)) if Some(id)==v.selected_provider));
+    }));
+    press(cx, "enter");
+    assert!(view.update(cx, |v, _| v.take_provider_action().is_none()));
+}
+
+#[gpui::test]
+fn reset_from_edit_keeps_draft_on_cancel_and_reopens_fresh_metadata_on_success(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = workspace(cx);
+    cx.simulate_resize(size(px(960.), px(640.)));
+    let original = cx.update(|window, cx| {
+        view.update(cx, |v, cx| {
+            v.preview_providers("providers-edit", window, cx);
+            let id = v.provider_form.as_ref().unwrap().entity_id();
+            v.reset_provider(window, cx);
+            id
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    press(cx, "escape");
+    assert!(
+        view.read_with(cx, |v, cx| v.provider_form.as_ref().unwrap().entity_id()
+            == original
+            && !v.tools.read(cx).has_request())
+    );
+    cx.update(|window, cx| view.update(cx, |v, cx| v.reset_provider(window, cx)));
+    let confirm = cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        let b = cx.global::<crate::parity::Geometry>().0["provider-reset-confirm"];
+        point(px(b[0] + b[2] / 2.), px(b[1] + b[3] / 2.))
+    });
+    cx.simulate_click(confirm, Default::default());
+    cx.update(|window, cx| {
+        view.update(cx, |v, cx| {
+            let request = v.take_tools_request(cx).unwrap();
+            assert!(matches!(
+                request.operation,
+                aipass_desktop_native::provider_tools::Operation::Reset { .. }
+            ));
+            let mut fresh = v.catalog.active[0].clone();
+            fresh.secret_refs.clear();
+            v.complete_tools(
+                aipass_desktop_native::provider_tools::Completion {
+                    scope: request.scope,
+                    mutated: true,
+                    result: Ok(aipass_desktop_native::provider_tools::Outcome::Reset(
+                        Box::new(fresh),
+                    )),
+                },
+                window,
+                cx,
+            );
+            assert_ne!(v.provider_form.as_ref().unwrap().entity_id(), original);
+            assert!(v.catalog.active[0].secret_refs.is_empty());
+            assert!(v.tools.read(cx).notice().is_some());
+            assert!(v.form_is_editing(cx));
         })
     });
 }

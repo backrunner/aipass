@@ -1,6 +1,6 @@
 //! Resize the original brand artwork to physical pixels before uploading it.
 //! The GPU's bilinear minification alone drops fine details at 16/28 logical px.
-use gpui::{img, prelude::*, px, Window};
+use gpui::{canvas, div, img, prelude::*, px, FontWeight, Rgba, TextAlign, TextRun, Window};
 use image::{imageops::FilterType, DynamicImage, ImageFormat};
 use std::io::Cursor;
 
@@ -12,6 +12,51 @@ pub fn logo(size: f32, window: &Window) -> impl IntoElement {
         .size(px(size))
         .flex_shrink_0()
         .rounded(px(size * 0.22))
+}
+
+/// The titlebar wordmark uses 0.01em tracking in AppTitleBar.svelte.
+/// Shape the whole name first to retain kerning, then add the CSS advance
+/// after each letter. GPUI currently has no letter-spacing text style.
+pub fn wordmark(color: Rgba, window: &Window) -> impl IntoElement {
+    const TEXT: &str = "AIPass";
+    let mut font = gpui::font(".AppleSystemUIFont");
+    font.weight = FontWeight::SEMIBOLD;
+    let line = window.text_system().shape_line(
+        TEXT.into(),
+        px(12.),
+        &[TextRun {
+            len: TEXT.len(),
+            font,
+            color: color.into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
+    let tracking = px(12. * 0.01);
+    let width = line.width() + tracking * TEXT.len() as f32;
+    let mut cursor = line.cursor();
+    let letters: Vec<_> = (1..=TEXT.len()).map(|end| cursor.take_until(end)).collect();
+    div()
+        .id("aipass-wordmark")
+        .aria_label(TEXT)
+        .w(width)
+        .h(px(15.))
+        .flex_shrink_0()
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, cx| {
+                    let mut origin = bounds.origin;
+                    for letter in &letters {
+                        let _ = letter.paint(origin, px(15.), TextAlign::Left, None, window, cx);
+                        origin.x += letter.width() + tracking;
+                    }
+                },
+            )
+            .size_full(),
+        )
 }
 
 pub fn asset(path: &str) -> anyhow::Result<Option<Vec<u8>>> {

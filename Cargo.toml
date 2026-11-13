@@ -16,6 +16,7 @@ members = [
   "crates/aipass-proxy",
   "crates/aipass-mcp-proxy"
 ]
+exclude = ["vendor/gpui", "vendor/gpui-base", "vendor/block", "vendor/gpui_apple", "vendor/gpui_wgpu"]
 resolver = "2"
 
 [workspace.package]
@@ -71,3 +72,11 @@ opt-level = 3
 
 [profile.dev.package.tiny-skia]
 opt-level = 3
+
+[patch."https://github.com/sonorahq/gpui"]
+gpui_apple = { path = "vendor/gpui_apple" }
+gpui_wgpu = { path = "vendor/gpui_wgpu" }
+gpui = { path = "vendor/gpui" }
+
+[patch.crates-io]
+block = { path = "vendor/block" }

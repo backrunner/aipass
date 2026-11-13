@@ -124,7 +124,7 @@ impl Render for ErrorToast {
                         .opacity(if t.bg.r < 0.1 { 0.5 } else { 0.22 })
                         .into(),
                     offset: gpui::point(px(0.), px(24.)),
-                    blur_radius: px(64.),
+                    blur_radius: crate::theme::shadow_blur(64.),
                     spread_radius: px(0.),
                     inset: false,
                 },

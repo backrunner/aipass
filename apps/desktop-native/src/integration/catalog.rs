@@ -121,6 +121,20 @@ pub fn compatible(tool: &Tool, entry: &EntrySummary, secret: &SecretRef) -> bool
         _ => openai || anthropic,
     }
 }
+
+/// Native subscription credentials must never enter API-key config writers.
+pub fn native_tool(entry: &EntrySummary) -> Option<Tool> {
+    if entry.credential_kind != CredentialKind::OAuth
+        || entry.provider_kind != aipass_provider_registry::ProviderKind::Official
+    {
+        return None;
+    }
+    match entry.provider_id.as_deref()? {
+        "codex" | "openai" => Some(Tool::Codex),
+        "anthropic" => Some(Tool::ClaudeCode),
+        _ => None,
+    }
+}
 pub fn ready(tool: &Tool, entry: &EntrySummary, secret: &SecretRef) -> bool {
     compatible(tool, entry, secret)
         && (!requires_model(tool)

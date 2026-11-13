@@ -26,6 +26,7 @@ pub struct Draft {
     pub concurrency_touched: bool,
     pub websockets: bool,
     pub websocket_touched: bool,
+    pub add_fields: super::optional::AddFields,
 }
 
 impl Draft {
@@ -74,6 +75,7 @@ impl Draft {
             concurrency_touched: false,
             websockets: true,
             websocket_touched: false,
+            add_fields: Default::default(),
             original: None,
         };
         if let Some(entry) = &original {
@@ -266,14 +268,14 @@ impl Draft {
                 max_concurrent_requests: concurrency,
                 supports_websockets: websockets,
                 default_model: optional(&self.model),
-                model_aliases: vec![],
-                headers: vec![],
+                model_aliases: super::optional::pairs(&self.add_fields.aliases),
+                headers: super::optional::pairs(self.add_fields.headers.expose()),
                 quota: None,
                 subscription: None,
                 gateway: None,
                 tags: lists::parse(&self.tags),
                 notes: optional(&self.notes),
-                secret_metadata: Default::default(),
+                secret_metadata: self.add_fields.metadata(),
             })))
         }
     }

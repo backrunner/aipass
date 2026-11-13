@@ -1,17 +1,25 @@
 mod assets;
 mod auth;
 mod backdrop;
+mod composite;
 mod curtain;
 mod desktop;
+mod disclosure;
 mod integrations;
 mod locale;
 mod logo;
 mod menu;
 mod parity;
+mod provider_icon;
+mod provider_tools_ui;
 mod providers;
+mod subscription_ui;
 mod theme;
 mod toast;
 mod typography;
+mod update_ui;
+#[cfg(feature = "parity-render")]
+mod update_validation;
 mod workspace;
 
 use aipass_desktop_native::session::{AgentTransport, Session};
@@ -36,10 +44,44 @@ fn main() {
         eprintln!("GPUI migration is not yet a production desktop. Use --parity-preview for isolated UI comparison.");
         std::process::exit(2);
     }
+    #[cfg(not(feature = "parity-render"))]
+    if args.iter().any(|arg| arg.starts_with("--update-config=")) {
+        eprintln!("Update fixtures require parity-render");
+        std::process::exit(2);
+    }
+    #[cfg(feature = "parity-render")]
+    let mut updater = update_validation::load(&args).unwrap_or_else(|error| {
+        eprintln!("Could not start isolated updater: {error:#}");
+        std::process::exit(2);
+    });
     let dark = args.iter().any(|arg| arg == "--dark");
     let chinese = args.iter().any(|arg| arg == "--zh-CN");
     let large = args.iter().any(|arg| arg == "--large");
     let reduced = args.iter().any(|arg| arg == "--reduced-motion");
+    #[cfg(feature = "parity-render")]
+    let backdrop_at = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--backdrop-at="))
+        .map(|value| {
+            value
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite() && (0.0..=60000.0).contains(n))
+                .unwrap_or_else(|| {
+                    eprintln!("--backdrop-at must be within 0..60000 milliseconds");
+                    std::process::exit(2);
+                })
+        });
+    #[cfg(feature = "parity-render")]
+    if backdrop_at.is_some()
+        && (args
+            .iter()
+            .any(|arg| arg.starts_with("--vault=") || arg.starts_with("--update-config="))
+            || !args.iter().any(|arg| arg.starts_with("--capture=")))
+    {
+        eprintln!("Background time samples require an isolated synthetic capture");
+        std::process::exit(2);
+    }
     #[cfg(feature = "parity-render")]
     let motion_at = args
         .iter()
@@ -59,6 +101,16 @@ fn main() {
         .iter()
         .find_map(|arg| arg.strip_prefix("--capture="))
         .map(std::path::PathBuf::from);
+    #[cfg(feature = "parity-render")]
+    let capture_actions: Vec<String> = args
+        .iter()
+        .filter_map(|arg| arg.strip_prefix("--capture-action=").map(str::to_owned))
+        .collect();
+    #[cfg(feature = "parity-render")]
+    if !capture_actions.is_empty() && capture.is_none() {
+        eprintln!("Control actions require an isolated synthetic capture");
+        std::process::exit(2);
+    }
     if args
         .iter()
         .any(|arg| arg.starts_with("--capture=") || arg.starts_with("--motion-trace="))
@@ -72,42 +124,67 @@ fn main() {
         .find_map(|arg| arg.strip_prefix("--scenario="))
         .unwrap_or("empty")
         .to_owned();
-    if !matches!(
-        scenario.as_str(),
-        "empty"
-            | "providers"
-            | "providers-add"
-            | "providers-edit"
-            | "providers-add-advanced"
-            | "providers-edit-advanced"
-            | "providers-key-add"
-            | "providers-key-edit"
-            | "providers-key-billing"
-            | "providers-key-reveal"
-            | "providers-integration-diff"
-            | "providers-integration-full"
-            | "providers-integration-file2"
-            | "providers-integration-unchanged"
-            | "providers-integration-readonly"
-            | "locked"
-            | "locked-busy"
-            | "locked-error"
-            | "setup"
-            | "create"
-            | "recover"
-            | "reset"
-            | "reset-bottom"
-            | "menu"
-            | "filter"
-            | "toast"
-            | "toast-long"
-            | "unlock-motion"
-            | "lock-motion"
-    ) {
+    #[cfg(feature = "parity-render")]
+    let subscription_fixture = subscription_ui::fixtures::SCENARIOS.contains(&scenario.as_str());
+    #[cfg(not(feature = "parity-render"))]
+    let subscription_fixture = false;
+    if !subscription_fixture
+        && !matches!(
+            scenario.as_str(),
+            "empty"
+                | "providers"
+                | "providers-reset"
+                | "providers-reset-error"
+                | "providers-usage"
+                | "providers-usage-advanced"
+                | "providers-usage-result"
+                | "providers-usage-failed"
+                | "providers-usage-busy"
+                | "providers-probe-result"
+                | "providers-notes-normal"
+                | "providers-notes-empty"
+                | "providers-notes-long"
+                | "providers-list"
+                | "providers-list-hover"
+                | "providers-list-selected-hover"
+                | "providers-add"
+                | "providers-add-menu"
+                | "providers-add-all"
+                | "providers-edit"
+                | "providers-add-advanced"
+                | "providers-edit-advanced"
+                | "providers-key-add"
+                | "providers-key-edit"
+                | "providers-key-billing"
+                | "providers-key-reveal"
+                | "providers-integration-picker"
+                | "providers-integration-diff"
+                | "providers-integration-full"
+                | "providers-integration-file2"
+                | "providers-integration-unchanged"
+                | "providers-integration-readonly"
+                | "locked"
+                | "locked-busy"
+                | "locked-error"
+                | "setup"
+                | "create"
+                | "recover"
+                | "reset"
+                | "reset-bottom"
+                | "menu"
+                | "filter"
+                | "toast"
+                | "toast-long"
+                | "unlock-motion"
+                | "lock-motion"
+        )
+    {
         eprintln!("Unknown comparison scenario: {scenario}");
         std::process::exit(2);
     }
-    if (scenario.ends_with("-motion") || scenario.starts_with("providers"))
+    if (scenario.ends_with("-motion")
+        || scenario.starts_with("providers")
+        || scenario.starts_with("subscription-"))
         && args.iter().any(|arg| arg.starts_with("--vault="))
     {
         eprintln!("Presentation fixtures accept synthetic data only");
@@ -138,9 +215,15 @@ fn main() {
     #[cfg(not(feature = "parity-render"))]
     if scenario.starts_with("providers")
         || args.iter().any(|arg| {
-            ["--capture=", "--motion-at=", "--motion-trace="]
-                .iter()
-                .any(|prefix| arg.starts_with(prefix))
+            [
+                "--capture=",
+                "--capture-action=",
+                "--motion-at=",
+                "--motion-trace=",
+                "--backdrop-at=",
+            ]
+            .iter()
+            .any(|prefix| arg.starts_with(prefix))
         })
     {
         eprintln!(
@@ -174,10 +257,17 @@ fn main() {
             eprintln!("Could not initialize Agent client: {error}");
             std::process::exit(2);
         });
+    #[cfg(feature = "parity-render")]
+    let session = updater
+        .as_mut()
+        .and_then(|context| context.session.take())
+        .or(session);
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             gpui_base::init(cx);
+            #[cfg(feature = "parity-render")]
+            cx.set_global(parity::Backgrounds { time_ms: backdrop_at, ..Default::default() });
             cx.text_system().add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!("../assets/password-dots.ttf"))]).expect("embedded password glyph font");
             // Register the full CJK family before CoreText discovers a single
             // fallback face while shaping a heading.
@@ -194,12 +284,15 @@ fn main() {
                 size(px(960.), px(640.))
             };
             let bounds = Bounds::centered(None, dimensions, cx);
+            let screenshot_only = args.iter().any(|arg| arg.starts_with("--capture="));
             #[cfg(feature = "parity-render")]
             let mut desktop = None;
             let result = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(640.))),
+                    focus: !screenshot_only,
+                    show: !screenshot_only,
                     titlebar: None,
                     window_background: gpui::WindowBackgroundAppearance::Transparent,
                     app_id: Some("com.alkinum.aipass.gpui-parity".into()),
@@ -208,6 +301,31 @@ fn main() {
                 |window, cx| {
                     window.set_window_title("AIPass GPUI Parity");
                     let view = cx.new(|cx| Desktop::new(session, &scenario, dark, chinese, window, cx));
+                    #[cfg(feature = "parity-render")]
+                    if let Some(context) = updater.take() {
+                        let view = view.downgrade();
+                        let restart_args = args.clone();
+                        let ready_path = std::env::var_os("AIPASS_NATIVE_UPDATE_READY");
+                        std::env::remove_var("AIPASS_NATIVE_UPDATE_READY");
+                        window.on_next_frame(move |_, cx| {
+                            // Readiness requires a rendered frame and typed Agent readiness.
+                            // Do network/IPC work off the native event loop.
+                            let ready_services = context.services.clone();
+                            if let Some(path) = ready_path {
+                                std::thread::spawn(move || {
+                                    let ready = ready_services.as_ref().map(|services| services.ensure_ready()).transpose();
+                                    if ready.is_ok() {
+                                        let _ = aipass_storage::atomic_write_bytes(std::path::PathBuf::from(path), std::process::id().to_string().as_bytes());
+                                    }
+                                });
+                            }
+                            let gate = context.host.runtime.as_ref().map(|runtime| runtime.gate());
+                            match aipass_desktop_native::updates::Worker::with_host(context.updater, restart_args, context.host) {
+                                Ok(worker) => { let _ = view.update(cx, |view, cx| { view.enable_updates(worker, gate); cx.notify(); }); }
+                                Err(error) => eprintln!("Could not start update worker: {error:#}"),
+                            }
+                        });
+                    }
                     #[cfg(feature = "parity-render")]
                     if let Some(ms) = motion_at { view.update(cx, |view, cx| view.freeze_motion_at(ms, cx)); }
                     #[cfg(feature = "parity-render")]
@@ -250,7 +368,19 @@ fn main() {
                         cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
                     }
                     let result = cx.update_window(handle.into(), |_, window, cx| {
+                        // Match the reference's final-viewport scroll operation,
+                        // after macOS sizing and background preparation settle.
+                        desktop.read(cx).prepare_capture_scroll(&scenario, cx);
+                        window.dispatch_event(gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent { position: gpui::point(px(-1.),px(-1.)), ..Default::default() }),cx);
                         window.draw(cx).clear(cx);
+                        if scenario.starts_with("providers-list") && scenario.ends_with("-hover") {
+                            let bounds = &cx.global::<parity::Geometry>().0["provider-list-row-1"];
+                            let position = gpui::point(px(bounds[0] + bounds[2] / 2.), px(bounds[1] + bounds[3] / 2.));
+                            window.dispatch_event(gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent { position, ..Default::default() }),cx);
+                            window.draw(cx).clear(cx);
+                            window.draw(cx).clear(cx);
+                        }
+                        for action in &capture_actions { parity::control_actions::apply(action, window, cx)?; }
                         let image = window.render_to_image()?;
                         #[cfg(target_os = "macos")]
                         let image = {
@@ -265,7 +395,11 @@ fn main() {
                             "pixels": [image.width(), image.height()],
                             "presentation": desktop.read(cx).presentation_state(cx),
                             "geometry": cx.try_global::<parity::Geometry>().map(|g| &g.0),
+                            "styles": cx.try_global::<parity::Styles>().map(|g| &g.0),
+                            "scrolls": cx.try_global::<parity::Scrolls>().map(|g| &g.0),
+                            "backgrounds": cx.try_global::<parity::Backgrounds>().map(|b|&b.frames),
                             "reducedMotion": cx.reduce_motion(), "motionTimeMs": motion_at,
+                            "controlActions": capture_actions,
                             "alphaEncoding": if cfg!(target_os = "macos") { "straight-from-premultiplied-metal" } else { "platform-readback" }});
                         std::fs::write(path.with_extension("json"), serde_json::to_vec_pretty(&metadata)?)?;
                         Ok::<_, anyhow::Error>(())
@@ -277,6 +411,6 @@ fn main() {
                     cx.update(|cx| cx.quit());
                 }).detach();
             }
-            cx.activate(true);
+            if !screenshot_only { cx.activate(true); }
         });
 }

@@ -69,3 +69,28 @@ fn all_automatic_tools_map_to_installed_detection_ids() {
         assert!(installed(&tool, &[d]), "{tool:?}");
     }
 }
+
+#[test]
+fn native_subscriptions_require_official_identity_and_matching_cli() {
+    let mut entry = Catalog::fixture().active.remove(0);
+    entry.credential_kind = CredentialKind::OAuth;
+    entry.provider_kind = aipass_provider_registry::ProviderKind::Official;
+    for (provider, expected) in [
+        ("codex", Some(Tool::Codex)),
+        ("openai", Some(Tool::Codex)),
+        ("anthropic", Some(Tool::ClaudeCode)),
+        ("copilot", None),
+    ] {
+        entry.provider_id = Some(provider.into());
+        assert_eq!(native_tool(&entry), expected);
+        assert!(AUTOMATIC
+            .iter()
+            .all(|(tool, _)| !compatible(tool, &entry, &entry.secret_refs[0])));
+    }
+    entry.provider_id = Some("codex".into());
+    entry.provider_kind = aipass_provider_registry::ProviderKind::ThirdParty;
+    assert!(native_tool(&entry).is_none());
+    entry.provider_kind = aipass_provider_registry::ProviderKind::Official;
+    entry.credential_kind = CredentialKind::Api;
+    assert!(native_tool(&entry).is_none());
+}
