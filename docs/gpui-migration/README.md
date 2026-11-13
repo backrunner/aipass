@@ -67,6 +67,13 @@ responsibility; the repository size gate continues to enforce the existing limit
 
 ## Current evidence (2026-11-14)
 
+The [post-delivery cutover audit](cutover-audit-20261114.md) accounts for all 98
+reference surface groups and the 45 current Tauri lifecycle sources. Four signed
+implementation commits were pushed through `2003fc3` after complete macOS Rust,
+Node and seven-scenario Tauri artifact checks. Settings, Agent/proxy pages,
+vault import, secure copy, pricing, permanent deletion and production platform
+integration remain blockers. Tauri has not been removed.
+
 The [provider maintenance follow-up](ui-provider-tools-20261114.md) implements
 Reset Provider, endpoint/usage actions and the separate Notes card, with scoped
 Agent operations, confirmation/failure states and bilingual theme comparisons.
