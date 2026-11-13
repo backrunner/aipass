@@ -8,6 +8,8 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { PNG } from "pngjs";
 import { comparePixels } from "./compare.mjs";
+import { measureComponents, compareGeometry, compareDeclaredStyles, authSpecs } from "./component-audit.mjs";
+import { reviewPage } from "./review-page.mjs";
 
 const run = promisify(execFile);
 const root = resolve(import.meta.dirname, "../..");
@@ -15,6 +17,7 @@ const round = process.argv[2];
 if (!round || !/^[a-z0-9-]+$/.test(round))
   throw new Error("Usage: capture-presentation.mjs unique-round-name [--smoke]");
 const smoke = process.argv.includes("--smoke");
+const frozen = process.argv.includes("--frozen");
 const probe = process.argv.includes("--probe");
 const allScenarios = ["empty", "locked", "locked-busy", "locked-error", "setup", "create", "recover", "reset", "reset-bottom", "menu", "filter", "toast", "toast-long"];
 const scenarios = process.argv.find(arg => arg.startsWith("--scenarios="))?.slice(12).split(",") ?? allScenarios;
@@ -25,7 +28,7 @@ for (const name of ["reference", "native", "diff"]) await mkdir(resolve(destinat
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const inventory = JSON.parse(await readFile(resolve(root, "docs/gpui-migration/inventory.json")));
 for (const input of inventory.referenceInputs) {
-  if (hash(await readFile(resolve(root, input.path))) !== input.sha256)
+  if (hash(frozen ? (await run("rtk", ["proxy", "git", "show", `${inventory.baseline}:${input.path}`], { cwd: root, encoding: "buffer", maxBuffer: 4 * 1024 * 1024 })).stdout : await readFile(resolve(root, input.path))) !== input.sha256)
     throw new Error(`Reference drift: ${input.path}`);
 }
 await run("rtk", ["cargo", "build", "-p", "aipass-desktop-native", "--features", "parity-render"],
@@ -41,6 +44,7 @@ async function collect(directory) {
   }
 }
 await collect("apps/desktop-native");
+await collect("vendor");
 await collect("tests/desktop-parity");
 for (const name of ["Cargo.toml", "Cargo.lock"]) sourceHashes[name] = hash(await readFile(resolve(root, name)));
 const changedTracked = (await run("rtk", ["proxy", "git", "diff", "--name-only", "-z", "HEAD"], { cwd: root })).stdout.split("\0").filter(Boolean);
@@ -85,7 +89,7 @@ try {
           const base = scenario === "create" ? "setup" : ["recover", "reset", "reset-bottom", "locked-busy", "locked-error"].includes(scenario) ? "locked"
             : ["menu", "filter"].includes(scenario) ? "empty" : scenario;
           const authState = scenario === "locked-busy" ? "busy" : scenario === "locked-error" ? "error" : "";
-          await page.goto(`http://127.0.0.1:14731/?scenario=${base}&locale=${locale}&theme=${theme}&authState=${authState}`);
+          await page.goto(`http://127.0.0.1:${frozen ? 14732 : 14731}/?scenario=${base}&locale=${locale}&theme=${theme}&authState=${authState}`);
           await page.locator(base === "empty" || base.startsWith("toast") ? ".workspace" : ".auth-card").waitFor();
           if (scenario === "create") await page.locator(".auth-card .form button").nth(1).click();
           if (["recover", "reset", "reset-bottom"].includes(scenario)) await page.locator(".auth-card .meta .link").click();
@@ -116,6 +120,7 @@ try {
           if (failures.length || metrics.trace.some(item => item.unsupported))
             throw new Error(`Incomplete reference fixture ${id}: ${JSON.stringify({ failures, trace: metrics.trace })}`);
           const referencePath = resolve(destination, "reference", `${id}.png`);
+          const components = await measureComponents(page, authSpecs(scenario));
           const nativePath = resolve(destination, "native", `${id}.png`);
           await page.screenshot({ path: referencePath, omitBackground: true });
           await writeFile(referencePath.replace(/\.png$/, ".json"), JSON.stringify({ id, ...metrics }, null, 2));
@@ -129,7 +134,9 @@ try {
           const referenceBytes = await readFile(referencePath), nativeBytes = await readFile(nativePath);
           const { diff, pass: exact, ...pixels } = comparePixels(PNG.sync.read(referenceBytes), PNG.sync.read(nativeBytes));
           if (diff) await writeFile(resolve(destination, "diff", `${id}.png`), PNG.sync.write(diff));
-          report.cases.push({ id, scenario, locale, theme, viewport: [width, height], native,
+          report.cases.push({ id, scenario, locale, theme, viewport: [width, height], native, components,
+            componentComparison: compareGeometry(components,native.geometry),
+            styleComparison: compareDeclaredStyles(components,native.styles),
             pixels: { exact, ...pixels }, presentationStatus: "unreviewed",
             referenceSHA256: hash(referenceBytes), nativeSHA256: hash(nativeBytes) });
           await save();
@@ -152,4 +159,5 @@ await writeFile(resolve(destination, "index.html"), `<!doctype html><meta charse
 <style>body{font:14px system-ui;background:#eee;color:#111}section{margin:28px 0}figure{margin:0;display:grid;grid-template-columns:1fr 1fr;gap:8px}img{width:100%}h2{font-size:16px}details img{max-width:960px}</style>
 <h1>${round}</h1><p>Reference left; GPUI right. Component, layout, shape, style and motion review is required. Pixel differences are diagnostic. Capture complete: ${report.complete}. Native interaction is not verified by this report.</p>
 ${report.cases.map(item => `<section><h2>${item.id}</h2><figure><img alt="Reference" src="reference/${item.id}.png"><img alt="GPUI" src="native/${item.id}.png"></figure><details><summary>Pixel diagnostic: ${(item.pixels.changedRatio * 100).toFixed(2)}% differing</summary><img alt="Difference" src="diff/${item.id}.png"></details></section>`).join("\n")}`);
+await writeFile(resolve(destination,"components.html"),reviewPage(round,report.cases.map(c=>({...c,name:c.id,reference:`reference/${c.id}.png`,native:`native/${c.id}.png`}))));
 if (!report.complete) { console.error(report.errors); process.exitCode = 1; }

@@ -10,7 +10,7 @@ const baselineInputs = new Map();
 if (frozen) {
   const inventory = JSON.parse(readFileSync(path("../../docs/gpui-migration/inventory.json")));
   for (const input of inventory.referenceInputs) {
-    const content = execFileSync("git", ["show", `${inventory.baseline}:${input.path}`], { cwd: path("../..") });
+    const content = execFileSync("rtk", ["proxy", "git", "show", `${inventory.baseline}:${input.path}`], { cwd: path("../..") });
     if (createHash("sha256").update(content).digest("hex") !== input.sha256) throw new Error(`Baseline mismatch: ${input.path}`);
     baselineInputs.set(path(`../../${input.path}`), content.toString());
   }

@@ -170,6 +170,7 @@ async function scenario({
   version,
   reportDir,
   name,
+  backgroundUpdate,
 }) {
   const root = realpathSync(mkdtempSync("/tmp/aipass-runtime-"));
   const output = join(reportDir, name);
@@ -180,7 +181,7 @@ async function scenario({
   let stdout = "";
   let stderr = "";
   const started = Date.now();
-  const report = { name, mode, target, version, ok: false };
+  const report = { name, mode, target, version, backgroundUpdate, ok: false };
   try {
     run("/usr/bin/ditto", [app, copy]);
     run("/usr/bin/codesign", ["--verify", "--deep", "--strict", copy]);
@@ -201,23 +202,30 @@ async function scenario({
     } finally { await proxyFixture.stop(); }
     const packageBytes = archive ? readFileSync(archive) : null;
     const packageSignature = signature ? read(signature).trim() : "";
+    const [major, minor, patch] = version.split(/[.+-]/).map(Number);
+    const offeredVersion = backgroundUpdate ? `${major}.${minor}.${patch + 1}` : version;
+    const servedPackage = packageBytes && Buffer.from(packageBytes);
+    if (backgroundUpdate === "tampered" && servedPackage) servedPackage[0] ^= 1;
+    const requests = { feed: 0, package: 0 };
     server = createServer((request, response) => {
       if (request.url === "/package") {
-        if (!packageBytes) {
+        requests.package += 1;
+        if (!servedPackage) {
           response.writeHead(404).end();
           return;
         }
-        response.writeHead(200, { "content-length": packageBytes.length });
-        response.end(packageBytes);
+        response.writeHead(200, { "content-length": servedPackage.length });
+        response.end(servedPackage);
       } else if (request.url === "/latest.json") {
-        if (mode === "startup" || existsSync(join(root, "installed.json"))) {
+        requests.feed += 1;
+        if ((mode === "startup" && !backgroundUpdate) || existsSync(join(root, "installed.json"))) {
           response.writeHead(204).end();
           return;
         }
         const url = `http://127.0.0.1:${server.address().port}/package`;
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
-          JSON.stringify({ version, url, signature: packageSignature }),
+          JSON.stringify({ version: offeredVersion, url, signature: packageSignature }),
         );
       } else {
         response.writeHead(404).end();
@@ -356,6 +364,25 @@ async function scenario({
       originalHash,
       "Installed executable differs from the signed input artifact",
     );
+    if (backgroundUpdate) {
+      // Let the shipped frontend's normal timer invoke the real update commands.
+      // A higher fixture version exercises discovery/download only; the signed
+      // payload remains the original artifact and is never installed here.
+      assert.ok(requests.feed >= 2, "Automatic check and download did not reach the feed");
+      assert.equal(requests.package, 1, "Automatic download did not fetch exactly one package");
+      assert.ok(!existsSync(join(root, "installed.json")), "Background download installed without a restart");
+      const cache = join(root, "cache/updates");
+      if (backgroundUpdate === "tampered") {
+        assert.ok(!existsSync(join(cache, "package")), "Tampered update was cached");
+        assert.ok(!existsSync(join(cache, "metadata.json")), "Tampered update was marked ready");
+      } else {
+        assert.equal(digest(join(cache, "package")), digest(archive), "Cached package differs from the signed archive");
+        assert.equal(JSON.parse(read(join(cache, "metadata.json"))).version, offeredVersion);
+      }
+      report.backgroundUpdateVerified = true;
+      report.requests = requests;
+      report.offeredVersion = offeredVersion;
+    }
     if (mode !== "startup") {
       assert.ok(
         !existsSync(join(root, "cache/updates/package")),
@@ -383,7 +410,7 @@ async function scenario({
     report.proxyConfigurationPreserved = true;
     report.ok = true;
     console.log(
-      `Passed ${name}: ${version}, 960x640, responsive frontend and agent, proxy configuration/history preserved${mode === "startup" ? "" : ", verified install and new process restart"}.`,
+      `Passed ${name}: ${version}, 960x640, responsive frontend and agent, proxy configuration/history preserved${mode === "startup" ? "" : ", verified install and new process restart"}${backgroundUpdate ? `, automatic download ${backgroundUpdate === "tampered" ? "rejected tampered bytes" : "verified and cached"}` : ""}.`,
     );
   } catch (error) {
     report.error = error.message;
@@ -497,6 +524,20 @@ async function main() {
       },
       ...(archive
         ? [
+            {
+              name: "automatic-download",
+              app: updaterApp,
+              mode: "startup",
+              target: "main",
+              backgroundUpdate: "valid",
+            },
+            {
+              name: "automatic-download-tampered",
+              app: updaterApp,
+              mode: "startup",
+              target: "main",
+              backgroundUpdate: "tampered",
+            },
             {
               name: "manual-install-restart",
               app: updaterApp,

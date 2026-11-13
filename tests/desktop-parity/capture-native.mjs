@@ -28,7 +28,7 @@ async function sources(directory) {
   return result;
 }
 const sourceHashes = {};
-for (const path of ["Cargo.toml", "Cargo.lock", ...await sources("apps/desktop-native")])
+for (const path of ["Cargo.toml", "Cargo.lock", ...await sources("apps/desktop-native"), ...await sources("vendor")])
   sourceHashes[path] = hash(await readFile(resolve(root, path)));
 const inventory = JSON.parse(await readFile(resolve(root, "docs/gpui-migration/inventory.json")));
 const toolchain = execFileSync("rtk", ["proxy", "rustc", "--version"], { encoding: "utf8" }).trim();

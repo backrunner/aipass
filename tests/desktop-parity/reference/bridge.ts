@@ -1,6 +1,7 @@
 // Deliberately test-only. Unknown commands fail and are retained in the trace.
 import { businessBridge } from "./business-bridge";
 import providerCatalog from "../fixtures/providers.json";
+import {subscriptionEntry,subscriptionInvoke} from "./subscription-fixtures";
 import type { EntrySummary } from "../../../apps/desktop/src/lib/types";
 const params = new URLSearchParams(location.search);
 const scenario = params.get("scenario") ?? "empty";
@@ -10,13 +11,24 @@ const authState = params.get("authState");
 const status = { exists: scenario !== "setup", locked: scenario === "locked", initialSyncPending: false };
 const trace: unknown[] = [];
 const listeners = new Map<string, Set<(event: { payload: unknown }) => void>>();
-const business = scenario.startsWith("business-") ? businessBridge((name, payload) => {
+if (params.get("notes") === "empty") providerCatalog.active[0].notes = "";
+if (params.get("notes") === "long") providerCatalog.active[0].notes = "Synthetic provider. Long notes wrap without changing the card width. 中文备注支持换行和复制。\n".repeat(12);
+const business = scenario.startsWith("business-") || scenario.startsWith("subscription-") ? businessBridge((name, payload) => {
   trace.push({ event: name, payload });
   listeners.get(name)?.forEach(listener => listener({ payload }));
-}, scenario === "business-json", scenario === "business-providers" ? [...providerCatalog.active, ...providerCatalog.archived, ...providerCatalog.trash] as unknown as EntrySummary[] : undefined) : undefined;
+}, scenario === "business-json", scenario.startsWith("subscription-") ? [subscriptionEntry()] : scenario === "business-providers" ? [...providerCatalog.active, ...providerCatalog.archived, ...providerCatalog.trash] as unknown as EntrySummary[] : undefined) : undefined;
 Object.assign(window, { __parityTrace: trace });
 export async function invoke(command: string, args?: unknown) {
   trace.push({ command, args });
+  if(scenario.startsWith("subscription-")){const result=await subscriptionInvoke(command,args as Record<string,unknown>);if(result!==undefined)return result;}
+  if (params.has("tools")) {
+    if (command === "provider_probe") return {ok:true,interfaceType:"openai_compatible",status:200,modelCount:12};
+    if (command === "provider_usage_probe") {
+      if(params.get("tools")==="busy") return new Promise(()=>{});
+      if(params.get("tools")==="failed") return {ok:false,source:"unknown",endpoint:"https://gateway.example.invalid/api/usage/token",status:401,error:"Fixture access denied"};
+      return {ok:true,source:"new_api_token_usage",endpoint:"https://gateway.example.invalid/api/usage/token",status:200,quota:{label:"Fixture plan",limit:"100",used:"25",remaining:"75",unit:"USD"},gateway:{group:"default",rate:"1"}};
+    }
+  }
   if (business) {
     const result = await business(command, args as Record<string, unknown>);
     if (result !== undefined) return result;

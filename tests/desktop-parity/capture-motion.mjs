@@ -32,6 +32,7 @@ async function collect(directory) {
   }
 }
 await collect("apps/desktop-native");
+await collect("vendor");
 await collect("tests/desktop-parity");
 for (const path of ["Cargo.toml", "Cargo.lock"]) sourceHashes[path] = hash(await readFile(resolve(root, path)));
 const report = {

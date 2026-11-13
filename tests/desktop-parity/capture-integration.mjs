@@ -17,6 +17,7 @@ async function record(path){for(const entry of await readdir(resolve(root,path),
   const next=`${path}/${entry.name}`;if(entry.isDirectory())await record(next);else sourceHashes[next]=hash(await readFile(resolve(root,next)));
 }}
 await record("apps/desktop-native");
+await record("vendor");
 for(const path of ["Cargo.toml","Cargo.lock","tests/desktop-parity/reference/business-preview-files.json","tests/desktop-parity/reference/business-bridge.ts","tests/desktop-parity/capture-integration.mjs"])
   sourceHashes[path]=hash(await readFile(resolve(root,path)));
 const report={binarySHA256:hash(await readFile(binary)),sourceHashes,reference:"immutable baseline UI with shared redacted diff fixtures",candidate:"gpui-offscreen",nativeInteractionVerified:false,presentationStatus:"unreviewed",cases:[],errors:[]};
