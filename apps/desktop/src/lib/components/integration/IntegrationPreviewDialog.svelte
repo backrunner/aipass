@@ -12,7 +12,6 @@
 
   export let open = false;
   export let preview: ToolConfigPreview | undefined = undefined;
-  export let toolName = "";
   export let busy = false;
   export let localProxy = false;
   export let allowConfirm = true;
@@ -78,15 +77,10 @@
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Portal>
     <Dialog.Overlay class="preview-overlay" />
-    <Dialog.Content class="preview-dialog-content">
+    <Dialog.Content class="preview-dialog-content" aria-describedby={undefined}>
       <div class="dialog-header">
         <div class="dialog-heading">
           <Dialog.Title class="dialog-title">{$t("providerDetail.preview")}</Dialog.Title>
-          {#if preview}
-            <Dialog.Description class="dialog-subtitle">
-              {$t("integration.previewFor", { tool: toolName || preview.tool, title: preview.entryTitle })}
-            </Dialog.Description>
-          {/if}
         </div>
         <div class="dialog-header-side">
           <SegmentedControl
@@ -139,7 +133,7 @@
       {/if}
 
       <div class="dialog-footer">
-        <span class="dialog-note"><span class="access-note">{accessNote}{#if launchCommand}<code>{launchCommand}</code>{/if}</span>{$t(managedSwitch ? "agents.backupDescription" : "integration.backupNote")}</span>
+        <span class="dialog-note"><span class="access-note">{accessNote}{#if launchCommand}<code>{launchCommand}</code>{/if}</span></span>
         <div class="dialog-actions">
           <!-- Button does not forward Dialog.Close child props (onclick), so
                closing is wired through the controlled onOpenChange instead. -->
@@ -231,17 +225,13 @@
   .dialog-header {
     display: flex;
     flex-shrink: 0;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
   }
 
   .dialog-heading {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
     min-width: 0;
-    padding-top: 2px;
   }
 
   .dialog-header-side {
@@ -255,12 +245,6 @@
     margin: 0;
     font-size: 15px;
     font-weight: 650;
-  }
-
-  :global(.dialog-subtitle) {
-    margin: 0;
-    color: var(--text-tertiary);
-    font-size: 12px;
   }
 
   :global(.dialog-close) {
@@ -420,7 +404,6 @@
 
   .access-note {
     display: block;
-    margin-bottom: 4px;
     color: var(--text-secondary);
     line-height: 1.5;
   }

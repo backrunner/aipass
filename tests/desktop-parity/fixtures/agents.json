@@ -1,0 +1,103 @@
+{
+  "detections": [
+    {
+      "tool": "codex",
+      "binaryFound": true,
+      "extensionFound": false,
+      "localRuntimeFound": false,
+      "configPath": "/synthetic/codex/config"
+    },
+    {
+      "tool": "claude-code",
+      "binaryFound": true,
+      "extensionFound": false,
+      "localRuntimeFound": false,
+      "configPath": "/synthetic/claude-code/config"
+    },
+    {
+      "tool": "cursor",
+      "binaryFound": true,
+      "extensionFound": false,
+      "localRuntimeFound": false,
+      "configPath": "/synthetic/cursor/config"
+    },
+    {
+      "tool": "cline",
+      "binaryFound": false,
+      "extensionFound": true,
+      "localRuntimeFound": false,
+      "configPath": "/synthetic/cline/config"
+    }
+  ],
+  "statuses": [
+    {
+      "tool": "codex",
+      "state": "ready",
+      "entryId": "00000000-0000-4000-8000-000000000001",
+      "secretId": "key-a",
+      "entryTitle": "Gateway with a deliberately long provider name",
+      "mode": null,
+      "accountIdentity": null,
+      "operationId": null,
+      "message": null,
+      "overrides": []
+    },
+    {
+      "tool": "claude-code",
+      "state": "unmanaged",
+      "entryId": null,
+      "secretId": null,
+      "entryTitle": null,
+      "mode": null,
+      "accountIdentity": null,
+      "operationId": null,
+      "message": null,
+      "overrides": []
+    },
+    {
+      "tool": "cursor",
+      "state": "unmanaged",
+      "entryId": null,
+      "secretId": null,
+      "entryTitle": null,
+      "mode": null,
+      "accountIdentity": null,
+      "operationId": null,
+      "message": null,
+      "overrides": []
+    },
+    {
+      "tool": "cline",
+      "state": "unmanaged",
+      "entryId": null,
+      "secretId": null,
+      "entryTitle": null,
+      "mode": null,
+      "accountIdentity": null,
+      "operationId": null,
+      "message": null,
+      "overrides": []
+    }
+  ],
+  "usage": {
+    "requestCount": 1200,
+    "inputTokens": 25000,
+    "outputTokens": 14000,
+    "cacheReadTokens": 5000,
+    "cacheCreationTokens": 700,
+    "estimatedCostMicros": 0,
+    "providers": [
+      {
+        "requestCount": 1200,
+        "inputTokens": 25000,
+        "outputTokens": 14000,
+        "cacheReadTokens": 5000,
+        "cacheCreationTokens": 700,
+        "estimatedCostMicros": 0,
+        "providerEntryId": "00000000-0000-4000-8000-000000000001",
+        "secretId": "key-a"
+      }
+    ],
+    "models": []
+  }
+}

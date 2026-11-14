@@ -12,9 +12,99 @@ vi.mock("./lib/build", () => ({ buildTimeIso: "2026-09-07T00:00:00Z", buildTimeL
 vi.mock("@vinlemon/window-controls/window-controls.js", () => ({}));
 import App from "./App.svelte";
 import * as updates from "./lib/services/updates";
+import { emptyServerUsage } from "./lib/services/serverUsage";
+import { defaultRetryPolicy } from "@aipass/schemas";
 
 let app: ReturnType<typeof mount>;
 afterEach(async () => { if (app) await unmount(app); document.body.innerHTML = ""; vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__; });
+
+test.each(["start", "rotate"])("locking during proxy %s prevents its follow-up command", async operation => {
+  vi.useFakeTimers();
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+  let locked = false;
+  const config = { enabled: false, bindAddr: "127.0.0.1:8787", pricing: [], routes: [{
+    id: "route", name: "Fixture", enabled: true, token: "synthetic-token", strategy: "fallback",
+    inboundProtocol: "open_ai_responses", upstreamProtocol: "open_ai_responses", conversionEnabled: false,
+    targets: [], retry: defaultRetryPolicy()
+  }] };
+  let finishSave!: (value: typeof config) => void;
+  const pendingSave = new Promise(resolve => { finishSave = resolve; });
+  invoke.mockImplementation(async (command: string) => {
+    switch (command) {
+      case "vault_status": return { exists: true, locked };
+      case "preferences_load": return { locale: "en", officialAccountsImport: false };
+      case "sync_settings_load": return { mode: "local" };
+      case "entries_list": case "entries_trash_list": case "take_pending_deep_links":
+      case "server_usage_timeseries": return [];
+      case "tool_config_detect": return [{ tool: "codex", binaryFound: true, configFound: false, paths: [] }];
+      case "server_config_get": return config;
+      case "server_config_set": return pendingSave;
+      case "server_status": case "server_start": return { running: false, enabled: false, activeRoutes: 0, requests: 0, failures: 0 };
+      case "server_usage_summary": return emptyServerUsage()[7];
+      case "pricing_config_get": return { groups: [], assignments: [] };
+      default: return null;
+    }
+  });
+  const settle = async () => { for (let i = 0; i < 80; i++) { await Promise.resolve(); flushSync(); } };
+  app = mount(App, { target: document.body });
+  await settle();
+  listeners.get("open-server-workspace")!();
+  await settle();
+  const start = operation === "start"
+    ? [...document.querySelectorAll<HTMLButtonElement>(".detail-header button")].find(button => button.textContent?.trim() === "Start")!
+    : document.querySelector<HTMLButtonElement>('.kv-actions button[aria-label="Rotate token"]')!;
+  expect(start.disabled).toBe(false);
+  start.click();
+  await settle();
+  expect(invoke).toHaveBeenCalledWith("server_config_set", expect.anything());
+  locked = true;
+  listeners.get("vault-status-changed")!();
+  await vi.advanceTimersByTimeAsync(600);
+  flushSync();
+  finishSave(config);
+  await settle();
+  expect(invoke.mock.calls.filter(([command]) => command === (operation === "start" ? "server_start" : "server_token_rotate"))).toHaveLength(0);
+});
+
+test("clearing proxy usage updates the chart before the next periodic refresh", async () => {
+  vi.useFakeTimers();
+  Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+  let cleared = false;
+  const now = new Date();
+  const date = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
+  const summary = { ...emptyServerUsage()[7], requestCount: 1, inputTokens: 42 };
+  const point = { date, ...summary };
+  invoke.mockImplementation(async (command: string) => {
+    switch (command) {
+      case "vault_status": return { exists: true, locked: false };
+      case "preferences_load": return { locale: "en", officialAccountsImport: false };
+      case "sync_settings_load": return { mode: "local" };
+      case "entries_list": case "entries_trash_list": case "take_pending_deep_links": case "tool_config_detect": return [];
+      case "server_config_get": return { enabled: false, bindAddr: "127.0.0.1:8787", routes: [], pricing: [] };
+      case "server_status": return { running: false, enabled: false, activeRoutes: 0, requests: 1, failures: 0 };
+      case "server_usage_summary": return cleared ? emptyServerUsage()[7] : summary;
+      case "server_usage_timeseries": return cleared ? [] : [point];
+      case "server_usage_clear": cleared = true; return null;
+      case "pricing_config_get": return { groups: [], assignments: [] };
+      default: return null;
+    }
+  });
+  const settle = async () => { for (let i = 0; i < 80; i++) { await Promise.resolve(); flushSync(); } };
+  app = mount(App, { target: document.body });
+  await settle();
+  listeners.get("open-server-workspace")!();
+  await settle();
+  expect(document.querySelector(".chart-summary strong")?.textContent).toBe("42");
+  document.querySelector<HTMLButtonElement>('[aria-label="Clear usage statistics"]')!.click();
+  await settle();
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent?.trim() === "Clear statistics")!;
+  expect(confirm).toBeTruthy();
+  confirm.click();
+  await settle();
+  expect(cleared).toBe(true);
+  expect(document.querySelector(".usage-empty")).not.toBeNull();
+  expect(document.querySelector(".chart-summary")).toBeNull();
+});
 
 test("update notices wait for unlock and close on lock, including a pending restart check", async () => {
   vi.useFakeTimers();

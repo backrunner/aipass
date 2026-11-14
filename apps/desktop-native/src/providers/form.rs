@@ -1,0 +1,752 @@
+use super::controls::{button, icon};
+use crate::{locale::Locale, theme::Theme};
+use aipass_desktop_native::catalog::{draft::Draft, Action};
+use aipass_provider_registry::{AuthScheme, InterfaceType};
+use aipass_vault::EntrySummary;
+use gpui::{
+    div, prelude::*, px, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    Subscription, Window,
+};
+use gpui_base::{
+    input::{InputAccessibility, InputEvent, InputState, TextareaState},
+    Dialog,
+};
+use std::collections::BTreeSet;
+
+pub enum FormEvent {
+    Save,
+    Close,
+}
+impl EventEmitter<FormEvent> for Form {}
+
+pub struct Form {
+    pub(super) theme: Theme,
+    pub(super) dark: bool,
+    pub(super) scroll: gpui::ScrollHandle,
+    scroll_to_end: bool,
+    #[cfg(feature = "parity-render")]
+    capture_scroll: Option<f32>,
+    pub(super) locale: Locale,
+    pub(super) inputs: Vec<Entity<InputState>>,
+    pub(super) draft: Draft,
+    pub(super) notes: Entity<TextareaState>,
+    pub(super) notes_height: gpui::Pixels,
+    pub(super) notes_resize_start: Option<(gpui::Pixels, gpui::Pixels)>,
+    pub(super) concurrency_repeat: Option<gpui::Task<()>>,
+    pub(super) advanced: bool,
+    pub(super) visible: BTreeSet<usize>,
+    pub(super) picker: Option<&'static str>,
+    pub(super) field_menu: crate::menu::MenuFocus,
+    pub(super) picker_focus: std::collections::BTreeMap<&'static str, crate::menu::MenuFocus>,
+    pub(super) picker_bounds: std::collections::BTreeMap<
+        &'static str,
+        std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
+    >,
+    pub(super) field_menu_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
+    pub(super) disclosure: crate::disclosure::Disclosure,
+    pub(super) disclosure_frame: crate::disclosure::Frame,
+    pub(super) revealed: bool,
+    pub(super) busy: bool,
+    pub error: String,
+    focus: FocusHandle,
+    action: Option<Action>,
+    pub(super) credentials: Option<Entity<super::credentials::Credentials>>,
+    pub(super) detail_panels: Option<(
+        Entity<crate::subscription_ui::Subscriptions>,
+        Entity<crate::integrations::Integrations>,
+    )>,
+    credentials_subscription: Option<Subscription>,
+    save_after_credential: bool,
+    _subscriptions: Vec<Subscription>,
+}
+
+pub(super) const LABELS: [&str; 16] = [
+    "providerForm.title",
+    "providerForm.secretLabel",
+    "providerForm.apiKey",
+    "providerForm.endpointUrl",
+    "providerForm.defaultModel",
+    "providerForm.tags",
+    "providerForm.notes",
+    "providerForm.domains",
+    "providerForm.consoleUrl",
+    "providerForm.maxConcurrentRequests",
+    "providerForm.modelAliases",
+    "providerForm.customHeaders",
+    "providerForm.group",
+    "providerForm.gatewayRate",
+    "providerForm.billingCurrency",
+    "providerForm.billingUnitPrice",
+];
+
+impl Form {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        self.dark = dark;
+        for input in &self.inputs {
+            let mut style = self.theme.input_style();
+            if self.is_editing() {
+                style.muted_foreground = gpui::rgb(0xa9a9a9).into();
+            }
+            input.update(cx, |input, cx| {
+                input.set_editor_style(style);
+                cx.notify();
+            });
+        }
+        self.notes.update(cx, |input, cx| {
+            input.set_editor_style(self.theme.input_style());
+            cx.notify();
+        });
+        // The form owns a separate credential editor; detail panels are shared with Workspace.
+        if let Some(view) = &self.credentials {
+            view.update(cx, |view, cx| view.apply_appearance(dark, cx));
+        }
+        cx.notify();
+    }
+
+    #[cfg(feature = "parity-render")]
+    pub fn prepare_capture_scroll(&self) {
+        self.scroll.set_offset(gpui::point(
+            gpui::px(0.),
+            -self
+                .capture_scroll
+                .map(px)
+                .unwrap_or_else(|| self.scroll.max_offset().y),
+        ));
+    }
+    #[cfg(feature = "parity-render")]
+    pub fn preview_advanced(&mut self) {
+        self.advanced = true;
+        self.scroll_to_end = true;
+    }
+    #[cfg(feature = "parity-render")]
+    pub fn preview_edit_fields(&mut self, gateway: bool) {
+        self.advanced = true;
+        self.capture_scroll = Some(if gateway { 800. } else { 550. });
+    }
+    #[cfg(feature = "parity-render")]
+    pub fn preview_optional(&mut self, scenario: &str) {
+        self.scroll_to_end = true;
+        match scenario {
+            "providers-add-menu" => self.picker = Some("add-field"),
+            "providers-add-all" => {
+                self.visible.extend(super::optional_fields::OPTIONAL);
+                self.advanced = true;
+            }
+            _ => {}
+        }
+    }
+    pub fn is_editing(&self) -> bool {
+        self.draft.original.is_some()
+    }
+    pub fn new(
+        entry: Option<EntrySummary>,
+        dark: bool,
+        chinese: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let draft = Draft::new(entry);
+        let theme = Theme::new(dark);
+        let locale = Locale::new(chinese);
+        crate::menu::init(cx);
+        super::optional_fields::init(cx);
+        let values = [
+            &draft.title,
+            &draft.secret_label,
+            &String::new(),
+            &draft.endpoint,
+            &draft.model,
+            &draft.tags,
+            &draft.notes,
+            &draft.domains,
+            &draft.console,
+            &draft.concurrency,
+            &draft.add_fields.aliases,
+            &String::new(),
+            &String::new(),
+            &String::new(),
+            &String::new(),
+            &String::new(),
+        ];
+        let inputs: Vec<_> = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                cx.new(|cx| {
+                    let placeholder = match (draft.original.is_some(), index) {
+                        (true, 3) => "https://api.example.com/v1".into(),
+                        (true, 4 | 5 | 8 | 10) => "—".into(),
+                        (true, 9) => "0".into(),
+                        (true, 11) => "Header=Value".into(),
+                        (true, 7) => url::Url::parse(
+                            draft.endpoint.split(',').next().unwrap_or_default().trim(),
+                        )
+                        .ok()
+                        .and_then(|url| url.host_str().map(str::to_owned))
+                        .unwrap_or_else(|| locale.text("providerForm.domainFromApi")),
+                        _ => match index {
+                            0 => locale.text("providerForm.titlePlaceholder"),
+                            1 => locale.text("providerForm.secretLabelPlaceholder"),
+                            2 => locale.text("providerForm.pasteApiKey"),
+                            3 => "https://api.example.com".into(),
+                            4 => "gpt-4o".into(),
+                            5 => "prod, team".into(),
+                            7 => locale.text("providerForm.domainFromApi"),
+                            8 => "https://console.example.com".into(),
+                            9 => locale.text("providerForm.unlimitedConcurrency"),
+                            10 => "fast=gpt-4o-mini".into(),
+                            11 => "x-version=1".into(),
+                            12 => locale.text("providerForm.gatewayGroupPlaceholder"),
+                            13 => "1x".into(),
+                            14 => "USD".into(),
+                            15 => "$0.002 / 1k".into(),
+                            _ => String::new(),
+                        },
+                    };
+                    let mut input = InputState::new(window, cx)
+                        .masked(index == 2)
+                        .placeholder(placeholder);
+                    let mut style = theme.input_style();
+                    if draft.original.is_some() {
+                        style.muted_foreground = gpui::rgb(0xa9a9a9).into();
+                    }
+                    input.set_editor_style(style);
+                    input.set_accessibility(
+                        InputAccessibility::new(Some(if index == 9 {
+                            gpui::Role::SpinButton
+                        } else {
+                            gpui::Role::TextInput
+                        }))
+                        .with_label(Some(locale.text(LABELS[index]).into())),
+                    );
+                    input.set_value((*value).clone(), window, cx);
+                    input
+                })
+            })
+            .collect();
+        let notes = cx.new(|cx| {
+            let mut input = TextareaState::new(window, cx).rows(3);
+            input.set_editor_style(theme.input_style());
+            input.set_value(draft.notes.clone(), window, cx);
+            input.set_accessibility(
+                InputAccessibility::new(Some(gpui::Role::MultilineTextInput))
+                    .with_label(Some(locale.text(LABELS[6]).into())),
+            );
+            input
+        });
+        let mut subscriptions: Vec<_> = inputs
+            .iter()
+            .enumerate()
+            .map(|(index, input)| {
+                cx.subscribe_in(input, window, move |this, _, event, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        if index == 3 && this.is_editing() {
+                            let value = this.inputs[3].read(cx).value();
+                            let placeholder =
+                                url::Url::parse(value.split(',').next().unwrap_or_default().trim())
+                                    .ok()
+                                    .and_then(|url| url.host_str().map(str::to_owned))
+                                    .unwrap_or_else(|| {
+                                        this.locale.text("providerForm.domainFromApi")
+                                    });
+                            this.inputs[7].update(cx, |input, cx| {
+                                input.set_placeholder(placeholder, window, cx)
+                            });
+                        }
+                        if index == 9 {
+                            this.draft.concurrency_touched = true;
+                        }
+                        if index == 10 {
+                            this.draft.aliases_touched = true;
+                        }
+                        cx.notify();
+                    }
+                })
+            })
+            .collect();
+        subscriptions.push(cx.subscribe(&notes, |_, _, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        }));
+        let mut visible = BTreeSet::new();
+        if draft.original.is_none() || !draft.endpoint.is_empty() {
+            visible.insert(3);
+        }
+        for (index, value) in values.iter().enumerate().skip(4) {
+            if !value.is_empty() {
+                visible.insert(index);
+            }
+        }
+        let focus = cx.focus_handle();
+        inputs[0].update(cx, |input, cx| {
+            // HTML's populated title input opens at the end of its value.
+            // Clamp through the editor API so Unicode titles remain intact.
+            input.set_cursor_position(gpui_base::input::Position::new(0, u32::MAX), window, cx);
+        });
+        Self {
+            theme,
+            dark,
+            scroll: gpui::ScrollHandle::new(),
+            scroll_to_end: false,
+            #[cfg(feature = "parity-render")]
+            capture_scroll: None,
+            locale,
+            inputs,
+            draft,
+            notes,
+            notes_height: px(66.6),
+            notes_resize_start: None,
+            concurrency_repeat: None,
+            advanced: false,
+            visible,
+            picker: None,
+            picker_focus: [
+                (
+                    "provider",
+                    aipass_provider_registry::default_provider_definitions().len() + 1,
+                ),
+                ("interface", 6),
+                ("auth", 6),
+            ]
+            .into_iter()
+            .map(|(key, count)| (key, crate::menu::MenuFocus::new(count, cx)))
+            .collect(),
+            picker_bounds: ["provider", "interface", "auth"]
+                .into_iter()
+                .map(|key| (key, Default::default()))
+                .collect(),
+            field_menu: crate::menu::MenuFocus::new(16, cx),
+            field_menu_bounds: Default::default(),
+            disclosure: Default::default(),
+            disclosure_frame: Default::default(),
+            revealed: false,
+            busy: false,
+            error: String::new(),
+            focus,
+            action: None,
+            credentials: None,
+            detail_panels: None,
+            credentials_subscription: None,
+            save_after_credential: false,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    pub fn take_action(&mut self) -> Option<Action> {
+        self.action.take()
+    }
+    pub fn attach_detail_panels(
+        &mut self,
+        subscriptions: Entity<crate::subscription_ui::Subscriptions>,
+        integrations: Entity<crate::integrations::Integrations>,
+    ) {
+        self.detail_panels = Some((subscriptions, integrations));
+    }
+    pub fn attach_credentials(
+        &mut self,
+        credentials: Entity<super::credentials::Credentials>,
+        cx: &mut Context<Self>,
+    ) {
+        self.credentials_subscription = Some(cx.subscribe(&credentials, |this, _, event, cx| {
+            if let super::credentials::Event::Settled(saved) = event {
+                let resume = this.save_after_credential && *saved;
+                this.save_after_credential = false;
+                if resume {
+                    this.set_busy(false, cx);
+                    this.save(cx);
+                }
+            }
+            cx.notify();
+        }));
+        self.credentials = Some(credentials);
+    }
+    /// Refresh fields owned by Agent background work without replacing edits.
+    pub fn refresh_original(
+        &mut self,
+        entry: &EntrySummary,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .draft
+            .original
+            .as_ref()
+            .is_none_or(|original| original.id != entry.id)
+        {
+            return;
+        }
+        if !self.draft.concurrency_touched {
+            let value = entry
+                .max_concurrent_requests
+                .map(|n| n.to_string())
+                .unwrap_or_default();
+            if self.inputs[9].read(cx).value().as_ref() != value {
+                self.inputs[9].update(cx, |input, cx| input.set_value(value, window, cx));
+            }
+        }
+        if !self.draft.websocket_touched {
+            self.draft.websockets = entry.supports_websockets.unwrap_or(true);
+        }
+        if !self.draft.aliases_touched {
+            let value =
+                aipass_desktop_native::catalog::optional::encode_pairs(&entry.model_aliases);
+            if self.inputs[10].read(cx).value().as_ref() != value {
+                self.inputs[10].update(cx, |input, cx| input.set_value(value, window, cx));
+            }
+        }
+        self.draft.original = Some(entry.clone());
+    }
+    pub fn set_error(&mut self, error: String) {
+        if let Some((_, message)) = error.split_once("provider_headers_merge_failed:") {
+            self.error = self
+                .locale
+                .text("providers.headersMergeFailed")
+                .replace("{message}", message.trim());
+            return;
+        }
+        self.error = match error.split_once("websocket_probe_unconfirmed:") {
+            Some((_, message)) => self
+                .locale
+                .text("providerForm.websocketProbeFailed")
+                .replace("{message}", message.trim()),
+            None => error,
+        };
+    }
+    pub fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
+        if busy {
+            self.concurrency_repeat = None;
+        }
+        self.busy = busy;
+        self.notes
+            .update(cx, |input, cx| input.set_disabled(busy, cx));
+        for input in &self.inputs {
+            input.update(cx, |input, cx| input.set_disabled(busy, cx));
+        }
+        cx.notify();
+    }
+    pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.concurrency_repeat = None;
+        self.notes_resize_start = None;
+        self.notes_height = px(66.6);
+        self.save_after_credential = false;
+        if let Some(credentials) = self.credentials.take() {
+            credentials.update(cx, |view, cx| view.cancel(window, cx));
+        }
+        self.credentials_subscription = None;
+        for input in &self.inputs {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        self.notes
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.action = None;
+        self.draft.api_key = Default::default();
+        self.draft.add_fields.headers = Default::default();
+    }
+    pub(super) fn save(&mut self, cx: &mut Context<Self>) {
+        if self.busy || self.save_after_credential {
+            return;
+        }
+        if self.is_editing() {
+            if let Some(credentials) = &self.credentials {
+                if credentials.read(cx).has_editor() {
+                    self.save_after_credential = credentials.update(cx, |view, cx| view.save(cx));
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        let value = |index: usize| self.inputs[index].read(cx).value().to_string();
+        let mut draft = Draft::new(self.draft.original.clone());
+        draft.provider_id = self.draft.provider_id.clone();
+        draft.interface = self.draft.interface.clone();
+        draft.auth = self.draft.auth.clone();
+        draft.websockets = self.draft.websockets;
+        draft.websocket_touched = self.draft.websocket_touched;
+        draft.title = value(0);
+        draft.secret_label = value(1);
+        draft.api_key = value(2).into();
+        draft.endpoint = value(3);
+        draft.model = value(4);
+        draft.tags = value(5);
+        draft.notes = self.notes.read(cx).value().to_string();
+        draft.domains = value(7);
+        draft.console = value(8);
+        draft.concurrency = value(9);
+        draft.concurrency_touched = self.draft.concurrency_touched;
+        draft.aliases_touched = self.draft.aliases_touched;
+        draft.add_fields = aipass_desktop_native::catalog::optional::AddFields {
+            aliases: value(10),
+            headers: value(11).into(),
+            group: value(12),
+            rate: value(13),
+            currency: value(14),
+            unit_price: value(15),
+        };
+        match draft.into_action() {
+            Ok(action) => {
+                self.action = Some(action);
+                self.error.clear();
+                self.set_busy(true, cx);
+                cx.emit(FormEvent::Save);
+            }
+            Err(key) => {
+                self.error = self.locale.text(key);
+                cx.notify();
+            }
+        }
+    }
+    pub(super) fn choose(
+        &mut self,
+        kind: &'static str,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        match kind {
+            "provider" => {
+                let definitions = aipass_provider_registry::default_provider_definitions();
+                if let Some(definition) = definitions.get(index) {
+                    self.draft.choose_provider(definition.id.to_owned());
+                    if self.inputs[3].read(cx).value().is_empty() {
+                        if let Some((_, _, endpoint)) =
+                            definition.endpoints.iter().find(|(_, kind, _)| {
+                                *kind == aipass_provider_registry::EndpointKind::Api
+                            })
+                        {
+                            self.inputs[3]
+                                .update(cx, |input, cx| input.set_value(*endpoint, window, cx));
+                            self.visible.insert(3);
+                        }
+                    }
+                    if self.inputs[0].read(cx).value().is_empty() {
+                        self.inputs[0].update(cx, |input, cx| {
+                            input.set_value(definition.display_name.to_owned(), window, cx)
+                        });
+                    }
+                }
+            }
+            "interface" => self.draft.choose_interface(
+                [
+                    InterfaceType::OpenAiCompatible,
+                    InterfaceType::AnthropicMessages,
+                    InterfaceType::Gemini,
+                    InterfaceType::AzureOpenAi,
+                    InterfaceType::Bedrock,
+                    InterfaceType::CustomHttp,
+                ][index]
+                    .clone(),
+            ),
+            "auth" => {
+                self.draft.auth_touched = true;
+                self.draft.auth = [
+                    AuthScheme::Bearer,
+                    AuthScheme::XApiKey,
+                    AuthScheme::GoogleApiKey,
+                    AuthScheme::AzureApiKey,
+                    AuthScheme::AwsProfile,
+                    AuthScheme::CustomHeader,
+                ][index]
+                    .clone()
+            }
+            "add-field" => {
+                if self.busy || !super::optional_fields::OPTIONAL.contains(&index) {
+                    return;
+                }
+                self.visible.insert(index);
+                if index >= 7 {
+                    self.advanced = true;
+                }
+                if index == 6 {
+                    self.notes.read(cx).focus_handle(cx).focus(window, cx);
+                } else {
+                    self.inputs[index]
+                        .read(cx)
+                        .focus_handle(cx)
+                        .focus(window, cx);
+                }
+            }
+            _ => {}
+        }
+        self.picker = None;
+        cx.notify();
+    }
+}
+
+#[cfg(all(test, feature = "parity-render"))]
+mod tests;
+
+impl Render for Form {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.disclosure_frame = self.disclosure.sample(self.advanced, window, cx);
+        if self.scroll_to_end && self.scroll.max_offset().y > px(0.) {
+            self.scroll
+                .set_offset(gpui::point(px(0.), -self.scroll.max_offset().y));
+            self.scroll_to_end = false;
+        }
+        let t = self.theme;
+        let editing = self.draft.original.is_some();
+        if editing {
+            return self.edit(window, cx);
+        }
+        let title = self.locale.text(if editing {
+            "providerModal.editProvider"
+        } else {
+            "providerList.addProvider"
+        });
+        let content = div()
+            .on_children_prepainted(crate::parity::record(if self.error.is_empty() {
+                &[
+                    "provider-form-header",
+                    "provider-form-body",
+                    "provider-form-footer",
+                ]
+            } else {
+                &[
+                    "provider-form-header",
+                    "provider-form-body",
+                    "provider-form-error",
+                    "provider-form-footer",
+                ]
+            }))
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .min_h_0()
+            .overflow_hidden()
+            .rounded(px(13.))
+            .bg(t.surface)
+            .text_color(t.text)
+            .w_full()
+            .max_h(window.viewport_size().height - px(32.))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(20.))
+                    .py(px(16.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .border_b_1()
+                    .border_color(t.divider)
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(title.clone()),
+                    )
+                    .child(
+                        icon(
+                            "provider-form-close",
+                            "x",
+                            self.locale.text("common.close"),
+                            t,
+                        )
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(FormEvent::Close))),
+                    ),
+            )
+            .child(self.fields(window, cx))
+            .when(!self.error.is_empty(), |el| {
+                el.child(
+                    div()
+                        .mx(px(20.))
+                        .mb(px(12.))
+                        .p(px(12.))
+                        .rounded(px(8.))
+                        .bg(t.danger_soft)
+                        .text_color(t.danger)
+                        .text_size(px(12.))
+                        .child(self.error.clone()),
+                )
+            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(20.))
+                    .py(px(14.))
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .border_t_1()
+                    .border_color(t.divider)
+                    .child(
+                        button(
+                            "provider-cancel",
+                            self.locale.text("common.cancel"),
+                            false,
+                            t,
+                        )
+                        .border_color(gpui::rgba(0))
+                        .bg(gpui::rgba(0))
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(FormEvent::Close))),
+                    )
+                    .child(
+                        button(
+                            "provider-save",
+                            self.locale.text(if self.busy {
+                                "common.loading"
+                            } else if editing {
+                                "providerModal.saveChanges"
+                            } else {
+                                "providerList.addProvider"
+                            }),
+                            true,
+                            t,
+                        )
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
+                    ),
+            );
+        if editing {
+            return content.into_any_element();
+        }
+        let owner = cx.entity().downgrade();
+        Dialog::new(cx)
+            .focus_handle(self.focus.clone())
+            .accessibility_label(title)
+            .close_on_escape(!self.busy)
+            .close_on_backdrop_press(!self.busy)
+            .on_open_change(move |open, _, window, cx| {
+                if !open {
+                    let _ = owner.update(cx, |this, cx| {
+                        if this.picker.take().is_some() {
+                            this.field_menu.trigger.focus(window, cx);
+                            cx.notify();
+                        } else {
+                            cx.emit(FormEvent::Close);
+                        }
+                    });
+                }
+            })
+            .backdrop(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(gpui::rgba(0x0f111073))
+                    .backdrop_blur(px(4.)),
+            )
+            .popup(
+                gpui_base::DialogPopup::new()
+                    .w(px(540.))
+                    // Match the reference's independently constrained outer
+                    // frame and inner form, including its border clipping.
+                    .max_h(window.viewport_size().height - px(32.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(14.))
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(t.surface)
+                    .overflow_hidden()
+                    .child(content),
+            )
+            .into_any_element()
+    }
+}

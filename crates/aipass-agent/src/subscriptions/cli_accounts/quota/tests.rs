@@ -1,5 +1,36 @@
 use super::*;
 
+#[test]
+fn object_order_does_not_reorder_allowances_or_scoped_models() {
+    let snapshots = [
+        r#"{"premium_interactions":{"entitlement":100,"quota_remaining":75},"chat":{"entitlement":100,"quota_remaining":80}}"#,
+        r#"{"chat":{"entitlement":100,"quota_remaining":80},"premium_interactions":{"entitlement":100,"quota_remaining":75}}"#,
+    ];
+    let models: Value =
+        serde_json::from_str(r#"{"z-paid":{"premium":true},"a-paid":{"premium":true}}"#).unwrap();
+    for input in snapshots {
+        let out = copilot_usage(
+            &json!({"quota_snapshots":serde_json::from_str::<Value>(input).unwrap()}),
+            &models,
+        )
+        .unwrap();
+        assert_eq!(out["windows"][0]["name"], "chat");
+        assert_eq!(out["windows"][1]["name"], "premium_interactions");
+        assert_eq!(out["windows"][1]["models"], json!(["a-paid", "z-paid"]));
+    }
+    for input in [
+        r#"{"z-scope":{"primary":{"usedPercent":25}},"codex":{"primary":{"usedPercent":20}}}"#,
+        r#"{"codex":{"primary":{"usedPercent":20}},"z-scope":{"primary":{"usedPercent":25}}}"#,
+    ] {
+        let out = codex_usage(
+            &json!({"rateLimitsByLimitId":serde_json::from_str::<Value>(input).unwrap()}),
+        )
+        .unwrap();
+        assert_eq!(out["windows"][0]["name"], "codex · primary");
+        assert_eq!(out["windows"][1]["name"], "z-scope · primary");
+    }
+}
+
 fn copilot(plan: &str, quota: Value) -> Value {
     copilot_usage(
         &json!({"copilot_plan":plan,"quota_reset_date":"2026-11-01",

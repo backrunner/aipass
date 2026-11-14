@@ -1,0 +1,44 @@
+[package]
+name = "aipass-desktop-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+parity-render = ["gpui/test-support", "gpui_platform/test-support"]
+
+[dependencies]
+aipass-desktop-platform = { path = "../../crates/aipass-desktop-platform" }
+aipass-proxy = { path = "../../crates/aipass-proxy" }
+aipass-agent = { path = "../../crates/aipass-agent" }
+aipass-agent-protocol = { path = "../../crates/aipass-agent-protocol" }
+aipass-config-writers = { path = "../../crates/aipass-config-writers" }
+aipass-vault = { path = "../../crates/aipass-vault" }
+aipass-provider-registry = { path = "../../crates/aipass-provider-registry" }
+aipass-storage = { path = "../../crates/aipass-storage" }
+base64.workspace = true
+reqwest.workspace = true
+semver = { workspace = true, features = ["serde"] }
+minisign-verify = "0.2"
+flate2 = "1"
+tar = "0.4"
+plist = "1"
+tempfile.workspace = true
+anyhow.workspace = true
+libc = "0.2"
+gpui = { git = "https://github.com/sonorahq/gpui", rev = "8ddac49c8b5a079149b33b4581e03f74e05237e0" }
+gpui_platform = { git = "https://github.com/sonorahq/gpui", rev = "8ddac49c8b5a079149b33b4581e03f74e05237e0", features = ["font-kit", "runtime_shaders"] }
+gpui-base = { path = "../../vendor/gpui-base" }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde_json.workspace = true
+serde.workspace = true
+uuid.workspace = true
+url = { version = "2", features = ["serde"] }
+time = { workspace = true, features = ["local-offset"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSDictionary", "NSUserDefaults", "NSValue"] }

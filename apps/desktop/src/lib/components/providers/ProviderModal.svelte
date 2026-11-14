@@ -1,6 +1,7 @@
 <script lang="ts">
   import { scrollMask, Banner, Button, ProviderFormFields } from "@aipass/ui";
   import { Dialog } from "bits-ui";
+  import { onDestroy, tick } from "svelte";
   import { X } from "lucide-svelte";
 
   import { t } from "../../stores/i18n";
@@ -20,6 +21,10 @@
 
   let dialogOpen = true;
   let closing = false;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(() => clearTimeout(closeTimer));
+  let errorNotice: HTMLDivElement | undefined;
+  $: if (error) void tick().then(() => errorNotice?.scrollIntoView({ block: "nearest" }));
 
   function handleOpenChange(next: boolean) {
     if (next) {
@@ -29,7 +34,7 @@
     if (closing || saving) return;
     closing = true;
     dialogOpen = false;
-    setTimeout(() => onClose(), 220);
+    closeTimer = setTimeout(() => onClose(), 220);
   }
 
   function handleClose() {
@@ -73,7 +78,7 @@
             {onAuthChanged}
           />
 
-          {#if error}<Banner tone="danger">{error}</Banner>{/if}
+          {#if error}<div bind:this={errorNotice}><Banner tone="danger">{error}</Banner></div>{/if}
         </div>
 
         <footer class="modal-footer">

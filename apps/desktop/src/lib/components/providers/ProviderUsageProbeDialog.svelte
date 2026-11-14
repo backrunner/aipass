@@ -120,7 +120,7 @@
     <Dialog.Content class="usage-dialog-content">
       <section class="usage-modal">
         <header class="usage-modal-header">
-          <div>
+          <div class="usage-heading">
             <Dialog.Title class="usage-title">{$t("providerDetail.usageProbeTitle")}</Dialog.Title>
             <Dialog.Description class="usage-subtitle">
               {$t("providerDetail.usageProbeDescription")}
@@ -341,17 +341,24 @@
     border-bottom: 1px solid var(--divider);
   }
 
-  .usage-title {
+  .usage-heading {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .usage-modal-header :global(.usage-title) {
     margin: 0;
     color: var(--text);
     font-size: 15px;
     font-weight: 650;
+    line-height: 20px;
   }
 
-  .usage-subtitle {
-    margin-top: 5px;
+  .usage-modal-header :global(.usage-subtitle) {
+    margin: 5px 0 0;
     color: var(--text-tertiary);
     font-size: 12px;
+    font-weight: 400;
     line-height: 1.45;
   }
 
@@ -361,6 +368,7 @@
     justify-content: center;
     width: 30px;
     height: 30px;
+    flex: 0 0 30px;
     border-radius: var(--radius);
     color: var(--text-tertiary);
     transition: background-color 80ms ease, color 120ms ease;

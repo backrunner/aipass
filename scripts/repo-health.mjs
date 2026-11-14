@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { relative, resolve, sep } from "node:path";
 
 export function isSource(path) {
-  return /^(apps|crates|packages)\//.test(path)
+  // The user-approved upstream vendor exception excludes AIPass's own modules.
+  return (/^(apps|crates|packages)\//.test(path) || [
+    "vendor/gpui/src/input_transform.rs",
+    "vendor/gpui_apple/src/system_font_weights.rs",
+  ].includes(path))
     && /\.(rs|ts|svelte|mjs|js)$/.test(path)
     && !path.endsWith(".d.ts")
     && !/\/(embedded|dist|node_modules|target)\//.test(path);

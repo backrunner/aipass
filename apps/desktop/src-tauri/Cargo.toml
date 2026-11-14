@@ -22,6 +22,7 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
+aipass-desktop-platform = { path = "../../../crates/aipass-desktop-platform" }
 aipass-agent = { path = "../../../crates/aipass-agent" }
 aipass-agent-protocol = { path = "../../../crates/aipass-agent-protocol" }
 aipass-config-writers = { path = "../../../crates/aipass-config-writers" }

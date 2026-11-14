@@ -1,0 +1,13 @@
+{
+  "name": "aipass-desktop-parity",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "capture": "node capture-reference.mjs",
+    "test": "node --test compare.test.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.65.0",
+    "pngjs": "7.0.0"
+  }
+}

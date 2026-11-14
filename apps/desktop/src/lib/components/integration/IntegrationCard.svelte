@@ -74,9 +74,7 @@
     patchState(tool, { applied: undefined });
   }
 
-  let lastResetKey = resetKey;
-  $: if (resetKey !== lastResetKey) {
-    lastResetKey = resetKey;
+  function invalidatePreview() {
     generation++;
     toolState = {};
     clearAllAppliedTimers();
@@ -85,6 +83,12 @@
     pendingApply = undefined;
     confirming = false;
     previewOpen = false;
+  }
+
+  let lastResetKey = resetKey;
+  $: if (resetKey !== lastResetKey) {
+    lastResetKey = resetKey;
+    invalidatePreview();
   }
 
   onDestroy(() => {
@@ -96,8 +100,7 @@
 
   $: sortedTools = installedIntegrationTools(detections, tools);
   $: if (pendingTool && !sortedTools.some(tool => tool.id === pendingTool?.id)) {
-    generation++;
-    previewOpen = false; pendingTool = undefined; pendingApply = undefined; activePreview = undefined;
+    invalidatePreview();
   }
 
   function patchState(tool: IntegrationToolDefinition, patch: Partial<ToolState>) {
@@ -122,6 +125,10 @@
     toolState = {};
     clearAllAppliedTimers();
     pendingApply = undefined;
+    // Track the request before awaiting so detection changes invalidate a
+    // loading preview as well as an already-open confirmation dialog.
+    pendingTool = tool;
+    activePreview = undefined;
     previewOpen = false;
     patchState(tool, { busy: true, error: "" });
     try {
@@ -277,7 +284,6 @@
 <IntegrationPreviewDialog
   open={previewOpen}
   preview={activePreview}
-  toolName={pendingTool?.name ?? ""}
   {localProxy}
   busy={confirming}
   allowConfirm={!previewReadonly}

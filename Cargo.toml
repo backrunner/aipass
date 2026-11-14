@@ -1,5 +1,7 @@
 [workspace]
 members = [
+  "crates/aipass-desktop-platform",
+  "apps/desktop-native",
   "apps/desktop/src-tauri",
   "crates/aipass-agent",
   "crates/aipass-agent-protocol",
@@ -15,6 +17,7 @@ members = [
   "crates/aipass-proxy",
   "crates/aipass-mcp-proxy"
 ]
+exclude = ["vendor/gpui", "vendor/gpui-base", "vendor/block", "vendor/gpui_apple", "vendor/gpui_wgpu"]
 resolver = "2"
 
 [workspace.package]
@@ -62,3 +65,19 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 interprocess = "2.2.3"
 rpassword = "7.4.0"
 windows-service = "0.8.1"
+
+# Native background filters operate over Retina-sized surfaces. Keep their
+# rasterizer optimized in development so resizing does not stall asset loading.
+[profile.dev.package.resvg]
+opt-level = 3
+
+[profile.dev.package.tiny-skia]
+opt-level = 3
+
+[patch."https://github.com/sonorahq/gpui"]
+gpui_apple = { path = "vendor/gpui_apple" }
+gpui_wgpu = { path = "vendor/gpui_wgpu" }
+gpui = { path = "vendor/gpui" }
+
+[patch.crates-io]
+block = { path = "vendor/block" }

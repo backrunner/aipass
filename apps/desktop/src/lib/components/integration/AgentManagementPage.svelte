@@ -183,7 +183,7 @@
     </div>
   {:else}<div class="empty"><Terminal size={28} /><span>{$t(loading ? "agents.scanning" : "agents.empty")}</span></div>{/if}
 </section>
-<IntegrationPreviewDialog open={previewOpen} {preview} toolName={integrationToolDefinitions.find(t => t.id === pending?.tool)?.name ?? ""}
+<IntegrationPreviewDialog open={previewOpen} {preview}
   busy={Boolean(busy)} managedSwitch onConfirm={apply} onOpenChange={open => { if (!busy) { previewOpen = open; if (!open) pending = undefined; } }} />
 
 <style lang="scss">

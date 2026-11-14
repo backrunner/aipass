@@ -1,0 +1,19 @@
+[package]
+name = "aipass-desktop-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+aipass-agent-protocol = { path = "../aipass-agent-protocol" }
+arboard = { version = "3", default-features = false }
+log = "0.4"
+sha2.workspace = true
+aipass-storage = { path = "../aipass-storage" }
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
