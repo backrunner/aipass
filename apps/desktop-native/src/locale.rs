@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-pub struct Locale(HashMap<String, String>);
+pub struct Locale(HashMap<String, String>, bool);
 
 impl Locale {
     pub fn new(chinese: bool) -> Self {
@@ -26,7 +26,15 @@ impl Locale {
                 .clone();
             dictionary.insert(alias, value);
         }
-        Self(dictionary)
+        Self(dictionary, chinese)
+    }
+
+    pub fn language(&self) -> aipass_agent_protocol::UiLocale {
+        if self.1 {
+            aipass_agent_protocol::UiLocale::ZhCn
+        } else {
+            aipass_agent_protocol::UiLocale::En
+        }
     }
 
     pub fn text(&self, key: &str) -> String {

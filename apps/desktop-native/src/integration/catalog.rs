@@ -160,6 +160,9 @@ pub fn icon(tool: &Tool) -> &'static str {
         Tool::AntigravityCli => "tool-antigravity-cli",
         Tool::CommandCode => "tool-command-code",
         Tool::Workbuddy => "tool-workbuddy",
+        Tool::Cline => "tool-cline",
+        Tool::Trae => "tool-trae",
+        Tool::Qoder => "tool-qoder",
         _ => "terminal",
     }
 }

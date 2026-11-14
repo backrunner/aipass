@@ -626,6 +626,7 @@ struct TextLayoutInner {
     line_height: Pixels,
     wrap_width: Option<Pixels>,
     truncate_width: Option<Pixels>,
+    scale_factor: f32,
     size: Option<Size<Pixels>>,
     bounds: Option<Bounds<Pixels>>,
 }
@@ -640,18 +641,16 @@ impl TextLayout {
     ) -> LayoutId {
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
-        let line_height = window.pixel_snap(
-            text_style
-                .line_height
-                .to_pixels(font_size.into(), window.rem_size()),
-        );
+        let line_height = text_style
+            .line_height
+            .to_pixels(font_size.into(), window.rem_size());
 
         let runs = if let Some(runs) = runs {
             runs
         } else {
             vec![text_style.to_run(text.len())]
         };
-        window.request_measured_layout(Default::default(), {
+        window.request_text_layout({
             let element_state = self.clone();
             // The layout measured before the current one. Flex layout probes a text with and
             // without a width limit in turn, so keeping both answers each probe without
@@ -659,6 +658,7 @@ impl TextLayout {
             let spare: RefCell<Option<TextLayoutInner>> = RefCell::new(None);
 
             move |known_dimensions, available_space, window, cx| {
+                let scale_factor = window.scale_factor();
                 let wrap_width = if text_style.white_space == WhiteSpace::Normal {
                     known_dimensions.width.or(match available_space.width {
                         crate::AvailableSpace::Definite(x) => Some(x),
@@ -692,15 +692,18 @@ impl TextLayout {
                 // would poison intrinsic sizing with whatever width an earlier pass used. A
                 // truncating probe reuses only a layout with the same truncation and wrap
                 // widths, which are the only inputs that differ between calls.
-                let answers = |text_layout: &TextLayoutInner| match truncate_width {
-                    None => {
-                        (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
-                            && text_layout.truncate_width.is_none()
-                    }
-                    Some(_) => {
-                        truncate_width == text_layout.truncate_width
-                            && wrap_width == text_layout.wrap_width
-                    }
+                let answers = |text_layout: &TextLayoutInner| {
+                    text_layout.scale_factor == scale_factor
+                        && match truncate_width {
+                            None => {
+                                (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
+                                    && text_layout.truncate_width.is_none()
+                            }
+                            Some(_) => {
+                                truncate_width == text_layout.truncate_width
+                                    && wrap_width == text_layout.wrap_width
+                            }
+                        }
                 };
                 if let Some(text_layout) = element_state.0.borrow().as_ref()
                     && let Some(size) = text_layout.size
@@ -780,6 +783,7 @@ impl TextLayout {
                         line_height,
                         wrap_width,
                         truncate_width,
+                        scale_factor,
                         size: Some(Size::default()),
                         bounds: None,
                     });
@@ -790,7 +794,10 @@ impl TextLayout {
                 for line in &lines {
                     let line_size = line.size(line_height);
                     size.height += line_size.height;
-                    size.width = size.width.max(line_size.width).ceil();
+                    // Preserve fractional advances through flex layout. The layout
+                    // engine snaps absolute edges once; rounding each run here
+                    // accumulates extra width across adjacent labels and badges.
+                    size.width = size.width.max(line_size.width);
                 }
 
                 *spare = element_state.0.borrow_mut().replace(TextLayoutInner {
@@ -799,6 +806,7 @@ impl TextLayout {
                     line_height,
                     wrap_width,
                     truncate_width,
+                    scale_factor,
                     size: Some(size),
                     bounds: None,
                 });

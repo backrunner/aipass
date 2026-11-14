@@ -7,6 +7,7 @@ struct Probe {
     scale: f32,
     origin: gpui::Point<f32>,
     offset: gpui::Point<Pixels>,
+    relative_offset: gpui::Point<f32>,
     clicks: usize,
     position: Rc<Cell<gpui::Point<Pixels>>>,
     scroll: Rc<Cell<f32>>,
@@ -40,6 +41,7 @@ impl Render for Probe {
         )
         .origin(self.origin)
         .translate(self.offset)
+        .translate_relative(self.relative_offset)
     }
 }
 
@@ -51,6 +53,7 @@ fn scaled_buttons_receive_visual_coordinates_and_unscaled_scroll(cx: &mut gpui::
         scale: 0.5,
         origin: point(0.5, 0.5),
         offset: point(px(0.), px(0.)),
+        relative_offset: point(0., 0.),
         clicks: 0,
         position: position.clone(),
         scroll: scroll.clone(),
@@ -95,6 +98,7 @@ fn dropdown_origin_and_translation_match_pointer_geometry(cx: &mut gpui::TestApp
         scale: 0.5,
         origin: point(0., 0.),
         offset: point(px(15.), px(7.)),
+        relative_offset: point(0., 0.),
         clicks: 0,
         position: position.clone(),
         scroll: Rc::new(Cell::new(0.)),
@@ -151,4 +155,24 @@ fn position_feedback_updates_input_origin_before_the_same_frame_is_painted(
     assert_eq!(clicks.get(), 1);
     cx.simulate_click(point(px(5.), px(5.)), Default::default());
     assert_eq!(clicks.get(), 1);
+}
+
+#[gpui::test]
+fn relative_dialog_translation_uses_current_layout_for_hit_testing(cx: &mut gpui::TestAppContext) {
+    let position = Rc::new(Cell::new(point(px(0.), px(0.))));
+    let (view, cx) = cx.add_window_view(|_, _| Probe {
+        scale: 0.96,
+        origin: point(0.5, 0.5),
+        offset: point(px(0.), px(0.)),
+        relative_offset: point(0., 0.04),
+        clicks: 0,
+        position: position.clone(),
+        scroll: Rc::new(Cell::new(0.)),
+    });
+    cx.update(|w, cx| w.draw(cx).clear(cx));
+    // 4% of the current 100px popup height, plus scaling around its center.
+    cx.simulate_click(point(px(13.6), px(15.6)), Default::default());
+    assert_eq!(view.read_with(cx, |v, _| v.clicks), 1);
+    assert!((f32::from(position.get().x) - 10.).abs() < 0.001);
+    assert!((f32::from(position.get().y) - 10.).abs() < 0.001);
 }

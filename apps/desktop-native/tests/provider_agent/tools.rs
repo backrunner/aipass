@@ -36,9 +36,18 @@ pub fn workflow(transport: &mut AgentTransport) {
             socket
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let mut request = [0; 4096];
-            let length = socket.read(&mut request).unwrap_or(0);
-            let request = String::from_utf8_lossy(&request[..length]);
+            // A TCP read is not a request boundary. Reply only after complete
+            // headers, otherwise closing with unread bytes can reset the client.
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") && request.len() < 16 * 1024 {
+                let mut byte = [0];
+                if socket.read(&mut byte).unwrap_or(0) == 0 {
+                    break;
+                }
+                request.push(byte[0]);
+            }
+            assert!(request.ends_with(b"\r\n\r\n"), "incomplete fixture request");
+            let request = String::from_utf8_lossy(&request);
             let body = if request.contains("/models") {
                 r#"{"object":"list","data":[{"id":"fixture-model","object":"model"}]}"#
             } else {
@@ -57,7 +66,11 @@ pub fn workflow(transport: &mut AgentTransport) {
     let id = applied(transport, draft.into_action().unwrap()).unwrap();
     let original = snapshot(transport).find(id).unwrap().clone();
     let result = call(transport, id, Operation::Probe);
-    assert!(matches!(result.result,Ok(Outcome::Probe(p))if p.ok&&p.model_count==Some(1)));
+    match result.result {
+        Ok(Outcome::Probe(probe)) => assert!(probe.ok && probe.model_count == Some(1), "{probe:?}"),
+        Err(error) => panic!("local fixture probe failed: {error:?}"),
+        _ => panic!("probe reply expected"),
+    }
     let result = call(
         transport,
         id,

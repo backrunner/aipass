@@ -10,8 +10,10 @@ import { measureComponents, providerSpecs, providerListSpecs, compareGeometry, c
 import { reviewPage } from "./review-page.mjs";
 const root = resolve(import.meta.dirname, "../..");
 const round = process.argv[2];
-const scenarios = (process.argv.includes("--list-only") ? ["providers-list", "providers-list-hover", "providers-list-selected-hover"] : process.argv.includes("--optional-only") ? ["providers-add-menu", "providers-add-all", "providers-add", "providers-add-advanced"] : process.argv.includes("--credentials-only") ? ["providers", "providers-edit", "providers-key-add", "providers-key-edit", "providers-key-billing", "providers-key-reveal"] : ["providers", "providers-add", "providers-edit", "providers-add-advanced", "providers-edit-advanced"])
+const scenarios = (process.argv.includes("--trash-only") ? ["providers-trash", "providers-trash-delete", "providers-trash-empty"] : process.argv.includes("--list-only") ? ["providers-list", "providers-list-hover", "providers-list-selected-hover"] : process.argv.includes("--optional-only") ? ["providers-add-menu", "providers-add-all", "providers-add", "providers-add-advanced"] : process.argv.includes("--credentials-only") ? ["providers", "providers-edit", "providers-key-add", "providers-key-edit", "providers-key-billing", "providers-key-reveal"] : ["providers", "providers-add", "providers-edit", "providers-add-advanced", "providers-edit-advanced", "providers-edit-fields", "providers-edit-gateway"])
   .filter(scenario => !process.argv.includes("--key-editors-only") || ["providers-key-add", "providers-key-edit", "providers-key-billing"].includes(scenario))
+  .filter(scenario => !process.argv.includes("--gateway-only") || scenario === "providers-edit-gateway")
+  .filter(scenario => !process.argv.includes("--edit-only") || scenario.startsWith("providers-edit"))
   .filter(scenario => !process.argv.includes("--add-only") || scenario.startsWith("providers-add"));
 assert(/^[a-z0-9-]+$/.test(round ?? ""), "Provide a unique round name");
 const output = resolve(root, "artifacts/desktop-parity", round);
@@ -31,7 +33,7 @@ async function record(path) {
 await record("apps/desktop-native");
 await record("vendor");
 for (const path of ["tests/desktop-parity/component-audit.mjs","tests/desktop-parity/review-page.mjs"]) sourceHashes[path] = hash(await readFile(resolve(root,path)));
-for (const path of ["Cargo.toml", "Cargo.lock", "tests/desktop-parity/fixtures/providers.json", "tests/desktop-parity/reference/business-bridge.ts", "tests/desktop-parity/reference/bridge.ts", "tests/desktop-parity/capture-providers.mjs"])
+for (const path of ["Cargo.toml", "Cargo.lock", "tests/desktop-parity/fixtures/providers.json", "tests/desktop-parity/fixtures/provider-gateway.json", "tests/desktop-parity/reference/business-bridge.ts", "tests/desktop-parity/reference/bridge.ts", "tests/desktop-parity/capture-providers.mjs"])
   sourceHashes[path] = hash(await readFile(resolve(root, path)));
 const report = { binarySHA256: hash(await readFile(binary)), sourceHashes,
   reference: "immutable baseline UI, matched synthetic provider catalog", candidate: "gpui-offscreen", nativeInteractionVerified: false,
@@ -47,7 +49,7 @@ try {
         page.setDefaultTimeout(7000);
         for (const scenario of scenarios) {
           const name = `${scenario}-${width}x${height}-${locale}-${theme}`;
-          await page.goto(`http://127.0.0.1:14732/?scenario=business-providers&locale=${locale}&theme=${theme}`);
+          await page.goto(`http://127.0.0.1:14732/?scenario=business-providers&locale=${locale}&theme=${theme}${scenario === "providers-edit-gateway" ? "&gateway=1" : ""}`);
           await page.locator(".detail-header h1").waitFor();
           assert.equal(await page.locator(".list-pane .entry").count(), 2);
           if (scenario.startsWith("providers-add")) await page.locator(".toolbar").getByRole("button", { name: /^(Add|添加)$/ }).click();
@@ -56,6 +58,13 @@ try {
           if (scenario.startsWith("providers-edit")) await page.locator(".title-input").waitFor();
           const labels = JSON.parse(await readFile(resolve(root, `packages/ui/src/locales/${locale}.json`)));
           await page.evaluate(() => document.fonts.ready);
+          if (scenario.startsWith("providers-trash")) {
+            await page.getByRole("button", {name: new RegExp(`^${labels["sidebar.trash"]}`)}).click();
+            await page.locator(".detail-header").getByRole("button", {name: labels["providerDetail.deleteForever"], exact: true}).waitFor();
+            if (scenario === "providers-trash-delete") await page.locator(".detail-header").getByRole("button", {name: labels["providerDetail.deleteForever"], exact: true}).click();
+            if (scenario === "providers-trash-empty") await page.locator(".toolbar").getByRole("button", {name: labels["providerList.emptyTrash"], exact: true}).click();
+            if (scenario !== "providers-trash") await page.getByRole("dialog").waitFor();
+          }
           if (scenario === "providers-add-all") {
             for (const key of ["defaultModel", "tags", "notes", "domains", "consoleUrl", "modelAliases", "customHeaders", "group", "billing"]) {
               await page.locator(".add-field-trigger").click();
@@ -64,7 +73,7 @@ try {
             }
             await page.locator(".add-field-trigger").waitFor({state:"hidden"});
           }
-          if (scenario.endsWith("-advanced")) {
+          if (scenario.endsWith("-advanced") || ["providers-edit-fields", "providers-edit-gateway"].includes(scenario)) {
             const container = page.locator(scenario.startsWith("providers-add") ? ".modal-body" : ".detail-body");
             await container.getByRole("button", { name: /^(Advanced|高级)$/ }).click();
             await container.evaluate(node => { node.scrollTop = node.scrollHeight; });
@@ -74,6 +83,10 @@ try {
             // freeze the reference at a transient one-pixel scroll extent.
             await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
             await page.locator(scenario.startsWith("providers-add") ? ".modal-body" : ".detail-body").evaluate(node => { node.scrollTop = node.scrollHeight; });
+          }
+          if (["providers-edit-fields", "providers-edit-gateway"].includes(scenario)) {
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await page.locator(".detail-body").evaluate((node, top) => { node.scrollTop = top; }, scenario === "providers-edit-gateway" ? 800 : 550);
           }
           if (scenario === "providers-add-menu") await page.locator(".add-field-trigger").click();
           if (scenario === "providers-key-add") await page.locator(".credential-add-row .add-chip").click();
@@ -100,7 +113,13 @@ try {
               await Promise.all(node.getAnimations({subtree:true}).map(animation=>animation.finished));
             });
           }
-          const components = await measureComponents(page, process.argv.includes("--list-only") ? providerListSpecs() : providerSpecs(scenario));
+          const trashSpecs = scenario === "providers-trash" ? [...providerListSpecs().filter(spec => !["toolbar.refresh", "toolbar.connect", "toolbar.add"].includes(spec.name) && !/provider-list-(row|icon|title|subtitle)-1$/.test(spec.name)),
+            {name:"toolbar.empty-trash",selector:".toolbar .cta-btn"}, {name:"trash-expiry",selector:".detail-body > .banner.tone-warning"}] : [
+            {name:"trash-confirm-dialog",selector:".modal-content"},
+            {name:"trash-confirm-title",selector:".modal-title"},
+            {name:"trash-confirm-description",selector:".modal-description"},
+          ];
+          const components = await measureComponents(page, scenario.startsWith("providers-trash") ? trashSpecs : process.argv.includes("--list-only") ? providerListSpecs() : providerSpecs(scenario));
           await page.screenshot({ path: resolve(output, `${name}.reference.png`) });
           const trace = await page.evaluate(() => window.__parityTrace);
           assert.deepEqual(trace.filter(item => item.unsupported), []);

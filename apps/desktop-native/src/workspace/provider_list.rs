@@ -63,8 +63,10 @@ impl Workspace {
                     .map(|(index, entry)| {
                         let id = entry.id;
                         let selected = self.selected_provider == Some(id);
+                        // The root owns theme interpolation. Seed interaction colors
+                        // from the new palette, rather than layering a second fade.
                         let background = transition(
-                            format!("provider-row-background-{id}"),
+                            format!("provider-row-background-{id}-{}", self.dark),
                             RowColor(if selected {
                                 t.accent_soft
                             } else if self.hovered_provider == Some(id) {
@@ -78,7 +80,7 @@ impl Workspace {
                         )
                         .0;
                         let foreground = transition(
-                            format!("provider-row-title-{id}"),
+                            format!("provider-row-title-{id}-{}", self.dark),
                             RowColor(if selected { t.accent } else { t.text }),
                             timing(120),
                             window,

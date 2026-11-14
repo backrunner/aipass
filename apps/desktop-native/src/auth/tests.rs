@@ -3,6 +3,33 @@ use gpui::TestAppContext;
 use std::{cell::Cell, rc::Rc};
 
 #[gpui::test]
+fn appearance_keeps_password_identity_focus_and_pending_state(cx: &mut TestAppContext) {
+    cx.update(gpui_base::init);
+    let (view, cx) =
+        cx.add_window_view(|window, cx| AuthView::new(Mode::Create, false, false, window, cx));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let identity = view.password.entity_id();
+            view.password.update(cx, |input, cx| {
+                input.set_value("synthetic-only", window, cx);
+                input.focus(window, cx);
+            });
+            view.busy = true;
+            view.error = "pending-fixture".into();
+            for dark in [true, false, true] {
+                view.apply_appearance(dark, cx);
+                assert_eq!(view.theme.surface, Theme::new(dark).surface);
+                assert_eq!(view.password.entity_id(), identity);
+                assert_eq!(view.password.read(cx).value(), "synthetic-only");
+                assert!(view.password.read(cx).focus_handle(cx).is_focused(window));
+                assert!(view.mode == Mode::Create && view.busy);
+                assert_eq!(view.error, "pending-fixture");
+            }
+        })
+    });
+}
+
+#[gpui::test]
 fn background_status_refresh_preserves_in_progress_creation(cx: &mut TestAppContext) {
     cx.update(gpui_base::init);
     let (view, cx) =
@@ -31,7 +58,7 @@ fn confirmation_and_pending_state_gate_authentication_events(cx: &mut TestAppCon
     let observed = events.clone();
     let _subscription = cx.update(|_, cx| {
         cx.subscribe(&view, move |_, event, _| {
-            assert!(matches!(event, AuthEvent::Create(_)));
+            assert!(matches!(event, AuthEvent::Create { .. }));
             observed.set(observed.get() + 1);
         })
     });

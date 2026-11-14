@@ -1,0 +1,64 @@
+{
+  "groups": [
+    {
+      "manual": true,
+      "id": "00000000-0000-4000-8000-000000000010",
+      "name": "Shared model prices",
+      "versions": [
+        {
+          "effectiveFrom": 0,
+          "rules": [
+            {
+              "model": "claude-",
+              "inputMicrosPerMillion": 2500000,
+              "outputMicrosPerMillion": 12000000,
+              "cacheReadMicrosPerMillion": 250000,
+              "cacheCreationMicrosPerMillion": 3000000
+            }
+          ]
+        },
+        {
+          "effectiveFrom": 1794560400,
+          "rules": [
+            {
+              "model": "claude-",
+              "inputMicrosPerMillion": 2500000,
+              "outputMicrosPerMillion": 12000000,
+              "cacheReadMicrosPerMillion": 250000,
+              "cacheCreationMicrosPerMillion": 3000000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "manual": true,
+      "id": "00000000-0000-4000-8000-000000000011",
+      "name": "Alternate shared prices",
+      "versions": [
+        {
+          "effectiveFrom": 0,
+          "rules": [
+            {
+              "model": "claude-",
+              "inputMicrosPerMillion": 2500000,
+              "outputMicrosPerMillion": 12000000,
+              "cacheReadMicrosPerMillion": 250000,
+              "cacheCreationMicrosPerMillion": 3000000
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "assignments": [
+    {
+      "entryId": "00000000-0000-4000-8000-000000000001",
+      "secretId": "key-a",
+      "groupId": "00000000-0000-4000-8000-000000000010",
+      "multiplier": 0.5,
+      "manual": true
+    }
+  ],
+  "listPriceUpdatedAt": null
+}

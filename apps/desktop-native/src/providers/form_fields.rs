@@ -16,6 +16,7 @@ impl Form {
         cx: &Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
+        let inline_edit = self.draft.original.is_some() && index != 6;
         let focused = if index == 6 {
             self.notes.read(cx).focus_handle(cx).is_focused(window)
         } else {
@@ -24,6 +25,9 @@ impl Form {
                 .focus_handle(cx)
                 .is_focused(window)
         };
+        if index == 6 && self.is_editing() {
+            return self.edit_notes(focused, cx);
+        }
         let advanced_last = [8, 10, 11, 12, 13]
             .into_iter()
             .rev()
@@ -41,7 +45,7 @@ impl Form {
                     && self.visible.iter().rfind(|i| (3..=6).contains(*i)) == Some(&index)));
         div()
             .px(px(16.))
-            .py(px(13.))
+            .py(px(if inline_edit { 12. } else { 13. }))
             .flex()
             .gap(px(if removable { 8. } else { 10. }))
             .items_center()
@@ -53,15 +57,43 @@ impl Form {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .gap(px(if inline_edit { 5. } else { 4. }))
                     .when(index != 6 || self.draft.original.is_none(), |el| {
                         el.child(
                             div()
                                 .text_size(px(11.))
                                 .line_height(px(13.))
                                 .text_color(t.tertiary)
-                                .child(self.locale.text(LABELS[index]))
+                                .child(self.locale.text(match (inline_edit, index) {
+                                    (true, 3) => "providerDetail.endpoint",
+                                    (true, 8) => "providerDetail.console",
+                                    (true, 10) => "providerDetail.aliases",
+                                    (true, 11) => "providerDetail.headers",
+                                    _ => LABELS[index],
+                                }))
                                 .observe(format!("provider-field-{index}-label")),
+                        )
+                    })
+                    .when(inline_edit && index == 11, |el| {
+                        el.when_some(
+                            self.draft
+                                .original
+                                .as_ref()
+                                .filter(|entry| !entry.header_names.is_empty()),
+                            |el, entry| {
+                                el.child(
+                                    div()
+                                        .font_family(if cfg!(target_os = "macos") {
+                                            "Menlo"
+                                        } else {
+                                            "monospace"
+                                        })
+                                        .text_size(px(12.))
+                                        .line_height(px(14.))
+                                        .child(entry.header_names.join(", "))
+                                        .observe("provider-edit-header-names"),
+                                )
+                            },
                         )
                     })
                     .child(
@@ -74,22 +106,32 @@ impl Form {
                                 } else {
                                     64.
                                 }
+                            } else if inline_edit {
+                                29.
                             } else {
                                 28.
                             }))
-                            .rounded(px(4.))
+                            .rounded(px(if inline_edit { 0. } else { 4. }))
                             .border_b_1()
                             .border_color(if focused {
                                 t.accent
+                            } else if inline_edit {
+                                t.border
                             } else {
                                 t.border.opacity(0.58)
                             })
-                            .bg(if focused { t.surface2 } else { gpui::rgba(0) })
-                            .px(px(1.))
-                            .text_size(px(13.))
-                            .line_height(px(20.))
+                            .bg(if focused && !inline_edit {
+                                t.surface2
+                            } else {
+                                gpui::rgba(0)
+                            })
+                            .px(px(if inline_edit { 0. } else { 1. }))
+                            .text_size(px(if inline_edit { 12. } else { 13. }))
+                            .line_height(px(if inline_edit { 14. } else { 20. }))
                             .child(if index == 6 {
                                 Textarea::new(&self.notes).into_any_element()
+                            } else if index == 9 {
+                                self.concurrency_input(cx)
                             } else {
                                 Input::new(&self.inputs[index]).into_any_element()
                             })
@@ -120,7 +162,8 @@ impl Form {
                                         },
                                     )),
                                 )
-                            }),
+                            })
+                            .observe(format!("provider-field-{index}-input")),
                     )
                     .when(
                         matches!(index, 9 | 12) && self.draft.original.is_none(),

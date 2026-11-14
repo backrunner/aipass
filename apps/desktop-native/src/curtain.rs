@@ -24,6 +24,11 @@ pub struct Curtain {
 impl EventEmitter<CurtainEvent> for Curtain {}
 
 impl Curtain {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        cx.notify();
+    }
+
     pub fn new(direction: Direction, theme: Theme) -> Self {
         Self {
             direction,

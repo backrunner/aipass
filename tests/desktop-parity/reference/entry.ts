@@ -1,4 +1,5 @@
 import { mount } from "svelte";
+import RecoveryReference from "./RecoveryReference.svelte";
 import App from "../../../apps/desktop/src/App.svelte";
 import UnlockTransition from "../../../apps/desktop/src/lib/components/auth/UnlockTransition.svelte";
 import DynamicReference from "./DynamicReference.svelte";
@@ -7,7 +8,9 @@ import "../../../apps/desktop/src/styles.scss";
 window.__TAURI_INTERNALS__ ||= {};
 document.documentElement.dataset.platform = "darwin";
 const params = new URLSearchParams(location.search);
-if ((params.get("scenario") ?? "").startsWith("subscription-")) {
+if ((params.get("scenario") ?? "").startsWith("recovery-kit")) {
+  mount(RecoveryReference, { target: document.getElementById("app")! });
+} else if ((params.get("scenario") ?? "").startsWith("subscription-")) {
   mount(SubscriptionReference, { target: document.getElementById("app")! });
 } else if (["unlock-motion", "lock-motion"].includes(params.get("scenario") ?? "")) {
   document.documentElement.dataset.theme = params.get("theme") ?? "light";

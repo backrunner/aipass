@@ -10,6 +10,7 @@ pub(crate) struct Scale {
     origin: gpui::Point<f32>,
     tracked_origin: Option<std::rc::Rc<std::cell::Cell<gpui::Point<f32>>>>,
     offset: gpui::Point<Pixels>,
+    relative_offset: gpui::Point<f32>,
 }
 
 impl Scale {
@@ -21,6 +22,7 @@ impl Scale {
             origin: gpui::point(0.5, 0.5),
             tracked_origin: None,
             offset: gpui::Point::default(),
+            relative_offset: gpui::Point::default(),
         }
     }
     pub fn origin(mut self, origin: gpui::Point<f32>) -> Self {
@@ -43,13 +45,28 @@ impl Scale {
         }
         self
     }
+    /// CSS percentage translations use this frame's laid-out popup bounds.
+    /// Resolve once for both input geometry and paint, without a delayed probe.
+    pub fn translate_relative(mut self, offset: gpui::Point<f32>) -> Self {
+        if filters_enabled() {
+            self.relative_offset = offset;
+        }
+        self
+    }
+    fn resolved_offset(&self, bounds: Bounds<Pixels>) -> gpui::Point<Pixels> {
+        self.offset
+            + gpui::point(
+                bounds.size.width * self.relative_offset.x,
+                bounds.size.height * self.relative_offset.y,
+            )
+    }
     fn input_transform(&self, bounds: Bounds<Pixels>) -> ElementTransform {
         let origin = bounds.origin
             + gpui::point(
                 bounds.size.width * self.resolved_origin().x,
                 bounds.size.height * self.resolved_origin().y,
             );
-        ElementTransform::scale_around(origin, self.factor).translated(self.offset)
+        ElementTransform::scale_around(origin, self.factor).translated(self.resolved_offset(bounds))
     }
 }
 
@@ -118,7 +135,7 @@ impl Element for Scale {
                 LayerFilter {
                     scale: Some(self.factor),
                     scale_origin: Some(self.resolved_origin()),
-                    translate: Some(self.offset),
+                    translate: Some(self.resolved_offset(bounds)),
                     ..Default::default()
                 },
                 // Preserve the popup's 64 px shadow and its 24 px vertical offset.

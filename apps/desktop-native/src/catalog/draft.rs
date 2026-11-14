@@ -24,6 +24,7 @@ pub struct Draft {
     pub notes: String,
     pub concurrency: String,
     pub concurrency_touched: bool,
+    pub aliases_touched: bool,
     pub websockets: bool,
     pub websocket_touched: bool,
     pub add_fields: super::optional::AddFields,
@@ -73,6 +74,7 @@ impl Draft {
             notes: String::new(),
             concurrency: String::new(),
             concurrency_touched: false,
+            aliases_touched: false,
             websockets: true,
             websocket_touched: false,
             add_fields: Default::default(),
@@ -87,9 +89,16 @@ impl Draft {
             draft.auth = entry.auth_scheme.clone();
             draft.title = entry.title.clone();
             draft.domains = lists::encode(&entry.domains);
+            let inferred = super::editing::domains("", &entry.endpoints);
+            if inferred.len() == entry.domains.len()
+                && entry.domains.iter().all(|domain| inferred.contains(domain))
+            {
+                draft.domains.clear();
+            }
             draft.model = entry.default_model.clone().unwrap_or_default();
             draft.tags = lists::encode(&entry.tags);
             draft.notes = entry.notes.clone().unwrap_or_default();
+            draft.add_fields.aliases = super::optional::encode_pairs(&entry.model_aliases);
             draft.concurrency = entry
                 .max_concurrent_requests
                 .map(|n| n.to_string())
@@ -223,34 +232,40 @@ impl Draft {
             .then(|| self.concurrency.trim().parse::<u32>().unwrap_or(0));
         let websockets = (original.is_none() || self.websocket_touched).then_some(self.websockets);
         if let Some(entry) = original {
-            Ok(Action::Update(
-                entry.id,
-                Box::new(ProviderEntryUpdateInput {
-                    title,
-                    provider_kind: kind,
-                    provider_id: Some(self.provider_id),
-                    credential_kind: None,
-                    account_identity: None,
-                    domains: lists::parse(&self.domains),
-                    favicon_url: entry.favicon_url.clone(),
-                    endpoints,
-                    interface_type: self.interface,
-                    auth_scheme: self.auth,
-                    api_key: optional(self.api_key.expose()),
-                    secret_label: None,
-                    max_concurrent_requests: concurrency,
-                    supports_websockets: websockets,
-                    default_model: optional(&self.model),
-                    model_aliases: entry.model_aliases.clone(),
-                    headers: None,
-                    quota: entry.quota.clone(),
-                    subscription: None,
-                    gateway: entry.gateway.clone(),
-                    tags: lists::parse(&self.tags),
-                    notes: optional(&self.notes),
-                    secret_metadata: Default::default(),
-                }),
-            ))
+            let input = Box::new(ProviderEntryUpdateInput {
+                title,
+                provider_kind: kind,
+                provider_id: Some(self.provider_id),
+                credential_kind: None,
+                account_identity: None,
+                domains: super::editing::domains(&self.domains, &endpoints),
+                favicon_url: entry.favicon_url.clone(),
+                endpoints,
+                interface_type: self.interface,
+                auth_scheme: self.auth,
+                api_key: optional(self.api_key.expose()),
+                secret_label: None,
+                max_concurrent_requests: concurrency,
+                supports_websockets: websockets,
+                default_model: optional(&self.model),
+                model_aliases: if self.aliases_touched {
+                    super::optional::pairs(&self.add_fields.aliases)
+                } else {
+                    entry.model_aliases.clone()
+                },
+                headers: None,
+                quota: entry.quota.clone(),
+                subscription: None,
+                gateway: entry.gateway.clone(),
+                tags: lists::parse(&self.tags),
+                notes: optional(&self.notes),
+                secret_metadata: Default::default(),
+            });
+            Ok(if self.add_fields.headers.expose().trim().is_empty() {
+                Action::Update(entry.id, input)
+            } else {
+                Action::UpdateHeaders(entry.id, input, self.add_fields.headers)
+            })
         } else {
             Ok(Action::Add(Box::new(ProviderEntryInput {
                 title,
@@ -258,7 +273,7 @@ impl Draft {
                 provider_id: Some(self.provider_id),
                 credential_kind: CredentialKind::Api,
                 account_identity: None,
-                domains: lists::parse(&self.domains),
+                domains: super::editing::domains(&self.domains, &endpoints),
                 favicon_url: None,
                 endpoints,
                 interface_type: self.interface,

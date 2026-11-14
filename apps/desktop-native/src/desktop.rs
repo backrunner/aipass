@@ -1,3 +1,5 @@
+mod activity;
+mod appearance;
 mod session_sync;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
@@ -34,6 +36,9 @@ pub fn init(cx: &mut gpui::App) {
 }
 
 pub struct Desktop {
+    appearance: crate::appearance::Appearance,
+    _appearance_subscription: Subscription,
+    _preferences_subscription: Option<Subscription>,
     pub(crate) updater: Option<aipass_desktop_native::updates::Worker>,
     pub(crate) update_focus: gpui::FocusHandle,
     pub(crate) runtime_gate: Option<std::sync::Arc<aipass_desktop_native::runtime::Gate>>,
@@ -47,7 +52,7 @@ pub struct Desktop {
     chinese: bool,
     close_requested: bool,
     last_refresh: Instant,
-    recovery_confirmed: bool,
+    recovery: Entity<crate::recovery_kit::RecoveryKit>,
     pub(crate) theme: Theme,
     pub(crate) locale: Locale,
     pub(crate) focus: FocusHandle,
@@ -55,12 +60,14 @@ pub struct Desktop {
     curtain_subscription: Option<Subscription>,
     motion_generation: u64,
     motion_only: bool,
+    loading_preview: bool,
     lock_covered: bool,
     last_unlocked: Option<bool>,
     _subscription: Subscription,
     _workspace_subscription: Subscription,
     pending_command: Option<Command>,
     _focus_subscription: Subscription,
+    _activation_subscription: Subscription,
     _poll: Task<()>,
 }
 
@@ -83,6 +90,8 @@ impl Desktop {
         }
         if scenario.starts_with("providers-")
             && (scenario.ends_with("-advanced")
+                || scenario.ends_with("-fields")
+                || scenario.ends_with("-gateway")
                 || scenario.ends_with("-menu")
                 || scenario.ends_with("-all"))
         {
@@ -95,6 +104,9 @@ impl Desktop {
     }
     #[cfg(feature = "parity-render")]
     pub fn capture_ready(&self, cx: &gpui::App) -> Result<bool, String> {
+        if self.loading_preview {
+            return Ok(true);
+        }
         if self.motion_only {
             Ok(true)
         } else if self.show_workspace {
@@ -120,8 +132,9 @@ impl Desktop {
         let auth = cx.new(|cx| {
             AuthView::new(
                 match scenario {
-                    "setup" => Mode::Choose,
-                    "create" => Mode::Create,
+                    s if s.starts_with("setup-import-") => Mode::Import,
+                    s if s.starts_with("setup") => Mode::Choose,
+                    "create" | "create-local" => Mode::Create,
                     "recover" | "reset" | "reset-bottom" => Mode::Recover,
                     _ => Mode::Unlock,
                 },
@@ -138,6 +151,11 @@ impl Desktop {
         workspace.update(cx, |workspace, cx| {
             workspace.preview_providers(scenario, window, cx)
         });
+        let recovery = cx.new(|cx| crate::recovery_kit::RecoveryKit::new(dark, chinese, cx));
+        #[cfg(feature = "parity-render")]
+        if scenario.starts_with("recovery-kit") {
+            recovery.update(cx, |v, cx| v.preview(scenario, window, cx));
+        }
         let toast = cx.new(|cx| ErrorToast::new(dark, chinese, window, cx));
         if matches!(scenario, "toast" | "toast-long") {
             toast.update(cx, |toast, cx| {
@@ -151,15 +169,19 @@ impl Desktop {
         let subscription = cx.subscribe_in(&auth, window, |this, _, event, window, cx| {
             let command = match event {
                 AuthEvent::Unlock(password) => Some(Command::Unlock(password.clone())),
-                AuthEvent::Create(password) => Some(Command::Create {
+                AuthEvent::Create {
+                    password,
+                    local_only,
+                } => Some(Command::Create {
                     password: password.clone(),
-                    local_only: false,
+                    local_only: *local_only,
                 }),
                 AuthEvent::Recover { key, password } => Some(Command::Recover {
                     key: key.clone(),
                     password: password.clone(),
                 }),
-                AuthEvent::Import => None,
+                AuthEvent::Import(request) => Some(Command::Import(request.clone())),
+                AuthEvent::CheckCloud => Some(Command::CheckCloud),
                 AuthEvent::Reset => Some(Command::Reset),
             };
             if let (Some(session), Some(command)) = (&mut this.session, command) {
@@ -216,6 +238,19 @@ impl Desktop {
                             }
                         }
                     }
+                    WorkspaceEvent::Trash => {
+                        if let Some(request) = view.update(cx, |view, cx| view.take_trash_request(cx)) {
+                            if this.session.as_ref().is_some_and(Session::is_unlocked) {
+                                this.pending_command = Some(Command::Trash(request));
+                            } else {
+                                let completion = aipass_desktop_native::trash::Completion {
+                                    generation: request.generation,
+                                    result: Err(aipass_agent::AgentCommandError { code: None, message: this.locale.text("tray.agentUnavailable") }),
+                                };
+                                view.update(cx, |view, cx| view.complete_trash(completion, window, cx));
+                            }
+                        }
+                    }
                     WorkspaceEvent::Credential => {
                         let request = view.update(cx, |view, cx| view.take_credential_request(cx));
                         if let Some(request) = request {
@@ -267,7 +302,10 @@ impl Desktop {
                 this.update_session(window, cx);
             });
         let show_workspace = session.is_none()
-            && (scenario.starts_with("subscription-")
+            && (scenario.starts_with("agents-")
+                || scenario.starts_with("recovery-kit")
+                || scenario.starts_with("subscription-")
+                || scenario.starts_with("providers-trash")
                 || matches!(
                     scenario,
                     "empty"
@@ -296,10 +334,20 @@ impl Desktop {
                         | "providers-edit"
                         | "providers-add-advanced"
                         | "providers-edit-advanced"
+                        | "providers-edit-fields"
+                        | "providers-edit-gateway"
                         | "providers-key-add"
                         | "providers-key-edit"
                         | "providers-key-billing"
                         | "providers-key-reveal"
+                        | "providers-pricing"
+                        | "providers-pricing-reference"
+                        | "providers-pricing-source"
+                        | "providers-pricing-group"
+                        | "providers-pricing-confirm"
+                        | "providers-pricing-delete"
+                        | "providers-pricing-history"
+                        | "providers-pricing-offpeak"
                         | "providers-integration-picker"
                         | "providers-integration-diff"
                         | "providers-integration-full"
@@ -326,6 +374,13 @@ impl Desktop {
                 this.focus.focus(window, cx);
             } else {
                 this.auth.update(cx, |auth, cx| auth.focus(window, cx));
+            }
+        });
+        let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() && this.session.as_ref().is_some_and(Session::is_unlocked)
+            {
+                let agents = this.workspace.read(cx).agents.clone();
+                agents.update(cx, |view, cx| view.focused(cx));
             }
         });
         if show_workspace || window.focused(cx).is_none() {
@@ -365,7 +420,15 @@ impl Desktop {
                 break;
             }
         });
+        let appearance_subscription = cx.observe_window_appearance(window, |this, window, cx| {
+            this.appearance.requested =
+                crate::appearance::resolve(this.appearance.preference, window.appearance());
+            cx.notify();
+        });
         Self {
+            appearance: crate::appearance::Appearance::new(dark),
+            _appearance_subscription: appearance_subscription,
+            _preferences_subscription: None,
             updater: None,
             update_focus: cx.focus_handle(),
             runtime_gate: None,
@@ -380,7 +443,7 @@ impl Desktop {
             chinese,
             close_requested: false,
             last_refresh: Instant::now(),
-            recovery_confirmed: false,
+            recovery,
             theme: Theme::new(dark),
             locale: Locale::new(chinese),
             focus,
@@ -388,12 +451,14 @@ impl Desktop {
             curtain_subscription: None,
             motion_generation: 0,
             motion_only,
+            loading_preview: scenario == "boot",
             lock_covered: false,
             last_unlocked: None,
             _subscription: subscription,
             _workspace_subscription: workspace_subscription,
             pending_command: None,
             _focus_subscription: focus_subscription,
+            _activation_subscription: activation_subscription,
             _poll: poll,
         }
     }

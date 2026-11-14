@@ -65,6 +65,63 @@ pub(super) fn fixture(cx: &mut TestAppContext) -> (Entity<Integrations>, &mut Vi
 }
 
 #[gpui::test]
+fn editing_allows_detection_but_keeps_config_writes_blocked(cx: &mut TestAppContext) {
+    let (view, cx) = fixture(cx);
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.sync(view.entry.clone(), true, cx);
+            assert!(!view.can_configure(&ToolConfigTool::Codex));
+            view.show_preview(ToolConfigTool::Codex, false, cx);
+            assert!(view.take_request().is_none());
+            view.scan(cx);
+            let request = view
+                .take_request()
+                .expect("read-only detection remains available");
+            assert!(matches!(request.operation, Operation::Scan));
+            view.scan(cx);
+            assert!(view.take_request().is_none());
+            assert!(!view.can_configure(&ToolConfigTool::Codex));
+        })
+    });
+}
+
+#[gpui::test]
+fn codex_modes_roam_with_keys_during_editing_without_writing(cx: &mut TestAppContext) {
+    let (view, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.sync(view.entry.clone(), true, cx);
+            view.mode_focus[0].focus(window, cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+    for (key, expected) in [
+        ("right", 1),
+        ("right", 0),
+        ("end", 1),
+        ("home", 0),
+        ("left", 1),
+    ] {
+        cx.simulate_keystrokes(key);
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            assert!(view.mode_focus[expected].is_focused(window));
+            assert_eq!(
+                view.codex_mode,
+                if expected == 0 {
+                    CodexApiKeyMode::AuthJson
+                } else {
+                    CodexApiKeyMode::ExperimentalBearerToken
+                }
+            );
+            assert!(!view.has_request());
+            assert!(!view.can_configure(&ToolConfigTool::Codex));
+            window.draw(cx).clear(cx);
+        });
+    }
+}
+
+#[gpui::test]
 fn multiple_keys_require_explicit_selection_and_confirmation_keeps_exact_request(
     cx: &mut TestAppContext,
 ) {

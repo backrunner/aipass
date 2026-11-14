@@ -19,6 +19,11 @@ pub struct Request {
 
 pub enum Operation {
     Reveal(String),
+    Copy {
+        secret_id: String,
+        permit: aipass_desktop_platform::clipboard::CopyPermit,
+        seconds: u16,
+    },
     Add {
         label: String,
         value: SensitiveString,
@@ -36,6 +41,7 @@ pub enum Operation {
 pub enum Outcome {
     Revealed(SensitiveString),
     Applied,
+    Copied(bool),
 }
 
 pub struct Completion {
@@ -47,6 +53,27 @@ impl Request {
     pub(crate) fn execute(self, client: &AgentClient) -> Completion {
         let id = self.scope.entry;
         let result = match self.operation {
+            Operation::Copy {
+                secret_id,
+                permit,
+                seconds,
+            } => {
+                if !permit.is_current() {
+                    Ok(Outcome::Copied(false))
+                } else {
+                    client
+                        .request::<SecretValue>(&AgentRequest::SecretRevealId { id, secret_id })
+                        .and_then(|value| {
+                            permit
+                                .write(value.secret, seconds)
+                                .map(Outcome::Copied)
+                                .map_err(|message| AgentCommandError {
+                                    code: None,
+                                    message,
+                                })
+                        })
+                }
+            }
             Operation::Reveal(secret_id) => client
                 .request::<SecretValue>(&AgentRequest::SecretRevealId { id, secret_id })
                 .map(|value| Outcome::Revealed(value.secret)),

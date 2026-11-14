@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/aipass-desktop-platform",
   "apps/desktop-native",
   "apps/desktop/src-tauri",
   "crates/aipass-agent",

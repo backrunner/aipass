@@ -4,36 +4,14 @@ use crate::models::SavePreferencesRequest;
 use crate::*;
 use aipass_agent_protocol::SessionPolicy;
 
-pub(crate) fn normalize_clipboard_seconds(seconds: u16) -> u16 {
-    if seconds == 0 {
-        45
-    } else {
-        seconds.min(600)
-    }
-}
+pub(crate) use aipass_desktop_platform::clipboard::normalize_seconds as normalize_clipboard_seconds;
 
 pub(crate) fn load_preferences(app: &AppHandle) -> Result<AppPreferences, String> {
-    let path = preferences_path(app)?;
-    if !path.exists() {
-        return Ok(AppPreferences::default());
-    }
-    let bytes = fs::read(&path).map_err(|err| err.to_string())?;
-    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
-        Ok(value) => value,
-        Err(_) => return Ok(AppPreferences::default()),
-    };
-    let had_persist_unlock = value.get("persistUnlock").is_some();
-    let preferences: AppPreferences =
-        serde_json::from_value(value).unwrap_or_else(|_| AppPreferences::default());
-    if had_persist_unlock {
-        write_json_atomic(&path, &preferences)?;
-    }
-    Ok(preferences)
+    aipass_desktop_platform::preferences::load_and_migrate(&preferences_path(app)?)
 }
 
 fn save_preferences(app: &AppHandle, preferences: &AppPreferences) -> Result<(), String> {
-    let path = preferences_path(app)?;
-    write_json_atomic(&path, preferences)
+    aipass_desktop_platform::preferences::save(&preferences_path(app)?, preferences)
 }
 
 fn preferences_path(app: &AppHandle) -> Result<PathBuf, String> {

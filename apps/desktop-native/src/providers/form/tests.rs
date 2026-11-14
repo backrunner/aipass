@@ -26,6 +26,223 @@ fn form(cx: &mut TestAppContext, edit: bool) -> (Entity<Form>, &mut VisualTestCo
 }
 
 #[gpui::test]
+fn editing_title_starts_focused_at_unicode_end(cx: &mut TestAppContext) {
+    cx.update(gpui_base::init);
+    let title = "网关 🎉";
+    let mut form = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let mut entry = aipass_desktop_native::catalog::Catalog::fixture()
+            .active
+            .remove(0);
+        entry.title = title.into();
+        let view = cx.new(|cx| Form::new(Some(entry), false, false, window, cx));
+        form = Some(view.clone());
+        gpui_base::Root::new(view, window, cx)
+    });
+    let form = form.unwrap();
+    cx.update(|window, cx| {
+        window.activate_window();
+        let input = form.read(cx).inputs[0].read(cx);
+        assert!(input.focus_handle(cx).is_focused(window));
+        assert_eq!(input.selected_range(), title.len()..title.len());
+    });
+    cx.simulate_keystrokes("x");
+    form.read_with(cx, |form, cx| {
+        assert_eq!(form.inputs[0].read(cx).value(), format!("{title}x"))
+    });
+}
+
+#[gpui::test]
+fn concurrency_steps_with_keyboard_mouse_bounds_and_undo(cx: &mut TestAppContext) {
+    let (form, cx) = form(cx, true);
+    cx.simulate_resize(gpui::size(px(960.), px(640.)));
+    cx.update(|window, cx| {
+        form.update(cx, |form, cx| {
+            form.preview_edit_fields(false);
+            form.capture_scroll = Some(700.);
+            form.inputs[9].read(cx).focus_handle(cx).focus(window, cx);
+        });
+        window.draw(cx).clear(cx);
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(250));
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        form.read(cx).prepare_capture_scroll();
+        window.draw(cx).clear(cx);
+    });
+    let value = |cx: &mut VisualTestContext| {
+        form.read_with(cx, |form, cx| form.inputs[9].read(cx).value().to_string())
+    };
+    cx.simulate_keystrokes("up");
+    assert_eq!(value(cx), "5");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(value(cx), "4");
+    for (initial, key, expected) in [
+        ("0", "down", "0"),
+        ("4294967295", "up", "4294967295"),
+        ("1.5", "up", "2"),
+        ("1.5", "down", "1"),
+        ("", "up", "1"),
+        ("", "down", "0"),
+    ] {
+        cx.update(|window, cx| {
+            form.read(cx).inputs[9]
+                .clone()
+                .update(cx, |input, cx| input.set_value(initial, window, cx));
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_keystrokes(key);
+        assert_eq!(value(cx), expected);
+    }
+    let arrow = cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        let b = cx.global::<crate::parity::Geometry>().0["provider-concurrency-increment"];
+        assert!(
+            b[1] > 100. && b[1] + b[3] < 640.,
+            "stepper must be visible: {b:?}"
+        );
+        gpui::point(px(b[0] + b[2] / 2.), px(b[1] + b[3] / 2.))
+    });
+    cx.simulate_mouse_move(arrow, gpui::MouseButton::Left, Default::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_mouse_down(arrow, gpui::MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(arrow, gpui::MouseButton::Left, Default::default());
+    assert_eq!(value(cx), "1");
+    cx.update(|window, _| window.activate_window());
+    cx.simulate_mouse_down(arrow, gpui::MouseButton::Left, Default::default());
+    assert_eq!(value(cx), "2");
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    cx.run_until_parked();
+    assert_eq!(value(cx), "3");
+    cx.simulate_mouse_up(
+        gpui::point(px(0.), px(0.)),
+        gpui::MouseButton::Left,
+        Default::default(),
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    cx.run_until_parked();
+    assert_eq!(value(cx), "3");
+    cx.update(|window, cx| {
+        assert!(form.read(cx).inputs[9]
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window));
+        form.update(cx, |form, cx| form.set_busy(true, cx));
+        window.draw(cx).clear(cx);
+    });
+    cx.simulate_keystrokes("up");
+    cx.simulate_mouse_down(arrow, gpui::MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(arrow, gpui::MouseButton::Left, Default::default());
+    assert_eq!(value(cx), "3");
+}
+
+#[gpui::test]
+fn editing_notes_resize_preserves_text_and_clears_on_cancel(cx: &mut TestAppContext) {
+    let (form, cx) = form(cx, true);
+    cx.simulate_resize(gpui::size(px(960.), px(640.)));
+    cx.update(|window, cx| {
+        form.update(cx, |form, _| form.capture_scroll = Some(500.));
+        window.draw(cx).clear(cx);
+        form.read(cx).prepare_capture_scroll();
+        window.draw(cx).clear(cx);
+    });
+    let before = form.read_with(cx, |form, cx| form.notes.read(cx).value().to_string());
+    for dy in [80., -200.] {
+        let start = cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            let b = cx.global::<crate::parity::Geometry>().0["provider-edit-notes-resize"];
+            gpui::point(px(b[0] + b[2] / 2.), px(b[1] + b[3] / 2.))
+        });
+        cx.simulate_mouse_down(start, gpui::MouseButton::Left, Default::default());
+        for offset in [dy / 2., dy] {
+            cx.simulate_mouse_move(
+                start + gpui::point(px(0.), px(offset)),
+                gpui::MouseButton::Left,
+                Default::default(),
+            );
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+        cx.simulate_mouse_up(
+            start + gpui::point(px(0.), px(dy)),
+            gpui::MouseButton::Left,
+            Default::default(),
+        );
+        form.read_with(cx, |form, cx| {
+            assert_eq!(form.notes.read(cx).value().as_ref(), before);
+            let expected = if dy > 0. { px(146.6) } else { px(64.) };
+            assert!((form.notes_height - expected).abs() < px(0.001));
+        });
+    }
+    cx.update(|window, cx| form.update(cx, |form, cx| form.clear(window, cx)));
+    form.read_with(cx, |form, cx| {
+        assert_eq!(form.notes_height, px(66.6));
+        assert!(form.notes.read(cx).value().is_empty());
+    });
+}
+
+#[gpui::test]
+fn edit_aliases_refresh_then_preserve_typed_draft_and_clear_headers_on_cancel(
+    cx: &mut TestAppContext,
+) {
+    let (form, cx) = form(cx, true);
+    cx.update(|window, cx| {
+        form.update(cx, |view, cx| {
+            assert_eq!(view.inputs[10].read(cx).value(), "fast=fixture-model");
+            assert!(view.inputs[11].read(cx).value().is_empty());
+            let mut fresh = view.draft.original.clone().unwrap();
+            fresh.model_aliases = vec![("background".into(), "current".into())];
+            view.refresh_original(&fresh, window, cx);
+            assert_eq!(view.inputs[10].read(cx).value(), "background=current");
+            assert!(!view.draft.aliases_touched);
+            view.inputs[10].update(cx, |input, cx| {
+                input.set_value("", window, cx);
+                input.focus_handle(cx).focus(window, cx);
+            });
+        })
+    });
+    cx.update(|window, cx| {
+        form.read(cx).inputs[10]
+            .clone()
+            .update(cx, |input, cx| input.insert("fast=new", window, cx))
+    });
+    cx.update(|window, cx| {
+        form.update(cx, |view, cx| {
+            assert!(view.draft.aliases_touched);
+            let mut fresh = view.draft.original.clone().unwrap();
+            fresh.model_aliases.clear();
+            view.refresh_original(&fresh, window, cx);
+            assert_eq!(view.inputs[10].read(cx).value(), "fast=new");
+            view.inputs[11].update(cx, |input, cx| {
+                input.insert("x-version=fixture", window, cx)
+            });
+            view.save(cx);
+            let request = view
+                .take_action()
+                .unwrap()
+                .into_request(|_| Ok(vec![("x-keep".into(), "original".into())]))
+                .unwrap();
+            let aipass_agent_protocol::AgentRequest::ProviderUpdate { input, .. } = request else {
+                panic!("update expected")
+            };
+            assert_eq!(input.model_aliases, [("fast".into(), "new".into())]);
+            assert_eq!(input.headers.unwrap().len(), 2);
+            view.set_busy(false, cx);
+            view.clear(window, cx);
+            assert!(view.inputs[11].read(cx).value().is_empty());
+            view.inputs[11].read(cx).focus_handle(cx).focus(window, cx);
+        })
+    });
+    cx.simulate_keystrokes("cmd-z");
+    form.read_with(cx, |view, cx| {
+        assert!(view.inputs[11].read(cx).value().is_empty())
+    });
+}
+
+#[gpui::test]
 fn optional_fields_add_remove_focus_and_agent_payload(cx: &mut TestAppContext) {
     let (form, cx) = form(cx, false);
     cx.update(|window, cx| {

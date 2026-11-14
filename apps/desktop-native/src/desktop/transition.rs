@@ -21,6 +21,7 @@ impl Desktop {
     }
 
     pub(super) fn lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        aipass_desktop_platform::clipboard::invalidate();
         if let Some(worker) = &self.updater {
             worker.cancel_confirmation();
         }
@@ -34,7 +35,7 @@ impl Desktop {
         if let Some(session) = &mut self.session {
             session.submit(Command::Lock);
         }
-        self.recovery_confirmed = false;
+        self.recovery.update(cx, |view, cx| view.clear(cx));
         self.pending_command = None;
         self.workspace
             .update(cx, |view, cx| view.clear_providers(window, cx));

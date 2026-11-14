@@ -1,4 +1,5 @@
 use super::*;
+use gpui::Focusable;
 use gpui::{point, size, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext};
 use std::{cell::Cell, rc::Rc};
 
@@ -22,6 +23,59 @@ fn press(cx: &mut VisualTestContext, key: &str) {
     });
     cx.simulate_event(KeyUpEvent { keystroke });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+#[gpui::test]
+fn appearance_preserves_search_editor_and_open_form(cx: &mut TestAppContext) {
+    let (view, cx) = workspace(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.preview_providers("providers-edit", window, cx);
+            let form = view.provider_form.as_ref().unwrap().entity_id();
+            let search = view.search.entity_id();
+            view.search.update(cx, |input, cx| {
+                input.set_value("draft search", window, cx);
+                input.focus(window, cx);
+            });
+            for dark in [true, false, true] {
+                view.apply_appearance(dark, cx);
+                assert_eq!(view.theme.text, Theme::new(dark).text);
+                assert_eq!(view.provider_form.as_ref().unwrap().entity_id(), form);
+                assert_eq!(view.search.entity_id(), search);
+                assert_eq!(view.search.read(cx).value(), "draft search");
+                assert!(view.search.read(cx).focus_handle(cx).is_focused(window));
+            }
+        })
+    });
+}
+
+#[gpui::test]
+fn public_endpoint_copy_uses_metadata_and_rejects_a_retired_provider(cx: &mut TestAppContext) {
+    let (view, cx) = workspace(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.preview_providers("providers", window, cx);
+            let entry = view.selected_provider.unwrap();
+            let value = aipass_desktop_native::catalog::encode_list([
+                "https://example.invalid/?models=a,b",
+                "https://second.invalid/v1",
+            ]);
+            view.copy_endpoint(entry, value.clone(), window, cx);
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some(value.clone())
+            );
+            assert!(view.provider_action.is_none());
+            view.selected_provider = Some(view.catalog.active[1].id);
+            view.copy_endpoint(entry, "retired metadata".into(), window, cx);
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some(value)
+            );
+            view.clear_providers(window, cx);
+            assert!(view.copied_endpoint.is_none());
+        })
+    });
 }
 
 #[gpui::test]
@@ -363,6 +417,33 @@ fn provider_action_menu_uses_keyboard_and_dispatches_once(cx: &mut TestAppContex
     }));
     press(cx, "enter");
     assert!(view.update(cx, |v, _| v.take_provider_action().is_none()));
+}
+
+#[gpui::test]
+fn editing_preserves_runtime_and_integration_panels(cx: &mut TestAppContext) {
+    let (view, cx) = workspace(cx);
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |v, cx| {
+            v.preview_providers("providers-edit", window, cx);
+            v.sync_credentials(window, cx);
+        });
+        window.draw(cx).clear(cx);
+        let geometry = &cx.global::<crate::parity::Geometry>().0;
+        assert!(geometry.contains_key("subscription-runtime-card"));
+        assert!(geometry.contains_key("provider-edit-notes"));
+        assert!(geometry.contains_key("provider-integration-card"));
+        let integrations = view.read(cx).integrations.read(cx);
+        assert_eq!(integrations.presentation(cx)["blocked"], true);
+        assert!(!integrations.has_request());
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |v, cx| {
+            v.close_provider_form(window, cx);
+            v.sync_credentials(window, cx);
+            assert_eq!(v.integrations.read(cx).presentation(cx)["blocked"], false);
+        });
+    });
 }
 
 #[gpui::test]

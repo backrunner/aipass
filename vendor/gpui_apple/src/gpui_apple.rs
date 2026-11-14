@@ -14,6 +14,8 @@ pub mod thermal;
 #[cfg(feature = "font-kit")]
 mod open_type;
 #[cfg(feature = "font-kit")]
+mod system_font_weights;
+#[cfg(feature = "font-kit")]
 mod text_system;
 
 pub use dispatcher::{AppleActivity, AppleDispatcher};

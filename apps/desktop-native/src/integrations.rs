@@ -13,9 +13,10 @@ mod login;
 mod native;
 #[cfg(all(test, feature = "parity-render"))]
 mod native_tests;
-mod preview;
+pub(crate) mod preview;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
+mod tool_rows;
 mod view;
 
 pub struct RequestEvent;
@@ -36,6 +37,7 @@ pub struct Integrations {
     generation: u64,
     secret_id: Option<String>,
     codex_mode: CodexApiKeyMode,
+    mode_focus: [gpui::FocusHandle; 2],
     detections: Vec<aipass_config_writers::ToolDetection>,
     statuses: Vec<ToolConfigStatus>,
     scanned: bool,
@@ -65,6 +67,18 @@ pub struct Integrations {
 }
 
 impl Integrations {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        self.dark = dark;
+        if let Some(view) = &self.preview {
+            view.update(cx, |view, cx| view.apply_appearance(dark, cx));
+        }
+        if let Some(view) = &self.login {
+            view.update(cx, |view, cx| view.apply_appearance(dark, cx));
+        }
+        cx.notify();
+    }
+
     pub fn new(dark: bool, chinese: bool, cx: &mut Context<Self>) -> Self {
         crate::menu::init(cx);
         Self {
@@ -73,6 +87,7 @@ impl Integrations {
             generation: 0,
             secret_id: None,
             codex_mode: CodexApiKeyMode::AuthJson,
+            mode_focus: std::array::from_fn(|_| cx.focus_handle()),
             detections: vec![],
             statuses: vec![],
             scanned: false,
@@ -199,7 +214,7 @@ impl Integrations {
         self.blocked || self.pending.is_some()
     }
     fn send(&mut self, operation: Operation, pending: Pending, cx: &mut Context<Self>) {
-        if self.busy() {
+        if self.pending.is_some() || (self.blocked && !matches!(operation, Operation::Scan)) {
             return;
         }
         let Some(entry) = &self.entry else {
@@ -224,7 +239,7 @@ impl Integrations {
         cx.notify();
     }
     fn scan(&mut self, cx: &mut Context<Self>) {
-        if self.busy() {
+        if self.pending.is_some() {
             return;
         }
         self.plan = None;
@@ -246,7 +261,7 @@ impl Integrations {
         cx.notify();
     }
     fn set_mode(&mut self, mode: CodexApiKeyMode, cx: &mut Context<Self>) {
-        if self.busy() {
+        if self.pending.is_some() || self.codex_mode == mode {
             return;
         }
         self.invalidate(cx);

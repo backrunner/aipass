@@ -55,7 +55,11 @@ impl Frame {
             self.height,
             measured_body::MeasuredBody::new(
                 self.open || self.height > 0.,
-                div().opacity(self.fade).child(body).into_any_element(),
+                div()
+                    .pixel_snap(false)
+                    .opacity(self.fade)
+                    .child(body)
+                    .into_any_element(),
             )
             .into_any_element(),
         )

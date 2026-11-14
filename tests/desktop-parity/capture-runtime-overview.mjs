@@ -72,6 +72,13 @@ try {
         "runtime-chevron": " .collapsible-chevron", "runtime-actions": " .collapsible-actions", "runtime-configure": " .icon-btn", "runtime-configure-icon": " .icon-btn svg" };
       if (expanded) Object.assign(parts, { "runtime-card-body": " .card-body", "runtime-overview": " .settings-overview" });
       const specs = Object.entries(parts).map(([name, suffix]) => ({ name, selector: base + suffix }));
+      // Preceding content determines the collapsed card's absolute position.
+      // Include its badge so an accidental wrap cannot hide behind scroll alignment.
+      for (const [name, selector] of Object.entries({
+        "subscription-usage-plan": ".subscription-usage .plan",
+        "subscription-usage-plan-name": ".subscription-usage .plan strong",
+        "subscription-usage-status": ".subscription-usage .plan .badge",
+      })) specs.push({ name, selector });
       if (expanded) for (let index = 0; index < 4; index++) for (const [part, suffix] of Object.entries({ row: "", icon: " .overview-icon", label: " strong", summary: " .overview-copy > span" }))
         specs.push({ name: `runtime-${part}-${index}`, selector: base + " .overview-row" + suffix, index });
       const components = await measureComponents(page, specs);

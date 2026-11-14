@@ -1,9 +1,14 @@
+import pricingFixture from "../fixtures/pricing.json";
+import gatewayFixture from "../fixtures/provider-gateway.json";
 import { fixtureTime, providers, proxyConfig, proxyStatus, timeseries, usage } from "./business-fixtures";
 import previewFiles from "./business-preview-files.json";
-import type { EntrySummary, ProxyConfig, ToolConfigStatus, ToolConfigPreview } from "../../../apps/desktop/src/lib/types";
+import type { EntrySummary, PricingConfig, ProxyConfig, ToolConfigStatus, ToolConfigPreview } from "../../../apps/desktop/src/lib/types";
 
 export function businessBridge(emit: (name: string, payload: unknown) => void, jsonRoute = false, initialEntries?: EntrySummary[]) {
   let entries = initialEntries ? structuredClone(initialEntries) : providers();
+  if (new URLSearchParams(location.search).has("gateway")) entries[0].gateway = structuredClone(gatewayFixture);
+  const pricing: PricingConfig = new URLSearchParams(location.search).has("pricing") ? structuredClone(pricingFixture) : {groups: [], assignments: [], listPriceUpdatedAt: null};
+  if (new URLSearchParams(location.search).has("pricing")) entries[0].secretRefs[0].billing = {rate: "0.75", currency: "USD", unitPrice: "0.01", note: "Synthetic reference billing"};
   let config = proxyConfig();
   if (jsonRoute) {
     config.routes[0].inboundProtocol = "anthropic_messages";
@@ -36,6 +41,18 @@ export function businessBridge(emit: (name: string, payload: unknown) => void, j
       const message = failures.get(command)!; failures.delete(command); throw new Error(message);
     }
     switch (command) {
+      case "pricing_config_get":
+      case "pricing_remote_sync": return clone(pricing);
+      case "pricing_assignment_set": {
+        pricing.assignments = pricing.assignments.filter(a => a.entryId !== args.entryId || a.secretId !== args.secretId);
+        pricing.assignments.push({entryId:args.entryId,secretId:args.secretId,groupId:args.groupId,multiplier:args.multiplier,manual:true}); return clone(pricing);
+      }
+      case "pricing_group_upsert": {
+        const index = pricing.groups.findIndex(g => g.id === args.group.id);
+        if (index < 0) pricing.groups.push(args.group); else pricing.groups[index] = args.group;
+        return clone(pricing);
+      }
+
       case "entries_list": return clone(entries.filter(entry => !entry.deletedAt && !!entry.archivedAt === !!args.archived));
       case "entries_trash_list": return clone(entries.filter(entry => entry.deletedAt));
       case "entries_favorites_list": return clone(entries.filter(entry => entry.favorite && !entry.archivedAt));

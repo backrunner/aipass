@@ -1,5 +1,4 @@
-//! Optional fields on the add-provider form. Existing entry updates keep their
-//! metadata through the edit workflow; this only builds the existing Add DTO.
+//! Provider form assignments and optional metadata for new credentials.
 use aipass_agent_protocol::SensitiveString;
 use aipass_provider_registry::BillingRule;
 use aipass_vault::SecretMetadataInput;
@@ -77,6 +76,20 @@ pub fn pairs(value: &str) -> Vec<(String, String)> {
         }
     }
     result
+}
+
+pub fn encode_pairs(pairs: &[(String, String)]) -> String {
+    let escape = |value: &str| {
+        value
+            .replace('\\', "\\\\")
+            .replace(',', "\\,")
+            .replace('=', "\\=")
+    };
+    pairs
+        .iter()
+        .map(|(name, value)| format!("{}={}", escape(name), escape(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

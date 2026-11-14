@@ -9,17 +9,25 @@ use aipass_agent_protocol::{
 use aipass_vault::EntrySummary;
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender, TryRecvError},
-    thread,
+    sync::mpsc::{Receiver, Sender, TryRecvError},
 };
 use uuid::Uuid;
 
+mod activity;
+mod worker;
+
 pub enum Command {
     Refresh,
+    Import(crate::onboarding::Import),
+    CheckCloud,
+    Touch,
+    Trash(crate::trash::Request),
+    Pricing(Box<crate::pricing::Request>),
     Provider(ProviderAction),
     Credential(Box<crate::credentials::Request>),
     ProviderTools(Box<crate::provider_tools::Request>),
     Integration(Box<crate::integration::Request>),
+    Agents(Box<crate::agent_management::Request>),
     Subscription(Box<crate::subscriptions::Request>),
     Unlock(SensitiveString),
     Create {
@@ -35,9 +43,13 @@ pub enum Command {
 }
 
 pub enum Reply {
+    Touched(SessionStatus),
+    Trash(crate::trash::Completion),
+    Pricing(Box<crate::pricing::Completion>),
     Credential(crate::credentials::Completion),
     ProviderTools(Box<crate::provider_tools::Completion>),
     Integration(Box<crate::integration::Completion>),
+    Agents(Box<crate::agent_management::Completion>),
     Subscription(Box<crate::subscriptions::Completion>),
     ProviderApplied {
         selected: Option<Uuid>,
@@ -46,6 +58,7 @@ pub enum Reply {
     Catalog {
         status: SessionStatus,
         catalog: Box<Catalog>,
+        sync_settings: Option<Result<aipass_agent_protocol::SyncSettings, AgentCommandError>>,
         selected: Option<Uuid>,
         saved: bool,
     },
@@ -105,6 +118,11 @@ impl AgentTransport {
             Catalog::default()
         };
         Ok(Reply::Catalog {
+            sync_settings: if !status.exists {
+                Some(self.0.request(&AgentRequest::SyncSettingsGet))
+            } else {
+                None
+            },
             status,
             catalog: Box::new(catalog),
             selected: None,
@@ -126,7 +144,21 @@ impl Transport for AgentTransport {
             })?;
         }
         match command {
+            Command::Pricing(request) => Ok(Reply::Pricing(Box::new(request.execute(&self.0)))),
+            Command::Trash(request) => Ok(Reply::Trash(request.execute(&self.0))),
             Command::Refresh => self.snapshot(),
+            Command::Import(request) => {
+                self.0.request::<serde_json::Value>(&request.request())?;
+                self.snapshot()
+            }
+            Command::CheckCloud => {
+                crate::onboarding::check_cloud(&self.0)?;
+                self.snapshot()
+            }
+            Command::Touch => self
+                .0
+                .request(&AgentRequest::SessionTouch)
+                .map(Reply::Touched),
             Command::Subscription(request) => {
                 Ok(Reply::Subscription(Box::new(request.execute(&self.0))))
             }
@@ -134,13 +166,22 @@ impl Transport for AgentTransport {
                 Ok(Reply::ProviderTools(Box::new(request.execute(&self.0))))
             }
             Command::Credential(request) => Ok(Reply::Credential(request.execute(&self.0))),
+            Command::Agents(request) => Ok(Reply::Agents(Box::new(request.execute(&self.0)))),
             Command::Integration(request) => {
                 Ok(Reply::Integration(Box::new(request.execute(&self.0))))
             }
             Command::Provider(action) => {
                 let saved = action.saves_form();
                 let mut selected = action.selected();
-                let request = action.into_request();
+                let request = action.into_request(|id| {
+                    let result: aipass_agent_protocol::ProviderHeaderValues =
+                        self.0.request(&AgentRequest::SecretRevealHeaders { id })?;
+                    Ok(result
+                        .headers
+                        .into_iter()
+                        .map(|(name, value)| (name, value.expose().to_owned()))
+                        .collect())
+                })?;
                 if matches!(request, AgentRequest::ProviderAdd { .. }) {
                     selected = Some(self.0.request::<Uuid>(&request)?);
                 } else {
@@ -188,22 +229,28 @@ struct Job {
 }
 struct Completion {
     generation: u64,
+    activity: bool,
     result: Result<Reply, AgentCommandError>,
 }
 
 /// Root view retains this controller across authentication/workspace changes.
 /// UI polling uses try_recv and never waits for IPC on the platform thread.
 pub struct Session {
+    activity: activity::Activity,
     sender: Option<Sender<Job>>,
     receiver: Receiver<Completion>,
     generation: u64,
     pub status: Option<SessionStatus>,
+    pub sync_settings: Option<aipass_agent_protocol::SyncSettings>,
     pub catalog: Catalog,
     pub selected: Option<Uuid>,
     pub provider_saved: bool,
     pub provider_applied: bool,
+    pub pricing_completion: Option<crate::pricing::Completion>,
+    pub trash_completion: Option<crate::trash::Completion>,
     pub tools_completion: Option<crate::provider_tools::Completion>,
     pub credential_completion: Option<crate::credentials::Completion>,
+    pub agents_completion: Option<crate::agent_management::Completion>,
     pub integration_completion: Option<crate::integration::Completion>,
     pub subscription_completion: Option<crate::subscriptions::Completion>,
     pub recovery: Option<SensitiveString>,
@@ -214,78 +261,24 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(mut transport: impl Transport) -> std::io::Result<Self> {
-        let (sender, jobs) = mpsc::channel::<Job>();
-        let (completed, receiver) = mpsc::channel();
-        thread::Builder::new()
-            .name("desktop-agent-client".into())
-            .spawn(move || {
-                while let Ok(job) = jobs.recv() {
-                    let subscription = match &job.command {
-                        Command::Subscription(request) => {
-                            Some((request.generation, request.operation.kind()))
-                        }
-                        _ => None,
-                    };
-                    let integration = match &job.command {
-                        Command::Integration(request) => Some(request.scope),
-                        _ => None,
-                    };
-                    let tools = match &job.command {
-                        Command::ProviderTools(request) => Some(request.scope),
-                        _ => None,
-                    };
-                    let result = transport.execute(job.command);
-                    let result = match (tools, result) {
-                        (Some(scope), Err(error)) => Ok(Reply::ProviderTools(Box::new(
-                            crate::provider_tools::Completion {
-                                scope,
-                                mutated: false,
-                                result: Err(error),
-                            },
-                        ))),
-                        (_, result) => result,
-                    };
-                    // Startup/transport errors still belong to the requesting panel.
-                    // Otherwise its pending state would survive without a reply.
-                    let result = match (subscription, result) {
-                        (Some((generation, kind)), Err(error)) => Ok(Reply::Subscription(
-                            Box::new(crate::subscriptions::Completion {
-                                generation,
-                                kind,
-                                result: Err(error),
-                            }),
-                        )),
-                        (_, result) => result,
-                    };
-                    let result = match (integration, result) {
-                        (Some(scope), Err(error)) => Ok(Reply::Integration(Box::new(
-                            crate::integration::Completion {
-                                scope,
-                                result: Err(error),
-                            },
-                        ))),
-                        (_, result) => result,
-                    };
-                    // A view can disappear while authentication is in flight. Still
-                    // execute its already-queued lock before dropping the transport.
-                    let _ = completed.send(Completion {
-                        generation: job.generation,
-                        result,
-                    });
-                }
-            })?;
+    pub fn new(transport: impl Transport) -> std::io::Result<Self> {
+        let (sender, receiver) = worker::start(transport)?;
         Ok(Self {
+            activity: Default::default(),
             sender: Some(sender),
             receiver,
             generation: 0,
             status: None,
+            sync_settings: None,
             catalog: Catalog::default(),
             selected: None,
             provider_saved: false,
             provider_applied: false,
+            pricing_completion: None,
+            trash_completion: None,
             tools_completion: None,
             credential_completion: None,
+            agents_completion: None,
             integration_completion: None,
             subscription_completion: None,
             recovery: None,
@@ -304,13 +297,30 @@ impl Session {
                 .is_some_and(|s| s.exists && !s.locked && !s.initial_sync_pending)
     }
 
+    pub fn record_activity(&mut self) {
+        if self.is_unlocked() {
+            self.activity.record(std::time::Instant::now());
+        }
+    }
+
+    pub fn submit_activity(&mut self) -> bool {
+        if !self.is_unlocked() || self.pending || !self.activity.take(std::time::Instant::now()) {
+            return false;
+        }
+        self.submit(Command::Touch)
+    }
+
     pub fn submit(&mut self, command: Command) -> bool {
         if matches!(
             command,
-            Command::Provider(_)
+            Command::Touch
+                | Command::Pricing(_)
+                | Command::Trash(_)
+                | Command::Provider(_)
                 | Command::ProviderTools(_)
                 | Command::Credential(_)
                 | Command::Integration(_)
+                | Command::Agents(_)
                 | Command::Subscription(_)
         ) && !self.is_unlocked()
         {
@@ -323,6 +333,8 @@ impl Session {
             return false;
         }
         if locking {
+            self.activity = Default::default();
+            aipass_desktop_platform::clipboard::invalidate();
             if self.lock_pending && self.pending {
                 return false;
             }
@@ -330,9 +342,12 @@ impl Session {
             self.catalog = Catalog::default();
             self.selected = None;
             self.recovery = None;
+            self.pricing_completion = None;
+            self.trash_completion = None;
             self.tools_completion = None;
             self.credential_completion = None;
             self.integration_completion = None;
+            self.agents_completion = None;
             self.subscription_completion = None;
             if let Some(status) = &mut self.status {
                 status.locked = true;
@@ -340,7 +355,8 @@ impl Session {
         }
         self.generation += 1;
         self.pending = true;
-        self.foreground_pending = !matches!(command, Command::Refresh);
+        self.foreground_pending = !matches!(&command, Command::Refresh | Command::Touch)
+            && !matches!(&command, Command::Pricing(request) if matches!(request.operation, crate::pricing::Operation::Load));
         self.error = None;
         if self.sender.as_ref().is_none_or(|sender| {
             sender
@@ -357,11 +373,15 @@ impl Session {
     }
 
     pub fn poll(&mut self) -> bool {
+        let was_unlocked = self.is_unlocked();
         self.provider_saved = false;
         self.provider_applied = false;
+        self.pricing_completion = None;
+        self.trash_completion = None;
         self.tools_completion = None;
         self.credential_completion = None;
         self.integration_completion = None;
+        self.agents_completion = None;
         self.subscription_completion = None;
         self.selected = None;
         let mut changed = false;
@@ -375,6 +395,44 @@ impl Session {
                     self.foreground_pending = false;
                     changed = true;
                     match completion.result {
+                        Ok(Reply::Pricing(completion)) => {
+                            if completion
+                                .result
+                                .as_ref()
+                                .is_err_and(|e| e.code == Some(AgentErrorCode::Locked))
+                            {
+                                self.catalog = Catalog::default();
+                                self.recovery = None;
+                                if let Some(status) = &mut self.status {
+                                    status.locked = true;
+                                }
+                            }
+                            self.pricing_completion = Some(*completion);
+                        }
+                        Ok(Reply::Trash(completion)) => {
+                            // Emptying trash can partially succeed before an I/O failure.
+                            // Refresh even on failure so the list reflects durable state.
+                            self.provider_applied = true;
+                            if completion
+                                .result
+                                .as_ref()
+                                .is_err_and(|error| error.code == Some(AgentErrorCode::Locked))
+                            {
+                                self.catalog = Catalog::default();
+                                self.recovery = None;
+                                if let Some(status) = &mut self.status {
+                                    status.locked = true;
+                                }
+                            }
+                            self.trash_completion = Some(completion);
+                        }
+                        Ok(Reply::Touched(status)) => {
+                            if status.locked || !status.exists || status.initial_sync_pending {
+                                self.catalog = Catalog::default();
+                                self.recovery = None;
+                            }
+                            self.status = Some(status);
+                        }
                         Ok(Reply::Subscription(completion)) => {
                             if completion
                                 .result
@@ -418,6 +476,24 @@ impl Session {
                                 self.provider_applied = true;
                             }
                             self.subscription_completion = Some(*completion);
+                        }
+                        Ok(Reply::Agents(completion)) => {
+                            if matches!(&completion.result, Ok(crate::agent_management::Outcome::Applied(result)) if result.outcome == aipass_agent_protocol::ToolConfigOutcome::Applied)
+                            {
+                                self.provider_applied = true;
+                            }
+                            if completion
+                                .result
+                                .as_ref()
+                                .is_err_and(|e| e.code == Some(AgentErrorCode::Locked))
+                            {
+                                self.catalog = Catalog::default();
+                                self.recovery = None;
+                                if let Some(status) = &mut self.status {
+                                    status.locked = true;
+                                }
+                            }
+                            self.agents_completion = Some(*completion);
                         }
                         Ok(Reply::Integration(completion)) => {
                             if matches!(&completion.result, Ok(crate::integration::Outcome::Login(status))
@@ -491,6 +567,7 @@ impl Session {
                             self.provider_applied = true;
                         }
                         Ok(Reply::Catalog {
+                            sync_settings,
                             status,
                             catalog,
                             selected,
@@ -504,6 +581,11 @@ impl Session {
                             self.catalog = if ready { *catalog } else { Catalog::default() };
                             self.selected = if ready { selected } else { None };
                             self.provider_saved = saved && ready;
+                            match sync_settings {
+                                Some(Ok(settings)) => self.sync_settings = Some(settings),
+                                Some(Err(error)) => self.error = Some(error),
+                                None => {}
+                            }
                             self.status = Some(status);
                         }
                         Ok(Reply::Snapshot { status, entries }) => {
@@ -557,7 +639,9 @@ impl Session {
                                     status.locked = true;
                                 }
                             }
-                            self.error = Some(error);
+                            if !completion.activity || error.code == Some(AgentErrorCode::Locked) {
+                                self.error = Some(error);
+                            }
                         }
                     }
                 }
@@ -571,19 +655,28 @@ impl Session {
                 }
             }
         }
+        if was_unlocked && !self.is_unlocked() {
+            self.activity = Default::default();
+            aipass_desktop_platform::clipboard::invalidate();
+        }
         changed
     }
 
     fn disconnected(&mut self) {
+        self.activity = Default::default();
+        aipass_desktop_platform::clipboard::invalidate();
         self.sender = None;
         self.pending = false;
         self.foreground_pending = false;
         self.catalog = Catalog::default();
         self.selected = None;
         self.recovery = None;
+        self.pricing_completion = None;
+        self.trash_completion = None;
         self.tools_completion = None;
         self.credential_completion = None;
         self.integration_completion = None;
+        self.agents_completion = None;
         self.subscription_completion = None;
         if let Some(status) = &mut self.status {
             status.locked = true;

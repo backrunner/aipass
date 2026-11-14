@@ -1,3 +1,5 @@
+mod agents_ui;
+mod appearance;
 mod assets;
 mod auth;
 mod backdrop;
@@ -5,17 +7,22 @@ mod composite;
 mod curtain;
 mod desktop;
 mod disclosure;
+mod form_ui;
 mod integrations;
 mod locale;
 mod logo;
 mod menu;
 mod parity;
+mod preferences;
 mod provider_icon;
 mod provider_tools_ui;
 mod providers;
+mod recovery_kit;
+mod scroll_fade;
 mod subscription_ui;
 mod theme;
 mod toast;
+mod trash_ui;
 mod typography;
 mod update_ui;
 #[cfg(feature = "parity-render")]
@@ -29,6 +36,11 @@ use gpui::{prelude::*, px, size, App, Bounds, WindowBounds, WindowOptions};
 fn main() {
     typography::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(feature = "parity-render")]
+    let args = parity::launch::arguments(args).unwrap_or_else(|error| {
+        eprintln!("Invalid isolated launch fixture: {error}");
+        std::process::exit(2);
+    });
     if args.iter().any(|arg| arg == "--motion-samples") {
         let samples: Vec<_> = [0.0, 60.0, 135.0, 270.0, 405.0, 539.0, 540.0, 600.0,
             660.0, 661.0, 795.0, 930.0, 1065.0, 1200.0].into_iter().map(|ms| {
@@ -52,6 +64,11 @@ fn main() {
     #[cfg(feature = "parity-render")]
     let mut updater = update_validation::load(&args).unwrap_or_else(|error| {
         eprintln!("Could not start isolated updater: {error:#}");
+        std::process::exit(2);
+    });
+    #[cfg(feature = "parity-render")]
+    let appearance_samples = parity::appearance::parse(&args).unwrap_or_else(|error| {
+        eprintln!("Invalid appearance capture: {error:#}");
         std::process::exit(2);
     });
     let dark = args.iter().any(|arg| arg == "--dark");
@@ -128,7 +145,12 @@ fn main() {
     let subscription_fixture = subscription_ui::fixtures::SCENARIOS.contains(&scenario.as_str());
     #[cfg(not(feature = "parity-render"))]
     let subscription_fixture = false;
+    #[cfg(feature = "parity-render")]
+    let agent_fixture = agents_ui::fixtures::SCENARIOS.contains(&scenario.as_str());
+    #[cfg(not(feature = "parity-render"))]
+    let agent_fixture = false;
     if !subscription_fixture
+        && !agent_fixture
         && !matches!(
             scenario.as_str(),
             "empty"
@@ -153,10 +175,23 @@ fn main() {
                 | "providers-edit"
                 | "providers-add-advanced"
                 | "providers-edit-advanced"
+                | "providers-edit-fields"
+                | "providers-edit-gateway"
                 | "providers-key-add"
                 | "providers-key-edit"
                 | "providers-key-billing"
                 | "providers-key-reveal"
+                | "providers-pricing"
+                | "providers-pricing-reference"
+                | "providers-pricing-source"
+                | "providers-pricing-group"
+                | "providers-pricing-confirm"
+                | "providers-pricing-delete"
+                | "providers-pricing-history"
+                | "providers-pricing-offpeak"
+                | "providers-trash"
+                | "providers-trash-delete"
+                | "providers-trash-empty"
                 | "providers-integration-picker"
                 | "providers-integration-diff"
                 | "providers-integration-full"
@@ -166,6 +201,17 @@ fn main() {
                 | "locked"
                 | "locked-busy"
                 | "locked-error"
+                | "boot"
+                | "setup-cloud"
+                | "setup-cloud-failed"
+                | "create-local"
+                | "recovery-kit"
+                | "recovery-kit-confirmed"
+                | "setup-import-backup"
+                | "setup-import-vault"
+                | "setup-import-local"
+                | "setup-import-icloud"
+                | "setup-import-webdav"
                 | "setup"
                 | "create"
                 | "recover"
@@ -184,7 +230,12 @@ fn main() {
     }
     if (scenario.ends_with("-motion")
         || scenario.starts_with("providers")
-        || scenario.starts_with("subscription-"))
+        || scenario.starts_with("agents-")
+        || scenario.starts_with("subscription-")
+        || scenario.starts_with("setup-")
+        || scenario.starts_with("recovery-kit")
+        || scenario == "create-local"
+        || scenario == "boot")
         && args.iter().any(|arg| arg.starts_with("--vault="))
     {
         eprintln!("Presentation fixtures accept synthetic data only");
@@ -218,6 +269,7 @@ fn main() {
             [
                 "--capture=",
                 "--capture-action=",
+                "--appearance-sample=",
                 "--motion-at=",
                 "--motion-trace=",
                 "--backdrop-at=",
@@ -262,10 +314,22 @@ fn main() {
         .as_mut()
         .and_then(|context| context.session.take())
         .or(session);
+    let preferences = preferences::load(&args, session.is_some()).unwrap_or_else(|error| {
+        eprintln!("Could not load desktop preferences: {error}");
+        std::process::exit(2);
+    });
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             gpui_base::init(cx);
+            cx.set_global(preferences);
+            // Explicit fixture colors stay deterministic; normal windows honor
+            // the shared preference, whose default is the system appearance.
+            let fixed_appearance = args.iter().any(|arg| matches!(arg.as_str(), "--dark" | "--light") || arg.starts_with("--capture="));
+            let preference = if fixed_appearance {
+                if dark { appearance::ThemePreference::Dark } else { appearance::ThemePreference::Light }
+            } else { cx.global::<preferences::Preferences>().0.theme };
+            cx.set_window_appearance(appearance::forced(preference));
             #[cfg(feature = "parity-render")]
             cx.set_global(parity::Backgrounds { time_ms: backdrop_at, ..Default::default() });
             cx.text_system().add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!("../assets/password-dots.ttf"))]).expect("embedded password glyph font");
@@ -273,6 +337,12 @@ fn main() {
             // fallback face while shaping a heading.
             cx.text_system().prewarm_fonts(&[gpui::font("PingFang SC")]);
             desktop::init(cx);
+            cx.on_app_quit(|cx| {
+                aipass_desktop_platform::clipboard::invalidate();
+                cx.background_executor().spawn(async {
+                    let _ = aipass_desktop_platform::clipboard::clear_now();
+                })
+            }).detach();
             #[cfg(feature = "parity-render")]
             if let Some(output) = motion_trace {
                 cx.set_global(parity::MotionTrace { output: Some(output), frames: Vec::new() });
@@ -300,7 +370,17 @@ fn main() {
                 },
                 |window, cx| {
                     window.set_window_title("AIPass GPUI Parity");
+                    #[cfg(feature = "parity-render")]
+                    if session.is_none() {
+                        if let Err(error) = parity::launch::observe(window) {
+                            eprintln!("Could not create native-window evidence: {error:#}");
+                        }
+                    }
+                    let dark = appearance::resolve(preference, window.appearance());
                     let view = cx.new(|cx| Desktop::new(session, &scenario, dark, chinese, window, cx));
+                    if !fixed_appearance {
+                        view.update(cx, |view, cx| view.follow_preferences(window, cx));
+                    }
                     #[cfg(feature = "parity-render")]
                     if let Some(context) = updater.take() {
                         let view = view.downgrade();
@@ -381,6 +461,17 @@ fn main() {
                             window.draw(cx).clear(cx);
                         }
                         for action in &capture_actions { parity::control_actions::apply(action, window, cx)?; }
+                        Ok::<_, anyhow::Error>(())
+                    });
+                    if let Err(error) = result.and_then(|r| r) {
+                        eprintln!("Capture setup failed: {error}");
+                        std::process::exit(1);
+                    }
+                    if let Err(error) = parity::appearance::apply(&appearance_samples, handle, &desktop, cx).await {
+                        eprintln!("Appearance capture failed: {error:#}");
+                        std::process::exit(1);
+                    }
+                    let result = cx.update_window(handle.into(), |_, window, cx| {
                         let image = window.render_to_image()?;
                         #[cfg(target_os = "macos")]
                         let image = {
@@ -394,6 +485,7 @@ fn main() {
                             "viewport": [f32::from(window.viewport_size().width), f32::from(window.viewport_size().height)],
                             "pixels": [image.width(), image.height()],
                             "presentation": desktop.read(cx).presentation_state(cx),
+                            "appearance": desktop.read(cx).appearance_state(),
                             "geometry": cx.try_global::<parity::Geometry>().map(|g| &g.0),
                             "styles": cx.try_global::<parity::Styles>().map(|g| &g.0),
                             "scrolls": cx.try_global::<parity::Scrolls>().map(|g| &g.0),
@@ -414,3 +506,5 @@ fn main() {
             if !screenshot_only { cx.activate(true); }
         });
 }
+
+mod pricing_ui;

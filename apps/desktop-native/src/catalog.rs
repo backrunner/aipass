@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod draft;
+mod editing;
 mod lists;
+pub use lists::encode as encode_list;
 pub mod optional;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -19,6 +21,12 @@ pub struct Catalog {
 pub enum Action {
     Add(Box<ProviderEntryInput>),
     Update(Uuid, Box<ProviderEntryUpdateInput>),
+    /// Incoming assignments are merged on the IPC worker, never in UI state.
+    UpdateHeaders(
+        Uuid,
+        Box<ProviderEntryUpdateInput>,
+        aipass_agent_protocol::SensitiveString,
+    ),
     Favorite(Uuid, bool),
     Archive(Uuid),
     Restore(Uuid),
@@ -27,23 +35,47 @@ pub enum Action {
 
 impl Action {
     pub fn saves_form(&self) -> bool {
-        matches!(self, Self::Add(_) | Self::Update(..))
+        matches!(
+            self,
+            Self::Add(_) | Self::Update(..) | Self::UpdateHeaders(..)
+        )
     }
     pub fn selected(&self) -> Option<Uuid> {
         match self {
-            Self::Update(id, _) | Self::Favorite(id, _) | Self::Restore(id) => Some(*id),
+            Self::Update(id, _)
+            | Self::UpdateHeaders(id, ..)
+            | Self::Favorite(id, _)
+            | Self::Restore(id) => Some(*id),
             _ => None,
         }
     }
-    pub fn into_request(self) -> AgentRequest {
-        match self {
+    pub fn into_request(
+        self,
+        reveal_headers: impl FnOnce(
+            Uuid,
+        )
+            -> Result<Vec<(String, String)>, aipass_agent::AgentCommandError>,
+    ) -> Result<AgentRequest, aipass_agent::AgentCommandError> {
+        Ok(match self {
             Self::Add(input) => AgentRequest::ProviderAdd { input: *input },
             Self::Update(id, input) => AgentRequest::ProviderUpdate { id, input: *input },
+            Self::UpdateHeaders(id, mut input, incoming) => {
+                // Always read the latest headers, including when the summary
+                // had none. A failed/locked read must never become replacement.
+                input.headers = Some(editing::merge_headers(
+                    reveal_headers(id).map_err(|error| aipass_agent::AgentCommandError {
+                        code: error.code,
+                        message: format!("provider_headers_merge_failed: {}", error.message),
+                    })?,
+                    optional::pairs(incoming.expose()),
+                ));
+                AgentRequest::ProviderUpdate { id, input: *input }
+            }
             Self::Favorite(id, favorite) => AgentRequest::ProviderFavorite { id, favorite },
             Self::Archive(id) => AgentRequest::ProviderArchive { id },
             Self::Restore(id) => AgentRequest::ProviderRestore { id },
             Self::Trash(id) => AgentRequest::ProviderTrash { id },
-        }
+        })
     }
 }
 

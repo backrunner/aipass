@@ -423,3 +423,44 @@ fn provider_save_waits_for_credential_commit_and_stops_on_credential_failure(
         assert_eq!(view.read_with(cx, |view, _| view.has_editor()), !success);
     }
 }
+
+#[gpui::test]
+fn copy_requires_confirmation_and_cancellation_invalidates_late_work(cx: &mut TestAppContext) {
+    let (view, cx) = fixture(cx);
+    let key = view.read_with(cx, |view, _| {
+        view.entry.as_ref().unwrap().secret_refs[0].id.clone()
+    });
+    cx.update(|window, cx| view.update(cx, |view, cx| view.copy_key(key.clone(), window, cx)));
+    assert!(cx.has_pending_prompt());
+    assert!(view.read_with(cx, |view, _| view.pending.is_some() && !view.has_request()));
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| !view.busy() && !view.has_request()));
+    cx.update(|window, cx| view.update(cx, |view, cx| view.copy_key(key.clone(), window, cx)));
+    cx.simulate_prompt_answer("Copy");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let request = view.take_request().expect("confirmed copy request");
+            let Operation::Copy { permit, .. } = request.operation else {
+                panic!("copy operation");
+            };
+            assert!(permit.is_current());
+            assert!(view.revealed.is_empty());
+            view.clear(window, cx);
+            assert!(!permit.is_current());
+            // No OS write occurs: cancellation is checked before touching the clipboard.
+            assert!(!permit.write("synthetic-cancelled-copy".into(), 45).unwrap());
+            view.complete(
+                Completion {
+                    scope: request.scope,
+                    result: Ok(Outcome::Copied(true)),
+                },
+                window,
+                cx,
+            );
+            assert!(view.notice.is_empty());
+            assert!(!view.busy());
+        })
+    });
+}

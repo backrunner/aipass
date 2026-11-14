@@ -170,6 +170,8 @@ impl Subscriptions {
                     })
                     .child(
                         Button::new("runtime-expand")
+                            .group("runtime-expand")
+                            .relative()
                             .rounded_tl(px(11.))
                             .when(!self.runtime_options.expanded, |s| s.rounded_bl(px(11.)))
                             .flex_1()
@@ -180,7 +182,6 @@ impl Subscriptions {
                             .py(px(12.))
                             .gap(px(8.))
                             .text_color(t.text)
-                            .hover(move |s| s.bg(t.surface2))
                             .focus_visible(move |s| {
                                 s.shadow(vec![gpui_base::box_shadow(
                                     0.,
@@ -193,6 +194,17 @@ impl Subscriptions {
                             })
                             .accessibility_label(self.text("providerRuntime.title"))
                             .aria_expanded(self.runtime_options.expanded)
+                            // Inset the paint without shrinking the disclosure's hit area.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(4.))
+                                    .bottom(px(4.))
+                                    .left(px(4.))
+                                    .right(px(4.))
+                                    .rounded(px(8.))
+                                    .group_hover("runtime-expand", move |s| s.bg(t.surface2)),
+                            )
                             .child(
                                 div()
                                     .flex_1()
@@ -201,6 +213,7 @@ impl Subscriptions {
                                     .flex_col()
                                     .items_start()
                                     // The inline-flex heading occupies a text line with its baseline descent.
+                                    .pixel_snap(false)
                                     .pb(px(2.078125))
                                     .child(
                                         div()
@@ -261,7 +274,7 @@ impl Subscriptions {
                                     .border_color(gpui::rgba(0x00000000))
                                     .rounded(px(8.))
                                     .text_color(t.secondary)
-                                    .hover(move |s| s.bg(t.accent_soft).text_color(t.text))
+                                    .hover(move |s| s.bg(t.surface2).text_color(t.text))
                                     .focus_visible(move |s| {
                                         s.shadow(vec![
                                             gpui_base::box_shadow(

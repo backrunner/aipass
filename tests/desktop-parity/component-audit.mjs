@@ -2,7 +2,7 @@
 // boxes remain failures; pixel diagnostics cannot silently waive them.
 export async function measureComponents(page, specs) {
   return page.evaluate(specs => {
-    const properties = ["display", "position", "boxSizing", "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "color", "backgroundColor", "backgroundImage", "opacity", "borderRadius", "boxShadow", "backdropFilter", "gap", "rowGap", "columnGap", ...["Top", "Right", "Bottom", "Left"].flatMap(side => [`padding${side}`, `margin${side}`, `border${side}Width`, `border${side}Color`])];
+    const properties = ["display", "position", "boxSizing", "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "whiteSpace", "color", "backgroundColor", "backgroundImage", "opacity", "borderRadius", "boxShadow", "backdropFilter", "gap", "rowGap", "columnGap", ...["Top", "Right", "Bottom", "Left"].flatMap(side => [`padding${side}`, `margin${side}`, `border${side}Width`, `border${side}Color`])];
     const describe = node => {
       const b = node.getBoundingClientRect(), s = getComputedStyle(node);
       return { bounds: [b.x, b.y, b.width, b.height], styles: Object.fromEntries(properties.map(key => [key, s[key]])) };
@@ -16,7 +16,7 @@ export async function measureComponents(page, specs) {
           const textNode=node.querySelector(textSelector);
           if(!textNode)return {name,selector,index,missing:true};
           const textStyle=getComputedStyle(textNode);
-          for(const property of ["fontFamily","fontSize","fontWeight","lineHeight","letterSpacing","color"])result.styles[property]=textStyle[property];
+          for(const property of ["fontFamily","fontSize","fontWeight","lineHeight","letterSpacing","whiteSpace","color"])result.styles[property]=textStyle[property];
         }
         return { name, selector, index, textSelector, nativeGapOwner, ...result };
       }),
@@ -48,6 +48,11 @@ export function compareDeclaredStyles(reference, styles) {
     if (target.nativeGapOwner && !styles?.[target.nativeGapOwner])
       checks.push({name:target.name,property:"gap",matched:false,reason:"mapped native style owner missing"});
     const gap = (target.nativeGapOwner ? styles?.[target.nativeGapOwner] : actual)?.gap;
+    if (actual.text?.white_space !== undefined) {
+      const value = { Normal: "normal", Nowrap: "nowrap" }[actual.text.white_space];
+      checks.push({ name: target.name, property: "whiteSpace", reference: expected.whiteSpace,
+        actual: actual.text.white_space, matched: value !== undefined && value === expected.whiteSpace });
+    }
     const pairs = [
       ["fontSize",actual.text?.font_size], ["fontWeight",actual.text?.font_weight],
       ["lineHeight",actual.text?.line_height], ["rowGap",gap?.height], ["columnGap",gap?.width],
@@ -65,7 +70,7 @@ export function compareDeclaredStyles(reference, styles) {
       checks.push({name:target.name,property,reference:expected[property],actual:value,delta,matched:Math.abs(delta)<0.02});
     }
   }
-  return { scope:"explicit numeric styles, without overriding inheritance, hover, color blending or font rasterization", checks, review,
+  return { scope:"explicit numeric and white-space styles, without overriding inheritance, hover, color blending or font rasterization", checks, review,
     passed:checks.length>0 && checks.every(c=>c.matched), fullStyleAcceptance:false };
 }
 
@@ -165,6 +170,45 @@ export function providerListSpecs() {
 }
 
 export function providerSpecs(scenario) {
+  if (scenario.startsWith("providers-edit")) return [
+    ...["header", "body"].map(part => ({name:`provider-edit-${part}`,selector:`.detail-${part}`})),
+    {name:"provider-edit-title",selector:".detail-header .title-input"},
+    ...["cancel", "save"].map((part, index) => ({name:`provider-edit-${part}`,selector:".detail-header .actions button",index})),
+    ...[0,1,2].map(index=>({name:`provider-badge-${index}`,selector:".detail-header .badge",index})),
+    ...[3,4,5].flatMap((field, index) => [
+      {name:`provider-field-${field}`,selector:".detail-body label.item-row",index,nativeGapOwner:`provider-field-${field}-content`},
+      {name:`provider-field-${field}-label`,selector:".detail-body label.item-row > span:first-child",index},
+      {name:`provider-field-${field}-input`,selector:".detail-body label.item-row > input",index},
+    ]),
+    {name:"provider-edit-notes",selector:".detail-body textarea.notes"},
+    {name:"provider-edit-advanced-toggle",selector:".detail-body .advanced .collapsible-trigger",textSelector:".collapsible-title"},
+    {name:"subscription-runtime-card",selector:".detail-body .card:has(.card-heading)"},
+    {name:"provider-integration-card",selector:".detail-body .card.collapsible:not(:has(.card-heading))"},
+    {name:"integration-tool-0",selector:".detail-body .tool-block"},
+    {name:"integration-tool-icon-0",selector:".detail-body .tool-icon .brand-icon"},
+    {name:"integration-mode-label",selector:".detail-body .tool-options-label"},
+    ...[0,1].map(index=>({name:`integration-mode-${index}`,selector:".detail-body .segmented button",index})),
+    {name:"integration-installed-0",selector:".detail-body .tool-status svg"},
+    {name:"integration-scan",selector:".detail-body .card.collapsible:not(:has(.card-heading)) .collapsible-actions button"},
+    ...(scenario.endsWith("-advanced") || ["providers-edit-fields", "providers-edit-gateway"].includes(scenario) ? [
+      ...["provider", "interface", "auth"].flatMap((kind,index)=>[
+        {name:`provider-edit-${kind}-row`,selector:".detail-body .advanced .item-row",index},
+        {name:`provider-edit-${kind}-label`,selector:".detail-body .advanced .item-row > span:first-child",index},
+        {name:`menu-form-${kind}-trigger`,selector:".detail-body .advanced .select-trigger",index},
+      ]),
+      ...[7,8,10,9].flatMap((field,index)=>[
+        {name:`provider-field-${field}`,selector:".detail-body .advanced label.item-row",index,nativeGapOwner:`provider-field-${field}-content`},
+        {name:`provider-field-${field}-label`,selector:".detail-body .advanced label.item-row > span:first-child",index},
+        {name:`provider-field-${field}-input`,selector:".detail-body .advanced label.item-row > input",index},
+      ]),
+      {name:"provider-edit-websocket-row",selector:".detail-body .advanced .item-row:has(.switch-field)"},
+      {name:"provider-edit-websocket",selector:".detail-body .advanced .switch-root"},
+      {name:"provider-field-11",selector:".detail-body .advanced .item-row:has(code)",nativeGapOwner:"provider-field-11-content"},
+      ...(scenario === "providers-edit-gateway" ? [{name:"provider-edit-gateway-group",selector:".detail-body .advanced .item-row:has(> .value)"}] : []),
+      {name:"provider-edit-header-names",selector:".detail-body .advanced .item-row > code"},
+      {name:"provider-field-11-input",selector:".detail-body .advanced .item-row:has(code) input"},
+    ] : []),
+  ];
   if (scenario === "providers-add-menu") return [
     {name:"provider-field-menu",selector:".provider-field-menu"},
     ...[0,1].map(index=>({name:`provider-field-menu-heading-${index}`,selector:".provider-field-menu-heading",index})),

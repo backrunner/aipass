@@ -1,5 +1,6 @@
 use super::*;
 use crate::curtain::CurtainEvent;
+use gpui::px;
 
 struct RejectPassword;
 impl aipass_desktop_native::session::Transport for RejectPassword {
@@ -79,6 +80,43 @@ fn workspace(cx: &mut gpui::TestAppContext) -> (Entity<Desktop>, &mut gpui::Visu
         gpui_base::Root::new(view, window, cx)
     });
     (desktop.unwrap(), cx)
+}
+
+#[gpui::test]
+fn appearance_observes_shared_preference_changes_without_rebuilding_views(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::{appearance::ThemePreference, preferences::Preferences};
+    let (desktop, cx) = workspace(cx);
+    cx.update(|window, cx| {
+        cx.set_global(Preferences::default());
+        desktop.update(cx, |view, cx| view.follow_preferences(window, cx));
+    });
+    let identities = desktop.read_with(cx, |view, _| {
+        (view.auth.entity_id(), view.workspace.entity_id())
+    });
+    for preference in [
+        ThemePreference::Dark,
+        ThemePreference::Light,
+        ThemePreference::System,
+    ] {
+        cx.update(|_, cx| {
+            cx.update_global::<Preferences, _>(|prefs, _| prefs.0.theme = preference)
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let view = desktop.read(cx);
+            assert_eq!(view.appearance.preference, preference);
+            assert_eq!(
+                view.appearance.requested,
+                crate::appearance::resolve(preference, cx.window_appearance())
+            );
+            assert_eq!(
+                (view.auth.entity_id(), view.workspace.entity_id()),
+                identities
+            );
+        });
+    }
 }
 
 #[gpui::test]
@@ -163,4 +201,49 @@ fn initial_workspace_focus_routes_window_actions(cx: &mut gpui::TestAppContext) 
         assert!(view.focus.contains_focused(window, cx));
         assert!(!view.focus.is_focused(window));
     });
+}
+
+#[gpui::test]
+fn real_key_click_and_consumed_scroll_input_reaches_activity_reporting(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (desktop, cx) = workspace(cx);
+    for input in ["key", "click", "scroll"] {
+        cx.update(|window, cx| {
+            desktop.update(cx, |view, cx| {
+                let mut session = Session::new(RejectPassword).unwrap();
+                session.status = Some(aipass_agent_protocol::SessionStatus {
+                    exists: true,
+                    locked: false,
+                    policy: Default::default(),
+                    last_lock_reason: None,
+                    vault_namespace: None,
+                    initial_sync_pending: false,
+                    initial_sync_failed: false,
+                    sync_revision: 0,
+                    sync_status: None,
+                });
+                assert!(!session.submit_activity());
+                view.session = Some(session);
+                view.show_workspace = true;
+                view.focus.focus(window, cx);
+            });
+            window.draw(cx).clear(cx);
+        });
+        match input {
+            "key" => cx.simulate_keystrokes("a"),
+            "click" => cx.simulate_click(gpui::point(px(100.), px(100.)), Default::default()),
+            _ => cx.simulate_event(gpui::ScrollWheelEvent {
+                position: gpui::point(px(800.), px(300.)),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-20.))),
+                ..Default::default()
+            }),
+        }
+        desktop.update(cx, |view, _| {
+            assert!(
+                view.session.as_mut().unwrap().submit_activity(),
+                "{input} was not reported"
+            )
+        });
+    }
 }

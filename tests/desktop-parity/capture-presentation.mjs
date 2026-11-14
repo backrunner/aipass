@@ -49,16 +49,18 @@ await collect("tests/desktop-parity");
 for (const name of ["Cargo.toml", "Cargo.lock"]) sourceHashes[name] = hash(await readFile(resolve(root, name)));
 const changedTracked = (await run("rtk", ["proxy", "git", "diff", "--name-only", "-z", "HEAD"], { cwd: root })).stdout.split("\0").filter(Boolean);
 const newSources = (await run("rtk", ["proxy", "git", "ls-files", "--others", "--exclude-standard", "-z"], { cwd: root })).stdout.split("\0").filter(Boolean);
+const deletedSources = [];
 for (const name of new Set([...changedTracked, ...newSources])) {
   if (name.split("/").some(part => ["node_modules", "target"].includes(part))) continue;
-  sourceHashes[name] = hash(await readFile(resolve(root, name)));
+  try { sourceHashes[name] = hash(await readFile(resolve(root, name))); }
+  catch (error) { if (error.code === "ENOENT") deletedSources.push(name); else throw error; }
 }
 const frozenBinary = resolve(destination, "aipass-desktop-native");
 await copyFile(binary, frozenBinary);
 await run("rtk", ["proxy", "zip", "-q", resolve(destination, "source.zip"), ...Object.keys(sourceHashes)], { cwd: root });
 const report = {
   standard: "components-layout-shape-style-v1", baseline: inventory.baseline,
-  referenceInputs: inventory.referenceInputs, sourceHashes,
+  referenceInputs: inventory.referenceInputs, sourceHashes, deletedSources,
   binarySHA256: hash(await readFile(binary)),
   referenceRenderer: "playwright-webkit-reference", candidateRenderer: "gpui-offscreen",
   capturePolicy: "Unmodified components, synthetic empty data, 2x scale, reduced motion, straight RGBA; no masks, compositing or image resizing. Metal readback retained separately.",

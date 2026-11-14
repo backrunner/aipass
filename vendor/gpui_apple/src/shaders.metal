@@ -760,8 +760,14 @@ fragment float4 polychrome_sprite_fragment(
   PolychromeSprite sprite = sprites[input.sprite_id];
   constexpr sampler atlas_texture_sampler(mag_filter::linear,
                                           min_filter::linear);
-  float4 sample =
-      atlas_texture.sample(atlas_texture_sampler, input.tile_position);
+  // Linear filtering must not cross a packed image's texel centers. Themes
+  // retain both palettes, so adjacent atlas allocations can have opposite colors.
+  float2 atlas_size(atlas_texture.get_width(), atlas_texture.get_height());
+  float2 origin(sprite.tile.bounds.origin.x, sprite.tile.bounds.origin.y);
+  float2 extent(sprite.tile.bounds.size.width, sprite.tile.bounds.size.height);
+  float2 position = clamp(input.tile_position, (origin + 0.5) / atlas_size,
+                         (origin + extent - 0.5) / atlas_size);
+  float4 sample = atlas_texture.sample(atlas_texture_sampler, position);
   float distance =
       quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, 0.0);
 

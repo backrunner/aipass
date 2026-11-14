@@ -27,66 +27,9 @@ pub(crate) struct VaultStatus {
     pub(crate) sync_status: Option<aipass_sync::SyncStatus>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AppPreferences {
-    pub(crate) auto_lock_minutes: u16,
-    pub(crate) clipboard_clear_seconds: u16,
-    #[serde(default)]
-    pub(crate) credential_click_action: CredentialClickAction,
-    #[serde(default = "default_confirm_secret_copy")]
-    pub(crate) confirm_secret_copy: bool,
-    pub(crate) lock_on_sleep: bool,
-    pub(crate) lock_on_screen_lock: bool,
-    #[serde(default)]
-    pub(crate) theme: ThemePreference,
-    #[serde(default)]
-    pub(crate) locale: LocalePreference,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) resolved_locale: Option<aipass_agent_protocol::UiLocale>,
-    #[serde(default)]
-    pub(crate) official_accounts_import: bool,
-}
-
-fn default_confirm_secret_copy() -> bool {
-    true
-}
-
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum CredentialClickAction {
-    #[default]
-    Reveal,
-    Copy,
-}
-
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum ThemePreference {
-    #[default]
-    System,
-    Light,
-    Dark,
-}
-
-pub(crate) use aipass_agent_protocol::LocalePreference;
-
-impl Default for AppPreferences {
-    fn default() -> Self {
-        Self {
-            auto_lock_minutes: 60,
-            clipboard_clear_seconds: 45,
-            credential_click_action: CredentialClickAction::Reveal,
-            confirm_secret_copy: true,
-            lock_on_sleep: true,
-            lock_on_screen_lock: true,
-            theme: ThemePreference::System,
-            locale: LocalePreference::System,
-            resolved_locale: None,
-            official_accounts_import: false,
-        }
-    }
-}
+pub(crate) use aipass_desktop_platform::preferences::{
+    AppPreferences, CredentialClickAction, LocalePreference, ThemePreference,
+};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]

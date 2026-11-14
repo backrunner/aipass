@@ -41,6 +41,15 @@ test("position and size drift are checked independently at half a logical pixel"
   }
   assert.equal(compareGeometry(reference, { field: [NaN,20,120,28] }).passed, false);
 });
+test("explicit wrapping rules cannot hide behind matching geometry", () => {
+  const reference = { targets: [{ name: "badge", styles: { whiteSpace: "nowrap" } }] };
+  const styles = { badge: { text: { white_space: "Normal" } } };
+  assert.equal(compareDeclaredStyles(reference, styles).passed, false);
+  styles.badge.text.white_space = "Nowrap";
+  assert.equal(compareDeclaredStyles(reference, styles).passed, true);
+  styles.badge.text.white_space = "Unknown";
+  assert.equal(compareDeclaredStyles(reference, styles).passed, false);
+});
 test("field spacing uses its vertical content owner without losing outer padding checks",()=>{
   const reference={targets:[{name:"row",nativeGapOwner:"content",styles:{rowGap:"4px",columnGap:"4px",paddingTop:"13px"}}]};
   const styles={row:{gap:{width:"10px",height:"10px"},padding:{top:"13px"}},content:{gap:{width:"4px",height:"4px"}}};

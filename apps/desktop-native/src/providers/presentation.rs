@@ -73,6 +73,7 @@ pub fn badges(entry: &EntrySummary, t: Theme, locale: &Locale, dark: bool) -> Di
             .map(|(index, label)| {
                 div()
                     .flex_shrink_0()
+                    .whitespace_nowrap()
                     .px(px(8.))
                     .py(px(3.))
                     .rounded_full()

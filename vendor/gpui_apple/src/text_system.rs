@@ -159,9 +159,13 @@ impl PlatformTextSystem for AppleTextSystem {
                 lock.font_ids_by_font_key[&font_key].as_ref()
             };
 
+            let system_family = gpui::font_name_with_fallbacks(&font.family, ".AppleSystemUIFont")
+                == ".AppleSystemUIFont";
             let candidate_properties = candidates
                 .iter()
-                .map(|font_id| lock.fonts[font_id.0].properties())
+                .map(|font_id| {
+                    crate::system_font_weights::properties(&lock.fonts[font_id.0], system_family)
+                })
                 .collect::<SmallVec<[_; 4]>>();
 
             let ix = font_kit::matching::find_best_match(

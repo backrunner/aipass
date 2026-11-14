@@ -9,6 +9,7 @@ authors.workspace = true
 parity-render = ["gpui/test-support", "gpui_platform/test-support"]
 
 [dependencies]
+aipass-desktop-platform = { path = "../../crates/aipass-desktop-platform" }
 aipass-proxy = { path = "../../crates/aipass-proxy" }
 aipass-agent = { path = "../../crates/aipass-agent" }
 aipass-agent-protocol = { path = "../../crates/aipass-agent-protocol" }
@@ -34,7 +35,7 @@ serde_json.workspace = true
 serde.workspace = true
 uuid.workspace = true
 url = { version = "2", features = ["serde"] }
-time.workspace = true
+time = { workspace = true, features = ["local-offset"] }
 
 [dev-dependencies]
 tempfile = "3"

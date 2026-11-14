@@ -3,7 +3,7 @@ use aipass_agent_protocol::ToolConfigPreviewResponse;
 
 impl Integrations {
     pub fn presentation(&self, cx: &gpui::App) -> serde_json::Value {
-        serde_json::json!({"expanded":self.expanded,"pending":self.pending.is_some(),
+        serde_json::json!({"expanded":self.expanded,"pending":self.pending.is_some(),"blocked":self.blocked,
             "selectedKey":self.secret_id,"preview":self.preview.as_ref().map(|p|p.read(cx).presentation())})
     }
     pub fn fixture(&mut self, scenario: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -11,11 +11,8 @@ impl Integrations {
         self.pending = None;
         self.requests.clear();
         self.in_flight = None;
-        self.blocked = false;
+        self.blocked = scenario.starts_with("providers-edit");
         self.scanned = true;
-        if !scenario.starts_with("providers-integration-") {
-            return;
-        }
         self.detections = vec![aipass_config_writers::ToolDetection {
             tool: aipass_config_writers::ToolId::Codex,
             binary_found: true,
@@ -24,6 +21,24 @@ impl Integrations {
             config_path: Some("/synthetic/.codex/config.toml".into()),
         }];
         self.expanded = true;
+        if !scenario.starts_with("providers-integration-") {
+            let entry = aipass_desktop_native::catalog::Catalog::fixture()
+                .active
+                .remove(0);
+            self.statuses = vec![ToolConfigStatus {
+                tool: ToolConfigTool::Codex,
+                state: "ready".into(),
+                entry_id: Some(entry.id),
+                entry_title: Some(entry.title),
+                secret_id: Some("key-a".into()),
+                mode: None,
+                account_identity: None,
+                operation_id: None,
+                message: None,
+                overrides: vec![],
+            }];
+            return;
+        }
         if scenario == "providers-integration-picker" {
             return;
         }

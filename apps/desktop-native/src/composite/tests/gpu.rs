@@ -26,6 +26,59 @@ fn quad(rect: Bounds<ScaledPixels>, color: u32, viewport: Bounds<ScaledPixels>) 
 }
 
 #[test]
+fn enlarged_image_edges_never_sample_another_cached_theme_tile() {
+    let mut renderer = gpui_platform::current_headless_renderer()
+        .unwrap()
+        .expect("Metal renderer");
+    let atlas = renderer.sprite_atlas();
+    let insert = |id, bgra: [u8; 4]| {
+        atlas
+            .get_or_insert_with(
+                gpui::RenderImageParams {
+                    image_id: gpui::ImageId(id),
+                    frame_index: 0,
+                }
+                .into(),
+                &mut || {
+                    Ok(Some((
+                        size(DevicePixels(4), DevicePixels(4)),
+                        std::borrow::Cow::Owned(bgra.repeat(16)),
+                    )))
+                },
+            )
+            .unwrap()
+            .unwrap()
+    };
+    let _first = insert(7001, [0, 0, 255, 255]);
+    let tile = insert(7002, [255, 255, 255, 255]);
+    let _last = insert(7003, [255, 0, 0, 255]);
+    let viewport = bounds(0., 0., 48., 48.);
+    let mut scene = Scene::default();
+    scene.insert_primitive(quad(viewport, 0, viewport));
+    scene.insert_primitive(gpui::PolychromeSprite {
+        order: 0,
+        pad: 0,
+        grayscale: false.into(),
+        opacity: 1.,
+        bounds: viewport,
+        content_mask: ContentMask { bounds: viewport },
+        corner_radii: Default::default(),
+        tile,
+    });
+    scene.finish();
+    let image = renderer
+        .render_scene_to_image(&scene, size(DevicePixels(48), DevicePixels(48)))
+        .unwrap();
+    for (x, y) in [(0, 24), (47, 24), (24, 0), (24, 47)] {
+        let pixel = image.get_pixel(x, y).0;
+        assert!(
+            pixel.iter().all(|v| *v >= 253),
+            "atlas neighbor bled into the image at {x},{y}: {pixel:?}"
+        );
+    }
+}
+
+#[test]
 fn current_frame_backdrop_blurs_foreground_and_discards_previous_frame() {
     let mut renderer = gpui_platform::current_headless_renderer()
         .unwrap()

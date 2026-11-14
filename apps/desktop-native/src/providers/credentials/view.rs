@@ -424,13 +424,24 @@ impl Credentials {
             .into_any_element()
     }
 
-    fn row(&self, secret: &SecretRef, index: usize, cx: &Context<Self>) -> Div {
+    fn row(
+        &self,
+        secret: &SecretRef,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
         let t = self.theme;
         let id = secret.id.clone();
         let edit = secret.clone();
         let remove_id = id.clone();
         let eye_id = id.clone();
+        let visible_copy_id = id.clone();
         let revealed = self.revealed.get(&id);
+        let copy_label = self
+            .locale
+            .text("providerDetail.copySecret")
+            .replace("{label}", &secret.label);
         let label = self
             .locale
             .text(if revealed.is_some() {
@@ -456,7 +467,28 @@ impl Credentials {
             .group
             .as_ref()
             .or_else(|| entry.gateway.as_ref().and_then(|g| g.group.as_ref()));
+        let hovered_id = secret.id.clone();
+        let focus = window
+            .use_keyed_state(
+                format!("credential-row-focus-{}", secret.id),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
+        let show_copy =
+            self.hovered_key.as_ref() == Some(&secret.id) || focus.contains_focused(window, cx);
         div()
+            .id(("credential-row", index))
+            .track_focus(&focus)
+            .on_hover(cx.listener(move |this, hovered, _, cx| {
+                if *hovered {
+                    this.hovered_key = Some(hovered_id.clone());
+                } else if this.hovered_key.as_ref() == Some(&hovered_id) {
+                    this.hovered_key = None;
+                }
+                cx.notify();
+            }))
             .relative()
             .px(px(16.))
             .py(px(12.))
@@ -475,7 +507,14 @@ impl Credentials {
                     .line_height(px(13.))
                     .text_color(t.tertiary)
                     .child(svg().path("key-round").size(px(13.)).text_color(t.tertiary))
-                    .child(div().min_w_0().text_ellipsis().child(secret.label.clone())),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(secret.label.clone()),
+                    )
+                    .children(self.pricing_badge(secret, index, cx)),
             )
             .child(
                 div()
@@ -486,6 +525,11 @@ impl Credentials {
                     .child(if let Some(value) = revealed {
                         div()
                             .id(("credential-visible", index))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if Self::copy_on_click(cx) {
+                                    this.copy_key(visible_copy_id.clone(), window, cx);
+                                }
+                            }))
                             .track_scroll(&value.scroll)
                             .flex()
                             .flex_1()
@@ -517,7 +561,11 @@ impl Credentials {
                             .disabled(self.busy())
                             .text_size(px(13.))
                             .justify_start()
-                            .accessibility_label(label.clone())
+                            .accessibility_label(if Self::copy_on_click(cx) {
+                                copy_label.clone()
+                            } else {
+                                label.clone()
+                            })
                             .child(
                                 div()
                                     .w_full()
@@ -526,9 +574,13 @@ impl Credentials {
                                     .font_family("AIPass Password Dots")
                                     .child("••••••••••••••••"),
                             )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.reveal(id.clone(), cx)),
-                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if Self::copy_on_click(cx) {
+                                    this.copy_key(id.clone(), window, cx);
+                                } else {
+                                    this.reveal(id.clone(), cx);
+                                }
+                            }))
                             .into_any_element()
                     })
                     .child(
@@ -551,6 +603,21 @@ impl Credentials {
                                     )),
                                 )
                             })
+                            .child(self.copy_control(secret, index, show_copy, window, cx))
+                            .child(
+                                icon(
+                                    ("credential-pricing", index),
+                                    "sliders-horizontal",
+                                    self.locale.text("pricing.credentialSettings"),
+                                    t,
+                                )
+                                .size(px(28.))
+                                .disabled(self.busy())
+                                .on_click(cx.listener({
+                                    let id = secret.id.clone();
+                                    move |_, _, _, cx| cx.emit(Event::Pricing(id.clone()))
+                                })),
+                            )
                             .child(
                                 icon(
                                     ("credential-edit", index),
@@ -671,7 +738,7 @@ impl Render for Credentials {
                                 .child(self.editor_view(window, cx))
                                 .into_any_element()
                         } else {
-                            self.row(secret, index, cx).into_any_element()
+                            self.row(secret, index, window, cx).into_any_element()
                         }
                     }),
             )

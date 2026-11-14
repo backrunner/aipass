@@ -1,5 +1,6 @@
 //! Backgrounds paint a complete cached scene on the first frame. Subsequent
 //! resize preparation retains the last scene; motion only transforms its layers.
+mod appearance;
 mod glass;
 mod motion;
 mod scene;
@@ -28,6 +29,8 @@ pub struct Backdrop {
     hero: bool,
     started: Instant,
     scene: Option<Arc<Scene>>,
+    alternate: Option<Arc<Scene>>,
+    appearance_pending: Option<Source>,
     pending: Option<Source>,
     surface: Surface,
     error: Option<String>,
@@ -39,6 +42,8 @@ impl Backdrop {
             hero,
             started: Instant::now(),
             scene: None,
+            alternate: None,
+            appearance_pending: None,
             pending: None,
             surface: Rc::default(),
             error: None,
@@ -171,7 +176,8 @@ impl Backdrop {
         canvas(
             |_, _, _| (),
             move |bounds, _, window, _| {
-                let bounds = bounds.dilate(px(-1.));
+                // Absolute children already occupy the parent's inner border box.
+                // Insetting again leaves an unpainted strip between glass and border.
                 if let Some(frame) = surface.borrow().as_ref() {
                     frame.paint(bounds, (radius - 1.).max(0.), true, window);
                 }

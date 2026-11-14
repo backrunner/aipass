@@ -53,6 +53,7 @@ impl Workspace {
             .sample(self.provider_advanced, window, cx);
         let id = entry.id;
         let editing = entry.clone();
+        let deleting = entry.title.clone();
         let favorite = entry.favorite;
         let card = || {
             div()
@@ -66,8 +67,42 @@ impl Workspace {
                 .flex()
                 .flex_col()
         };
+        let copy_owner = cx.entity().downgrade();
         let row = |name: &str, label: String, value: String| {
+            let endpoint = name == "endpoint" && !value.is_empty();
+            let copied = self.copied_endpoint.is_some_and(|(entry, _)| entry == id);
+            let copy = value.clone();
+            let copy_owner = copy_owner.clone();
             div()
+                .relative()
+                .min_w_0()
+                .when(endpoint, |el| {
+                    el.child(
+                        Button::new("provider-endpoint-copy")
+                            .absolute()
+                            .right(px(16.))
+                            .top(px(12.))
+                            .size(px(13.))
+                            .cursor_pointer()
+                            .accessibility_label(self.locale.text(if copied {
+                                "providerDetail.copied"
+                            } else {
+                                "common.copy"
+                            }))
+                            .child(
+                                svg()
+                                    .path(if copied { "check" } else { "copy" })
+                                    .size(px(13.))
+                                    .text_color(t.tertiary),
+                            )
+                            .focus_visible(move |s| s.shadow(t.outline(t.focus_ring, 2., 2.)))
+                            .on_click(move |_, window, cx| {
+                                let _ = copy_owner.update(cx, |this, cx| {
+                                    this.copy_endpoint(id, copy.clone(), window, cx)
+                                });
+                            }),
+                    )
+                })
                 .flex_shrink_0()
                 .px(px(16.))
                 .py(px(12.))
@@ -168,13 +203,11 @@ impl Workspace {
                                             })
                                             .when(matches!(self.selected, 9 | 10), |el| {
                                                 el.child(
-                                                    self.button(
-                                                        "restore-provider",
-                                                        "providerDetail.restore",
-                                                        "undo-2",
-                                                        true,
-                                                        false,
-                                                    )
+                                                    crate::providers::controls::ghost_button("restore-provider", false, t)
+                                                    .gap(px(6.)).flex_shrink_0()
+                                                    .accessibility_label(self.locale.text("providerDetail.restore"))
+                                                    .child(svg().path("undo-2").size(px(14.)).text_color(t.text))
+                                                    .child(self.locale.text("providerDetail.restore"))
                                                     .disabled(self.provider_busy)
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.request_provider(
@@ -209,6 +242,15 @@ impl Workspace {
                                                     )
                                                 },
                                             )
+                                            .when(self.selected == 9, |el| el.child(
+                                                self.button("trash-archived-provider", "providerDetail.moveToTrash", "trash-2", true, false)
+                                                    .disabled(self.provider_busy)
+                                                    .on_click(cx.listener(move |this, _, _, cx| this.request_provider(Action::Trash(id), cx)))
+                                            ))
+                                            .when(self.selected == 10, |el| el.child(
+                                                self.button("delete-provider", "providerDetail.deleteForever", "trash-2", true, false).disabled(self.provider_busy)
+                                                    .on_click(cx.listener(move |this, _, window, cx| this.confirm_trash(Some((id, deleting.clone())), window, cx)))
+                                            ))
                                             .when(self.selected != 10, |el| {
                                                 el.child(
                                     self.provider_actions(id, window, cx),
@@ -233,6 +275,16 @@ impl Workspace {
                     .flex_col()
                     .gap(px(18.))
                     .children(self.tools.read(cx).notice())
+                    .when(self.selected == 10, |el| el.children(entry.deleted_at.map(|deleted| {
+                        let remaining = aipass_desktop_native::trash::days_remaining(deleted, time::OffsetDateTime::now_utc());
+                        let label = if remaining == 0 { self.locale.text("providerDetail.deleteSoon") } else {
+                            self.locale.text("providerDetail.deletesIn").replace("{count}", &remaining.to_string())
+                                .replace("{unit}", &self.locale.text(if remaining == 1 { "providerDetail.day" } else { "providerDetail.days" }))
+                        };
+                        div().flex_shrink_0().px(px(12.)).py(px(8.)).border_1().border_color(gpui::transparent_black())
+                            .rounded(px(8.)).bg(t.warning.opacity(if self.dark { 0.14 } else { 0.1 })).text_color(t.warning)
+                            .text_size(px(12.)).line_height(px(16.8)).child(label).observe("trash-expiry")
+                    })))
                     .when(entry.credential_kind == CredentialKind::OAuth, |el| el.child(self.subscriptions.update(cx,|view,cx|view.account_card(window,cx))))
                     .when(entry.credential_kind == CredentialKind::Api, |el| el.child(
                         card()
@@ -248,18 +300,8 @@ impl Workspace {
                                     .border_color(t.divider)
                                     .child(self.locale.text("providerDetail.credentials")).observe("provider-credentials-heading"),
                             )
-                            .children(
-                                entry
-                                    .endpoints
-                                    .iter()
-                                    .filter(|endpoint| endpoint.kind == EndpointKind::Api)
-                                    .map(|endpoint| {
-                                        row(
-                                            "endpoint", self.locale.text("providerDetail.endpoint"),
-                                            endpoint.url.clone().unwrap_or_default(),
-                                        )
-                                    }),
-                            )
+                            .child(row("endpoint", self.locale.text("providerDetail.endpoint"), aipass_desktop_native::catalog::encode_list(entry.endpoints.iter()
+                                .filter(|e| e.kind == EndpointKind::Api).filter_map(|e| e.url.as_deref()).filter(|s| !s.is_empty()))))
                             .child(self.credentials.clone())
                             .child(row(
                                 "model", self.locale.text("providerDetail.defaultModel"),

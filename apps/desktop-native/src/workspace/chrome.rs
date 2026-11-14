@@ -91,12 +91,16 @@ impl Workspace {
         let after_filter = self.refresh_focus.clone();
         let before_filter = self.search.read(cx).focus_handle(cx);
         div()
-            .on_children_prepainted(crate::parity::record(&[
-                "toolbar.search",
-                "toolbar.refresh",
-                "toolbar.connect",
-                "toolbar.add",
-            ]))
+            .on_children_prepainted(crate::parity::record(if self.selected == 10 {
+                &["toolbar.search", "toolbar.empty-trash"]
+            } else {
+                &[
+                    "toolbar.search",
+                    "toolbar.refresh",
+                    "toolbar.connect",
+                    "toolbar.add",
+                ]
+            }))
             .pt(px(38.))
             .px(px(16.))
             .pb(px(8.))
@@ -279,15 +283,16 @@ impl Workspace {
             })
             .when(self.selected == 10, |el| {
                 el.child(
-                    self.button(
-                        "empty-trash",
-                        "providerList.emptyTrash",
-                        "trash-2",
-                        false,
-                        false,
-                    )
-                    .disabled(true)
-                    .opacity(0.45),
+                    crate::providers::controls::ghost_button("empty-trash", true, t)
+                        .flex_shrink_0()
+                        .gap(px(6.))
+                        .accessibility_label(self.locale.text("providerList.emptyTrash"))
+                        .child(svg().path("trash-2").size(px(14.)).text_color(t.danger))
+                        .child(self.locale.text("providerList.emptyTrash"))
+                        .disabled(self.provider_busy || self.catalog.trash.is_empty())
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.confirm_trash(None, window, cx)),
+                        ),
                 )
             })
     }

@@ -1,3 +1,4 @@
+mod appearance;
 use crate::{
     backdrop::Backdrop,
     locale::Locale,
@@ -13,6 +14,7 @@ use gpui_base::{
 };
 
 mod chrome;
+mod copying;
 use crate::menu;
 mod notes;
 mod provider_detail;
@@ -20,6 +22,7 @@ mod provider_list;
 mod provider_menu;
 mod providers;
 mod tools;
+mod trash;
 pub use providers::ProviderFeedback;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
@@ -31,6 +34,7 @@ pub enum WorkspaceEvent {
     Provider,
     Credential,
     ProviderTools,
+    Trash,
     Integration,
 }
 impl EventEmitter<WorkspaceEvent> for Workspace {}
@@ -56,6 +60,7 @@ pub struct Workspace {
     selected_provider: Option<uuid::Uuid>,
     hovered_provider: Option<uuid::Uuid>,
     provider_busy: bool,
+    copied_endpoint: Option<(uuid::Uuid, std::time::Instant)>,
     provider_menu_open: bool,
     provider_advanced: bool,
     provider_disclosure: crate::disclosure::Disclosure,
@@ -63,10 +68,16 @@ pub struct Workspace {
     provider_action: Option<aipass_desktop_native::catalog::Action>,
     provider_form: Option<Entity<crate::providers::Form>>,
     form_subscription: Option<Subscription>,
+    trash: Entity<crate::trash_ui::Confirm>,
+    _trash_subscription: Subscription,
     tools: Entity<crate::provider_tools_ui::Tools>,
     notes: Entity<notes::Notes>,
     _tools_subscription: Subscription,
     _tools_observer: Subscription,
+    pub(crate) agents: Entity<crate::agents_ui::Agents>,
+    _agents_observer: Subscription,
+    pub(crate) pricing: Entity<crate::pricing_ui::Pricing>,
+    _pricing_observer: Subscription,
     credentials: Entity<crate::providers::credentials::Credentials>,
     integrations: Entity<crate::integrations::Integrations>,
     pub(crate) subscriptions: Entity<crate::subscription_ui::Subscriptions>,
@@ -145,23 +156,36 @@ impl Workspace {
                     cx.notify();
                 }
             });
+        let pricing = cx.new(|cx| crate::pricing_ui::Pricing::new(dark, chinese, window, cx));
+        let pricing_observer = cx.observe(&pricing, |_, _, cx| cx.notify());
         let credentials =
             cx.new(|cx| crate::providers::credentials::Credentials::new(dark, chinese, window, cx));
-        let credentials_subscription = cx.subscribe(&credentials, |this, view, event, cx| {
-            if matches!(event, crate::providers::credentials::Event::Request)
-                && view.read(cx).has_request()
-            {
-                this.provider_busy = true;
-                cx.emit(WorkspaceEvent::Credential);
-            }
-            cx.notify();
-        });
+        let credentials_subscription =
+            cx.subscribe_in(&credentials, window, |this, view, event, window, cx| {
+                if let crate::providers::credentials::Event::Pricing(id) = event {
+                    this.pricing
+                        .update(cx, |pricing, cx| pricing.show(id, window, cx));
+                }
+                if matches!(event, crate::providers::credentials::Event::Request)
+                    && view.read(cx).has_request()
+                {
+                    this.provider_busy = true;
+                    cx.emit(WorkspaceEvent::Credential);
+                }
+                cx.notify();
+            });
         let integrations = cx.new(|cx| crate::integrations::Integrations::new(dark, chinese, cx));
         let integrations_subscription = cx.subscribe(&integrations, |this, view, _, cx| {
             if view.read(cx).has_request() {
                 this.provider_busy = true;
                 cx.emit(WorkspaceEvent::Integration);
             }
+            cx.notify();
+        });
+        let trash = cx.new(|cx| crate::trash_ui::Confirm::new(dark, chinese, cx));
+        let trash_subscription = cx.subscribe(&trash, |this, _, _, cx| {
+            this.provider_busy = true;
+            cx.emit(WorkspaceEvent::Trash);
             cx.notify();
         });
         let tools = cx.new(|cx| crate::provider_tools_ui::Tools::new(dark, chinese, window, cx));
@@ -177,7 +201,12 @@ impl Workspace {
         let subscriptions =
             cx.new(|cx| crate::subscription_ui::Subscriptions::new(dark, chinese, window, cx));
         let subscriptions_observer = cx.observe(&subscriptions, |_, _, cx| cx.notify());
+        let agents =
+            cx.new(|cx| crate::agents_ui::Agents::new(subscriptions.clone(), dark, chinese, cx));
+        let agents_observer = cx.observe(&agents, |_, _, cx| cx.notify());
         Self {
+            agents,
+            _agents_observer: agents_observer,
             theme: Theme::new(dark),
             locale,
             selected: 0,
@@ -197,6 +226,7 @@ impl Workspace {
             catalog: Default::default(),
             selected_provider: None,
             provider_busy: false,
+            copied_endpoint: None,
             hovered_provider: None,
             provider_menu_open: false,
             provider_advanced: false,
@@ -205,10 +235,14 @@ impl Workspace {
             provider_action: None,
             provider_form: None,
             form_subscription: None,
+            trash,
+            _trash_subscription: trash_subscription,
             tools,
             notes,
             _tools_subscription: tools_subscription,
             _tools_observer: tools_observer,
+            pricing,
+            _pricing_observer: pricing_observer,
             credentials,
             integrations,
             subscriptions,
@@ -267,6 +301,8 @@ impl Workspace {
                 this.provider_menu_open = false;
                 this.provider_advanced = false;
                 this.selected = index;
+                this.agents
+                    .update(cx, |view, cx| view.activate(index == 7, cx));
                 this.tag_filter = None;
                 this.select_visible(window, cx);
                 cx.notify();
@@ -278,14 +314,17 @@ impl Workspace {
                     .text_color(if active { t.accent } else { t.secondary }),
             )
             .child(div().flex_1().child(self.locale.text(NAV[index])))
-            .when(index < 7 || index == 10, |el| {
-                el.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(if active { t.accent } else { t.tertiary })
-                        .child(self.catalog.entries(index, "").len().to_string()),
-                )
-            })
+            .when(
+                index < 7 || (index == 10 && !self.catalog.trash.is_empty()),
+                |el| {
+                    el.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(if active { t.accent } else { t.tertiary })
+                            .child(self.catalog.entries(index, "").len().to_string()),
+                    )
+                },
+            )
     }
 
     fn sidebar(&self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
@@ -488,34 +527,43 @@ impl Render for Workspace {
                     .flex()
                     .gap(px(8.))
                     .child(self.sidebar(sidebar, cx))
-                    .child(
-                        self.pane(t.surface.opacity(0.86))
-                            .w(px(list))
-                            .flex_shrink_0()
-                            .child(self.toolbar(window, cx))
-                            .flex()
-                            .flex_col()
-                            .child(if self.visible_providers(cx).is_empty() {
-                                self.empty(title, desc, false, cx).into_any_element()
+                    .when(self.selected == 7, |el| {
+                        el.child(div().flex_1().min_w_0().h_full().child(self.agents.clone()))
+                    })
+                    .when(self.selected != 7, |el| {
+                        el.child(
+                            self.pane(t.surface.opacity(0.86))
+                                .w(px(list))
+                                .flex_shrink_0()
+                                .child(self.toolbar(window, cx))
+                                .flex()
+                                .flex_col()
+                                .child(if self.visible_providers(cx).is_empty() {
+                                    self.empty(title, desc, false, cx).into_any_element()
+                                } else {
+                                    self.provider_list(window, cx).into_any_element()
+                                }),
+                        )
+                        .child(
+                            self.pane(if self.visible_providers(cx).is_empty() {
+                                rgba(0x00000000)
                             } else {
-                                self.provider_list(window, cx).into_any_element()
-                            }),
-                    )
-                    .child(
-                        self.pane(if self.visible_providers(cx).is_empty() {
-                            rgba(0x00000000)
-                        } else {
-                            t.surface.opacity(0.86)
-                        })
-                        .flex_1()
-                        .child(self.provider_detail(window, cx)),
-                    ),
+                                t.surface.opacity(0.86)
+                            })
+                            .flex_1()
+                            .child(self.provider_detail(window, cx)),
+                        )
+                    }),
             )
             .child(self.titlebar(sidebar, list, window, cx))
+            .children(self.agents.read(cx).modal())
+            .children(self.agents.read(cx).setup_modal())
             .children(self.integrations.read(cx).modal())
             .children(self.integrations.read(cx).login_modal())
             .child(self.subscriptions.clone())
             .child(self.tools.clone())
+            .child(self.pricing.clone())
+            .child(self.trash.clone())
             .children(
                 self.provider_form
                     .clone()
@@ -553,5 +601,21 @@ impl Render for Workspace {
                         },
                     )),
             )
+    }
+}
+
+impl Workspace {
+    pub(crate) fn loading_chrome(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let (sidebar, list) = columns(f32::from(window.viewport_size().width));
+        div()
+            .absolute()
+            .inset_0()
+            .child(self.backdrop.render(window, cx))
+            .child(self.titlebar(sidebar, list, window, cx))
+            .into_any_element()
     }
 }

@@ -88,6 +88,28 @@ pub struct Subscriptions {
 }
 
 impl Subscriptions {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        self.dark = dark;
+        for input in [&self.query, &self.api_key, &self.code]
+            .into_iter()
+            .chain(self.inputs.values())
+            .chain(self.runtime_options.fields.values())
+        {
+            input.update(cx, |input, cx| {
+                input.set_editor_style(self.theme.input_style());
+                cx.notify();
+            });
+        }
+        if let Some(input) = &self.runtime_options.body {
+            input.update(cx, |input, cx| {
+                input.set_editor_style(self.theme.input_style());
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
     pub fn new(dark: bool, chinese: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = Theme::new(dark);
         let locale = Locale::new(chinese);

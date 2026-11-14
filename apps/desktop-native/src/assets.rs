@@ -16,6 +16,8 @@ macro_rules! icons {
 icons!(
     "send",
     "info",
+    "history",
+    "scan-search",
     "bell",
     "clock-3",
     "circle-dollar-sign",
@@ -60,7 +62,9 @@ icons!(
     "settings",
     "lock",
     "spinner",
+    "loading",
     "circle-alert",
+    "triangle-alert",
     "x"
 );
 
@@ -75,6 +79,15 @@ impl AssetSource for Assets {
             return Ok(Some(Cow::Owned(svg.into_bytes())));
         }
         let tool = match path {
+            "tool-cline" => {
+                Some(include_bytes!("../../desktop/public/tool-icons/cline.svg").as_slice())
+            }
+            "tool-trae" => {
+                Some(include_bytes!("../../desktop/public/tool-icons/trae.svg").as_slice())
+            }
+            "tool-qoder" => {
+                Some(include_bytes!("../../desktop/public/tool-icons/qoder.svg").as_slice())
+            }
             "tool-codex" => {
                 Some(include_bytes!("../../desktop/public/tool-icons/codex.svg").as_slice())
             }

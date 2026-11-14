@@ -10,6 +10,7 @@ pub fn button(id: impl Into<ElementId>, label: String, primary: bool, t: Theme) 
 
 pub fn base_button(id: impl Into<ElementId>, primary: bool, t: Theme) -> Button {
     Button::new(id)
+        .whitespace_nowrap()
         .styles(|s| s.disabled(|s| s.opacity(0.45)))
         .focus_visible(move |s| s.shadow(t.outline(t.focus_ring, 2., 1.)))
         .h(px(32.))
@@ -35,6 +36,28 @@ pub fn base_button(id: impl Into<ElementId>, primary: bool, t: Theme) -> Button 
                     t.border_strong
                 })
         })
+}
+
+/// Shared ghost/danger actions. Each interaction style is registered once.
+pub fn ghost_button(id: impl Into<ElementId>, danger: bool, t: Theme) -> Button {
+    Button::new(id)
+        .whitespace_nowrap()
+        .styles(|s| s.disabled(|s| s.opacity(0.45)))
+        .focus_visible(move |s| s.shadow(t.outline(t.focus_ring, 2., 1.)))
+        .h(px(32.))
+        .px(px(12.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .text_color(if danger { t.danger } else { t.text })
+        .text_size(px(13.))
+        .line_height(px(13.))
+        .font_weight(FontWeight::MEDIUM)
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(move |s| s.bg(if danger { t.danger_soft } else { t.accent_soft }))
 }
 
 pub fn icon(id: impl Into<ElementId>, name: &'static str, label: String, t: Theme) -> Button {

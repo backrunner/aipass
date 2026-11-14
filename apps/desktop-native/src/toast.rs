@@ -36,6 +36,11 @@ pub struct ErrorToast {
 }
 
 impl ErrorToast {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        cx.notify();
+    }
+
     pub fn new(dark: bool, chinese: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle().tab_index(0);
         let subscriptions = vec![

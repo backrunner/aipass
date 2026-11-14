@@ -19,6 +19,15 @@ impl Render for ResizeNotes {
     }
 }
 impl Notes {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        self.input.update(cx, |input, cx| {
+            input.set_editor_style(self.theme.input_style());
+            cx.notify();
+        });
+        cx.notify();
+    }
+
     pub fn new(dark: bool, chinese: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = Theme::new(dark);
         let locale = Locale::new(chinese);

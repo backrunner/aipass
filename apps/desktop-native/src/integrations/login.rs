@@ -46,6 +46,16 @@ fn terminal(status: &str) -> bool {
 }
 
 impl Login {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        self.dark = dark;
+        self.code.update(cx, |input, cx| {
+            input.set_editor_style(self.theme.input_style());
+            cx.notify();
+        });
+        cx.notify();
+    }
+
     pub fn new(
         tool: ToolConfigTool,
         dark: bool,

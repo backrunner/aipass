@@ -138,3 +138,18 @@ fn user_content_is_preserved_when_clipboard_recovers_after_many_failures() {
     assert_eq!(state.clipboard.clears, 0);
     assert!(state.pending.is_none());
 }
+
+#[test]
+fn cancelled_and_invalidated_permits_never_write_and_release_exclusivity() {
+    let permit = CopyPermit::begin().unwrap().unwrap();
+    assert!(CopyPermit::begin().unwrap().is_none());
+    assert!(permit.is_current());
+    permit.cancellation().cancel();
+    assert!(!permit.is_current());
+    assert!(!permit.write("synthetic-no-os-write".into(), 45).unwrap());
+    let permit = CopyPermit::begin().unwrap().unwrap();
+    invalidate();
+    assert!(!permit.is_current());
+    assert!(!permit.write("synthetic-no-os-write".into(), 45).unwrap());
+    assert!(CopyPermit::begin().unwrap().is_some());
+}

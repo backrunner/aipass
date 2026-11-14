@@ -60,6 +60,9 @@ impl Element for MotionReveal {
             },
         );
         let mut style = Style::default();
+        // Animated heights must retain their measured extent; pre-snapping each
+        // frame introduces both motion steps and cumulative sibling drift.
+        style.pixel_snap = Some(false);
         style.size.width = relative(1.0).into();
         match height {
             None if self.progress > 0.0 => {}

@@ -5118,11 +5118,11 @@
 -
 -[lints]
 -workspace = true
- 
+
  [lib]
  path = "src/gpui_wgpu.rs"
 @@ -14,51 +16,145 @@
- 
+
  [features]
  default = []
 -bench-support = ["gpui/bench-support", "dep:image"]
@@ -5131,7 +5131,7 @@
 +bench-support = [ "gpui/bench-support", "dep:image",]
 +font-kit = [ "dep:font-kit",]
 +test-support = [ "gpui/test-support", "dep:image",]
- 
+
  [dependencies]
 -gpui.workspace = true
 -anyhow.workspace = true
@@ -5151,12 +5151,12 @@
 -unicode-segmentation.workspace = true
 -gpui_util.workspace = true
 -web-time.workspace = true
- 
+
 -# Optional: only needed on platforms with multiple font sources (e.g. Linux)
 -# WARNING: If you change this, you must also publish a new version of zed-font-kit to crates.io
 -font-kit = { workspace = true, optional = true }
 +[workspace]
- 
+
 -[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 -wgpu = { workspace = true, features = ["std", "metal", "gles", "vulkan", "wgsl", "webgpu"] }
 +[lints.clippy]
@@ -5171,20 +5171,20 @@
 +too_many_arguments = "allow"
 +large_enum_variant = "allow"
 +nonminimal_bool = "allow"
- 
+
 -[target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
 -wgpu = { workspace = true, default-features = true }
 +[dependencies.gpui]
 +default-features = false
 +git = "https://github.com/sonorahq/gpui"
 +rev = "8ddac49c8b5a079149b33b4581e03f74e05237e0"
- 
+
 -[target.'cfg(target_family = "wasm")'.dependencies]
 -web-sys = { workspace = true, features = ["HtmlCanvasElement"] }
 -wgpu = { workspace = true, features = ["webgl"] }
 +[dependencies.anyhow]
 +version = "1.0.86"
- 
+
 -[dev-dependencies]
 -criterion.workspace = true
 -gpui = { workspace = true, features = ["bench-support"] }
@@ -5193,7 +5193,7 @@
 -naga = { workspace = true, features = ["wgsl-in"] }
 +[dependencies.bytemuck]
 +version = "1"
- 
+
 -[[bench]]
 -name = "layout_line"
 -harness = false
@@ -5407,13 +5407,13 @@
  use cosmic_text::{
 @@ -1347,13 +1348,13 @@
          assert!(text_system.all_font_names().is_empty());
- 
+
          text_system.add_fonts(vec![Cow::Borrowed(include_bytes!(
 -            "../../../assets/fonts/lilex/Lilex-Regular.ttf"
 +            "../test-assets/fonts/lilex/Lilex-Regular.ttf"
          ))])?;
          assert_eq!(text_system.all_font_names(), ["Lilex"]);
- 
+
          text_system.add_fonts(vec![
              Cow::Borrowed(IBM_PLEX),
 -            Cow::Borrowed(include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf")),
@@ -5423,13 +5423,13 @@
          Ok(())
 @@ -1379,8 +1380,8 @@
      }
- 
+
      const IBM_PLEX: &[u8] =
 -        include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
 -    const LILEX: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
 +        include_bytes!("../test-assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
 +    const LILEX: &[u8] = include_bytes!("../test-assets/fonts/lilex/Lilex-Regular.ttf");
- 
+
      /// Every code point of `Bidi_Class=B`, each of which starts a new bidi
      /// paragraph and so can split one line into mixed-direction paragraphs.
 --- a/src/shaders.wgsl
@@ -5437,21 +5437,43 @@
 @@ -1,3 +1,4 @@
 +// Modified by AIPass (2026-11-13): group opacity compositing and control states; see vendor/README.md.
  /* Functions useful for debugging:
- 
+
  // A heat map color for debugging (blue -> cyan -> green -> yellow -> red).
-@@ -1609,6 +1610,8 @@
+@@ -1359,13 +1360,19 @@
+
+ @fragment
+ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
+-    let sample = textureSample(t_sprite, s_sprite, input.tile_position);
++    let sprite = load_poly_sprite(input.sprite_id);
++    // Clamp to this packed image, never a neighboring appearance texture.
++    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
++    let origin = vec2<f32>(sprite.tile.bounds.origin);
++    let extent = vec2<f32>(sprite.tile.bounds.size);
++    let position = clamp(input.tile_position, (origin + vec2<f32>(0.5)) / atlas_size,
++        (origin + extent - vec2<f32>(0.5)) / atlas_size);
++    let sample = textureSample(t_sprite, s_sprite, position);
+     // Alpha clip after using the derivatives.
+     if (any(input.clip_distances < vec4<f32>(0.0))) {
+         return vec4<f32>(0.0);
+     }
+
+-    let sprite = load_poly_sprite(input.sprite_id);
+     let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, 0.0);
+
+     var color = sample;
+@@ -1609,6 +1616,8 @@
      fade_left: f32,
      fade_right: f32,
      pad: f32,
 +    opacity: f32,
 +    alignment_pad: f32,
  }
- 
+
  @fragment
-@@ -1689,5 +1692,5 @@
+@@ -1689,5 +1698,5 @@
          coverage = min(coverage, smoothstep(0.0, mask.fade_right, right));
      }
- 
+
 -    return coverage;
 -}
 +    return coverage * mask.opacity;
@@ -5461,7 +5483,7 @@
 @@ -1,3 +1,4 @@
 +// Modified by AIPass (2026-11-13): group opacity compositing and control states; see vendor/README.md.
  @group(1) @binding(0) var t_instances: texture_2d<u32>;
- 
+
  // Each texel of `t_instances` packs four 32-bit words of instance data. Most
 @@ -236,5 +237,5 @@
  // Layer filters are not drawn on the WebGL path; this keeps the module complete.
@@ -5485,7 +5507,7 @@
 +    opacity: f32,
 +    alignment_pad: f32,
  }
- 
+
  #[repr(C)]
 @@ -1447,6 +1450,7 @@
                  source_bounds: bounds,
@@ -5496,7 +5518,7 @@
              }],
          )?;
 @@ -3750,7 +3754,7 @@
- 
+
  impl Composite {
      fn of(layer: LayerEffect) -> Self {
 -        match layer.filter.fades() {
@@ -5512,7 +5534,7 @@
 +        alignment_pad: 0.0,
      }
  }
- 
+
 @@ -4114,7 +4120,7 @@
          assert_eq!(std::mem::size_of::<MonochromeSprite>(), 28 * 4);
          assert_eq!(std::mem::size_of::<SubpixelSprite>(), 28 * 4);
@@ -5529,5 +5551,5 @@
 +        assert_eq!(std::mem::offset_of!(MaskParams, opacity), 72);
 +        assert_eq!(std::mem::offset_of!(MaskParams, alignment_pad), 76);
      }
- 
+
      #[test]

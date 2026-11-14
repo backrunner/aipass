@@ -27,6 +27,7 @@ type NodeMeasureFn = StackSafe<Box<MeasureFn>>;
 
 struct NodeContext {
     measure: NodeMeasureFn,
+    snap_size: bool,
 }
 pub struct TaffyLayoutEngine {
     taffy: TaffyTree<NodeContext>,
@@ -106,6 +107,7 @@ impl TaffyLayoutEngine {
         style: Style,
         rem_size: Pixels,
         scale_factor: f32,
+        snap_size: bool,
         measure: impl FnMut(
             Size<Option<Pixels>>,
             Size<AvailableSpace>,
@@ -122,7 +124,13 @@ impl TaffyLayoutEngine {
 
         let id = self
             .taffy
-            .new_leaf_with_context(taffy_style, NodeContext { measure })
+            .new_leaf_with_context(
+                taffy_style,
+                NodeContext {
+                    measure,
+                    snap_size,
+                },
+            )
             .expect(EXPECT_MESSAGE)
             .into();
         self.note_pixel_snap(id, snap);
@@ -285,7 +293,13 @@ impl TaffyLayoutEngine {
 
                     let measured_size: Size<Pixels> =
                         (node_context.measure)(known_dimensions, available_space, window, cx);
-                    snap_measured_size_to_device_pixels(measured_size, scale_factor).into()
+                    let mut device_size =
+                        snap_measured_size_to_device_pixels(measured_size, scale_factor);
+                    if !node_context.snap_size {
+                        device_size.width = measured_size.width.0.max(0.) * scale_factor;
+                        device_size.height = measured_size.height.0.max(0.) * scale_factor;
+                    }
+                    device_size.into()
                 },
             )
             .expect(EXPECT_MESSAGE);
@@ -318,7 +332,8 @@ impl TaffyLayoutEngine {
     //     authored absolute lengths are rounded in `to_taffy`. This
     //     includes borders, padding, gaps, and explicit sizes.
     //     Custom-measured leaf nodes have their measured sizes rounded up
-    //     to integer device-pixel lengths.
+    //     to integer device-pixel lengths, except text metrics, whose
+    //     fractional advances and line heights survive until absolute edge snapping.
     //
     //  2. Post-layout edge snapping. After Taffy resolves the tree, layout
     //     relationships such as flex shares, grid tracks, percentages, and

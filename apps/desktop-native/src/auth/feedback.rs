@@ -31,6 +31,15 @@ impl AuthView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if scenario.starts_with("setup-cloud") || scenario == "create-local" {
+            self.cloud_default = true;
+            self.cloud_failed = scenario.ends_with("failed");
+        }
+        #[cfg(feature = "parity-render")]
+        if let Some(source) = scenario.strip_prefix("setup-import-") {
+            self.import
+                .update(cx, |s, cx| s.preview(source, window, cx));
+        }
         if matches!(scenario, "reset" | "reset-bottom") {
             self.open_reset(window, cx);
             self.scroll_to_end = scenario == "reset-bottom";

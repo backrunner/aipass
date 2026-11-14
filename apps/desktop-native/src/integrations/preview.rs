@@ -36,10 +36,16 @@ pub struct Preview {
     panes: [FocusHandle; 2],
     allow_confirm: bool,
     pub busy: bool,
+    pub managed: bool,
     theme: Theme,
     locale: Locale,
 }
 impl Preview {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        cx.notify();
+    }
+
     pub fn new(
         response: ToolConfigPreviewResponse,
         allow_confirm: bool,
@@ -72,6 +78,7 @@ impl Preview {
             panes: std::array::from_fn(|_| cx.focus_handle()),
             allow_confirm,
             busy: false,
+            managed: false,
             theme: Theme::new(dark),
             locale: Locale::new(chinese),
         }
@@ -415,7 +422,11 @@ impl Render for Preview {
                                 el.child(
                                     button(
                                         "integration-confirm",
-                                        self.locale.text("server.writeConfig"),
+                                        self.locale.text(if self.managed {
+                                            "agents.importAndSwitch"
+                                        } else {
+                                            "server.writeConfig"
+                                        }),
                                         true,
                                         t,
                                     )

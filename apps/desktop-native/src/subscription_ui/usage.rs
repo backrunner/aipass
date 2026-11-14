@@ -202,23 +202,30 @@ impl Subscriptions {
                             .child(
                                 div()
                                     .text_size(px(14.))
-                                    .line_height(px(19.))
+                                    .line_height(px(17.))
                                     .font_weight(FontWeight::BOLD)
-                                    .child(plan),
+                                    .child(plan)
+                                    .observe("subscription-usage-plan-name"),
                             )
                             .when_some(snapshot.and_then(|s| s.status.clone()), |el, status| {
                                 el.child(
                                     div()
-                                        .px(px(6.))
+                                        .flex_shrink_0()
+                                        .px(px(8.))
                                         .py(px(3.))
-                                        .rounded(px(4.))
-                                        .bg(t.surface2)
-                                        .text_size(px(10.))
-                                        .line_height(px(12.))
+                                        .border_1()
+                                        .border_color(t.border)
+                                        .rounded_full()
+                                        .text_size(px(11.))
+                                        .line_height(px(11.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .whitespace_nowrap()
                                         .text_color(t.secondary)
-                                        .child(status),
+                                        .child(status)
+                                        .observe("subscription-usage-status"),
                                 )
-                            }),
+                            })
+                            .observe("subscription-usage-plan"),
                     )
                 },
             )

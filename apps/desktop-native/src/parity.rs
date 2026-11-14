@@ -2,7 +2,11 @@
 //! alter layout or inject reference pixels into the renderer.
 use gpui::{App, Bounds, Pixels, Window};
 #[cfg(feature = "parity-render")]
+pub mod appearance;
+#[cfg(feature = "parity-render")]
 pub mod control_actions;
+#[cfg(feature = "parity-render")]
+pub mod launch;
 mod observation;
 pub use observation::Observe;
 

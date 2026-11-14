@@ -47,11 +47,21 @@ impl Workspace {
             .update(cx, |view, cx| view.complete(completion, window, cx));
     }
     pub(super) fn sync_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let entry = self
-            .visible_providers(cx)
-            .into_iter()
-            .find(|entry| Some(entry.id) == self.selected_provider)
-            .cloned();
+        self.agents.update(cx, |view, cx| {
+            view.sync(&self.catalog.active, cx);
+            view.activate(self.selected == 7, cx);
+        });
+        let entry = if self.selected == 7 {
+            self.agents.read(cx).entry()
+        } else {
+            self.visible_providers(cx)
+                .into_iter()
+                .find(|entry| Some(entry.id) == self.selected_provider)
+                .cloned()
+        };
+        self.pricing
+            .update(cx, |view, cx| view.sync(entry.clone(), window, cx));
+        let pricing_config = self.pricing.read(cx).config.clone();
         self.tools
             .update(cx, |view, cx| view.sync(entry.clone(), window, cx));
         self.notes
@@ -60,6 +70,7 @@ impl Workspace {
         self.subscriptions
             .update(cx, |view, cx| view.sync_entry(entry.clone(), window, cx));
         self.credentials.update(cx, |view, cx| {
+            view.pricing_config = pricing_config;
             view.sync(entry.clone(), editing, self.provider_busy, window, cx)
         });
         self.integrations.update(cx, |view, cx| {
@@ -79,7 +90,7 @@ impl Workspace {
         serde_json::json!({"active": self.catalog.active.len(), "archived": self.catalog.archived.len(), "trash": self.catalog.trash.len(),
             "form": self.provider_form.as_ref().map(|form| if form.read(cx).is_editing() { "edit" } else { "add" }),
             "selectedProvider": self.selected_provider, "hoveredProvider": self.hovered_provider,
-            "providerTools":self.tools.read(cx).presentation(),"subscription":self.subscriptions.read(cx).presentation(),"credentials": self.credentials.read(cx).presentation_state(), "integration":self.integrations.read(cx).presentation(cx)})
+            "pricing":self.pricing.read(cx).presentation(), "providerTools":self.tools.read(cx).presentation(),"subscription":self.subscriptions.read(cx).presentation(),"credentials": self.credentials.read(cx).presentation_state(), "integration":self.integrations.read(cx).presentation(cx)})
     }
     pub(super) fn select_visible(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.selected_provider;
@@ -91,6 +102,7 @@ impl Workspace {
             self.selected_provider = visible.first().map(|entry| entry.id);
         }
         if previous != self.selected_provider {
+            self.copied_endpoint = None;
             if self.form_is_editing(cx) {
                 self.close_provider_form(window, cx);
             }
@@ -104,6 +116,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if scenario.starts_with("agents-") {
+            self.selected = 7;
+            self.catalog.active = crate::agents_ui::fixtures::entries(scenario);
+            self.agents
+                .update(cx, |view, cx| view.fixture(scenario, window, cx));
+            self.sync_credentials(window, cx);
+            return;
+        }
         if scenario.starts_with("subscription-") {
             self.catalog = Catalog::fixture();
             self.catalog.active = vec![crate::subscription_ui::fixtures::entry(scenario)];
@@ -117,6 +137,31 @@ impl Workspace {
             return;
         }
         self.catalog = Catalog::fixture();
+        if scenario == "providers-edit-gateway" {
+            self.catalog.active[0].gateway = Some(
+                serde_json::from_str(include_str!(
+                    "../../../../tests/desktop-parity/fixtures/provider-gateway.json"
+                ))
+                .expect("gateway fixture"),
+            );
+        }
+        if scenario.starts_with("providers-trash") {
+            self.selected = 10;
+            self.select_visible(window, cx);
+            self.sync_credentials(window, cx);
+            if scenario != "providers-trash" {
+                let target = if scenario == "providers-trash-delete" {
+                    self.catalog
+                        .trash
+                        .first()
+                        .map(|entry| (entry.id, entry.title.clone()))
+                } else {
+                    None
+                };
+                self.confirm_trash(target, window, cx);
+            }
+            return;
+        }
         if scenario == "providers-notes-empty" {
             self.catalog.active[0].notes = None;
         }
@@ -139,6 +184,13 @@ impl Workspace {
                 form.update(cx, |form, _| form.preview_advanced());
             }
         }
+        if matches!(scenario, "providers-edit-fields" | "providers-edit-gateway") {
+            if let Some(form) = &self.provider_form {
+                form.update(cx, |form, _| {
+                    form.preview_edit_fields(scenario == "providers-edit-gateway")
+                });
+            }
+        }
         if matches!(scenario, "providers-add-menu" | "providers-add-all") {
             if let Some(form) = &self.provider_form {
                 form.update(cx, |form, _| form.preview_optional(scenario));
@@ -149,6 +201,8 @@ impl Workspace {
         self.integrations
             .update(cx, |view, cx| view.fixture(scenario, window, cx));
         self.tools
+            .update(cx, |view, cx| view.fixture(scenario, window, cx));
+        self.pricing
             .update(cx, |view, cx| view.fixture(scenario, window, cx));
         self.provider_busy = false;
     }
@@ -267,12 +321,16 @@ impl Workspace {
         cx.notify();
     }
     pub fn clear_providers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.copied_endpoint = None;
+        self.agents.update(cx, |view, cx| view.clear(cx));
+        self.trash.update(cx, |view, cx| view.clear(cx));
         self.close_provider_form(window, cx);
         self.credentials
             .update(cx, |view, cx| view.clear(window, cx));
         self.integrations.update(cx, |view, cx| view.clear(cx));
         self.subscriptions
             .update(cx, |view, cx| view.clear(window, cx));
+        self.pricing.update(cx, |view, cx| view.clear(window, cx));
         self.tools.update(cx, |view, cx| view.clear(window, cx));
         self.notes
             .update(cx, |view, cx| view.sync(None, window, cx));
@@ -311,7 +369,8 @@ impl Workspace {
         self.close_provider_form(window, cx);
         let form = cx.new(|cx| Form::new(entry, self.dark, self.chinese, window, cx));
         form.update(cx, |form, cx| {
-            form.attach_credentials(self.credentials.clone(), cx)
+            form.attach_credentials(self.credentials.clone(), cx);
+            form.attach_detail_panels(self.subscriptions.clone(), self.integrations.clone());
         });
         self.form_subscription =
             Some(

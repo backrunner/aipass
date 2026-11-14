@@ -1,3 +1,5 @@
+mod appearance;
+mod import;
 use crate::parity::Observe;
 use crate::{backdrop::Backdrop, locale::Locale, theme::Theme};
 use aipass_agent_protocol::SensitiveString;
@@ -18,6 +20,7 @@ mod surface;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Choose,
+    Import,
     Create,
     Unlock,
     Recover,
@@ -25,17 +28,25 @@ pub enum Mode {
 
 pub enum AuthEvent {
     Unlock(SensitiveString),
-    Create(SensitiveString),
+    Create {
+        password: SensitiveString,
+        local_only: bool,
+    },
     Recover {
         key: SensitiveString,
         password: SensitiveString,
     },
-    Import,
+    Import(aipass_desktop_native::onboarding::Import),
+    CheckCloud,
     Reset,
 }
 
 pub struct AuthView {
     pub mode: Mode,
+    import: Entity<import::ImportForm>,
+    cloud_default: bool,
+    cloud_failed: bool,
+    cloud_checking: bool,
     theme: Theme,
     locale: Locale,
     password: Entity<InputState>,
@@ -62,7 +73,7 @@ impl AuthView {
     pub fn sync_exists(&mut self, exists: bool, window: &mut Window, cx: &mut Context<Self>) {
         let next = match (exists, self.mode) {
             (false, Mode::Unlock | Mode::Recover) => Some(Mode::Choose),
-            (true, Mode::Choose | Mode::Create) => Some(Mode::Unlock),
+            (true, Mode::Choose | Mode::Create | Mode::Import) => Some(Mode::Unlock),
             _ => None,
         };
         if let Some(mode) = next {
@@ -89,6 +100,7 @@ impl AuthView {
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = Locale::new(chinese);
+        let import = cx.new(|cx| import::ImportForm::new(dark, chinese, window, cx));
         let mut field = |key: &str, masked| {
             cx.new(|cx| {
                 let mut input = InputState::new(window, cx).masked(masked);
@@ -128,11 +140,26 @@ impl AuthView {
             .collect();
         subscriptions
             .push(cx.subscribe(&reset_confirmation, |_, _, _: &InputEvent, cx| cx.notify()));
+        subscriptions.push(cx.subscribe_in(
+            &import,
+            window,
+            |this, _, event, window, cx| match event {
+                import::Event::Back => this.change_mode(Mode::Choose, window, cx),
+                import::Event::Submit(request) => {
+                    this.set_busy(true, cx);
+                    cx.emit(AuthEvent::Import(request.clone()));
+                }
+            },
+        ));
         if mode == Mode::Unlock {
             password.update(cx, |input, cx| input.focus(window, cx));
         }
         Self {
             mode,
+            import,
+            cloud_default: false,
+            cloud_failed: false,
+            cloud_checking: false,
             theme: Theme::new(dark),
             locale,
             password,
@@ -163,6 +190,10 @@ impl AuthView {
             return;
         }
         self.busy = busy;
+        if !busy {
+            self.cloud_checking = false;
+        }
+        self.import.update(cx, |s, cx| s.set_busy(busy, cx));
         for input in [&self.password, &self.confirmation, &self.recovery] {
             input.update(cx, |input, cx| input.set_disabled(busy, cx));
         }
@@ -184,7 +215,7 @@ impl AuthView {
                 password == self.confirmation.read(cx).value()
                     && !self.recovery.read(cx).value().trim().is_empty()
             }
-            Mode::Choose => false,
+            Mode::Choose | Mode::Import => false,
         }
     }
 
@@ -193,6 +224,7 @@ impl AuthView {
             // set_value also clears the editor's undo and IME history.
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
+        self.import.update(cx, |s, cx| s.clear(window, cx));
         self.error.clear();
         self.reset_open = false;
         self.reset_busy = false;
@@ -231,12 +263,15 @@ impl AuthView {
         let password = SensitiveString::new(self.password.read(cx).value().to_string());
         let event = match self.mode {
             Mode::Unlock => AuthEvent::Unlock(password),
-            Mode::Create => AuthEvent::Create(password),
+            Mode::Create => AuthEvent::Create {
+                password,
+                local_only: false,
+            },
             Mode::Recover => AuthEvent::Recover {
                 password,
                 key: SensitiveString::new(self.recovery.read(cx).value().to_string()),
             },
-            Mode::Choose => return,
+            Mode::Choose | Mode::Import => return,
         };
         // Keep fields available for correction after failure, as in the reference.
         // Success, lock and mode changes clear the editor and its undo history.
@@ -297,7 +332,13 @@ impl AuthView {
                             .min_w_0()
                             .px(px(12.))
                             .relative()
-                            .when(input == &self.recovery, |el| el.font_family("Menlo"))
+                            .when(input == &self.recovery, |el| {
+                                el.font_family(if cfg!(target_os = "macos") {
+                                    ".AppleSystemUIFontMonospaced"
+                                } else {
+                                    "monospace"
+                                })
+                            })
                             .when(
                                 input != &self.recovery
                                     && !self.revealed
@@ -378,7 +419,7 @@ impl AuthView {
     }
 
     fn button(&self, id: &'static str, label: &str, primary: bool, cx: &Context<Self>) -> Button {
-        let loading = id == "submit" && self.busy;
+        let loading = (id == "submit" && self.busy) || (id == "check-cloud" && self.cloud_checking);
         Button::new(id)
             .relative()
             .accessibility_label(self.locale.text(label))
@@ -437,7 +478,7 @@ impl Render for AuthView {
             self.scroll_to_end = false;
         }
         let (title, description, submit) = match self.mode {
-            Mode::Choose => ("auth.setup.title", "auth.setup.desc", ""),
+            Mode::Choose | Mode::Import => ("auth.setup.title", "auth.setup.desc", ""),
             Mode::Create => (
                 "auth.create.title",
                 "auth.create.desc",
@@ -494,9 +535,32 @@ impl Render for AuthView {
                     ),
             )
             .when(self.mode == Mode::Choose, |el| {
-                el.child(
+                el.when(self.cloud_default, |el| {
+                    el.child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .text_color(self.theme.secondary)
+                            .child(self.locale.text(if self.cloud_failed {
+                                "auth.setup.cloudFailed"
+                            } else {
+                                "auth.setup.cloudEmpty"
+                            })),
+                    )
+                    .child(
+                        self.button("check-cloud", "auth.setup.checkCloud", false, cx)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_busy(true, cx);
+                                this.cloud_checking = true;
+                                cx.emit(AuthEvent::CheckCloud);
+                            })),
+                    )
+                })
+                .child(
                     self.button("import", "auth.import.title", true, cx)
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(AuthEvent::Import))),
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.change_mode(Mode::Import, window, cx)
+                        })),
                 )
                 .child(
                     self.button("create", "auth.create.title", false, cx)
@@ -549,6 +613,24 @@ impl Render for AuthView {
                         .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
                         .observe("auth-submit"),
                 )
+                .when(self.mode == Mode::Create && self.cloud_default, |el| {
+                    el.child(
+                        self.button("create-local", "auth.create.localOnly", false, cx)
+                            .disabled(!self.ready(cx))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.ready(cx) {
+                                    let password = SensitiveString::new(
+                                        this.password.read(cx).value().to_string(),
+                                    );
+                                    this.set_busy(true, cx);
+                                    cx.emit(AuthEvent::Create {
+                                        password,
+                                        local_only: true,
+                                    });
+                                }
+                            })),
+                    )
+                })
                 .child(self.auth_navigation(cx))
             });
         div()
@@ -612,7 +694,11 @@ impl Render for AuthView {
                                     .child(crate::logo::logo(28., window))
                                     .child("AIPass"),
                             )
-                            .child(form.flex_shrink_0().observe("auth-form"))
+                            .child(if self.mode == Mode::Import {
+                                self.import.clone().into_any_element()
+                            } else {
+                                form.flex_shrink_0().observe("auth-form").into_any_element()
+                            })
                             .when(self.reset_open && self.mode == Mode::Recover, |el| {
                                 el.child(self.reset_panel(window, cx))
                             })
@@ -683,5 +769,18 @@ impl AuthView {
             .when(self.mode == Mode::Recover && !self.reset_open, |el| {
                 el.child(self.reset_link(cx))
             })
+    }
+}
+
+impl AuthView {
+    pub fn setup_status(
+        &mut self,
+        cloud_default: bool,
+        cloud_failed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.cloud_default = cloud_default;
+        self.cloud_failed = cloud_failed;
+        cx.notify();
     }
 }

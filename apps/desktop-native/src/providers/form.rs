@@ -24,10 +24,15 @@ pub struct Form {
     pub(super) dark: bool,
     pub(super) scroll: gpui::ScrollHandle,
     scroll_to_end: bool,
+    #[cfg(feature = "parity-render")]
+    capture_scroll: Option<f32>,
     pub(super) locale: Locale,
     pub(super) inputs: Vec<Entity<InputState>>,
     pub(super) draft: Draft,
     pub(super) notes: Entity<TextareaState>,
+    pub(super) notes_height: gpui::Pixels,
+    pub(super) notes_resize_start: Option<(gpui::Pixels, gpui::Pixels)>,
+    pub(super) concurrency_repeat: Option<gpui::Task<()>>,
     pub(super) advanced: bool,
     pub(super) visible: BTreeSet<usize>,
     pub(super) picker: Option<&'static str>,
@@ -46,6 +51,10 @@ pub struct Form {
     focus: FocusHandle,
     action: Option<Action>,
     pub(super) credentials: Option<Entity<super::credentials::Credentials>>,
+    pub(super) detail_panels: Option<(
+        Entity<crate::subscription_ui::Subscriptions>,
+        Entity<crate::integrations::Integrations>,
+    )>,
     credentials_subscription: Option<Subscription>,
     save_after_credential: bool,
     _subscriptions: Vec<Subscription>,
@@ -71,15 +80,49 @@ pub(super) const LABELS: [&str; 16] = [
 ];
 
 impl Form {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        self.dark = dark;
+        for input in &self.inputs {
+            let mut style = self.theme.input_style();
+            if self.is_editing() {
+                style.muted_foreground = gpui::rgb(0xa9a9a9).into();
+            }
+            input.update(cx, |input, cx| {
+                input.set_editor_style(style);
+                cx.notify();
+            });
+        }
+        self.notes.update(cx, |input, cx| {
+            input.set_editor_style(self.theme.input_style());
+            cx.notify();
+        });
+        // The form owns a separate credential editor; detail panels are shared with Workspace.
+        if let Some(view) = &self.credentials {
+            view.update(cx, |view, cx| view.apply_appearance(dark, cx));
+        }
+        cx.notify();
+    }
+
     #[cfg(feature = "parity-render")]
     pub fn prepare_capture_scroll(&self) {
-        self.scroll
-            .set_offset(gpui::point(gpui::px(0.), -self.scroll.max_offset().y));
+        self.scroll.set_offset(gpui::point(
+            gpui::px(0.),
+            -self
+                .capture_scroll
+                .map(px)
+                .unwrap_or_else(|| self.scroll.max_offset().y),
+        ));
     }
     #[cfg(feature = "parity-render")]
     pub fn preview_advanced(&mut self) {
         self.advanced = true;
         self.scroll_to_end = true;
+    }
+    #[cfg(feature = "parity-render")]
+    pub fn preview_edit_fields(&mut self, gateway: bool) {
+        self.advanced = true;
+        self.capture_scroll = Some(if gateway { 800. } else { 550. });
     }
     #[cfg(feature = "parity-render")]
     pub fn preview_optional(&mut self, scenario: &str) {
@@ -119,7 +162,7 @@ impl Form {
             &draft.domains,
             &draft.console,
             &draft.concurrency,
-            &String::new(),
+            &draft.add_fields.aliases,
             &String::new(),
             &String::new(),
             &String::new(),
@@ -131,31 +174,51 @@ impl Form {
             .enumerate()
             .map(|(index, value)| {
                 cx.new(|cx| {
-                    let placeholder = match index {
-                        0 => locale.text("providerForm.titlePlaceholder"),
-                        1 => locale.text("providerForm.secretLabelPlaceholder"),
-                        2 => locale.text("providerForm.pasteApiKey"),
-                        3 => "https://api.example.com".into(),
-                        4 => "gpt-4o".into(),
-                        5 => "prod, team".into(),
-                        7 => locale.text("providerForm.domainFromApi"),
-                        8 => "https://console.example.com".into(),
-                        9 => locale.text("providerForm.unlimitedConcurrency"),
-                        10 => "fast=gpt-4o-mini".into(),
-                        11 => "x-version=1".into(),
-                        12 => locale.text("providerForm.gatewayGroupPlaceholder"),
-                        13 => "1x".into(),
-                        14 => "USD".into(),
-                        15 => "$0.002 / 1k".into(),
-                        _ => String::new(),
+                    let placeholder = match (draft.original.is_some(), index) {
+                        (true, 3) => "https://api.example.com/v1".into(),
+                        (true, 4 | 5 | 8 | 10) => "—".into(),
+                        (true, 9) => "0".into(),
+                        (true, 11) => "Header=Value".into(),
+                        (true, 7) => url::Url::parse(
+                            draft.endpoint.split(',').next().unwrap_or_default().trim(),
+                        )
+                        .ok()
+                        .and_then(|url| url.host_str().map(str::to_owned))
+                        .unwrap_or_else(|| locale.text("providerForm.domainFromApi")),
+                        _ => match index {
+                            0 => locale.text("providerForm.titlePlaceholder"),
+                            1 => locale.text("providerForm.secretLabelPlaceholder"),
+                            2 => locale.text("providerForm.pasteApiKey"),
+                            3 => "https://api.example.com".into(),
+                            4 => "gpt-4o".into(),
+                            5 => "prod, team".into(),
+                            7 => locale.text("providerForm.domainFromApi"),
+                            8 => "https://console.example.com".into(),
+                            9 => locale.text("providerForm.unlimitedConcurrency"),
+                            10 => "fast=gpt-4o-mini".into(),
+                            11 => "x-version=1".into(),
+                            12 => locale.text("providerForm.gatewayGroupPlaceholder"),
+                            13 => "1x".into(),
+                            14 => "USD".into(),
+                            15 => "$0.002 / 1k".into(),
+                            _ => String::new(),
+                        },
                     };
                     let mut input = InputState::new(window, cx)
                         .masked(index == 2)
                         .placeholder(placeholder);
-                    input.set_editor_style(theme.input_style());
+                    let mut style = theme.input_style();
+                    if draft.original.is_some() {
+                        style.muted_foreground = gpui::rgb(0xa9a9a9).into();
+                    }
+                    input.set_editor_style(style);
                     input.set_accessibility(
-                        InputAccessibility::new(Some(gpui::Role::TextInput))
-                            .with_label(Some(locale.text(LABELS[index]).into())),
+                        InputAccessibility::new(Some(if index == 9 {
+                            gpui::Role::SpinButton
+                        } else {
+                            gpui::Role::TextInput
+                        }))
+                        .with_label(Some(locale.text(LABELS[index]).into())),
                     );
                     input.set_value((*value).clone(), window, cx);
                     input
@@ -176,10 +239,26 @@ impl Form {
             .iter()
             .enumerate()
             .map(|(index, input)| {
-                cx.subscribe(input, move |this, _, event, cx| {
+                cx.subscribe_in(input, window, move |this, _, event, window, cx| {
                     if matches!(event, InputEvent::Change) {
+                        if index == 3 && this.is_editing() {
+                            let value = this.inputs[3].read(cx).value();
+                            let placeholder =
+                                url::Url::parse(value.split(',').next().unwrap_or_default().trim())
+                                    .ok()
+                                    .and_then(|url| url.host_str().map(str::to_owned))
+                                    .unwrap_or_else(|| {
+                                        this.locale.text("providerForm.domainFromApi")
+                                    });
+                            this.inputs[7].update(cx, |input, cx| {
+                                input.set_placeholder(placeholder, window, cx)
+                            });
+                        }
                         if index == 9 {
                             this.draft.concurrency_touched = true;
+                        }
+                        if index == 10 {
+                            this.draft.aliases_touched = true;
                         }
                         cx.notify();
                     }
@@ -201,23 +280,32 @@ impl Form {
             }
         }
         let focus = cx.focus_handle();
-        inputs[0].read(cx).focus_handle(cx).focus(window, cx);
+        inputs[0].update(cx, |input, cx| {
+            // HTML's populated title input opens at the end of its value.
+            // Clamp through the editor API so Unicode titles remain intact.
+            input.set_cursor_position(gpui_base::input::Position::new(0, u32::MAX), window, cx);
+        });
         Self {
             theme,
             dark,
             scroll: gpui::ScrollHandle::new(),
             scroll_to_end: false,
+            #[cfg(feature = "parity-render")]
+            capture_scroll: None,
             locale,
             inputs,
             draft,
             notes,
+            notes_height: px(66.6),
+            notes_resize_start: None,
+            concurrency_repeat: None,
             advanced: false,
             visible,
             picker: None,
             picker_focus: [
                 (
                     "provider",
-                    aipass_provider_registry::default_provider_definitions().len(),
+                    aipass_provider_registry::default_provider_definitions().len() + 1,
                 ),
                 ("interface", 6),
                 ("auth", 6),
@@ -239,6 +327,7 @@ impl Form {
             focus,
             action: None,
             credentials: None,
+            detail_panels: None,
             credentials_subscription: None,
             save_after_credential: false,
             _subscriptions: subscriptions,
@@ -247,6 +336,13 @@ impl Form {
 
     pub fn take_action(&mut self) -> Option<Action> {
         self.action.take()
+    }
+    pub fn attach_detail_panels(
+        &mut self,
+        subscriptions: Entity<crate::subscription_ui::Subscriptions>,
+        integrations: Entity<crate::integrations::Integrations>,
+    ) {
+        self.detail_panels = Some((subscriptions, integrations));
     }
     pub fn attach_credentials(
         &mut self,
@@ -293,9 +389,23 @@ impl Form {
         if !self.draft.websocket_touched {
             self.draft.websockets = entry.supports_websockets.unwrap_or(true);
         }
+        if !self.draft.aliases_touched {
+            let value =
+                aipass_desktop_native::catalog::optional::encode_pairs(&entry.model_aliases);
+            if self.inputs[10].read(cx).value().as_ref() != value {
+                self.inputs[10].update(cx, |input, cx| input.set_value(value, window, cx));
+            }
+        }
         self.draft.original = Some(entry.clone());
     }
     pub fn set_error(&mut self, error: String) {
+        if let Some((_, message)) = error.split_once("provider_headers_merge_failed:") {
+            self.error = self
+                .locale
+                .text("providers.headersMergeFailed")
+                .replace("{message}", message.trim());
+            return;
+        }
         self.error = match error.split_once("websocket_probe_unconfirmed:") {
             Some((_, message)) => self
                 .locale
@@ -305,6 +415,9 @@ impl Form {
         };
     }
     pub fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
+        if busy {
+            self.concurrency_repeat = None;
+        }
         self.busy = busy;
         self.notes
             .update(cx, |input, cx| input.set_disabled(busy, cx));
@@ -314,6 +427,9 @@ impl Form {
         cx.notify();
     }
     pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.concurrency_repeat = None;
+        self.notes_resize_start = None;
+        self.notes_height = px(66.6);
         self.save_after_credential = false;
         if let Some(credentials) = self.credentials.take() {
             credentials.update(cx, |view, cx| view.cancel(window, cx));
@@ -326,6 +442,7 @@ impl Form {
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.action = None;
         self.draft.api_key = Default::default();
+        self.draft.add_fields.headers = Default::default();
     }
     pub(super) fn save(&mut self, cx: &mut Context<Self>) {
         if self.busy || self.save_after_credential {
@@ -358,6 +475,7 @@ impl Form {
         draft.console = value(8);
         draft.concurrency = value(9);
         draft.concurrency_touched = self.draft.concurrency_touched;
+        draft.aliases_touched = self.draft.aliases_touched;
         draft.add_fields = aipass_desktop_native::catalog::optional::AddFields {
             aliases: value(10),
             headers: value(11).into(),

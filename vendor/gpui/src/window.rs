@@ -1277,6 +1277,7 @@ pub struct Window {
     pub(crate) image_cache_stack: Vec<AnyImageCache>,
     pub(crate) rendered_frame: Frame,
     pub(crate) next_frame: Frame,
+    frame_crossfade: Option<(SpanId, SpanId, f32)>,
     next_hitbox_id: HitboxId,
     pub(crate) next_tooltip_id: TooltipId,
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
@@ -2214,6 +2215,7 @@ impl Window {
             focused_text_input: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+            frame_crossfade: None,
             next_frame_callbacks,
             next_hitbox_id: HitboxId(0),
             next_tooltip_id: TooltipId::default(),
@@ -3908,6 +3910,7 @@ impl Window {
         #[cfg(feature = "profiler")]
         let request_layout_start = Instant::now();
         let frame_stats_render = crate::frame_stats::start();
+        self.frame_crossfade = None;
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
         crate::frame_stats::record(crate::frame_stats::Phase::Render, frame_stats_render);
@@ -3960,6 +3963,10 @@ impl Window {
         crate::frame_stats::record(crate::frame_stats::Phase::Prepaint, frame_stats_prepaint);
         let frame_stats_paint = crate::frame_stats::start();
         self.invalidator.set_phase(DrawPhase::Paint);
+        let frame_bounds = Bounds::new(Point::default(), self.viewport_size());
+        if let Some((current, _, _)) = self.frame_crossfade {
+            self.next_frame.scene.push_span(current, frame_bounds);
+        }
         root_element.paint(self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3973,6 +3980,24 @@ impl Window {
             drag_element.paint(self, cx);
         } else if let Some(mut tooltip_element) = tooltip_element {
             tooltip_element.paint(self, cx);
+        }
+        // Include deferred popups, dialogs and tooltips in a single composite.
+        // Replayed paint never restores input or accessibility nodes.
+        if let Some((_, previous, progress)) = self.frame_crossfade {
+            if progress < 1. && self.rendered_span(previous) == Some(frame_bounds) {
+                self.with_filter(
+                    frame_bounds,
+                    LayerFilter {
+                        opacity: Some(1. - progress),
+                        ..Default::default()
+                    },
+                    px(0.),
+                    |window| {
+                        window.replay_span(previous, 1.);
+                    },
+                );
+            }
+            self.next_frame.scene.pop_span();
         }
         crate::frame_stats::record(crate::frame_stats::Phase::Paint, frame_stats_paint);
 
@@ -4975,8 +5000,10 @@ impl Window {
             );
         }
         if let Some(opacity) = filter.opacity {
-            assert!(opacity.is_finite() && (0.0..=1.0).contains(&opacity),
-                "layer opacity must be finite and between zero and one");
+            assert!(
+                opacity.is_finite() && (0.0..=1.0).contains(&opacity),
+                "layer opacity must be finite and between zero and one"
+            );
         }
         let grows_from = filter.scale_origin;
         let filter = Filter {
@@ -5017,13 +5044,26 @@ impl Window {
         // Unlike blur/fade/scale it has no local sampling bounds of its own.
         let source_bounds = if !filter.blurs() && !filter.fades() && !filter.transforms() {
             content_mask
-        } else { source_bounds };
+        } else {
+            source_bounds
+        };
         self.next_frame
             .scene
             .push_filter(source_bounds, transform_origin, content_mask, filter);
         let result = f(self);
         self.next_frame.scene.pop_filter();
         result
+    }
+
+    /// Crossfade this complete frame, including deferred overlays, with a named
+    /// previous frame. Call from an uncached root view on each rendered frame.
+    /// `current` and `previous` must differ; alternate them when retargeting so
+    /// an interrupted transition starts from the previous composite. Progress is
+    /// the new frame's weight. The caller must retain outgoing image assets until
+    /// completion and cancel on layout or security-sensitive content changes.
+    pub fn set_frame_crossfade(&mut self, current: SpanId, previous: SpanId, progress: f32) {
+        assert_ne!(current, previous);
+        self.frame_crossfade = Some((current, previous, progress.clamp(0., 1.)));
     }
 
     /// Names what `f` paints, so that [`Window::replay_span`] can paint it again on a later
@@ -5707,6 +5747,29 @@ impl Window {
         F: Fn(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
             + 'static,
     {
+        self.request_measured_layout_with_size_snapping(style, true, measure)
+    }
+
+    /// Preserve shaped advances and line heights until absolute edges are snapped.
+    /// Rounding each text leaf independently accumulates spacing in rows and columns.
+    pub(crate) fn request_text_layout<F>(&mut self, measure: F) -> LayoutId
+    where
+        F: Fn(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
+            + 'static,
+    {
+        self.request_measured_layout_with_size_snapping(Style::default(), false, measure)
+    }
+
+    fn request_measured_layout_with_size_snapping<F>(
+        &mut self,
+        style: Style,
+        snap_size: bool,
+        measure: F,
+    ) -> LayoutId
+    where
+        F: Fn(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
+            + 'static,
+    {
         self.invalidator.debug_assert_prepaint();
 
         let rem_size = self.rem_size();
@@ -5714,7 +5777,7 @@ impl Window {
         self.layout_engine
             .as_mut()
             .unwrap()
-            .request_measured_layout(style, rem_size, scale_factor, measure)
+            .request_measured_layout(style, rem_size, scale_factor, snap_size, measure)
     }
 
     /// Compute the layout for the given id within the given available space.

@@ -2,10 +2,14 @@
 #[cfg(feature = "parity-render")]
 use super::ReplayToast;
 use super::{CloseWindow, Desktop, LockVault};
+use crate::parity::Observe;
 use gpui::{div, prelude::*, px, rgb, Context, Window};
 
 impl Render for Desktop {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.prepare_appearance(window, cx);
+        self.appearance
+            .frame(self.show_workspace, self.curtain.is_some(), window, cx);
         if self.motion_only {
             return div()
                 .size_full()
@@ -16,11 +20,6 @@ impl Render for Desktop {
                 .children(self.curtain.clone())
                 .into_any_element();
         }
-        let recovery = self
-            .session
-            .as_ref()
-            .and_then(|s| s.recovery.as_ref())
-            .map(|key| key.expose().to_owned());
         let root = div()
             .id("desktop")
             .track_focus(&self.focus)
@@ -39,12 +38,32 @@ impl Render for Desktop {
                     cx.quit();
                 }
             }))
+            .capture_key_down(cx.listener(|this, _, _, _| {
+                if let Some(session) = &mut this.session {
+                    session.record_activity();
+                }
+            }))
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                if let Some(session) = &mut this.session {
+                    session.record_activity();
+                }
+            }))
             .on_action(cx.listener(|this, _: &LockVault, window, cx| this.lock(window, cx)))
-            .child(if self.show_workspace {
-                self.workspace.clone().into_any_element()
-            } else {
-                self.auth.clone().into_any_element()
-            })
+            .child(super::activity::capture_scroll(cx))
+            .child(
+                if self.loading_preview
+                    || self
+                        .session
+                        .as_ref()
+                        .is_some_and(|s| s.status.as_ref().is_none_or(|s| s.initial_sync_pending))
+                {
+                    self.loading(window, cx).into_any_element()
+                } else if self.show_workspace {
+                    self.workspace.clone().into_any_element()
+                } else {
+                    self.auth.clone().into_any_element()
+                },
+            )
             .when(!self.show_workspace, |el| {
                 el.child(
                     div()
@@ -71,88 +90,7 @@ impl Render for Desktop {
                         )),
                 )
             })
-            .when_some(recovery, |el, key| {
-                el.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .bg(gpui::rgba(0x080c188c))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .w(px(440.))
-                                .p(px(28.))
-                                .rounded(px(14.))
-                                .bg(self.theme.surface)
-                                .text_color(self.theme.text)
-                                .flex()
-                                .flex_col()
-                                .gap(px(14.))
-                                .child(
-                                    div()
-                                        .text_size(px(18.))
-                                        .child(self.locale.text("recovery.title")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .child(self.locale.text("recovery.shortDesc")),
-                                )
-                                .child(
-                                    div()
-                                        .p(px(14.))
-                                        .rounded(px(8.))
-                                        .bg(self.theme.surface2)
-                                        .font_family("Menlo")
-                                        .text_size(px(13.))
-                                        .child(key),
-                                )
-                                .child(
-                                    div()
-                                        .id("recovery-confirm")
-                                        .cursor_pointer()
-                                        .text_size(px(12.))
-                                        .child(format!(
-                                            "{} {}",
-                                            if self.recovery_confirmed {
-                                                "☑"
-                                            } else {
-                                                "☐"
-                                            },
-                                            self.locale.text("recovery.ack")
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.recovery_confirmed = !this.recovery_confirmed;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .id("recovery-continue")
-                                        .h(px(36.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(8.))
-                                        .bg(rgb(0x2563eb))
-                                        .text_color(rgb(0xffffff))
-                                        .when(!self.recovery_confirmed, |el| el.opacity(0.5))
-                                        .child(self.locale.text("recovery.continue"))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            if this.recovery_confirmed {
-                                                if let Some(session) = &mut this.session {
-                                                    session.recovery = None;
-                                                }
-                                                this.recovery_confirmed = false;
-                                                cx.notify();
-                                            }
-                                        })),
-                                ),
-                        ),
-                )
-            })
+            .child(self.recovery.clone())
             .child(self.update_banner(cx))
             .children(self.curtain.clone())
             .child(self.toast.clone());
@@ -171,5 +109,102 @@ impl Render for Desktop {
         #[cfg(not(feature = "parity-render"))]
         let _ = self.toast_fixture;
         root.into_any_element()
+    }
+}
+
+impl Desktop {
+    fn loading(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
+        let spinner = gpui::svg()
+            .path("loading")
+            .size(px(16.))
+            .text_color(self.theme.accent);
+        use gpui::AnimationExt;
+        let spinner = if cx.reduce_motion() {
+            spinner.into_any_element()
+        } else {
+            spinner
+                .with_animation(
+                    "boot-spinner",
+                    gpui::Animation::new(std::time::Duration::from_millis(800)).repeat(),
+                    |el, delta| {
+                        el.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            delta * std::f32::consts::TAU,
+                        )))
+                    },
+                )
+                .into_any_element()
+        };
+        let chrome = self
+            .workspace
+            .update(cx, |view, cx| view.loading_chrome(window, cx));
+        let error = self
+            .session
+            .as_ref()
+            .and_then(|s| s.error.as_ref())
+            .map(|e| e.message.clone());
+        div()
+            .size_full()
+            .relative()
+            .child(chrome)
+            .pt(px(48.))
+            .pb(px(24.))
+            .bg(self.theme.bg)
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .relative()
+                    .gap(px(22.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .text_size(px(15.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(self.theme.text)
+                            .child(crate::logo::logo(28., window))
+                            .child("AIPass"),
+                    )
+                    .child(
+                        div()
+                            .id("boot-status")
+                            .role(gpui::Role::Status)
+                            .aria_label(self.locale.text("common.loading"))
+                            .min_h(px(20.))
+                            .flex()
+                            .items_center()
+                            .child(spinner)
+                            .observe("boot-status"),
+                    )
+                    .when_some(error, |el, error| {
+                        el.child(
+                            div()
+                                .max_w(px(420.))
+                                .text_size(px(13.))
+                                .text_color(self.theme.danger)
+                                .child(error),
+                        )
+                        .child(
+                            crate::providers::controls::button(
+                                "boot-retry",
+                                self.locale.text("providerRuntime.retry"),
+                                false,
+                                self.theme,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(s) = &mut this.session {
+                                    s.submit(aipass_desktop_native::session::Command::Refresh);
+                                }
+                                cx.notify();
+                            })),
+                        )
+                    })
+                    .observe("boot-content"),
+            )
     }
 }

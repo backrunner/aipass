@@ -8,11 +8,14 @@ use gpui::{prelude::*, Context, Entity, EventEmitter, Focusable, Subscription, T
 use gpui_base::input::{InputAccessibility, InputEvent, InputState};
 use std::{collections::BTreeMap, time::Duration};
 
+mod copying;
+mod pricing;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
 mod view;
 
 pub enum Event {
+    Pricing(String),
     Request,
     Settled(bool),
     Changed,
@@ -21,6 +24,7 @@ impl EventEmitter<Event> for Credentials {}
 
 enum Pending {
     Reveal(String),
+    Copy(String),
     Edit(String),
     Save,
     Remove(String),
@@ -32,6 +36,7 @@ struct Revealed {
 }
 
 pub struct Credentials {
+    pub pricing_config: Option<aipass_agent_protocol::PricingConfig>,
     entry: Option<EntrySummary>,
     theme: Theme,
     locale: Locale,
@@ -55,7 +60,11 @@ pub struct Credentials {
     picker_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     error: String,
     notice: String,
+    copied: Option<String>,
+    hovered_key: Option<String>,
     notice_timer: Option<Task<()>>,
+    copy_task: Option<Task<()>>,
+    copy_cancellation: Option<aipass_desktop_platform::clipboard::Cancellation>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -71,6 +80,21 @@ const LABELS: [&str; 8] = [
 ];
 
 impl Credentials {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        for (index, input) in self.inputs.iter().enumerate() {
+            let mut style = self.theme.input_style();
+            if index < 3 {
+                style.muted_foreground = gpui::rgb(0xa9a9a9).into();
+            }
+            input.update(cx, |input, cx| {
+                input.set_editor_style(style);
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
     pub fn new(dark: bool, chinese: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = Theme::new(dark);
         let locale = Locale::new(chinese);
@@ -116,6 +140,7 @@ impl Credentials {
             })
             .collect();
         Self {
+            pricing_config: None,
             entry: None,
             theme,
             locale,
@@ -136,10 +161,14 @@ impl Credentials {
             billing_note: None,
             error: String::new(),
             notice: String::new(),
+            copied: None,
+            hovered_key: None,
             picker_open: false,
             picker_focus: crate::menu::MenuFocus::new(6, cx),
             picker_bounds: Default::default(),
             notice_timer: None,
+            copy_task: None,
+            copy_cancellation: None,
             _subscriptions: subscriptions,
         }
     }
@@ -219,7 +248,7 @@ impl Credentials {
                 .as_ref()
                 .and_then(Option::as_deref)
                 .is_some_and(changed)
-                || matches!(&self.pending, Some(Pending::Reveal(id) | Pending::Edit(id)) if changed(id))
+                || matches!(&self.pending, Some(Pending::Reveal(id) | Pending::Edit(id) | Pending::Copy(id)) if changed(id))
             {
                 self.cancel(window, cx);
             }
@@ -233,6 +262,7 @@ impl Credentials {
     pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel(window, cx);
         self.entry = None;
+        self.hovered_key = None;
         self.revealed.clear();
         self.reveal_timer = None;
         self.notice.clear();
@@ -241,6 +271,8 @@ impl Credentials {
     }
 
     pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_copy();
+        self.copied = None;
         self.generation = self.generation.wrapping_add(1);
         self.request = None;
         self.pending = None;
@@ -452,7 +484,26 @@ impl Credentials {
             return;
         };
         self.blocked = false;
+        self.copy_task = None;
+        self.copy_cancellation = None;
         match completion.result {
+            Ok(Outcome::Copied(copied)) => {
+                if copied {
+                    if let Pending::Copy(id) = pending {
+                        self.copied = Some(id);
+                    }
+                }
+                self.notice_timer = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(1800))
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.copied = None;
+                        cx.notify();
+                    });
+                }));
+                cx.emit(Event::Settled(copied));
+            }
             Ok(Outcome::Revealed(value)) => match pending {
                 Pending::Reveal(id) => {
                     self.revealed.insert(

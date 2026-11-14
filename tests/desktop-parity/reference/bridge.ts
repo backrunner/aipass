@@ -1,3 +1,4 @@
+import {agentInvoke,agentEntries} from "./agent-fixtures";
 // Deliberately test-only. Unknown commands fail and are retained in the trace.
 import { businessBridge } from "./business-bridge";
 import providerCatalog from "../fixtures/providers.json";
@@ -8,7 +9,7 @@ const scenario = params.get("scenario") ?? "empty";
 const locale = params.get("locale") ?? "en";
 const theme = params.get("theme") ?? "light";
 const authState = params.get("authState");
-const status = { exists: scenario !== "setup", locked: scenario === "locked", initialSyncPending: false };
+const status = { exists: scenario !== "setup", locked: scenario === "locked", initialSyncPending: scenario === "boot", initialSyncFailed: params.get("cloud") === "failed" };
 const trace: unknown[] = [];
 const listeners = new Map<string, Set<(event: { payload: unknown }) => void>>();
 if (params.get("notes") === "empty") providerCatalog.active[0].notes = "";
@@ -16,7 +17,7 @@ if (params.get("notes") === "long") providerCatalog.active[0].notes = "Synthetic
 const business = scenario.startsWith("business-") || scenario.startsWith("subscription-") ? businessBridge((name, payload) => {
   trace.push({ event: name, payload });
   listeners.get(name)?.forEach(listener => listener({ payload }));
-}, scenario === "business-json", scenario.startsWith("subscription-") ? [subscriptionEntry()] : scenario === "business-providers" ? [...providerCatalog.active, ...providerCatalog.archived, ...providerCatalog.trash] as unknown as EntrySummary[] : undefined) : undefined;
+}, scenario === "business-json", scenario.startsWith("subscription-") ? [subscriptionEntry()] : params.has("agents") ? agentEntries() : scenario === "business-providers" ? [...providerCatalog.active, ...providerCatalog.archived, ...providerCatalog.trash] as unknown as EntrySummary[] : undefined) : undefined;
 Object.assign(window, { __parityTrace: trace });
 export async function invoke(command: string, args?: unknown) {
   trace.push({ command, args });
@@ -29,6 +30,7 @@ export async function invoke(command: string, args?: unknown) {
       return {ok:true,source:"new_api_token_usage",endpoint:"https://gateway.example.invalid/api/usage/token",status:200,quota:{label:"Fixture plan",limit:"100",used:"25",remaining:"75",unit:"USD"},gateway:{group:"default",rate:"1"}};
     }
   }
+  if(params.has("agents")){const result=await agentInvoke(command,args as Record<string,unknown>);if(result!==undefined)return result;}
   if (business) {
     const result = await business(command, args as Record<string, unknown>);
     if (result !== undefined) return result;
@@ -46,7 +48,7 @@ export async function invoke(command: string, args?: unknown) {
     case "window_target": return "main";
     case "preferences_load": return { locale, theme, officialAccountsImport: false };
     case "language_settings_load": return { locale };
-    case "sync_settings_load": return { mode: "local" };
+    case "sync_settings_load": return { mode: params.has("cloud") ? "icloud" : "local" };
     case "entries_list": case "entries_search": case "entries_favorites_list":
     case "entries_trash_list": case "take_pending_deep_links": case "tool_config_detect":
     case "server_usage_timeseries": case "server_usage_hourly_timeseries": return [];

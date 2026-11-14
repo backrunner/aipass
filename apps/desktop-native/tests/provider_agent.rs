@@ -14,12 +14,18 @@ use std::{
 };
 #[path = "provider_agent/credentials.rs"]
 mod credentials;
+#[path = "provider_agent/editing.rs"]
+mod editing;
 #[path = "provider_agent/integration.rs"]
 mod integration;
+#[path = "provider_agent/pricing.rs"]
+mod pricing;
 #[path = "provider_agent/subscriptions.rs"]
 mod subscriptions;
 #[path = "provider_agent/tools.rs"]
 mod tools;
+#[path = "provider_agent/trash.rs"]
+mod trash;
 
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
@@ -119,9 +125,11 @@ fn workflow(root: &Path) {
         .max_concurrent_requests
         .is_none_or(|value| value == 0));
     assert_eq!(edited.tags, ["native", "checked"]);
+    editing::workflow(&mut transport, root, id);
     subscriptions::workflow(&mut transport, id);
     integration::workflow(&mut transport, root, id);
     let credential_id = credentials::workflow(&mut transport, id);
+    pricing::workflow(&mut transport, id, &credential_id);
     applied(&mut transport, Action::Favorite(id, true));
     assert!(snapshot(&mut transport).active[0].favorite);
     applied(&mut transport, Action::Archive(id));
@@ -137,6 +145,7 @@ fn workflow(root: &Path) {
     applied(&mut transport, Action::Restore(id));
     assert_eq!(snapshot(&mut transport).active[0].id, id);
     transport.execute(Command::Lock).unwrap();
+    editing::locked(&mut transport, edited.clone());
     credentials::locked(&mut transport, id, &credential_id);
     subscriptions::locked(&mut transport, id);
     let rejected = transport
@@ -159,6 +168,7 @@ fn workflow(root: &Path) {
     assert!(restored.active[0].favorite);
     credentials::persisted(&mut transport, id, &credential_id);
     tools::workflow(&mut transport);
+    trash::workflow(&mut transport);
 }
 
 #[test]

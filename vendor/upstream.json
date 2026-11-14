@@ -14,6 +14,7 @@
         "src/element.rs",
         "src/elements/div.rs",
         "src/elements/svg.rs",
+        "src/elements/text.rs",
         "src/gestures.rs",
         "src/gpui.rs",
         "src/input_transform.rs",
@@ -21,6 +22,7 @@
         "src/platform.rs",
         "src/scene.rs",
         "src/style.rs",
+        "src/taffy.rs",
         "src/view.rs",
         "src/window.rs",
         "src/window/a11y.rs"
@@ -435,7 +437,7 @@
           "upstreamSha256": "ab5412945c36fd0087e95a1544d610cf9308e906b3059835b4c49f98f4b9279e"
         },
         "src/elements/text.rs": {
-          "sha256": "72d0612ad4487697e9e02e594e40ce37adb7e7cdb43d11a61c994bca05cb74fe",
+          "sha256": "7d2883580c85caabba1b944976145fa5e6554d27d2b8c9a882218bbc81b873b5",
           "upstreamSha256": "72d0612ad4487697e9e02e594e40ce37adb7e7cdb43d11a61c994bca05cb74fe"
         },
         "src/elements/uniform_list.rs": {
@@ -647,7 +649,7 @@
           "upstreamSha256": "0c14aec0196ad632601015e166dfcd3df72228292646120bbc3857c3631cd680"
         },
         "src/taffy.rs": {
-          "sha256": "6102c027558c921e9117c48659a7e8a926bab41dcaec2242c21723b9fcd5893f",
+          "sha256": "5e0db916d1c7b1b93153093af80c82778d6df4aac358c4c3a72a6e95abbf92de",
           "upstreamSha256": "6102c027558c921e9117c48659a7e8a926bab41dcaec2242c21723b9fcd5893f"
         },
         "src/test.rs": {
@@ -687,7 +689,7 @@
           "upstreamSha256": "67ddc1b7f88381e7fd0a4e2aed18c290b5df603c7ec93af3f779a1f729f63603"
         },
         "src/window.rs": {
-          "sha256": "72419660a64b8f088dfa75b39c4b40a7784d68cca21d13b3946a143a1f84609c",
+          "sha256": "0adc18a77a44bda49ed50cdd8495ed7bc2c60927bcf350b13bb0acebed92d73e",
           "upstreamSha256": "bbb7771d04ebd9b89632956c18a8600ae6ce34ce6e0d53cf3718546f4a017937"
         },
         "src/window/a11y.rs": {
@@ -721,6 +723,7 @@
         "src/input/base/state.rs",
         "src/input/editor/lsp/definitions.rs",
         "src/input/editor/lsp/hover.rs",
+        "src/motion/reveal.rs",
         "src/popover.rs",
         "src/popup.rs",
         "src/questionnaire/keyboard.rs",
@@ -1228,7 +1231,7 @@
           "upstreamSha256": "29f42bfce53fd7c2034b92e6700b0f68f2aea9633e2421f64042deb5272ff039"
         },
         "src/motion/reveal.rs": {
-          "sha256": "20795e5eae575d1d778a9a3dc77930a28be35a9532fb9059a131a5616294457e",
+          "sha256": "eb5329129edac78c89c8b6a441a14b5d98441f8f19b8e225edf874479edb72f4",
           "upstreamSha256": "20795e5eae575d1d778a9a3dc77930a28be35a9532fb9059a131a5616294457e"
         },
         "src/motion/sequence.rs": {
@@ -1700,13 +1703,21 @@
       "revision": "8ddac49c8b5a079149b33b4581e03f74e05237e0",
       "sourceDirectory": "crates/gpui_apple",
       "changedFiles": [
+        "Cargo.lock",
         "Cargo.toml",
         "Cargo.toml.orig",
         "NOTICE",
+        "src/gpui_apple.rs",
         "src/metal_renderer.rs",
-        "src/shaders.metal"
+        "src/shaders.metal",
+        "src/system_font_weights.rs",
+        "src/text_system.rs"
       ],
       "files": {
+        "Cargo.lock": {
+          "upstreamSha256": null,
+          "sha256": "f7a6213f73dadd5d226150b4f23afa14af3adfb4d43ad9ed9a6624303359b60e"
+        },
         "Cargo.toml": {
           "sha256": "c56ed0d2c05b76d9e250db7e77883a932431b40acbc22faafda1ca34b08b7e09",
           "upstreamSha256": "d03b4c1b9465fb7066b5a72daa327de12779b047b180f62a3a2300d19dc063d2"
@@ -1733,7 +1744,7 @@
           "upstreamSha256": "21ec54613d48cd3c419f2f694f75460d1019491c2406a7ed4dfa3374c84824cf"
         },
         "src/gpui_apple.rs": {
-          "sha256": "96ef426df5a543c0d090d69596efce126ea97618e4c58e243b035befac957bc2",
+          "sha256": "cdcc0bc0ebc8e7368f957733cb649730e917cd9a0cfd7dc9f6230b8ae3857225",
           "upstreamSha256": "96ef426df5a543c0d090d69596efce126ea97618e4c58e243b035befac957bc2"
         },
         "src/keychain.rs": {
@@ -1753,11 +1764,15 @@
           "upstreamSha256": "bc827c157fdce50125b158adb595b665d82f38b62fc6b3a9693c65abae640453"
         },
         "src/shaders.metal": {
-          "sha256": "9a4ccb684f6bc6c5131fa1f7291609d3cba31c6cc7ae3e3a9ab52730960cd521",
+          "sha256": "9e2e3493c89f9608d308ee5c8ed8bf8227404b42b08c5ebae5150809f9e153b5",
           "upstreamSha256": "79d86d9201d8c79f9c1068ed79f3cc4ca2db9637e9ecb489630fd34884bf8925"
         },
+        "src/system_font_weights.rs": {
+          "upstreamSha256": null,
+          "sha256": "1f8d1ce203b484e8c4c8c788ad28c9a26d8d221a0c589a6b603849c80c33b20f"
+        },
         "src/text_system.rs": {
-          "sha256": "932774c521b1bfd99a2552572cf09769e0dd39b2b2e306a3f6df80f57522b375",
+          "sha256": "915edfe87d66bb8205ab542e9f199ba3a1c7f370b5b80703b5b23860b642d6f2",
           "upstreamSha256": "932774c521b1bfd99a2552572cf09769e0dd39b2b2e306a3f6df80f57522b375"
         },
         "src/thermal.rs": {
@@ -1820,7 +1835,7 @@
           "upstreamSha256": "b51033ac07d187c89c4079f208d3a557c6fff309b1cd403927ce8974e795afa0"
         },
         "src/shaders.wgsl": {
-          "sha256": "38129cf78dd800910e450911e7967ff82b4dce2bf256ac70ea66b31b5965a2ba",
+          "sha256": "9f1ec70bc4b0fa705dad4e1b86703eee70fc749f7d1c1647421c81c9f4007718",
           "upstreamSha256": "707aac88703d1a4778fdeb491f691f0193f3591ec60d99feb582efb3f65838d7"
         },
         "src/shaders_storage.wgsl": {

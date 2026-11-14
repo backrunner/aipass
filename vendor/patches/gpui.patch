@@ -57,7 +57,7 @@
 +    "gui",
 +]
  autobenches = false
- 
+
 -
 -[lints]
 -workspace = true
@@ -91,7 +91,7 @@
 +[lints.clippy.style]
 +level = "allow"
 +priority = -1
- 
+
  [features]
 -default = ["font-kit", "wayland", "x11", "windows-manifest"]
 +default = [
@@ -148,7 +148,7 @@
      "dep:dioxus-cli-config",
 @@ -59,52 +140,246 @@
  path = "src/gpui.rs"
- 
+
  [dependencies]
 -accesskit.workspace = true
 -anyhow.workspace = true
@@ -1289,7 +1289,7 @@
  //! useful features for laying out and styling its children as well as binding
 @@ -90,6 +91,15 @@
  }
- 
+
  impl Interactivity {
 +    /// Removes pointer-dependent presentation when a composed control is disabled.
 +    /// Focus styles remain available so an already-focused control stays identifiable.
@@ -1304,7 +1304,7 @@
      #[cfg(any(feature = "inspector", debug_assertions))]
      #[track_caller]
 @@ -2539,9 +2549,10 @@
- 
+
                  #[cfg(any(test, all(debug_assertions, feature = "test-support")))]
                  if let Some(debug_selector) = &self.debug_selector {
 -                    window
@@ -1315,10 +1315,10 @@
 +                        window.input_transform.bounds(bounds),
 +                    );
                  }
- 
+
                  self.paint_hover_group_handler(window, cx);
 @@ -2557,7 +2568,6 @@
- 
+
                  let snap = style.pixel_snap.unwrap_or(window.pixel_snapping);
                  window.with_pixel_snapping(snap, |window| {
 -                    window.with_element_opacity(style.opacity, |window| {
@@ -1331,7 +1331,7 @@
                          });
 -                    });
                  });
- 
+
                  ((), element_state)
 --- a/src/elements/svg.rs
 +++ b/src/elements/svg.rs
@@ -1346,7 +1346,7 @@
      data_path: Option<SharedString>,
 +    inherit_text_color: bool,
  }
- 
+
  /// Create a new SVG element.
 @@ -32,10 +34,18 @@
          external_path: None,
@@ -1355,7 +1355,7 @@
 +        inherit_text_color: false,
      }
  }
- 
+
  impl Svg {
 +    /// Use the surrounding text color when this icon has no explicit tint.
 +    /// This allows a button's hover/disabled color to apply to its SVG child.
@@ -1370,7 +1370,7 @@
 @@ -146,8 +156,11 @@
                      })
                      .unwrap_or_default();
- 
+
 +                let color = style.text.color.or_else(|| {
 +                    self.inherit_text_color.then(|| window.text_style().color)
 +                });
@@ -1398,6 +1398,103 @@
                      window
                          .paint_svg(bounds, path.clone(), None, transformation, color, cx)
                          .log_err();
+--- a/src/elements/text.rs
++++ b/src/elements/text.rs
+@@ -626,6 +626,7 @@
+     line_height: Pixels,
+     wrap_width: Option<Pixels>,
+     truncate_width: Option<Pixels>,
++    scale_factor: f32,
+     size: Option<Size<Pixels>>,
+     bounds: Option<Bounds<Pixels>>,
+ }
+@@ -640,18 +641,16 @@
+     ) -> LayoutId {
+         let text_style = window.text_style();
+         let font_size = text_style.font_size.to_pixels(window.rem_size());
+-        let line_height = window.pixel_snap(
+-            text_style
+-                .line_height
+-                .to_pixels(font_size.into(), window.rem_size()),
+-        );
++        let line_height = text_style
++            .line_height
++            .to_pixels(font_size.into(), window.rem_size());
+
+         let runs = if let Some(runs) = runs {
+             runs
+         } else {
+             vec![text_style.to_run(text.len())]
+         };
+-        window.request_measured_layout(Default::default(), {
++        window.request_text_layout({
+             let element_state = self.clone();
+             // The layout measured before the current one. Flex layout probes a text with and
+             // without a width limit in turn, so keeping both answers each probe without
+@@ -659,6 +658,7 @@
+             let spare: RefCell<Option<TextLayoutInner>> = RefCell::new(None);
+
+             move |known_dimensions, available_space, window, cx| {
++                let scale_factor = window.scale_factor();
+                 let wrap_width = if text_style.white_space == WhiteSpace::Normal {
+                     known_dimensions.width.or(match available_space.width {
+                         crate::AvailableSpace::Definite(x) => Some(x),
+@@ -692,15 +692,18 @@
+                 // would poison intrinsic sizing with whatever width an earlier pass used. A
+                 // truncating probe reuses only a layout with the same truncation and wrap
+                 // widths, which are the only inputs that differ between calls.
+-                let answers = |text_layout: &TextLayoutInner| match truncate_width {
+-                    None => {
+-                        (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
+-                            && text_layout.truncate_width.is_none()
+-                    }
+-                    Some(_) => {
+-                        truncate_width == text_layout.truncate_width
+-                            && wrap_width == text_layout.wrap_width
+-                    }
++                let answers = |text_layout: &TextLayoutInner| {
++                    text_layout.scale_factor == scale_factor
++                        && match truncate_width {
++                            None => {
++                                (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
++                                    && text_layout.truncate_width.is_none()
++                            }
++                            Some(_) => {
++                                truncate_width == text_layout.truncate_width
++                                    && wrap_width == text_layout.wrap_width
++                            }
++                        }
+                 };
+                 if let Some(text_layout) = element_state.0.borrow().as_ref()
+                     && let Some(size) = text_layout.size
+@@ -780,6 +783,7 @@
+                         line_height,
+                         wrap_width,
+                         truncate_width,
++                        scale_factor,
+                         size: Some(Size::default()),
+                         bounds: None,
+                     });
+@@ -790,7 +794,10 @@
+                 for line in &lines {
+                     let line_size = line.size(line_height);
+                     size.height += line_size.height;
+-                    size.width = size.width.max(line_size.width).ceil();
++                    // Preserve fractional advances through flex layout. The layout
++                    // engine snaps absolute edges once; rounding each run here
++                    // accumulates extra width across adjacent labels and badges.
++                    size.width = size.width.max(line_size.width);
+                 }
+
+                 *spare = element_state.0.borrow_mut().replace(TextLayoutInner {
+@@ -799,6 +806,7 @@
+                     line_height,
+                     wrap_width,
+                     truncate_width,
++                    scale_factor,
+                     size: Some(size),
+                     bounds: None,
+                 });
 --- a/src/gestures.rs
 +++ b/src/gestures.rs
 @@ -1,3 +1,4 @@
@@ -1419,7 +1516,7 @@
 +        }
 +    }
 +}
- 
+
  /// A phased long-press gesture recognized from a touch.
  #[derive(Clone, Debug)]
 @@ -425,7 +434,15 @@
@@ -1436,7 +1533,7 @@
 +        }
 +    }
 +}
- 
+
  /// Platform gesture recognition services.
  ///
 --- a/src/gpui.rs
@@ -1559,7 +1656,7 @@
      Point, Render, TouchDragEvent, Window, point, seal::Sealed,
 @@ -15,7 +16,12 @@
  pub trait KeyEvent: InputEvent {}
- 
+
  /// A mouse event from the platform.
 -pub trait MouseEvent: InputEvent {}
 +pub trait MouseEvent: InputEvent + Clone {
@@ -1568,7 +1665,7 @@
 +        self.clone()
 +    }
 +}
- 
+
  /// A gesture event from the platform.
  pub trait GestureEvent: InputEvent {}
 @@ -168,7 +174,14 @@
@@ -1584,13 +1681,13 @@
 +        }
 +    }
 +}
- 
+
  impl MouseDownEvent {
      /// Returns true if this mouse up event should focus the element.
 @@ -203,7 +216,14 @@
      }
  }
- 
+
 -impl MouseEvent for MouseUpEvent {}
 +impl MouseEvent for MouseUpEvent {
 +    fn in_coordinate_space(&self, transform: crate::ElementTransform) -> Self {
@@ -1600,7 +1697,7 @@
 +        }
 +    }
 +}
- 
+
  impl MouseUpEvent {
      /// Returns true if this mouse up event should focus the element.
 @@ -257,7 +277,14 @@
@@ -1616,7 +1713,7 @@
 +        }
 +    }
 +}
- 
+
  /// A click event that was generated by a keyboard button being pressed and released.
  #[derive(Clone, Debug, Default)]
 @@ -508,7 +535,14 @@
@@ -1632,7 +1729,7 @@
 +        }
 +    }
 +}
- 
+
  impl MouseMoveEvent {
      /// Returns true if the left mouse button is currently held down.
 @@ -539,7 +573,18 @@
@@ -1652,7 +1749,7 @@
 +        }
 +    }
 +}
- 
+
  impl Deref for ScrollWheelEvent {
      type Target = Modifiers;
 @@ -591,7 +636,14 @@
@@ -1668,7 +1765,7 @@
 +        }
 +    }
 +}
- 
+
  impl Deref for PinchEvent {
      type Target = Modifiers;
 @@ -764,7 +816,20 @@
@@ -1690,7 +1787,7 @@
 +        event
 +    }
 +}
- 
+
  /// An enum corresponding to all kinds of platform input events.
  #[derive(Clone, Debug)]
 --- a/src/platform.rs
@@ -1707,7 +1804,7 @@
 +    transform: crate::ElementTransform,
      focus_id: Option<crate::FocusId>,
  }
- 
+
 @@ -2031,8 +2033,16 @@
          Self {
              cx,
@@ -1723,7 +1820,7 @@
 +        self.transform = transform;
 +        self
      }
- 
+
      pub(crate) fn with_focus(mut self, focus_id: crate::FocusId) -> Self {
 @@ -2130,6 +2140,7 @@
              .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
@@ -1731,7 +1828,7 @@
              .flatten()
 +            .map(|bounds| self.transform.bounds(bounds))
      }
- 
+
      pub fn selection_bounds_for_range(&mut self, range_utf16: Range<usize>) -> Vec<Bounds<Pixels>> {
 @@ -2139,6 +2150,9 @@
                      .selection_bounds_for_range(range_utf16, window, cx)
@@ -1741,7 +1838,7 @@
 +            .map(|bounds| self.transform.bounds(bounds))
 +            .collect()
      }
- 
+
      #[allow(dead_code)]
 @@ -2189,7 +2203,9 @@
          let marked_range = self.handler.marked_text_range(window, cx);
@@ -1753,9 +1850,9 @@
 +                .map(|bounds| self.transform.bounds(bounds))
          })
      }
- 
+
 @@ -2203,6 +2219,7 @@
- 
+
      #[allow(unused)]
      pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
 +        let point = self.transform.unmap(point);
@@ -1768,7 +1865,7 @@
              .flatten()
 +            .map(|bounds| self.transform.bounds(bounds))
      }
- 
+
      /// See [`InputHandler::text_length_utf16`].
 --- a/src/scene.rs
 +++ b/src/scene.rs
@@ -1776,7 +1873,7 @@
 +// Modified by AIPass (2026-11-13): group opacity compositing and control states; see vendor/README.md.
  // todo("windows"): remove
  #![cfg_attr(windows, allow(dead_code))]
- 
+
 @@ -512,6 +513,7 @@
      pub fn can_merge_with(&self, next: &Self) -> bool {
          self.filter == next.filter
@@ -1809,7 +1906,7 @@
 -        self.blur <= 0. && !self.fades() && !self.transforms()
 +        self.opacity == 1. && self.blur <= 0. && !self.fades() && !self.transforms()
      }
- 
+
      /// Whether the layer has to go through the blur passes.
 --- a/src/style.rs
 +++ b/src/style.rs
@@ -1849,12 +1946,70 @@
 +        if filter.is_none() {
              return self.paint_sharp(bounds, window, cx, continuation);
          }
- 
+
 -        window.with_filter(bounds, self.filter, self.shadow_reach(), |window| {
 +        window.with_filter(bounds, filter, self.shadow_reach(), |window| {
              self.paint_sharp(bounds, window, cx, continuation)
          });
      }
+--- a/src/taffy.rs
++++ b/src/taffy.rs
+@@ -27,6 +27,7 @@
+
+ struct NodeContext {
+     measure: NodeMeasureFn,
++    snap_size: bool,
+ }
+ pub struct TaffyLayoutEngine {
+     taffy: TaffyTree<NodeContext>,
+@@ -106,6 +107,7 @@
+         style: Style,
+         rem_size: Pixels,
+         scale_factor: f32,
++        snap_size: bool,
+         measure: impl FnMut(
+             Size<Option<Pixels>>,
+             Size<AvailableSpace>,
+@@ -122,7 +124,13 @@
+
+         let id = self
+             .taffy
+-            .new_leaf_with_context(taffy_style, NodeContext { measure })
++            .new_leaf_with_context(
++                taffy_style,
++                NodeContext {
++                    measure,
++                    snap_size,
++                },
++            )
+             .expect(EXPECT_MESSAGE)
+             .into();
+         self.note_pixel_snap(id, snap);
+@@ -285,7 +293,13 @@
+
+                     let measured_size: Size<Pixels> =
+                         (node_context.measure)(known_dimensions, available_space, window, cx);
+-                    snap_measured_size_to_device_pixels(measured_size, scale_factor).into()
++                    let mut device_size =
++                        snap_measured_size_to_device_pixels(measured_size, scale_factor);
++                    if !node_context.snap_size {
++                        device_size.width = measured_size.width.0.max(0.) * scale_factor;
++                        device_size.height = measured_size.height.0.max(0.) * scale_factor;
++                    }
++                    device_size.into()
+                 },
+             )
+             .expect(EXPECT_MESSAGE);
+@@ -318,7 +332,8 @@
+     //     authored absolute lengths are rounded in `to_taffy`. This
+     //     includes borders, padding, gaps, and explicit sizes.
+     //     Custom-measured leaf nodes have their measured sizes rounded up
+-    //     to integer device-pixel lengths.
++    //     to integer device-pixel lengths, except text metrics, whose
++    //     fractional advances and line heights survive until absolute edge snapping.
+     //
+     //  2. Post-layout edge snapping. After Taffy resolves the tree, layout
+     //     relationships such as flex shares, grid tracks, percentages, and
 --- a/src/view.rs
 +++ b/src/view.rs
 @@ -1,3 +1,4 @@
@@ -1864,7 +2019,7 @@
      Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
 @@ -328,6 +329,8 @@
  }
- 
+
  struct ViewElementCacheKey {
 +    input_transform: crate::ElementTransform,
 +    input_clip: Option<Bounds<Pixels>>,
@@ -1873,7 +2028,7 @@
      text_style: TextStyle,
 @@ -545,6 +548,8 @@
                  let text_style = window.text_style();
- 
+
                  if let Some(mut element_state) = element_state
 +                    && element_state.cache_key.input_transform == window.input_transform
 +                    && element_state.cache_key.input_clip == window.input_clip
@@ -1889,6 +2044,282 @@
                              bounds,
                              content_mask,
                              text_style,
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -1,3 +1,4 @@
++// Modified by AIPass (2026-11-13): renderer/input compatibility; see vendor/README.md.
+ #[cfg(feature = "profiler")]
+ use crate::DebugFrameOverlayMode;
+ #[cfg(any(feature = "inspector", debug_assertions))]
+@@ -861,6 +862,7 @@
+     pub content_mask: ContentMask<Pixels>,
+     /// Flags that specify hitbox behavior.
+     pub behavior: HitboxBehavior,
++    screen_bounds: Bounds<Pixels>,
+ }
+
+ impl Hitbox {
+@@ -887,7 +889,9 @@
+     /// Checks whether this hitbox would be hovered at `position`, regardless of the current input
+     /// modality or mouse position.
+     pub fn is_hovered_at(&self, position: Point<Pixels>, window: &Window) -> bool {
+-        let hit_test = window.rendered_frame.hit_test(position);
++        let hit_test = window
++            .rendered_frame
++            .hit_test(window.input_transform.point(position));
+         hit_test
+             .ids
+             .iter()
+@@ -1188,7 +1192,7 @@
+         let mut set_hover_hitbox_count = false;
+         let mut hit_test = HitTest::default();
+         for hitbox in self.hitboxes.iter().rev() {
+-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
++            let bounds = hitbox.screen_bounds;
+             if bounds.contains(&position) {
+                 hit_test.ids.push(hitbox.id);
+                 if !set_hover_hitbox_count
+@@ -1273,6 +1277,7 @@
+     pub(crate) image_cache_stack: Vec<AnyImageCache>,
+     pub(crate) rendered_frame: Frame,
+     pub(crate) next_frame: Frame,
++    frame_crossfade: Option<(SpanId, SpanId, f32)>,
+     next_hitbox_id: HitboxId,
+     pub(crate) next_tooltip_id: TooltipId,
+     pub(crate) tooltip_bounds: Option<TooltipBounds>,
+@@ -1287,6 +1292,8 @@
+     modifiers: Modifiers,
+     capslock: Capslock,
+     scale_factor: f32,
++    pub(crate) input_transform: crate::ElementTransform,
++    pub(crate) input_clip: Option<Bounds<Pixels>>,
+     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
+     appearance: WindowAppearance,
+     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
+@@ -2208,6 +2215,7 @@
+             focused_text_input: None,
+             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
+             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
++            frame_crossfade: None,
+             next_frame_callbacks,
+             next_hitbox_id: HitboxId(0),
+             next_tooltip_id: TooltipId::default(),
+@@ -2222,6 +2230,8 @@
+             modifiers,
+             capslock,
+             scale_factor,
++            input_transform: crate::ElementTransform::default(),
++            input_clip: None,
+             bounds_observers: SubscriberSet::new(),
+             appearance,
+             appearance_observers: SubscriberSet::new(),
+@@ -3443,7 +3453,7 @@
+
+     /// The position of the mouse relative to the window.
+     pub fn mouse_position(&self) -> Point<Pixels> {
+-        self.mouse_position
++        self.input_transform.unmap(self.mouse_position)
+     }
+
+     /// Captures the pointer for the given hitbox. While captured, all mouse move and mouse up
+@@ -3900,6 +3910,7 @@
+         #[cfg(feature = "profiler")]
+         let request_layout_start = Instant::now();
+         let frame_stats_render = crate::frame_stats::start();
++        self.frame_crossfade = None;
+         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
+         let root_layout_id = root_element.request_layout(self, cx);
+         crate::frame_stats::record(crate::frame_stats::Phase::Render, frame_stats_render);
+@@ -3952,6 +3963,10 @@
+         crate::frame_stats::record(crate::frame_stats::Phase::Prepaint, frame_stats_prepaint);
+         let frame_stats_paint = crate::frame_stats::start();
+         self.invalidator.set_phase(DrawPhase::Paint);
++        let frame_bounds = Bounds::new(Point::default(), self.viewport_size());
++        if let Some((current, _, _)) = self.frame_crossfade {
++            self.next_frame.scene.push_span(current, frame_bounds);
++        }
+         root_element.paint(self, cx);
+
+         #[cfg(any(feature = "inspector", debug_assertions))]
+@@ -3965,6 +3980,24 @@
+             drag_element.paint(self, cx);
+         } else if let Some(mut tooltip_element) = tooltip_element {
+             tooltip_element.paint(self, cx);
++        }
++        // Include deferred popups, dialogs and tooltips in a single composite.
++        // Replayed paint never restores input or accessibility nodes.
++        if let Some((_, previous, progress)) = self.frame_crossfade {
++            if progress < 1. && self.rendered_span(previous) == Some(frame_bounds) {
++                self.with_filter(
++                    frame_bounds,
++                    LayerFilter {
++                        opacity: Some(1. - progress),
++                        ..Default::default()
++                    },
++                    px(0.),
++                    |window| {
++                        window.replay_span(previous, 1.);
++                    },
++                );
++            }
++            self.next_frame.scene.pop_span();
+         }
+         crate::frame_stats::record(crate::frame_stats::Phase::Paint, frame_stats_paint);
+
+@@ -4395,10 +4428,15 @@
+     ) -> R {
+         self.invalidator.debug_assert_paint_or_prepaint();
+         if let Some(mask) = mask {
++            let previous_clip = self.input_clip;
++            if let Some(clip) = previous_clip {
++                self.input_clip = Some(self.input_transform.bounds(mask.bounds).intersect(&clip));
++            }
+             let mask = mask.intersect(&self.content_mask());
+             self.content_mask_stack.push(mask);
+             let result = f(self);
+             self.content_mask_stack.pop();
++            self.input_clip = previous_clip;
+             result
+         } else {
+             f(self)
+@@ -4456,6 +4494,7 @@
+         result
+     }
+
++    #[cfg(test)]
+     pub(crate) fn with_element_opacity<R>(
+         &mut self,
+         opacity: Option<f32>,
+@@ -4960,8 +4999,15 @@
+                 "layer translation must be finite"
+             );
+         }
++        if let Some(opacity) = filter.opacity {
++            assert!(
++                opacity.is_finite() && (0.0..=1.0).contains(&opacity),
++                "layer opacity must be finite and between zero and one"
++            );
++        }
+         let grows_from = filter.scale_origin;
+         let filter = Filter {
++            opacity: filter.opacity.unwrap_or(1.0),
+             blur: filter.blur.map_or(0., |blur| blur.0 * scale_factor),
+             fade_top: filter.fade_top.map_or(0., |fade| fade.0 * scale_factor),
+             fade_bottom: filter.fade_bottom.map_or(0., |fade| fade.0 * scale_factor),
+@@ -4994,12 +5040,30 @@
+         };
+         let source_bounds = element_bounds.dilate(ScaledPixels(filter.blur * BLUR_REACH + reach));
+         let content_mask = self.snapped_content_mask().bounds;
++        // Opacity must include overflow-visible descendants and their shadows.
++        // Unlike blur/fade/scale it has no local sampling bounds of its own.
++        let source_bounds = if !filter.blurs() && !filter.fades() && !filter.transforms() {
++            content_mask
++        } else {
++            source_bounds
++        };
+         self.next_frame
+             .scene
+             .push_filter(source_bounds, transform_origin, content_mask, filter);
+         let result = f(self);
+         self.next_frame.scene.pop_filter();
+         result
++    }
++
++    /// Crossfade this complete frame, including deferred overlays, with a named
++    /// previous frame. Call from an uncached root view on each rendered frame.
++    /// `current` and `previous` must differ; alternate them when retargeting so
++    /// an interrupted transition starts from the previous composite. Progress is
++    /// the new frame's weight. The caller must retain outgoing image assets until
++    /// completion and cancel on layout or security-sensitive content changes.
++    pub fn set_frame_crossfade(&mut self, current: SpanId, previous: SpanId, progress: f32) {
++        assert_ne!(current, previous);
++        self.frame_crossfade = Some((current, previous, progress.clamp(0., 1.)));
+     }
+
+     /// Names what `f` paints, so that [`Window::replay_span`] can paint it again on a later
+@@ -5683,6 +5747,29 @@
+         F: Fn(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
+             + 'static,
+     {
++        self.request_measured_layout_with_size_snapping(style, true, measure)
++    }
++
++    /// Preserve shaped advances and line heights until absolute edges are snapped.
++    /// Rounding each text leaf independently accumulates spacing in rows and columns.
++    pub(crate) fn request_text_layout<F>(&mut self, measure: F) -> LayoutId
++    where
++        F: Fn(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
++            + 'static,
++    {
++        self.request_measured_layout_with_size_snapping(Style::default(), false, measure)
++    }
++
++    fn request_measured_layout_with_size_snapping<F>(
++        &mut self,
++        style: Style,
++        snap_size: bool,
++        measure: F,
++    ) -> LayoutId
++    where
++        F: Fn(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
++            + 'static,
++    {
+         self.invalidator.debug_assert_prepaint();
+
+         let rem_size = self.rem_size();
+@@ -5690,7 +5777,7 @@
+         self.layout_engine
+             .as_mut()
+             .unwrap()
+-            .request_measured_layout(style, rem_size, scale_factor, measure)
++            .request_measured_layout(style, rem_size, scale_factor, snap_size, measure)
+     }
+
+     /// Compute the layout for the given id within the given available space.
+@@ -5751,6 +5838,10 @@
+             bounds,
+             content_mask,
+             behavior,
++            screen_bounds: self
++                .input_transform
++                .bounds(bounds)
++                .intersect(&self.input_clip.unwrap_or(content_mask.bounds)),
+         };
+         self.next_frame.hitboxes.push(hitbox.clone());
+         hitbox
+@@ -5848,7 +5939,9 @@
+         if focus_handle.is_focused(self) {
+             let cx = self.to_async(cx);
+             self.next_frame.input_handlers.push(Some(
+-                PlatformInputHandler::new(cx, Box::new(input_handler)).with_focus(focus_handle.id),
++                PlatformInputHandler::new(cx, Box::new(input_handler))
++                    .with_focus(focus_handle.id)
++                    .with_transform(self.input_transform),
+             ));
+         }
+     }
+@@ -5906,10 +5999,19 @@
+     ) {
+         self.invalidator.debug_assert_paint();
+
++        let transform = self.input_transform;
+         self.next_frame.mouse_listeners.push(Some(Box::new(
+             move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
+-                if let Some(event) = event.downcast_ref() {
+-                    listener(event, phase, window, cx)
++                if let Some(event) = event.downcast_ref::<Event>() {
++                    if transform == crate::ElementTransform::default() {
++                        listener(event, phase, window, cx);
++                    } else {
++                        let previous = window.input_transform;
++                        window.input_transform = transform;
++                        let event = event.in_coordinate_space(transform);
++                        listener(&event, phase, window, cx);
++                        window.input_transform = previous;
++                    }
+                 }
+             },
+         )));
 --- a/src/window/a11y.rs
 +++ b/src/window/a11y.rs
 @@ -1,3 +1,4 @@
@@ -1930,7 +2361,7 @@
 +        self.scale_factor = scale_factor;
          self
      }
- 
+
 @@ -343,7 +358,24 @@
      ///
      /// Returns `false` if a node with this id is already present in the tree,
@@ -1957,159 +2388,3 @@
          let pushed = self.nodes.push_leaf(id, node);
          #[cfg(debug_assertions)]
          if pushed {
---- a/src/window.rs
-+++ b/src/window.rs
-@@ -1,3 +1,4 @@
-+// Modified by AIPass (2026-11-13): renderer/input compatibility; see vendor/README.md.
- #[cfg(feature = "profiler")]
- use crate::DebugFrameOverlayMode;
- #[cfg(any(feature = "inspector", debug_assertions))]
-@@ -861,6 +862,7 @@
-     pub content_mask: ContentMask<Pixels>,
-     /// Flags that specify hitbox behavior.
-     pub behavior: HitboxBehavior,
-+    screen_bounds: Bounds<Pixels>,
- }
- 
- impl Hitbox {
-@@ -887,7 +889,9 @@
-     /// Checks whether this hitbox would be hovered at `position`, regardless of the current input
-     /// modality or mouse position.
-     pub fn is_hovered_at(&self, position: Point<Pixels>, window: &Window) -> bool {
--        let hit_test = window.rendered_frame.hit_test(position);
-+        let hit_test = window
-+            .rendered_frame
-+            .hit_test(window.input_transform.point(position));
-         hit_test
-             .ids
-             .iter()
-@@ -1188,7 +1192,7 @@
-         let mut set_hover_hitbox_count = false;
-         let mut hit_test = HitTest::default();
-         for hitbox in self.hitboxes.iter().rev() {
--            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-+            let bounds = hitbox.screen_bounds;
-             if bounds.contains(&position) {
-                 hit_test.ids.push(hitbox.id);
-                 if !set_hover_hitbox_count
-@@ -1287,6 +1291,8 @@
-     modifiers: Modifiers,
-     capslock: Capslock,
-     scale_factor: f32,
-+    pub(crate) input_transform: crate::ElementTransform,
-+    pub(crate) input_clip: Option<Bounds<Pixels>>,
-     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
-     appearance: WindowAppearance,
-     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
-@@ -2222,6 +2228,8 @@
-             modifiers,
-             capslock,
-             scale_factor,
-+            input_transform: crate::ElementTransform::default(),
-+            input_clip: None,
-             bounds_observers: SubscriberSet::new(),
-             appearance,
-             appearance_observers: SubscriberSet::new(),
-@@ -3443,7 +3451,7 @@
- 
-     /// The position of the mouse relative to the window.
-     pub fn mouse_position(&self) -> Point<Pixels> {
--        self.mouse_position
-+        self.input_transform.unmap(self.mouse_position)
-     }
- 
-     /// Captures the pointer for the given hitbox. While captured, all mouse move and mouse up
-@@ -4395,10 +4403,15 @@
-     ) -> R {
-         self.invalidator.debug_assert_paint_or_prepaint();
-         if let Some(mask) = mask {
-+            let previous_clip = self.input_clip;
-+            if let Some(clip) = previous_clip {
-+                self.input_clip = Some(self.input_transform.bounds(mask.bounds).intersect(&clip));
-+            }
-             let mask = mask.intersect(&self.content_mask());
-             self.content_mask_stack.push(mask);
-             let result = f(self);
-             self.content_mask_stack.pop();
-+            self.input_clip = previous_clip;
-             result
-         } else {
-             f(self)
-@@ -4456,6 +4469,7 @@
-         result
-     }
- 
-+    #[cfg(test)]
-     pub(crate) fn with_element_opacity<R>(
-         &mut self,
-         opacity: Option<f32>,
-@@ -4960,8 +4974,13 @@
-                 "layer translation must be finite"
-             );
-         }
-+        if let Some(opacity) = filter.opacity {
-+            assert!(opacity.is_finite() && (0.0..=1.0).contains(&opacity),
-+                "layer opacity must be finite and between zero and one");
-+        }
-         let grows_from = filter.scale_origin;
-         let filter = Filter {
-+            opacity: filter.opacity.unwrap_or(1.0),
-             blur: filter.blur.map_or(0., |blur| blur.0 * scale_factor),
-             fade_top: filter.fade_top.map_or(0., |fade| fade.0 * scale_factor),
-             fade_bottom: filter.fade_bottom.map_or(0., |fade| fade.0 * scale_factor),
-@@ -4994,6 +5013,11 @@
-         };
-         let source_bounds = element_bounds.dilate(ScaledPixels(filter.blur * BLUR_REACH + reach));
-         let content_mask = self.snapped_content_mask().bounds;
-+        // Opacity must include overflow-visible descendants and their shadows.
-+        // Unlike blur/fade/scale it has no local sampling bounds of its own.
-+        let source_bounds = if !filter.blurs() && !filter.fades() && !filter.transforms() {
-+            content_mask
-+        } else { source_bounds };
-         self.next_frame
-             .scene
-             .push_filter(source_bounds, transform_origin, content_mask, filter);
-@@ -5751,6 +5775,10 @@
-             bounds,
-             content_mask,
-             behavior,
-+            screen_bounds: self
-+                .input_transform
-+                .bounds(bounds)
-+                .intersect(&self.input_clip.unwrap_or(content_mask.bounds)),
-         };
-         self.next_frame.hitboxes.push(hitbox.clone());
-         hitbox
-@@ -5848,7 +5876,9 @@
-         if focus_handle.is_focused(self) {
-             let cx = self.to_async(cx);
-             self.next_frame.input_handlers.push(Some(
--                PlatformInputHandler::new(cx, Box::new(input_handler)).with_focus(focus_handle.id),
-+                PlatformInputHandler::new(cx, Box::new(input_handler))
-+                    .with_focus(focus_handle.id)
-+                    .with_transform(self.input_transform),
-             ));
-         }
-     }
-@@ -5906,10 +5936,19 @@
-     ) {
-         self.invalidator.debug_assert_paint();
- 
-+        let transform = self.input_transform;
-         self.next_frame.mouse_listeners.push(Some(Box::new(
-             move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
--                if let Some(event) = event.downcast_ref() {
--                    listener(event, phase, window, cx)
-+                if let Some(event) = event.downcast_ref::<Event>() {
-+                    if transform == crate::ElementTransform::default() {
-+                        listener(event, phase, window, cx);
-+                    } else {
-+                        let previous = window.input_transform;
-+                        window.input_transform = transform;
-+                        let event = event.in_coordinate_space(transform);
-+                        listener(&event, phase, window, cx);
-+                        window.input_transform = previous;
-+                    }
-                 }
-             },
-         )));

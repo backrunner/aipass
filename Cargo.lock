@@ -296,6 +296,7 @@ dependencies = [
  "aipass-agent-protocol",
  "aipass-config-writers",
  "aipass-crypto",
+ "aipass-desktop-platform",
  "aipass-native-host",
  "aipass-provider-registry",
  "aipass-proxy",
@@ -337,6 +338,7 @@ dependencies = [
  "aipass-agent",
  "aipass-agent-protocol",
  "aipass-config-writers",
+ "aipass-desktop-platform",
  "aipass-provider-registry",
  "aipass-proxy",
  "aipass-storage",
@@ -361,6 +363,21 @@ dependencies = [
  "time",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "aipass-desktop-platform"
+version = "0.2.0"
+dependencies = [
+ "aipass-agent-protocol",
+ "aipass-storage",
+ "arboard",
+ "directories",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -5431,6 +5448,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_threads"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cabcc654086861f9e1bc5115258de62ef92c79b20f4615a1b0cc57c4e82027d4"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "objc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8884,7 +8910,9 @@ checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
 dependencies = [
  "deranged",
  "itoa",
+ "libc",
  "num-conv",
+ "num_threads",
  "powerfmt",
  "serde_core",
  "time-core",

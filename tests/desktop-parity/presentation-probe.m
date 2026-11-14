@@ -2,6 +2,7 @@
 // MTLDrawable.presentedTime is an actual onscreen timestamp, not a draw request.
 // https://developer.apple.com/documentation/metal/mtldrawable/presentedtime
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
 #import <objc/runtime.h>
@@ -75,6 +76,18 @@ __attribute__((constructor)) static void installObserver(void) {
                     record(line, length);
                 }];
         }
+        [NSWorkspace.sharedWorkspace.notificationCenter
+            addObserverForName:NSWorkspaceDidActivateApplicationNotification object:nil queue:nil
+            usingBlock:^(NSNotification *notification) {
+                NSRunningApplication *app = notification.userInfo[NSWorkspaceApplicationKey];
+                NSDictionary *event = @{@"event": @"foreground-app",
+                    @"atMs": @((CACurrentMediaTime()-started)*1000),
+                    @"pid": @(app.processIdentifier), @"bundleId": app.bundleIdentifier ?: @""};
+                NSData *data = [NSJSONSerialization dataWithJSONObject:event options:0 error:nil];
+                NSMutableData *line = [data mutableCopy];
+                [line appendBytes:"\n" length:1];
+                record(line.bytes, (int)line.length);
+            }];
         // Modern GPUI receives drawables from CAMetalDisplayLink; nextDrawable
         // alone observes only startup. Observe actual command-buffer submits.
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();

@@ -31,7 +31,7 @@ await writeFile(resolve(contents,"Info.plist"),`<?xml version="1.0" encoding="UT
 run("codesign",["--force","--sign","-",app]);
 const observer=resolve(output,"presentation-probe.dylib");
 run("xcrun",["clang","-dynamiclib","-O2","-fobjc-arc","-Wall","-Wextra","-Werror",
-  "tests/desktop-parity/presentation-probe.m","-framework","Foundation","-framework","QuartzCore",
+  "tests/desktop-parity/presentation-probe.m","-framework","Foundation","-framework","AppKit","-framework","QuartzCore",
   "-framework","Metal","-o",observer]);
 const sourceHashes={};
 async function record(path){
@@ -80,7 +80,7 @@ for(const [name,flags] of cases){
   const metrics=presentationMetrics(events);
   const reduced=flags.includes("--reduced-motion");
   // Focused input caret blinking may draw at ~2Hz with reduced motion.
-  const reducedPassed=reduced && metrics.presented>0 && metrics.invalidPresentationCallbacks===0 &&
+  const reducedPassed=reduced && metrics.foregroundContinuous && metrics.presented>0 && metrics.invalidPresentationCallbacks===0 &&
     metrics.staleUnpresented===0 && metrics.steadyFPS<=3;
   report.cases.push({name,args,metrics,termination,passed:reduced ? reducedPassed : metrics.continuousAnimationPassed});
   await writeFile(resolve(output,"report.json"),JSON.stringify(report,null,2)+"\n");

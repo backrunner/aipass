@@ -65,6 +65,17 @@ const LABELS: [&str; 3] = [
     "providerDetail.userId",
 ];
 impl Tools {
+    pub(crate) fn apply_appearance(&mut self, dark: bool, cx: &mut gpui::Context<Self>) {
+        self.theme = Theme::new(dark);
+        for input in &self.inputs {
+            input.update(cx, |input, cx| {
+                input.set_editor_style(self.theme.input_style());
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
     pub fn new(dark: bool, chinese: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::menu::init(cx);
         let theme = Theme::new(dark);

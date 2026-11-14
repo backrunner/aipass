@@ -1,6 +1,7 @@
 use super::*;
 use aipass_agent_protocol::SessionPolicy;
 use std::time::{Duration, Instant};
+use std::{sync::mpsc, thread};
 
 fn status(locked: bool) -> SessionStatus {
     SessionStatus {
@@ -147,6 +148,40 @@ fn subscription_startup_failure_returns_to_the_panel_and_lock_rejects_new_work()
     assert!(!session.submit(Command::Subscription(Box::new(Request {
         generation: 43,
         operation: Operation::Catalog
+    }))));
+}
+
+#[test]
+fn pricing_background_reads_keep_scope_on_startup_failure_and_fail_closed_on_lock() {
+    use crate::pricing::{Operation, Request, Scope};
+    let (mut session, commands, results) = fixture();
+    session.status = Some(status(false));
+    let scope = Scope {
+        entry: Uuid::new_v4(),
+        generation: 81,
+    };
+    for code in [AgentErrorCode::ServiceUnavailable, AgentErrorCode::Locked] {
+        assert!(session.submit(Command::Pricing(Box::new(Request {
+            scope,
+            operation: Operation::Load
+        }))));
+        assert!(!session.foreground_pending);
+        commands.recv_timeout(Duration::from_secs(1)).unwrap();
+        results
+            .send(Err(AgentCommandError {
+                code: Some(code.clone()),
+                message: "Synthetic pricing failure".into(),
+            }))
+            .unwrap();
+        settle(&mut session);
+        let completion = session.pricing_completion.take().unwrap();
+        assert_eq!(completion.scope, scope);
+        assert_eq!(completion.result.unwrap_err().code, Some(code));
+    }
+    assert!(!session.is_unlocked());
+    assert!(!session.submit(Command::Pricing(Box::new(Request {
+        scope,
+        operation: Operation::Load
     }))));
 }
 
@@ -515,6 +550,7 @@ fn locked_missing_or_sync_pending_snapshots_never_expose_catalog_data() {
         reply.initial_sync_pending = mode == 2;
         results
             .send(Ok(Reply::Catalog {
+                sync_settings: None,
                 status: reply,
                 catalog: Box::new(Catalog::fixture()),
                 selected: None,
@@ -527,4 +563,122 @@ fn locked_missing_or_sync_pending_snapshots_never_expose_catalog_data() {
         assert!(session.catalog.archived.is_empty());
         assert!(session.catalog.trash.is_empty());
     }
+}
+
+#[test]
+fn credential_transport_failure_settles_the_requesting_panel() {
+    let (mut session, commands, results) = fixture();
+    session.status = Some(status(false));
+    let scope = crate::credentials::Scope {
+        entry: Uuid::new_v4(),
+        generation: 17,
+    };
+    assert!(
+        session.submit(Command::Credential(Box::new(crate::credentials::Request {
+            scope,
+            operation: crate::credentials::Operation::Reveal("fixture-key".into())
+        })))
+    );
+    commands.recv_timeout(Duration::from_secs(1)).unwrap();
+    results
+        .send(Err(AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: "offline".into(),
+        }))
+        .unwrap();
+    settle(&mut session);
+    assert!(!session.pending);
+    let completion = session.credential_completion.as_ref().unwrap();
+    assert!(completion.scope == scope);
+    assert_eq!(completion.result.as_ref().err().unwrap().message, "offline");
+}
+
+#[test]
+fn trash_failure_settles_confirmation_and_refreshes_possible_partial_deletion() {
+    let (mut session, commands, results) = fixture();
+    session.status = Some(status(false));
+    assert!(session.submit(Command::Trash(crate::trash::Request {
+        generation: 31,
+        target: None
+    })));
+    commands.recv_timeout(Duration::from_secs(1)).unwrap();
+    results
+        .send(Err(AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: "offline".into(),
+        }))
+        .unwrap();
+    settle(&mut session);
+    let completion = session.trash_completion.as_ref().unwrap();
+    assert_eq!(completion.generation, 31);
+    assert!(completion.result.is_err());
+    assert!(!session.pending);
+    assert!(session.provider_applied);
+}
+
+#[test]
+fn activity_requires_recent_unlocked_input_and_does_not_block_foreground_ui() {
+    let (mut session, commands, results) = fixture();
+    session.record_activity();
+    session.status = Some(status(false));
+    assert!(!session.submit_activity());
+    session.record_activity();
+    assert!(session.submit_activity());
+    assert!(!session.foreground_pending);
+    assert!(matches!(
+        commands.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Command::Touch
+    ));
+    results.send(Ok(Reply::Touched(status(false)))).unwrap();
+    settle(&mut session);
+    assert!(!session.submit_activity());
+    assert!(session.is_unlocked());
+    // Transport failures in best-effort keepalive should not replace UI feedback.
+    assert!(session.submit(Command::Touch));
+    commands.recv_timeout(Duration::from_secs(1)).unwrap();
+    results
+        .send(Err(AgentCommandError {
+            code: Some(AgentErrorCode::ServiceUnavailable),
+            message: "offline".into(),
+        }))
+        .unwrap();
+    settle(&mut session);
+    assert!(session.error.is_none());
+    assert!(session.submit(Command::Touch));
+    commands.recv_timeout(Duration::from_secs(1)).unwrap();
+    results
+        .send(Err(AgentCommandError {
+            code: Some(AgentErrorCode::Locked),
+            message: "locked".into(),
+        }))
+        .unwrap();
+    settle(&mut session);
+    assert!(!session.is_unlocked());
+    session.record_activity();
+    assert!(!session.submit_activity());
+}
+
+#[test]
+fn setup_metadata_failure_preserves_loaded_session_status() {
+    let (mut session, commands, results) = fixture();
+    assert!(session.submit(Command::Refresh));
+    commands.recv_timeout(Duration::from_secs(1)).unwrap();
+    let mut ready = status(true);
+    ready.exists = false;
+    results
+        .send(Ok(Reply::Catalog {
+            sync_settings: Some(Err(AgentCommandError {
+                code: Some(AgentErrorCode::ServiceUnavailable),
+                message: "synthetic setup metadata failure".into(),
+            })),
+            status: ready,
+            catalog: Box::default(),
+            selected: None,
+            saved: false,
+        }))
+        .unwrap();
+    settle(&mut session);
+    assert!(!session.status.as_ref().unwrap().exists);
+    assert!(session.error.is_some());
+    assert!(!session.pending);
 }

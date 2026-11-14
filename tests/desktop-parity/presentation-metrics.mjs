@@ -23,6 +23,15 @@ export function presentationMetrics(events, { warmupMs = 3000, targetHz = 60 } =
   const intervalMs = stats(intervals);
   const spanMs = steady.length > 1 ? steady.at(-1).atMs-steady[0].atMs : 0;
   const stopped=events.find(e=>e.event==="stop");
+  const windowStateEvents=events.filter(e=>e.event==="window-state").sort((a,b)=>a.atMs-b.atMs);
+  let key=false, active=false;
+  for(const event of windowStateEvents.filter(e=>e.atMs<=warmupMs)) {
+    if(event.name==="NSWindowDidBecomeKeyNotification")key=true;
+    if(event.name==="NSWindowDidResignKeyNotification")key=false;
+    if(event.name==="NSApplicationDidBecomeActiveNotification")active=true;
+    if(event.name==="NSApplicationDidResignActiveNotification")active=false;
+  }
+  const foregroundContinuous=key && active && !windowStateEvents.some(e=>e.atMs>warmupMs && e.name.includes("DidResign"));
   const result = {
     clock: started?.clock, observerIncluded:started?.observerIncluded,
     targetHz, warmupMs, submitted:submitted.length, presented:visible.length,
@@ -35,10 +44,11 @@ export function presentationMetrics(events, { warmupMs = 3000, targetHz = 60 } =
     estimatedMissedBudgetSlots:intervals.reduce((n,ms)=>n+Math.max(0,Math.round(ms/budget)-1),0),
     submittedToPresentedMs:stats(steady.map(e=>e.atMs-byIndex.get(e.index)?.atMs).filter(Number.isFinite)),
     pixels:[...new Set(submitted.map(e=>JSON.stringify(e.pixels)))].map(v=>JSON.parse(v)),
-    windowStateEvents:events.filter(e=>e.event==="window-state"),
+    windowStateEvents, foregroundContinuous,
+    foregroundApplications:events.filter(e=>e.event==="foreground-app"),
   };
   result.continuousAnimationPassed = started?.clock === "MTLDrawable.presentedTime" &&
-    spanMs >= 10000 && intervals.length >= 300 &&
+    foregroundContinuous && spanMs >= 10000 && intervals.length >= 300 &&
     result.invalidPresentationCallbacks === 0 && stalePending.length === 0 &&
     result.tailWithoutPresentationMs !== null && result.tailWithoutPresentationMs <= 100 &&
     intervalMs.p95 <= budget+2 && intervalMs.p99 <= budget*1.5 && intervalMs.max <= 50 && result.lateRatio <= .01;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::parity::Observe;
 use gpui::{canvas, Context, TestAppContext};
 use std::{cell::Cell, rc::Rc};
 
@@ -55,4 +56,49 @@ fn closed_body_measures_without_prepaint_or_paint(cx: &mut TestAppContext) {
     draw(cx);
     draw(cx);
     assert_eq!((prepaints.get(), paints.get()), counts);
+}
+
+struct FractionalStack;
+impl Render for FractionalStack {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .children((0..10).map(|i| {
+                Frame {
+                    height: 1.,
+                    fade: 1.,
+                    open: true,
+                }
+                .body(
+                    format!("fractional-reveal-{i}"),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .text_size(px(12.))
+                        .line_height(px(16.8))
+                        .children((0..3).map(|_| div().flex_shrink_0().child("A line"))),
+                )
+            }))
+            .child(div().h(px(1.)).observe("fractional-reveal-end"))
+    }
+}
+
+#[gpui::test]
+fn stacked_disclosures_do_not_accumulate_rounded_line_heights(cx: &mut TestAppContext) {
+    let (_, cx) = cx.add_window_view(|_, _| FractionalStack);
+    cx.simulate_resize(gpui::size(px(960.), px(640.)));
+    for scale in [1., 2., 1.5] {
+        cx.simulate_scale_factor_change(scale);
+        for _ in 0..3 {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+        cx.update(|_, cx| {
+            let end = cx.global::<crate::parity::Geometry>().0["fractional-reveal-end"][1];
+            assert!(
+                (end - 504.).abs() <= 0.5 / scale,
+                "natural height drifted at scale {scale}: {end}"
+            );
+        });
+    }
 }

@@ -99,6 +99,7 @@ impl Runtime {
         if self.services.proxy_running()? && !allow_disconnect {
             return Ok(false);
         }
+        aipass_desktop_platform::clipboard::clear_now().map_err(anyhow::Error::msg)?;
         let result = self
             .services
             .suspend()

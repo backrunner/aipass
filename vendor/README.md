@@ -19,9 +19,26 @@ on 2026-11-13. This exception does not extend to AIPass-authored modules or test
 `gpui/src/input_transform.rs` is a new AIPass module and is covered by the ordinary
 repository size gate. Its integration and GPU regressions live under
 `apps/desktop-native/src/composite/tests/`.
+The same size gate covers `gpui_apple/src/system_font_weights.rs`.
 
 ## Maintained changes
 
+- Metal/WGPU: clamp image sampling to each atlas tile's texel centers so retained
+  light/dark textures cannot bleed into neighboring image edges.
+- GPUI: crossfade complete named frames after deferred menus, dialogs and tooltips
+  paint. Keep live input and accessibility dispatch exclusive to the current frame.
+  Callers retain outgoing textures and cancel replay on resize or vault locking.
+
+- GPUI text: preserve fractional intrinsic widths and line heights through layout and leave
+  device-pixel snapping to the layout engine's absolute edges. Per-label rounding
+  must not accumulate across adjacent badges. Include display scale in the
+  measurement-cache key so moving between displays refreshes snapped line metrics.
+- GPUI Base: preserve measured disclosure heights during animation. AIPass reveal
+  subtrees retain fractional extents so stacked sections and bottom scrolling do
+  not accumulate independently rounded heights.
+- Apple text: map the named system font weights to their CSS classes before
+  matching. Medium must not fall back to Regular, and Heavy and Black remain
+  distinct. Other font families retain the upstream matching behavior.
 - GPUI: add an input transform scoped to compositor subtrees. Keep hit testing,
   clips, pointer/scroll/gesture coordinates, cached views, accessibility bounds,
   native IME geometry and selection hit testing consistent with the painted scale.

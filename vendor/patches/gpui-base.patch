@@ -1069,3 +1069,15 @@
                              position: point(px(20.), px(20.)),
                              delta: ScrollDelta::Pixels(point(px(0.), px(-4.))),
                              touch_phase: TouchPhase::Moved,
+--- a/src/motion/reveal.rs
++++ b/src/motion/reveal.rs
+@@ -60,6 +60,9 @@
+             },
+         );
+         let mut style = Style::default();
++        // Animated heights must retain their measured extent; pre-snapping each
++        // frame introduces both motion steps and cumulative sibling drift.
++        style.pixel_snap = Some(false);
+         style.size.width = relative(1.0).into();
+         match height {
+             None if self.progress > 0.0 => {}

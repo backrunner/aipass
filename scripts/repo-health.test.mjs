@@ -30,6 +30,7 @@ test("enforces new-module limits and no growth for documented legacy modules", (
   assert.equal(auditFileSizes([file("crates/core/src/old.rs", 3)], policy).length, 1);
   assert.equal(auditFileSizes([], policy).length, 1);
   assert.equal(auditFileSizes([file("vendor/gpui/src/input_transform.rs", 4)], { ...policy, legacy: {} }).length, 1);
+  assert.equal(auditFileSizes([file("vendor/gpui_apple/src/system_font_weights.rs", 4)], { ...policy, legacy: {} }).length, 1);
   assert.equal(auditFileSizes([file("vendor/gpui/src/window.rs", 100)], { ...policy, legacy: {} }).length, 0);
 });
 

@@ -364,369 +364,8 @@ impl Integrations {
             .items_center()
             .child(label)
     }
-    fn tool_row(&self, index: usize, tool: ToolConfigTool, cx: &Context<Self>) -> AnyElement {
-        let t = self.theme;
-        let enabled = self.can_configure(&tool);
-        let preview = tool.clone();
-        let apply = tool.clone();
-        let restore = tool.clone();
-        let status = self.statuses.iter().find(|s| s.tool == tool);
-        let needs_model = self
-            .entry
-            .as_ref()
-            .and_then(|e| {
-                e.secret_refs
-                    .iter()
-                    .find(|s| Some(&s.id) == self.secret_id.as_ref())
-                    .map(|s| !catalog::ready(&tool, e, s))
-            })
-            .unwrap_or(false);
-        div()
-            .px(px(16.))
-            .py(px(10.))
-            .min_h(px(56.))
-            .border_b_1()
-            .border_color(t.divider)
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .flex_shrink_0()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(
-                                div()
-                                    .size(px(32.))
-                                    .flex_shrink_0()
-                                    .rounded(px(8.))
-                                    .bg(t.surface2)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        svg()
-                                            .path(catalog::icon(&tool))
-                                            .size(px(17.))
-                                            .text_color(t.secondary),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.))
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_ellipsis()
-                                            .child(catalog::name(&tool)),
-                                    )
-                                    .when(needs_model, |el| {
-                                        el.child(
-                                            div().text_size(px(11.)).text_color(t.tertiary).child(
-                                                self.locale.text(
-                                                    "integration.providerDefaultModelRequired",
-                                                ),
-                                            ),
-                                        )
-                                    }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .flex_shrink_0()
-                            .child(div().text_color(t.success).text_size(px(13.)).child("✓"))
-                            .child(
-                                icon(
-                                    ("integration-preview", index),
-                                    "eye",
-                                    self.locale.text("providerDetail.preview"),
-                                    t,
-                                )
-                                .size(px(26.))
-                                .disabled(!enabled)
-                                .opacity(if enabled { 1. } else { 0.45 })
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.show_preview(preview.clone(), true, cx)
-                                    },
-                                )),
-                            )
-                            .child(
-                                button(
-                                    ("integration-write", index),
-                                    self.locale.text(
-                                        if self
-                                            .entry
-                                            .as_ref()
-                                            .and_then(catalog::native_tool)
-                                            .is_some()
-                                        {
-                                            "integration.switchAccount"
-                                        } else {
-                                            "server.writeConfig"
-                                        },
-                                    ),
-                                    false,
-                                    t,
-                                )
-                                .h(px(26.))
-                                .px(px(9.))
-                                .text_size(px(12.))
-                                .disabled(!enabled)
-                                .opacity(if enabled { 1. } else { 0.45 })
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.show_preview(apply.clone(), false, cx)
-                                    },
-                                )),
-                            ),
-                    ),
-            )
-            .when(
-                tool == ToolConfigTool::Codex
-                    && self.entry.as_ref().and_then(catalog::native_tool).is_none(),
-                |el| {
-                    el.child(
-                        div()
-                            .ml(px(42.))
-                            .flex()
-                            .items_center()
-                            .gap(px(12.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(11.))
-                                    .text_color(t.tertiary)
-                                    .child(self.locale.text("providerDetail.codexAuthMode")),
-                            )
-                            .child(
-                                div()
-                                    .p(px(2.))
-                                    .rounded(px(8.))
-                                    .border_1()
-                                    .border_color(t.border)
-                                    .bg(t.surface2)
-                                    .flex()
-                                    .gap(px(2.))
-                                    .children(
-                                        [
-                                            CodexApiKeyMode::AuthJson,
-                                            CodexApiKeyMode::ExperimentalBearerToken,
-                                        ]
-                                        .into_iter()
-                                        .enumerate()
-                                        .map(
-                                            |(i, mode)| {
-                                                let active = self.codex_mode == mode;
-                                                Button::new(("integration-codex-mode", i))
-                                                    .disabled(self.busy())
-                                                    .h(px(24.))
-                                                    .px(px(8.))
-                                                    .rounded(px(4.))
-                                                    .bg(if active {
-                                                        t.surface
-                                                    } else {
-                                                        gpui::rgba(0)
-                                                    })
-                                                    .text_size(px(11.))
-                                                    .text_color(t.secondary)
-                                                    .child(if i == 0 {
-                                                        "auth.json".into()
-                                                    } else {
-                                                        self.locale.text(
-                                                            "providerDetail.codexModeExperimental",
-                                                        )
-                                                    })
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.set_mode(mode.clone(), cx)
-                                                    }))
-                                            },
-                                        ),
-                                    ),
-                            ),
-                    )
-                },
-            )
-            .when_some(status, |el, status| {
-                el.child(
-                    div()
-                        .ml(px(42.))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .text_size(px(11.))
-                        .text_color(t.secondary)
-                        .child(div().flex_1().min_w_0().child(self.status_label(status)))
-                        .when(
-                            status.mode == Some(aipass_agent_protocol::ToolConfigMode::Official)
-                                && ["login_required", "renewal_required"]
-                                    .contains(&status.state.as_str()),
-                            |el| {
-                                let tool = tool.clone();
-                                el.child(
-                                    button(
-                                        ("integration-relogin", index),
-                                        self.locale.text("integration.relogin"),
-                                        false,
-                                        t,
-                                    )
-                                    .h(px(26.))
-                                    .text_size(px(12.))
-                                    .disabled(self.busy())
-                                    .on_click(
-                                        cx.listener(move |this, _, _, cx| {
-                                            this.reconnect(&tool, cx)
-                                        }),
-                                    ),
-                                )
-                            },
-                        )
-                        .when(status.operation_id.is_some(), |el| {
-                            el.child(
-                                button(
-                                    ("integration-restore", index),
-                                    self.locale.text("integration.restore"),
-                                    false,
-                                    t,
-                                )
-                                .h(px(26.))
-                                .text_size(px(12.))
-                                .disabled(self.busy() || status.state == "conflict")
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.restore(&restore, cx)),
-                                ),
-                            )
-                        }),
-                )
-                .when(
-                    !["ready", "unmanaged", "api_key_invalid", "api_key_changed"]
-                        .contains(&status.state.as_str()),
-                    |el| {
-                        el.child(
-                            self.banner(
-                                self.locale
-                                    .text(&format!("integration.state.{}", status.state)),
-                                t.warning,
-                            ),
-                        )
-                    },
-                )
-                .when(
-                    ["api_key_invalid", "api_key_changed"].contains(&status.state.as_str()),
-                    |el| {
-                        el.child(
-                            self.banner(self.locale.text("integration.updateApiKey"), t.warning),
-                        )
-                    },
-                )
-                .when(!status.overrides.is_empty(), |el| {
-                    el.child(
-                        self.banner(
-                            self.locale
-                                .text("integration.environmentOverrides")
-                                .replace("{keys}", &status.overrides.join(", ")),
-                            t.warning,
-                        ),
-                    )
-                })
-            })
-            .when_some(
-                self.applied.as_ref().filter(|result| result.tool == tool),
-                |el, result| {
-                    el.child(
-                        div()
-                            .p(px(10.))
-                            .rounded(px(8.))
-                            .bg(t.success.opacity(0.08))
-                            .text_color(t.success)
-                            .text_size(px(12.))
-                            .flex()
-                            .items_start()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        self.locale
-                                            .text("providerDetail.configured")
-                                            .replace("{title}", &result.entry_title),
-                                    )
-                                    .child(
-                                        div()
-                                            .font_family(preview::MONO)
-                                            .text_size(px(11.))
-                                            .child(result.target_path.clone()),
-                                    ),
-                            )
-                            .child(
-                                icon(
-                                    ("integration-dismiss-applied", index),
-                                    "x",
-                                    self.locale.text("common.close"),
-                                    t,
-                                )
-                                .size(px(20.))
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.applied = None;
-                                        this.message_timer = None;
-                                        cx.notify();
-                                    },
-                                )),
-                            ),
-                    )
-                },
-            )
-            .into_any_element()
-    }
-    fn status_label(&self, status: &ToolConfigStatus) -> String {
-        if status.mode == Some(aipass_agent_protocol::ToolConfigMode::Official) {
-            if let Some(identity) = status.account_identity.as_deref().filter(|s| !s.is_empty()) {
-                return self
-                    .locale
-                    .text("integration.usingOfficialSubscription")
-                    .replace(
-                        "{account}",
-                        &aipass_desktop_native::subscriptions::presentation::readable(identity),
-                    );
-            }
-        }
-        format!(
-            "{}: {}",
-            self.locale.text("integration.current"),
-            status
-                .entry_title
-                .clone()
-                .unwrap_or_else(|| self.locale.text("integration.unmanaged"))
-        )
-    }
-    fn banner(&self, text: String, color: gpui::Rgba) -> impl IntoElement {
-        div()
-            .p(px(10.))
-            .rounded(px(8.))
-            .bg(color.opacity(0.08))
-            .text_color(color)
-            .text_size(px(12.))
-            .child(text)
-    }
 }
+
 impl Render for Integrations {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let disclosure = self.disclosure.sample(self.expanded, window, cx);
@@ -735,10 +374,11 @@ impl Render for Integrations {
         }
         let t = self.theme;
         let tools = self.tools();
+        let tool_count = tools.len();
         div()
             .w_full()
             .flex_shrink_0()
-            .rounded(px(10.))
+            .rounded(px(12.))
             .border_1()
             .border_color(t.border)
             .bg(t.surface)
@@ -766,6 +406,7 @@ impl Render for Integrations {
                             .items_center()
                             .gap(px(8.))
                             .text_size(px(13.))
+                            .line_height(px(18.2))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.text)
                             .accessibility_label(self.locale.text("server.integrate"))
@@ -785,19 +426,22 @@ impl Render for Integrations {
                     .child(
                         icon(
                             "integration-scan",
-                            "refresh-cw",
+                            "scan-search",
                             self.locale.text("integration.scanInstallations"),
                             t,
                         )
-                        .mr(px(12.))
-                        .disabled(self.busy())
-                        .on_click(cx.listener(|this, _, _, cx| this.scan(cx))),
+                        .mr(px(16.))
+                        .size(px(26.))
+                        .disabled(self.pending.is_some())
+                        .on_click(cx.listener(|this, _, _, cx| this.scan(cx)))
+                        .observe("integration-scan"),
                     ),
             )
             .child(
                 disclosure.body(
                     "integration-content",
                     div()
+                        .py(px(4.))
                         .flex()
                         .flex_col()
                         .when(
@@ -862,14 +506,12 @@ impl Render for Integrations {
                                     .child(self.locale.text("agents.empty")),
                             )
                         })
-                        .children(
-                            tools
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, tool)| self.tool_row(i, tool, cx)),
-                        ),
+                        .children(tools.into_iter().enumerate().map(|(i, tool)| {
+                            self.tool_row(i, tool, i + 1 == tool_count, window, cx)
+                        })),
                 ),
             )
+            .observe("provider-integration-card")
             .into_any_element()
     }
 }
