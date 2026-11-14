@@ -5,6 +5,11 @@ The 2026-11-13 review requires measured component details, including spacing,
 and engineering splits for large native files. A successful capture is not an
 acceptance result.
 
+User update, 2026-11-14: foreground smoothness sampling is waived for UI-first
+Tauri cleanup. Preserve prior interrupted samples without marking performance as
+passed. Fixed-time animation, geometry/style and interaction checks still apply;
+see the [current readiness review](ui-control-close-20261114.md).
+
 ## Comparison layers
 
 1. **Coverage:** use the component and dynamic-state inventories. Track missing
@@ -80,7 +85,12 @@ which is zero for an unpresented/dropped drawable. Modern GPUI uses
 all zero callbacks and unmatched submissions. Three seconds of warmup are
 explicitly separated from steady-state intervals, without removing long gaps.
 Window activation notifications distinguish foreground changes from rendering
-work. A wall-clock stop marker detects silent tails, with a 100 ms allowance
+work. The observer also records the foreground application's bundle identifier
+and PID to diagnose competing window automation without collecting window text.
+Both active-application and key-window observations must hold continuously after
+warmup, including in reduced-motion cases. Background frames cannot pass merely
+because their intervals happen to meet the timing threshold.
+A wall-clock stop marker detects silent tails, with a 100 ms allowance
 for process termination and in-flight drawables; interval timing itself uses
 Metal's monotonic clock.
 
@@ -116,3 +126,7 @@ until corrected and reviewed. Do not mark the overall UI or an inventory entry
 accepted merely because its outer container, one locale or a reduced-motion
 screenshot matches. Intentional prior design changes (such as titlebar alignment)
 need an explicit recorded exception, not a silent baseline edit.
+
+## Onboarding and Agent management follow-up
+
+[Native onboarding and Agent management](native-onboarding-agents-20261114.md) records the restored import/cloud/recovery/loading branches and Agent page, bounded paired comparisons, native tests and remaining settings/local-proxy/native-input coverage. These additions do not turn the 98-surface inventory into full UI acceptance. Foreground smoothness sampling remains waived.

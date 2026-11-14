@@ -551,6 +551,13 @@ Newest entries last within each section.
 
 ## Endpoint inference (three implementations)
 
+### Native provider edits must preserve desktop normalization and secret merges
+- **Symptom**: advanced alias/header fields were missing or ignored; inferred domains became fixed overrides, so changing the API base could retain an old matching host.
+- **Root cause**: native `catalog/draft.rs` preserved all original aliases, forced headers to `None`, and encoded every summary domain. The Svelte editor and Tauri input adapter already distinguished inferred hosts from explicit overrides. Typed Agent header reads return `ProviderHeaderValues`, not the bridge's unwrapped array.
+- **Fix**: add touched alias drafts, case-insensitive worker-side header merges from fresh typed reads, fail-closed read errors, and API-only domain inference matching `provider_inputs.rs`. Split presentation and editing helpers into real modules.
+- **Guardrail**: run the isolated Agent roundtrip for merge/preservation, alias clearing and locked writes; test escaped values, refreshed versus touched drafts, explicit domain overrides and exclusion of console hosts. Never populate UI state with stored header values or treat a failed read as an empty header list. Compare advanced controls while visible as well as at maximum scroll; retain rounding failures.
+- **Watch points**: native `catalog/{draft,editing,optional}.rs`, `providers/form.rs`, `session.rs`, `tests/provider_agent/editing.rs`, Svelte `domainOverride`/`mergeHeaderPairs`, and Tauri `provider_inputs.rs`.
+
 ### Valid AI endpoints misclassified as custom_http
 - **Symptom**: OpenAI-compatible endpoints such as `/api/paas/v4`, `/v1beta`, custom-domain Anthropic relays, and MiniMax `/v1` were saved as `custom_http`, making them non-proxyable.
 - **Root cause**: inference lived in three places that had drifted apart: `packages/schemas/src/index.ts` `inferProviderFromEndpoint` (narrow 10-word fallback regex), `apps/extension/src/content/detector.ts` `inferInterfaceFromEndpoint` (wider keyword set, plus a `replicate|cohere|minimax` short-circuit that ran before the OpenAI check), and `crates/aipass-agent/src/server.rs` `infer_interface_from_endpoint`. The schemas fallback was the narrowest and won in save flows.
@@ -1371,7 +1378,8 @@ Newest entries last within each section.
 - **Symptom**: secret cleanup depended on WebView timers; a failed clipboard read fell back to clearing unrelated user content.
 - **Root cause**: `apps/desktop/src/App.svelte::scheduleClipboardClear` retained plaintext in a frontend closure and `clearCopiedSecretFromClipboard` wrote an empty value after read failures.
 - **Fix**: native `secret_clipboard` owns clipboard lifetime, bounded retry backoff, SHA-256 ownership digests instead of retained plaintext, confirmation before API-key reads, and lock/exit invalidation. All desktop sensitive-copy entry points reuse it.
-- **Guardrail**: clear only after a successful matching read; preserve newer clipboard content, keep previous cleanup after a failed copy, and invalidate pending confirmation/Agent responses on lock. Never abandon cleanup after transient OS failures; retain only a digest and retry with bounded backoff until content changes or clearing succeeds. Cover these paths in `secret_clipboard/tests.rs`.
+- **Guardrail**: clear only after a successful matching read; preserve newer clipboard content, keep previous cleanup after a failed copy, and invalidate pending confirmation/Agent responses on lock. Never abandon cleanup after transient OS failures; retain only a digest and retry with bounded backoff until content changes or clearing succeeds. Cover these paths in `crates/aipass-desktop-platform/src/clipboard/tests.rs`.
+- **Follow-up (2026-11-14)**: Tauri and GPUI reuse `aipass-desktop-platform` for preferences and owned clipboard cleanup. A single-use copy permit captures the lock epoch before confirmation; provider/key retirement also cancels it. Confirm before reading plaintext, and send only a copied/cancelled result back to the UI. Exit and update paths invalidate pending requests and attempt owned cleanup.
 - **Watch points**: provider API keys, recovery kit, server tokens and panel access codes; UI preferences defaults/migration; native clipboard-history exclusion hints are best effort.
 
 
@@ -1622,3 +1630,43 @@ Newest entries last within each section.
 - **Fix**: scope global component selectors beneath the header, restore title/description typography and spacing in both implementations, shorten both locales and keep the close button from shrinking.
 - **Guardrail**: inspect title and description separately for size, weight, line height, color and wrapping. Require a visual hierarchy even when reference and candidate share a defect. Record user-directed baseline corrections explicitly; preserve the immutable reference and earlier evidence.
 - **Watch points**: Svelte `Dialog.Title`/`Dialog.Description` callers, native dialog headers, `capture-provider-tools.mjs` typography observations, and `ui-provider-tools-20261114.md`.
+
+### Native panel failures must retain request scope before transport startup
+
+- **Symptom**: a credential panel could stay busy after Agent startup or runtime-gate failure because no scoped completion reached it.
+- **Root cause**: operation execution built panel completions, but errors raised before execution escaped as a generic session error.
+- **Fix**: the ordered IPC worker captures every panel's scope before transport execution and routes early failures back to that scope. Trash failures also request a catalog refresh because bulk deletion may partially succeed.
+- **Guardrail**: test transport failures independently of operation failures; lock retires completions and confirmation state. Only recent real input may enqueue `SessionTouch`; wheel capture must run before nested scrolling consumes the event, and background refresh must never renew the session.
+- **Watch points**: `session/worker.rs`, credential copying, trash confirmation, root activity capture and new request families.
+
+## Apple system font weight matching
+
+- **Scope**: `vendor/gpui_apple/src/system_font_weights.rs`, system-font controls and intrinsic text widths.
+- **Symptom**: Medium buttons looked like Regular and were too narrow despite matching size, padding and font-feature declarations.
+- **Cause**: font-kit's generic Core Text conversion classified Apple's named Medium face as about 530; its CSS 400/500 matching rule then selected Regular for a 500 request.
+- **Fix**: normalize only Apple's named system faces to their CSS classes before matching. Preserve arbitrary families/intermediate weights, distinguish all nine named faces and keep the maintained patch/source inventory current.
+- **Guardrail**: compare actual selected faces and shaped widths, not only requested style numbers. Keep fractional/variable-weight ink and accumulated rounding differences visible in reports; do not hide them with per-label widths or looser geometry thresholds. Renderer changes require fresh screenshots.
+
+
+### Native pricing drafts and partial group binding need separate state
+- **Symptom**: A newly enabled off-peak section could save zero prices without input; retrying a failed binding could repeat a successful price-version write.
+- **Root cause**: Reusing default numeric DTO values for editable drafts conflates blank with free. A group save and credential assignment are two separately acknowledged Agent operations.
+- **Fix**: Native pricing drafts start required prices empty, preserve optional one-hour absence, parse decimal micro-dollars without an f64 round trip, and retain the successful config while retrying only the exact-key binding. Keep picker initialization and request scope local to the dialog.
+- **Guardrail**: Test new/empty off-peak prices, explicit zero, maximum exact prices, partial-write retry, early transport errors, selection/lock invalidation and real Agent persistence. Comparison fixtures must omit absent optional fields as the real protocol does; JSON null can coerce to zero in the reference UI.
+- **Watch points**: `apps/desktop-native/src/pricing`, `pricing_ui`, `session/worker.rs`, provider credential badges and `tests/provider_agent/pricing.rs`. Keep font-width and real-window failures open independently of functional tests.
+
+### Fractional text widths must survive both shaping and layout
+
+- **Symptom**: individual labels differed by less than one pixel, but adjacent badges drifted farther right; a pricing estimate wrapped after correcting widths.
+- **Root cause**: text measurement rounded up once, then the layout adapter rounded every measured leaf up again. Rounded intrinsic widths accumulated before final edge alignment. Native controls also omitted explicit reference no-wrap styles. An inline reference badge was incorrectly modeled as a vertically centered flex pill.
+- **Fix**: preserve fractional text advances until absolute-edge rounding, retaining ordinary custom-element measurement behavior. Include display scale in text measurement cache identity. Match no-wrap declarations and position inline decorations using the font ascent/descent and parent baseline.
+- **Guardrail**: test adjacent fractional labels, multiple display scales, fit/wrap/ellipsis transitions and actual Apple font screenshots. Compare white-space declarations. Empty component mappings must remain failures; add edit-header/action observations instead of treating capture success as layout acceptance. Do not add per-label widths or widen the half-pixel tolerance to hide drift.
+- **Watch points**: pinned GPUI `elements/text.rs`, `taffy.rs`, `window.rs`, native `typography`, provider controls/edit header, pricing assignment and `component-audit.mjs`. Synthetic text-system tests do not establish Apple glyph rasterization or real-window presentation.
+
+### System appearance must update mounted editors and deferred overlays together
+
+- **Symptom**: the preview stayed light after a system appearance change. A root-only fade missed menus/dialogs; provider-row color animation lagged behind it. Retaining both background palettes exposed a thin image-edge tint.
+- **Root cause**: themes were constructor arguments without a platform observer. Deferred overlays paint after the root element, and row hover colors had a separate animation clock. Linear atlas sampling crossed image tile boundaries.
+- **Fix**: resolve the shared System preference at startup and observe both window appearance and preference changes. Update existing view/editor styles without rebuilding their entities. Crossfade complete frames, including deferred overlays, once; seed row interaction colors from the new palette. Retain outgoing materials, preserve the background clock and clamp Metal/WGPU image samples to their tile's texel centers.
+- **Guardrail**: test defaults, preference changes, retained input/focus, reduced motion, interruption, resize/lock cancellation and exclusive live-popup input. Compare both directions at minimum size, with menus, dialogs and bilingual controls. Test atlas neighbors with contrasting pixels; do not widen pixel tolerances to hide texture bleed. Synthetic AppKit notifications do not prove foreground frame pacing or manual system-setting interaction.
+- **Watch points**: native `appearance`, `desktop/appearance`, `backdrop/appearance`, all mounted views' `apply_appearance`, GPUI complete-frame paint, Metal/WGPU image shaders and `capture-appearance.mjs`.

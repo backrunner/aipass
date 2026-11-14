@@ -1,11 +1,62 @@
 # Tauri removal audit, 2026-11-14
 
-**Decision: keep Tauri. Native production cutover is not ready.**
+**Current removal gate (user instruction, 2026-11-14): complete UI acceptance.**
+
+After all UI surfaces, states, controls and appearance are accepted, remove Tauri.
+The user's subsequent instruction waives foreground smoothness sampling; it is
+no longer a cleanup prerequisite and must not be recorded as a performance pass.
+Functional regression and production behavior may be
+reviewed afterward. The Keychain-dependent workspace test, production lifecycle
+and updater functional checks below are deferred work, not prerequisites for
+this UI-first cleanup. Do not remove resources or shared code still needed by
+GPUI, the Agent or the LAN control panel, and keep the resulting tree buildable.
+The mandatory workspace Clippy and structural repository checks still apply.
+
+UI acceptance is not complete: local-proxy/settings pages and integrated native
+interaction remain open. The [onboarding and Agent checkpoint](native-onboarding-agents-20261114.md) adds the previously missing authentication setup/recovery/loading branches and Agent management page with bounded comparison evidence.
+The [native interaction checkpoint](native-acceptance-20261114.md) records partial
+real-window acceptance and visibility diagnostics; it does not close the integrated
+input or appearance gate. Its visible-window follow-up closes the subscription
+proxy Tab/input gap and verifies cancellation, selectors and form scrolling;
+system appearance round-trip presentation remains interrupted.
+Keep Tauri for these UI gaps only.
+The original production audit below is historical; it does not override this
+new removal criterion.
 
 The reviewed implementation was delivered as four signed commits ending at
 `2003fc3aea36a1160894d309fdd780c37473282a` on `refactor/gpui-desktop`.
 The remote branch SHA was checked after the push. This audit follows that delivery;
 it does not mark the migration accepted or authorize a release.
+
+## Implementation follow-up
+
+The [clipboard, activity and trash checkpoint](native-actions-20261114.md) implements
+three gaps identified below. The original audit is retained as a point-in-time
+inventory. Its statements that native secure copy, permanent deletion and activity
+dispatch are absent are superseded by that checkpoint; other production and UI
+blockers remain open. The new checkpoint does not remove Tauri or accept cutover.
+
+The subsequent [native pricing checkpoint](native-pricing-20261114.md) adds
+credential price assignments, shared rule/version dialogs and public endpoint
+copy. It supersedes their absence in this original inventory. Font-width,
+real-window and remaining production/page gaps are still open.
+
+The [UI consistency follow-up](ui-consistency-20261114.md) corrects fractional
+text layout and pricing badge paint, restores edit-page runtime/integration
+cards, and adds previously missing edit-page mappings. It records the remaining
+edit/advanced/integration discrepancies explicitly; cutover is still blocked.
+
+The [UI control checkpoint](ui-control-close-20261114.md) closes the measured
+edit/integration geometry gaps, corrects stepper/resize/font/glass details, and
+records the new UI-first removal criterion. Its current-source readiness review
+incorporates the sampling waiver and confirms the remaining visible gaps. It also
+corrects the historical recovery-export claim: the active reference requires
+copy/copied feedback; its optional download callback is not supplied by the app.
+
+The [onboarding and Agent checkpoint](native-onboarding-agents-20261114.md)
+subsequently restores import/cloud/recovery/loading and Agent management, account
+detail and manual guides. Its evidence does not close the remaining settings,
+local-proxy or integrated-input acceptance requirements.
 
 ## Coverage boundary
 
@@ -15,7 +66,7 @@ sources, excluding the comparison example. The table below accounts for every
 surface group. It records implementation scope, not 98 successful UI checks.
 Existing comparison reports remain evidence for their specific cases only.
 
-| Reference group | Surfaces | Current native coverage and remaining work |
+| Reference group | Surfaces | Original native coverage, superseded by the follow-ups above |
 | --- | ---: | --- |
 | App root | 1 | Preview startup and provider workspace exist; production startup and page routing are incomplete. |
 | Authentication | 8 | Auth controls, transitions and recovery display exist. Vault import, cloud discovery UI and recovery export still need working flows and acceptance. |
@@ -31,7 +82,7 @@ The existing three-round acceptance contract remains in force. A component's
 presence, an offscreen image or a passing Rust event test does not accept physical
 input, animation presentation, every state or production lifecycle.
 
-## Confirmed blockers in current code
+## Original production blockers (historical)
 
 1. **Production entry point.** [main.rs](../../apps/desktop-native/src/main.rs)
    exits without `--parity-preview`. A normal native launch does not start the
@@ -126,13 +177,18 @@ Artifact SHA-256 values:
 
 ## Removal sequence
 
-Complete the missing UI/action paths and their Agent-backed behavior first.
-Then extract and connect platform services, move shared assets, and switch the
-production launcher/package/CI paths together. Require the complete native
-artifact gate and three integrated visual/input rounds before removing the Tauri
-crate, plugins, desktop-only JS dependencies and obsolete scripts. Keep shared
-Svelte controls/locales for the control panel and preserve required Swift code
-and third-party notices. Finally regenerate lockfiles/embedded outputs and rerun
-the structural, source and native artifact checks on the removal diff.
+Complete the missing native UI surfaces and their visual/input/motion acceptance
+first. Then preserve required platform adapters and assets, remove the Tauri
+shell and its exclusive dependencies, and update build/package references so the
+remaining native tree builds. Keep shared Svelte controls/locales for the control
+panel, required Swift adapters and third-party notices. Refresh lockfiles and
+run the structural/source checks and mandatory workspace Clippy on the cleanup.
+Functional and production-artifact acceptance remains deferred until the later
+functional/release phase; UI acceptance alone does not certify a release.
 
 No Tauri source, dependency or platform service was removed in this checkpoint.
+
+Later native edit work and its still-open acceptance items are recorded in
+[native provider editing follow-up](native-edit-20261114.md). Its local checks
+do not complete the remaining UI gate. Functional/Keychain/production acceptance
+is deferred under the instruction above.
