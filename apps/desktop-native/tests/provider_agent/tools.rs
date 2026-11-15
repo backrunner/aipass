@@ -1,6 +1,45 @@
 use super::*;
 use aipass_agent_protocol::{AgentErrorCode, UsageProbeMode};
 use aipass_desktop_native::provider_tools::{Completion, Operation, Outcome, Request, Scope};
+
+fn read_request(socket: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    // Winsock inherits the listener's nonblocking mode on accepted sockets.
+    // The fixture polls accept, but reads each complete HTTP header synchronously.
+    socket.set_nonblocking(false).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut request = Vec::new();
+    while !request.ends_with(b"\r\n\r\n") && request.len() < 16 * 1024 {
+        let mut byte = [0];
+        if socket.read(&mut byte).expect("fixture request read failed") == 0 {
+            break;
+        }
+        request.push(byte[0]);
+    }
+    assert!(request.ends_with(b"\r\n\r\n"), "incomplete fixture request");
+    String::from_utf8(request).unwrap()
+}
+
+#[test]
+fn fixture_reads_fragmented_headers_from_a_nonblocking_accepted_socket() {
+    use std::io::Write;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut server, _) = listener.accept().unwrap();
+    // Reproduce Windows inheritance on every local validation platform.
+    server.set_nonblocking(true).unwrap();
+    client.write_all(b"GET /v1/models HTTP/1.1\r\n").unwrap();
+    let reader = thread::spawn(move || read_request(&mut server));
+    thread::sleep(Duration::from_millis(50));
+    client.write_all(b"Host: localhost\r\n\r\n").unwrap();
+    assert_eq!(
+        reader.join().unwrap(),
+        "GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    );
+}
+
 fn call(transport: &mut AgentTransport, id: uuid::Uuid, operation: Operation) -> Completion {
     let Reply::ProviderTools(completion) = transport
         .execute(Command::ProviderTools(Box::new(Request {
@@ -27,27 +66,15 @@ pub fn workflow(transport: &mut AgentTransport) {
     let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let running = alive.clone();
     let mock = thread::spawn(move || {
-        use std::io::{Read, Write};
+        use std::io::Write;
         while running.load(std::sync::atomic::Ordering::Relaxed) {
             let Ok((mut socket, _)) = listener.accept() else {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
             // A TCP read is not a request boundary. Reply only after complete
             // headers, otherwise closing with unread bytes can reset the client.
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") && request.len() < 16 * 1024 {
-                let mut byte = [0];
-                if socket.read(&mut byte).unwrap_or(0) == 0 {
-                    break;
-                }
-                request.push(byte[0]);
-            }
-            assert!(request.ends_with(b"\r\n\r\n"), "incomplete fixture request");
-            let request = String::from_utf8_lossy(&request);
+            let request = read_request(&mut socket);
             let body = if request.contains("/models") {
                 r#"{"object":"list","data":[{"id":"fixture-model","object":"model"}]}"#
             } else {

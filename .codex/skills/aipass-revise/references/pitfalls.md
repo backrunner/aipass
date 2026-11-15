@@ -1796,3 +1796,10 @@ Newest entries last within each section.
 - Keep UI, authenticated CLI and artifact-check installation paths aligned.
   Assert no suspend/stop/restore on preparation failure, no cleanup before
   consent, and normal recovery for failures after shutdown.
+
+### Windows test HTTP sockets inherit listener nonblocking mode
+
+- A fixture may poll a nonblocking listener but expect synchronous request
+  reads. Explicitly set accepted sockets to blocking mode with a read timeout.
+- Do not turn every read error into EOF. Preserve incomplete-header failures,
+  and reproduce the inherited mode with fragmented requests on all platforms.
