@@ -113,7 +113,7 @@ impl Prepared {
         if let Some(instance) = instance {
             instance.inherit(&mut command)?;
         }
-        let start = super::restart::wait(command, &ready);
+        let start = super::restart::wait(command, &ready, self.kind == Kind::AppImage);
         if let Err(error) = start {
             if self.kind == Kind::AppImage {
                 if let Err(rollback) = exchange(&self.destination, &self.package) {

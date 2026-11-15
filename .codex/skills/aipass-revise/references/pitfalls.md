@@ -1761,3 +1761,21 @@ Newest entries last within each section.
 - **Fix**: decode both typed responses in native integration, keep conflict/login-required states, and present generic restoration separately. Reject malformed or mixed response shapes.
 - **Regression**: wire-shape and restore-notice tests plus the real-Agent provider workflow. CLI fixtures must supply executable Windows shims and platform-correct PATH separators.
 - **Watch points**: `integration/rollback.rs`, `integrations.rs`, Agent tool handlers, CLI rollback, and `tests/provider_agent`.
+
+
+### Cargo test executable layout is not a script contract
+- **Symptom**: Linux credential-store verification cannot find `target/debug/deps` after the workspace tests pass under Rust 1.100.
+- **Root cause**: Cargo emits library test executables under a newer build layout; scanning a hard-coded directory assumes an internal implementation detail.
+- **Fix**: preserve compiler-artifact JSON from the actual workspace test invocation and select the unique library test executable by target name/profile. Run the existing exact ignored credential tests in the isolated bus unchanged.
+- **Regression**: parser tests cover old/new/custom paths, non-test and binary targets, repeated records, missing and ambiguous outputs. Retain shell pipefail so artifact recording cannot hide a failed Cargo test.
+- **Watch points**: `cargo-test-artifacts.mjs`, `verify-linux-keyring.mjs`, and the Rust CI test step.
+
+### AppImage restart readiness must identify the desktop beneath its runtime
+
+- Extract-and-run forks AppRun and keeps the AppImage runtime as a live parent.
+  The PID returned by spawn can differ from the desktop PID in the ready file.
+- For AppImages, verify a bounded kernel parent chain to that live spawned
+  process, including same-user/live-process checks. Keep exact-PID matching for
+  direct executables; never accept arbitrary ready-file content or remove the
+  signed-artifact, instance-lease and failure-rollback checks.
+- Preserve native Linux packaged install/cached-install/failure-recovery CI.

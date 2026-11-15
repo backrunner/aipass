@@ -57,3 +57,4 @@ apps/extension/chrome-extension.pem
 apps/desktop-native/desktop.release.generated.json
 apps/desktop-native/.cloudkit-build/
 apps/desktop-native/swift-tray/.build/
+/rust-test-artifacts.jsonl

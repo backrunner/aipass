@@ -12,6 +12,8 @@ pub mod control;
 pub mod production;
 #[cfg(target_os = "linux")]
 mod restart;
+#[cfg(any(target_os = "linux", test))]
+mod restart_identity;
 mod worker;
 #[cfg(windows)]
 pub use bundle::run as run_windows_helper;
