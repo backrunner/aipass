@@ -42,7 +42,7 @@ uninstaller. See [proxy restoration and upgrades](docs/native-tool-switching.md#
 
 Desktop releases are available for macOS (Universal) and Linux (x86_64 / aarch64). Standalone CLI archives are available for macOS, Linux, and Windows.
 
-AIPass is pre-release software. Read the release notes before upgrading.
+Read the release notes before upgrading. Beta and nightly builds are available as pre-releases.
 
 ## Documentation
 
