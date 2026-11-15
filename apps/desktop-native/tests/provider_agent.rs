@@ -81,10 +81,15 @@ fn workflow(root: &Path) {
         if transport.execute(Command::Refresh).is_ok() {
             break;
         }
-        assert!(
-            server.0.try_wait().unwrap().is_none(),
-            "isolated Agent exited"
-        );
+        if let Some(status) = server.0.try_wait().unwrap() {
+            // Startup precedes vault creation; this contains only fixture
+            // initialization diagnostics, never provider credentials.
+            let log = fs::read_to_string(root.join("agent-process.log")).unwrap_or_default();
+            panic!(
+                "isolated Agent exited ({status}): {}",
+                log.chars().take(16_384).collect::<String>()
+            );
+        }
         assert!(Instant::now() < deadline, "isolated Agent did not bind");
         thread::sleep(Duration::from_millis(20));
     }
