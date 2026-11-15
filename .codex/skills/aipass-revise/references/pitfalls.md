@@ -1745,3 +1745,19 @@ Newest entries last within each section.
 - **Fix**: treat `/P` as noninteractive; skip proxy restoration only for the current uninstall process when `/AIPASS_REPLACE` is present. The next ordinary uninstall still restores the backup. Retain stop/autostart cleanup in both paths. Correct quoted registry command strings and compile NSIS with warnings treated as errors.
 - **Guardrail**: keep upgrade/downgrade, updater, interrupted replacement and subsequent ordinary uninstall in the real Windows NSIS gate; never persist a skip-restoration flag.
 - **Watch points**: `apps/desktop-native/bundle/windows/installer.nsi`, `scripts/verify-windows-runtime.mjs`, and Agent `--prepare-uninstall` ownership checks.
+
+
+### Startup readiness must not depend on a visible platform frame
+- **Symptom**: Linux packaged startup passes GPUI/Agent probes but never emits startup-complete; the updater bootstrap also remains pending.
+- **Root cause**: `on_next_frame` depends on platform frame delivery, which hidden/occluded X11 windows may stop. GPUI already draws once synchronously inside `open_window`.
+- **Fix**: use `window.defer` for production and parity updater bootstrap after the initial draw; keep Agent readiness off the UI thread. Do not manufacture a readiness log or weaken the runtime assertion.
+- **Regression**: finished-package main/tray startup and signed update restart gates retain the startup-complete/ready assertions, including Linux AppImage replacement.
+- **Watch points**: `startup::attach`, the parity updater bootstrap in `main.rs`, and GPUI `App::open_window` draw/defer ordering.
+
+
+### Tool rollback has two existing wire response shapes
+- **Symptom**: generic tool configuration is restored, but the desktop reports `missing field tool`.
+- **Root cause**: native account switches return camelCase `ToolConfigApplyResponse`; generic encrypted file rollback returns snake_case `ApplyResult`. macOS disposable-HOME Keychain refusal did not exercise the successful file path.
+- **Fix**: decode both typed responses in native integration, keep conflict/login-required states, and present generic restoration separately. Reject malformed or mixed response shapes.
+- **Regression**: wire-shape and restore-notice tests plus the real-Agent provider workflow. CLI fixtures must supply executable Windows shims and platform-correct PATH separators.
+- **Watch points**: `integration/rollback.rs`, `integrations.rs`, Agent tool handlers, CLI rollback, and `tests/provider_agent`.

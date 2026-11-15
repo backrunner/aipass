@@ -185,7 +185,10 @@ pub fn attach(
     let owner = view.downgrade();
     let ready = std::env::var_os("AIPASS_NATIVE_UPDATE_READY");
     std::env::remove_var("AIPASS_NATIVE_UPDATE_READY");
-    window.on_next_frame(move |_, cx| {
+    // open_window draws the initial view before flushing deferred callbacks.
+    // Tray/occluded windows may receive no further platform frame requests.
+    // Startup and updater readiness must not wait for the window to be shown.
+    window.defer(cx, move |_, cx| {
         let _ = aipass_desktop_native::shell::logging::log_event(
             "desktop.startup.stage",
             &[("stage", "complete")],

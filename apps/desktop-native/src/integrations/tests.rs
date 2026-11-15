@@ -240,27 +240,114 @@ fn apply_notice_expires_restore_uses_agent_status_and_failure_is_retryable(
     cx: &mut TestAppContext,
 ) {
     let (view, cx) = fixture(cx);
-    cx.update(|window,cx|view.update(cx,|view,cx|{
-        view.select_secret("key-a".into(),cx);view.show_preview(ToolConfigTool::OpenCode,false,cx);
-        let response=make_response(view);let request=view.take_request().unwrap();
-        view.complete(Completion{scope:request.scope,result:Ok(Outcome::Preview(response))},window,cx);
-        view.confirm(cx);let request=view.take_request().unwrap();
-        view.complete(Completion{scope:request.scope,result:Err(aipass_agent::AgentCommandError{code:Some(aipass_agent_protocol::AgentErrorCode::Conflict),message:"changed".into()})},window,cx);
-        assert!(view.preview.is_none()&&view.plan.is_none());assert_eq!(view.error,"changed");
-        view.show_preview(ToolConfigTool::OpenCode,false,cx);
-        let response=make_response(view);let request=view.take_request().unwrap();
-        view.complete(Completion{scope:request.scope,result:Ok(Outcome::Preview(response))},window,cx);
-        view.confirm(cx);let request=view.take_request().unwrap();
-        let operation_id=uuid::Uuid::new_v4();
-        view.complete(Completion{scope:request.scope,result:Ok(Outcome::Applied(aipass_agent_protocol::ToolConfigApplyResponse {
-            outcome:ToolConfigOutcome::Applied,message:None,tool:ToolConfigTool::OpenCode,mode:ToolConfigMode::Helper,entry_id:request.scope.entry,entry_title:"fixture".into(),operation_id,target_path:String::new(),backup_path:String::new(),summary:String::new()
-        }))},window,cx);
-        assert!(!view.message.is_empty());
-        view.scan(cx);let request=view.take_request().unwrap();
-        view.complete(Completion{scope:request.scope,result:Ok(Outcome::Scanned{detections:view.detections.clone(),statuses:vec![ToolConfigStatus {tool:ToolConfigTool::Codex,state:"ready".into(),entry_title:Some("fixture".into()),entry_id:Some(request.scope.entry),secret_id:Some("key-a".into()),mode:Some(ToolConfigMode::Plaintext),account_identity:None,operation_id:Some(operation_id),message:None,overrides:vec![]}]})},window,cx);
-        view.restore(&ToolConfigTool::Codex,cx);
-        assert!(matches!(view.take_request().unwrap().operation,Operation::Rollback(id) if id==operation_id));
-    }));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.select_secret("key-a".into(), cx);
+            view.show_preview(ToolConfigTool::OpenCode, false, cx);
+            let response = make_response(view);
+            let request = view.take_request().unwrap();
+            view.complete(
+                Completion {
+                    scope: request.scope,
+                    result: Ok(Outcome::Preview(response)),
+                },
+                window,
+                cx,
+            );
+            view.confirm(cx);
+            let request = view.take_request().unwrap();
+            view.complete(
+                Completion {
+                    scope: request.scope,
+                    result: Err(aipass_agent::AgentCommandError {
+                        code: Some(aipass_agent_protocol::AgentErrorCode::Conflict),
+                        message: "changed".into(),
+                    }),
+                },
+                window,
+                cx,
+            );
+            assert!(view.preview.is_none() && view.plan.is_none());
+            assert_eq!(view.error, "changed");
+            view.show_preview(ToolConfigTool::OpenCode, false, cx);
+            let response = make_response(view);
+            let request = view.take_request().unwrap();
+            view.complete(
+                Completion {
+                    scope: request.scope,
+                    result: Ok(Outcome::Preview(response)),
+                },
+                window,
+                cx,
+            );
+            view.confirm(cx);
+            let request = view.take_request().unwrap();
+            let operation_id = uuid::Uuid::new_v4();
+            view.complete(
+                Completion {
+                    scope: request.scope,
+                    result: Ok(Outcome::Applied(
+                        aipass_agent_protocol::ToolConfigApplyResponse {
+                            outcome: ToolConfigOutcome::Applied,
+                            message: None,
+                            tool: ToolConfigTool::OpenCode,
+                            mode: ToolConfigMode::Helper,
+                            entry_id: request.scope.entry,
+                            entry_title: "fixture".into(),
+                            operation_id,
+                            target_path: String::new(),
+                            backup_path: String::new(),
+                            summary: String::new(),
+                        },
+                    )),
+                },
+                window,
+                cx,
+            );
+            assert!(!view.message.is_empty());
+            view.scan(cx);
+            let request = view.take_request().unwrap();
+            view.complete(
+                Completion {
+                    scope: request.scope,
+                    result: Ok(Outcome::Scanned {
+                        detections: view.detections.clone(),
+                        statuses: vec![ToolConfigStatus {
+                            tool: ToolConfigTool::Codex,
+                            state: "ready".into(),
+                            entry_title: Some("fixture".into()),
+                            entry_id: Some(request.scope.entry),
+                            secret_id: Some("key-a".into()),
+                            mode: Some(ToolConfigMode::Plaintext),
+                            account_identity: None,
+                            operation_id: Some(operation_id),
+                            message: None,
+                            overrides: vec![],
+                        }],
+                    }),
+                },
+                window,
+                cx,
+            );
+            view.restore(&ToolConfigTool::Codex, cx);
+            let request = view.take_request().unwrap();
+            assert!(matches!(request.operation,Operation::Rollback(id) if id==operation_id));
+            view.complete(
+                Completion {
+                    scope: request.scope,
+                    result: Ok(Outcome::Restored(aipass_config_writers::ApplyResult {
+                        operation_id,
+                        target_path: "fixture/config.json".into(),
+                        backup_path: "fixture/backup".into(),
+                    })),
+                },
+                window,
+                cx,
+            );
+            assert_eq!(view.message, view.locale.text("integration.restored"));
+            assert!(view.error.is_empty() && view.applied.is_none() && !view.busy());
+        })
+    });
     cx.executor().advance_clock(Duration::from_secs(5));
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.applied.is_none()

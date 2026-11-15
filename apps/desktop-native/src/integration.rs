@@ -8,6 +8,7 @@ use aipass_config_writers::ToolDetection;
 use uuid::Uuid;
 pub mod catalog;
 pub mod diff;
+mod rollback;
 pub mod syntax;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub enum Outcome {
     },
     Preview(ToolConfigPreviewResponse),
     Applied(ToolConfigApplyResponse),
+    Restored(aipass_config_writers::ApplyResult),
     Login(ToolConfigLoginStatus),
     CodeSent,
     Cancelled,
@@ -90,8 +92,8 @@ impl Request {
                 .request(&AgentRequest::ToolConfigApply { request })
                 .map(Outcome::Applied),
             Operation::Rollback(operation_id) => client
-                .request(&AgentRequest::ToolConfigRollback { operation_id })
-                .map(Outcome::Applied),
+                .request::<rollback::Response>(&AgentRequest::ToolConfigRollback { operation_id })
+                .map(Outcome::from),
             Operation::LoginStart(request) => client
                 .request(&AgentRequest::ToolConfigLoginStart { request })
                 .map(Outcome::Login),

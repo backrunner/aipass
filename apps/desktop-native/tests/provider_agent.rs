@@ -202,11 +202,24 @@ fn provider_agent_roundtrip() {
     }
     fs::write(root.join("disposable-native-profile"), b"synthetic").unwrap();
     fs::create_dir_all(home.join("bin")).unwrap();
-    fs::write(home.join("bin/opencode"), b"#!/bin/sh\nexit 0\n").unwrap();
+    let tool = home.join(if cfg!(windows) {
+        "bin/opencode.cmd"
+    } else {
+        "bin/opencode"
+    });
+    fs::write(
+        &tool,
+        if cfg!(windows) {
+            "@exit /b 0\r\n"
+        } else {
+            "#!/bin/sh\nexit 0\n"
+        },
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(home.join("bin/opencode"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
     }
     fs::write(
         root.join("data/agent/sync-settings.json"),
@@ -231,18 +244,19 @@ fn provider_agent_roundtrip() {
     ] {
         command.env_remove(key);
     }
+    let mut search_path = vec![home.join("bin")];
+    if cfg!(windows) {
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        search_path.extend([system.join("System32"), system]);
+    } else {
+        search_path.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(Into::into));
+    }
     command
         .env("AIPASS_NATIVE_TEST_ROLE", "client")
         .current_dir(root)
         .env("HOME", &home)
         .env("USERPROFILE", &home)
-        .env(
-            "PATH",
-            format!(
-                "{}:/usr/bin:/bin:/usr/sbin:/sbin",
-                home.join("bin").display()
-            ),
-        )
+        .env("PATH", std::env::join_paths(search_path).unwrap())
         .env("APPDATA", home.join("AppData/Roaming"))
         .env("LOCALAPPDATA", home.join("AppData/Local"))
         .env("XDG_CONFIG_HOME", home.join(".config"))

@@ -444,6 +444,15 @@ impl Integrations {
                     }
                 }
             }
+            Ok(Outcome::Restored(_)) => {
+                self.preview = None;
+                self.plan = None;
+                self.preview_subscription = None;
+                self.applied = None;
+                self.message_timer = None;
+                self.message = self.locale.text("integration.restored");
+                self.scanned = false;
+            }
             Ok(Outcome::Applied(result)) => {
                 self.preview = None;
                 self.plan = None;

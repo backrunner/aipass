@@ -521,7 +521,7 @@ fn main() {
                         let restart_args = args.clone();
                         let ready_path = std::env::var_os("AIPASS_NATIVE_UPDATE_READY");
                         std::env::remove_var("AIPASS_NATIVE_UPDATE_READY");
-                        window.on_next_frame(move |_, cx| {
+                        window.defer(cx, move |_, cx| {
                             // Readiness requires a rendered frame and typed Agent readiness.
                             // Do network/IPC work off the native event loop.
                             let ready_services = context.services.clone();

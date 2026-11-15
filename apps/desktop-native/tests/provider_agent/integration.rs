@@ -90,17 +90,14 @@ pub(super) fn workflow(transport: &mut AgentTransport, root: &Path, id: uuid::Uu
                 content.contains("synthetic-native-provider-key")
                     && content.contains("externally-edited")
             );
-            let Outcome::Applied(restored) =
+            let Outcome::Restored(restored) =
                 execute(transport, id, Operation::Rollback(applied.operation_id))
                     .result
                     .unwrap()
             else {
                 panic!("rollback expected")
             };
-            assert_eq!(
-                restored.outcome,
-                aipass_agent_protocol::ToolConfigOutcome::Applied
-            );
+            assert_eq!(restored.operation_id, applied.operation_id);
             assert_eq!(fs::read(target).unwrap(), external);
             eprintln!("EVIDENCE: real IPC preimage conflict, apply and rollback passed.");
         }
