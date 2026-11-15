@@ -205,6 +205,13 @@ fn provider_agent_roundtrip() {
     for path in [&home, &root.join("r"), &root.join("data/agent")] {
         fs::create_dir_all(path).unwrap();
     }
+    // Windows Known Folder lookup verifies the redirected profile directories
+    // before the Agent can claim its private named-pipe listener.
+    if cfg!(windows) {
+        for name in ["Roaming", "Local"] {
+            fs::create_dir_all(home.join("AppData").join(name)).unwrap();
+        }
+    }
     fs::write(root.join("disposable-native-profile"), b"synthetic").unwrap();
     fs::create_dir_all(home.join("bin")).unwrap();
     let tool = home.join(if cfg!(windows) {

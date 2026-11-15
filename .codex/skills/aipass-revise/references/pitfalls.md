@@ -1779,3 +1779,11 @@ Newest entries last within each section.
   direct executables; never accept arbitrary ready-file content or remove the
   signed-artifact, instance-lease and failure-rollback checks.
 - Preserve native Linux packaged install/cached-install/failure-recovery CI.
+
+### Windows isolated profiles require existing Known Folder directories
+
+- When redirecting USERPROFILE/APPDATA/LOCALAPPDATA in a child-process fixture,
+  create both AppData/Roaming and AppData/Local before launch. BaseDirs uses
+  Windows Known Folder lookup, which verifies directory existence.
+- Keep production profile and pipe-owner validation intact. Compare provider,
+  CLI and installed-runtime fixtures when changing their environment setup.
