@@ -23,18 +23,16 @@ const save = () => writeFile(resolve(output, "manifest.json"), JSON.stringify(ma
 await save();
 try {
   run("cargo", ["build", "-p", "aipass-desktop-native", "--features", "parity-render"]);
-  run("cargo", ["build", "-p", "aipass-desktop", "--example", "parity_reference"]);
   const version = JSON.parse(await readFile(resolve(root, "package.json"), "utf8")).version;
-  const desktopConfig = JSON.parse(await readFile(resolve(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"));
+  const desktopConfig = JSON.parse(await readFile(resolve(root, "apps/desktop-native/desktop.json"), "utf8"));
   if (desktopConfig.version !== version) throw new Error("Desktop and workspace versions differ");
-  const icon = resolve(root, "apps/desktop/src-tauri/icons/icon.icns");
+  const icon = resolve(root, "apps/desktop-native/assets/bundle/icon.icns");
   manifest.commit = run("git", ["rev-parse", "HEAD"], true).trim();
   manifest.trackedDiff = run("git", ["diff", "HEAD", "--stat"], true).trim();
   manifest.iconSHA256 = hash(await readFile(icon));
   manifest.packagerSHA256 = hash(await readFile(new URL(import.meta.url)));
   for (const [kind, source, executable, identifier] of [
-    ["GPUI", "debug/aipass-desktop-native", "aipass-desktop-native", "com.alkinum.aipass.gpui-validation"],
-    ["Tauri", "debug/examples/parity_reference", "parity_reference", "com.alkinum.aipass.tauri-validation"],
+    ["GPUI", "debug/aipass-desktop", "aipass-desktop-native", "com.alkinum.aipass.gpui-validation"],
   ]) {
     const app = resolve(output, `AIPass ${kind} Validation.app`);
     const macos = resolve(app, "Contents/MacOS");
@@ -70,7 +68,7 @@ try {
       CFBundleShortVersionString: version,
       CFBundleVersion: version,
       CFBundleIconFile: "icon.icns",
-      LSMinimumSystemVersion: desktopConfig.bundle.macOS.minimumSystemVersion,
+      LSMinimumSystemVersion: desktopConfig.macOS.minimumSystemVersion,
     };
     await writeFile(resolve(app, "Contents/Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

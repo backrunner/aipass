@@ -3,6 +3,7 @@ pub mod credentials;
 pub mod feedback;
 pub mod integration;
 pub mod motion;
+pub mod provider_links;
 pub mod provider_tools;
 pub mod runtime;
 pub mod session;
@@ -15,3 +16,9 @@ pub mod pricing;
 pub mod onboarding;
 
 pub mod agent_management;
+
+pub mod administration;
+
+pub mod shell;
+
+pub mod runtime_check;

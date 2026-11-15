@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 pub mod draft;
 mod editing;
-mod lists;
+pub mod lists;
 pub use lists::encode as encode_list;
 pub mod optional;
 

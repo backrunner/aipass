@@ -66,6 +66,15 @@ impl SelectableText {
         self
     }
 
+    /// Applies syntax colors without changing selection offsets or copied text.
+    pub fn highlights(
+        mut self,
+        highlights: impl IntoIterator<Item = (Range<usize>, gpui::HighlightStyle)>,
+    ) -> Self {
+        self.styled_text = self.styled_text.with_highlights(highlights);
+        self
+    }
+
     /// Overrides the selection background, which defaults to the theme's
     /// `colors.selection` token.
     pub fn selection_color(mut self, color: Hsla) -> Self {

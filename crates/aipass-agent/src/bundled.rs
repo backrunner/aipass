@@ -17,7 +17,7 @@ pub fn helper_candidates(executable: &Path, name: &str) -> Vec<PathBuf> {
         if let Some(parent) = directory.parent() {
             candidates.push(parent.join("Resources").join(name));
             candidates.push(parent.join("resources").join(name));
-            // Tauri deb/rpm and AppImage resources live beside usr/bin in
+            // Native deb/rpm and AppImage resources live beside usr/bin in
             // usr/lib/<product name>, not beside the desktop executable.
             candidates.push(parent.join("lib/AIPass").join(name));
         }

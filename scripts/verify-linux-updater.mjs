@@ -21,7 +21,7 @@ const baseBytes = readFileSync(baseArtifact);
 const signature = readFileSync(`${artifact}.sig`, "utf8").trim();
 const sha256 = createHash("sha256").update(bytes).digest("hex");
 writeFileSync(join(reports, "artifact.json"), JSON.stringify({ artifact: basename(artifact), version, sha256, baseArtifact: basename(baseArtifact), baseSha256: createHash("sha256").update(baseBytes).digest("hex") }, null, 2));
-const target = `linux-${process.arch === "arm64" ? "aarch64" : "x86_64"}-appimage`;
+const target = `linux-native-${process.arch === "arm64" ? "aarch64" : "x86_64"}-appimage`;
 const debDir = join(dirname(artifact), "..", "deb");
 const debs = readdirSync(debDir).filter(name => name.endsWith(".deb") && name.includes(version));
 assert.equal(debs.length, 1, "Expected the matching signed Deb for cross-format rejection");
@@ -83,7 +83,7 @@ try {
       // match so this case exercises cache cleanup rather than a fresh download.
       const channel = scenario === "readonly-cached" ? "official"
         : version.includes("nightly") ? "nightly" : version.includes("-") ? "beta" : "official";
-      writeFileSync(join(cache, "metadata.json"), JSON.stringify({ version, channel }));
+      writeFileSync(join(cache, "metadata.json"), JSON.stringify({endpoint:`http://127.0.0.1:${server.address().port}/latest.json`,target,release:{version,notes:null,url:`http://127.0.0.1:${server.address().port}/update.AppImage`,signature}}));
     }
     if (scenario === "readonly-image") chmodSync(installDir, 0o555);
     if (["readonly-cache", "readonly-cached"].includes(scenario)) chmodSync(cache, 0o555);
@@ -92,7 +92,7 @@ try {
     servedBytes = scenario === "wrong-format" ? debBytes : bytes;
     servedSignature = scenario === "wrong-format" ? debSignature : signature;
     requests = [];
-    const env = { ...process.env, XAUTHORITY: process.env.XAUTHORITY ?? join(process.env.HOME, ".Xauthority"), HOME: home, XDG_CONFIG_HOME: join(home, ".config"), XDG_DATA_HOME: join(home, ".local/share"), XDG_CACHE_HOME: join(home, ".cache"), APPIMAGE_EXTRACT_AND_RUN: "1", WEBKIT_DISABLE_DMABUF_RENDERER: "1", LIBGL_ALWAYS_SOFTWARE: "1" };
+    const env = { ...process.env, XAUTHORITY: process.env.XAUTHORITY ?? join(process.env.HOME, ".Xauthority"), HOME: home, XDG_CONFIG_HOME: join(home, ".config"), XDG_DATA_HOME: join(home, ".local/share"), XDG_CACHE_HOME: join(home, ".cache"), APPIMAGE_EXTRACT_AND_RUN: "1", LIBGL_ALWAYS_SOFTWARE: "1" };
     for (const key of ["APPIMAGE", "APPDIR", "AIPASS_WINDOW_TARGET", "AIPASS_MASTER_PASSWORD", "AIPASS_AGENT_PATH", "AIPASS_AGENT_BINARY"]) delete env[key];
     let output = "";
     const child = spawn(image, ["--verify-runtime", root], { env, stdio: ["ignore", "pipe", "pipe"] });

@@ -121,8 +121,11 @@ impl Scene {
         filter: Filter,
     ) {
         let start = self.primitive_bounds.barrier();
-        let mut destination_bounds =
-            scale_bounds_around(source_bounds, transform_origin, filter.scale);
+        let mut destination_bounds = if let Some(y) = filter.scale_y {
+            scale_bounds_axes(source_bounds, transform_origin, filter.scale, y)
+        } else {
+            scale_bounds_around(source_bounds, transform_origin, filter.scale)
+        };
         destination_bounds.origin += filter.translate;
         self.effects.push(LayerEffect {
             start,
@@ -536,6 +539,8 @@ pub struct Filter {
     pub fade_right: f32,
     /// Uniform compositor scale around the layer's transform origin.
     pub scale: f32,
+    /// Independent vertical scale, falling back to the uniform scale.
+    pub scale_y: Option<f32>,
     /// Compositor translation in scaled pixels.
     pub translate: Point<ScaledPixels>,
 }
@@ -677,6 +682,7 @@ impl Default for Filter {
             fade_left: 0.0,
             fade_right: 0.0,
             scale: 1.0,
+            scale_y: None,
             translate: Point::default(),
         }
     }
@@ -700,7 +706,7 @@ impl Filter {
 
     /// Whether the layer is transformed while it is composited.
     pub fn scales(&self) -> bool {
-        self.scale != 1.0
+        self.scale != 1.0 || self.scale_y.is_some_and(|scale| scale != 1.)
     }
 
     /// Whether the layer is translated while it is composited.
@@ -719,8 +725,18 @@ pub(crate) fn scale_bounds_around(
     origin: Point<ScaledPixels>,
     scale: f32,
 ) -> Bounds<ScaledPixels> {
+    scale_bounds_axes(bounds, origin, scale, scale)
+}
+
+fn scale_bounds_axes(
+    bounds: Bounds<ScaledPixels>,
+    origin: Point<ScaledPixels>,
+    scale: f32,
+    scale_y: f32,
+) -> Bounds<ScaledPixels> {
     let scaled_x = |value: ScaledPixels| ScaledPixels(origin.x.0 + (value.0 - origin.x.0) * scale);
-    let scaled_y = |value: ScaledPixels| ScaledPixels(origin.y.0 + (value.0 - origin.y.0) * scale);
+    let scaled_y =
+        |value: ScaledPixels| ScaledPixels(origin.y.0 + (value.0 - origin.y.0) * scale_y);
 
     Bounds::from_corners(
         point(scaled_x(bounds.origin.x), scaled_y(bounds.origin.y)),

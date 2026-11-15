@@ -15,18 +15,18 @@ const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const inventory = JSON.parse(await readFile(resolve(root, "docs/gpui-migration/inventory.json")));
 const candidate = process.argv.includes("--candidate");
 const candidatePaths = new Set([
-  "apps/desktop/src/App.svelte",
-  "apps/desktop/src/App.test.ts",
-  "apps/desktop/src/lib/components/auth/RecoveryKitModal.svelte",
-  "apps/desktop/src/lib/components/server/ServerDetailPane.test.ts",
-  "apps/desktop/src/lib/components/shared/SegmentedControl.svelte",
-  "apps/desktop/src/lib/components/integration/IntegrationCard.svelte",
-  "apps/desktop/src/lib/components/integration/IntegrationCard.test.ts",
-  "apps/desktop/src/lib/components/integration/AgentAccountDetail.svelte",
-  "apps/desktop/src/lib/components/server/UsageChart.svelte",
-  "apps/desktop/src/lib/components/server/UsageChart.test.ts",
-  "apps/desktop/src/lib/components/server/ServerDetailPane.svelte",
-  "apps/desktop/src/lib/components/providers/ProviderModal.svelte",
+  "artifacts/desktop-reference/src/App.svelte",
+  "artifacts/desktop-reference/src/App.test.ts",
+  "artifacts/desktop-reference/src/lib/components/auth/RecoveryKitModal.svelte",
+  "artifacts/desktop-reference/src/lib/components/server/ServerDetailPane.test.ts",
+  "artifacts/desktop-reference/src/lib/components/shared/SegmentedControl.svelte",
+  "artifacts/desktop-reference/src/lib/components/integration/IntegrationCard.svelte",
+  "artifacts/desktop-reference/src/lib/components/integration/IntegrationCard.test.ts",
+  "artifacts/desktop-reference/src/lib/components/integration/AgentAccountDetail.svelte",
+  "artifacts/desktop-reference/src/lib/components/server/UsageChart.svelte",
+  "artifacts/desktop-reference/src/lib/components/server/UsageChart.test.ts",
+  "artifacts/desktop-reference/src/lib/components/server/ServerDetailPane.svelte",
+  "artifacts/desktop-reference/src/lib/components/providers/ProviderModal.svelte",
 ]);
 const referenceDeltas = [];
 const sourceHashes = {};
@@ -42,8 +42,8 @@ for (const input of inventory.referenceInputs) {
   } else assert.equal(actual, input.sha256, `Reference drift: ${input.path}`);
 }
 for (const path of [
-  "apps/desktop/src/lib/services/serverMutation.ts", "apps/desktop/src/lib/services/serverMutation.test.ts",
-  "apps/desktop/src/lib/components/providers/ProviderModal.test.ts", "apps/desktop/src/lib/components/auth/RecoveryKitModal.test.ts"
+  "artifacts/desktop-reference/src/lib/services/serverMutation.ts", "artifacts/desktop-reference/src/lib/services/serverMutation.test.ts",
+  "artifacts/desktop-reference/src/lib/components/providers/ProviderModal.test.ts", "artifacts/desktop-reference/src/lib/components/auth/RecoveryKitModal.test.ts"
 ]) sourceHashes[path] = hash(await readFile(resolve(root, path)));
 const inputs = ["audit-business.mjs", "reference/bridge.ts", "reference/business-bridge.ts", "reference/business-fixtures.ts", "reference/business-preview-files.json"];
 const fixtureHashes = Object.fromEntries(await Promise.all(inputs.map(async path => [path, hash(await readFile(resolve(import.meta.dirname, path)))])));

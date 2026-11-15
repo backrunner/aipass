@@ -1,5 +1,27 @@
 use super::*;
 impl AuthView {
+    pub fn relocalize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for (input, key) in [
+            (&self.password, "auth.masterPassword"),
+            (&self.confirmation, "auth.confirmPassword"),
+            (&self.recovery, "auth.recoveryKey"),
+            (&self.reset_confirmation, "auth.reset.placeholder"),
+        ] {
+            input.update(cx, |input, cx| {
+                input.set_accessibility(
+                    InputAccessibility::new(Some(gpui::Role::TextInput))
+                        .with_label(Some(self.locale.text(key).into()))
+                        .with_value_exposed(false),
+                );
+                cx.notify();
+            });
+        }
+        self.reset_confirmation.update(cx, |input, cx| {
+            input.set_placeholder(self.locale.text("auth.reset.placeholder"), window, cx);
+        });
+        self.import.update(cx, |form, cx| form.relocalize(cx));
+        cx.notify();
+    }
     pub fn prepare_appearance(
         &mut self,
         dark: bool,

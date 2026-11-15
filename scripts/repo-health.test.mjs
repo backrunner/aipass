@@ -62,3 +62,9 @@ test("rejects fingerprinted shared sources without LF checkout rules and exempts
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("retired desktop framework cannot return through manifests or lockfiles", () => {
+  for (const [path, content] of [["apps/desktop-native/package.json", '{"dependencies":{"@tauri-apps/api":"2"}}'], ["Cargo.lock", 'name = "tauri-runtime-wry"'], ["apps/desktop-native/Cargo.toml", 'tauri = "2"'], ["apps/desktop-native/Cargo.toml", 'shell = { package = "tauri-runtime", version = "2" }']]) {
+    assert.ok(auditDependencies([{path,content}]).some(value=>value.includes("retired desktop framework")));
+  }
+});

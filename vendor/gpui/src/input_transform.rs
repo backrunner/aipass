@@ -4,14 +4,14 @@ use crate::{Bounds, Pixels, Point, Window};
 /// A uniform scale and translation from element coordinates to window coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ElementTransform {
-    scale: f32,
+    scale: Point<f32>,
     offset: Point<Pixels>,
 }
 
 impl Default for ElementTransform {
     fn default() -> Self {
         Self {
-            scale: 1.,
+            scale: crate::point(1., 1.),
             offset: Point::default(),
         }
     }
@@ -20,10 +20,14 @@ impl Default for ElementTransform {
 impl ElementTransform {
     /// Scale around an origin expressed in logical pixels.
     pub fn scale_around(origin: Point<Pixels>, scale: f32) -> Self {
-        assert!(scale.is_finite() && scale > 0.);
+        Self::scale_axes_around(origin, crate::point(scale, scale))
+    }
+    /// Scale independently on each axis, using the compositor's logical origin.
+    pub fn scale_axes_around(origin: Point<Pixels>, scale: Point<f32>) -> Self {
+        assert!(scale.x.is_finite() && scale.x > 0. && scale.y.is_finite() && scale.y > 0.);
         Self {
             scale,
-            offset: origin * (1. - scale),
+            offset: crate::point(origin.x * (1. - scale.x), origin.y * (1. - scale.y)),
         }
     }
 
@@ -35,17 +39,17 @@ impl ElementTransform {
 
     /// Convert an element position into window coordinates.
     pub fn point(self, value: Point<Pixels>) -> Point<Pixels> {
-        value * self.scale + self.offset
+        crate::point(value.x * self.scale.x, value.y * self.scale.y) + self.offset
     }
 
     /// Convert a window position into element coordinates.
     pub fn unmap(self, value: Point<Pixels>) -> Point<Pixels> {
-        (value - self.offset) / self.scale
+        self.delta(value - self.offset)
     }
 
     /// Convert a physical movement into element coordinates.
     pub fn delta(self, value: Point<Pixels>) -> Point<Pixels> {
-        value / self.scale
+        crate::point(value.x / self.scale.x, value.y / self.scale.y)
     }
 
     /// Convert element bounds into window coordinates.
@@ -55,7 +59,7 @@ impl ElementTransform {
 
     pub(crate) fn then(self, parent: Self) -> Self {
         Self {
-            scale: self.scale * parent.scale,
+            scale: crate::point(self.scale.x * parent.scale.x, self.scale.y * parent.scale.y),
             offset: parent.point(self.offset),
         }
     }

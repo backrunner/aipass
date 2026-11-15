@@ -1,10 +1,13 @@
+import administration from "../fixtures/administration.json";
+const admin=new URLSearchParams(location.search).has("proxy");
 // Synthetic, non-network data. Never reads the user's vault or tool files.
-import type { EntrySummary, ProxyConfig, ProxyStatus, ServerUsageSummary, UsageTimeseriesPoint } from "../../../apps/desktop/src/lib/types";
+import type { EntrySummary, ProxyConfig, ProxyStatus, ServerUsageSummary, UsageTimeseriesPoint } from "../../../artifacts/desktop-reference/src/lib/types";
 import { defaultRetryPolicy } from "@aipass/schemas";
 
 export const fixtureTime = "2026-11-12T04:00:00Z";
 const faviconUrl = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3C/svg%3E";
 export function providers(): EntrySummary[] {
+  if(admin)return structuredClone(administration.entries) as any;
   const entry = (id: string, title: string, key: string): EntrySummary => ({
     id, title, favorite: false, providerKind: "third_party", credentialKind: "api",
     domains: [], faviconUrl, endpoints: [{ id: "api", kind: "api", url: `https://${id}.example.invalid/v1` }],
@@ -27,6 +30,7 @@ export function providers(): EntrySummary[] {
 }
 
 export function proxyConfig(): ProxyConfig {
+  if(admin)return structuredClone(administration.config) as any;
   const target = (id: string, secretId: string, priority: number) => ({ id, secretId, priority,
     providerEntryId: "gateway", label: secretId === "key-a" ? "Production" : "Fallback",
     baseUrl: "https://gateway.example.invalid/v1", authScheme: "bearer", weight: 1, enabled: true });
@@ -41,6 +45,7 @@ export function proxyConfig(): ProxyConfig {
 }
 
 export function proxyStatus(): ProxyStatus {
+  if(admin)return structuredClone(administration.status) as any;
   return { running: true, enabled: true, bindAddr: "127.0.0.1:8787", activeRoutes: 1,
     requests: 1234567, failures: 12, recentRequests: 42, recentTokens: 987654,
     successRateBps: 9750, averageFirstTokenMs: 360, inFlightRequests: 7, availableChannels: 1, totalChannels: 2,
@@ -50,6 +55,7 @@ export function proxyStatus(): ProxyStatus {
 }
 
 export function usage(multiplier: number): ServerUsageSummary {
+  if(admin)return structuredClone(administration.usage) as any;
   const row = (providerEntryId: string, secretId: string, n: number) => ({ providerEntryId, secretId,
     requestCount: n * multiplier, inputTokens: n * 1000 * multiplier, outputTokens: n * 100 * multiplier,
     cacheReadTokens: n * 400 * multiplier, cacheCreationTokens: n * 100 * multiplier,
@@ -62,6 +68,7 @@ export function usage(multiplier: number): ServerUsageSummary {
 }
 
 export function timeseries(hourly: boolean, multiplier = 1): UsageTimeseriesPoint[] {
+  if(admin&&!hourly)return structuredClone(administration.series) as any;
   const point = (date: string, n: number): UsageTimeseriesPoint => {
     const values = usage(n * multiplier);
     return { date, requestCount: values.requestCount, inputTokens: values.inputTokens, outputTokens: values.outputTokens,

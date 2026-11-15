@@ -144,11 +144,8 @@ impl Services for AgentServices {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (&self.desktop_binary, &self.singleton_socket);
-            ensure!(
-                !self.supervise,
-                "native supervisor update support is macOS-only"
-            );
+            // Linux/Windows login entries do not respawn a stopped desktop.
+            let _ = (&self.desktop_binary, &self.singleton_socket, self.supervise);
         }
         Ok(())
     }

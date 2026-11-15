@@ -225,7 +225,7 @@ async function scenario({
         const url = `http://127.0.0.1:${server.address().port}/package`;
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
-          JSON.stringify({ version: offeredVersion, url, signature: packageSignature }),
+          JSON.stringify({ version: offeredVersion, platforms: Object.fromEntries(["darwin-native-aarch64","darwin-native-x86_64"].map(target=>[target,{url,signature:packageSignature}])) }),
         );
       } else {
         response.writeHead(404).end();
@@ -253,7 +253,7 @@ async function scenario({
           : "official";
       writeFileSync(
         join(cache, "metadata.json"),
-        JSON.stringify({ version, channel }),
+        JSON.stringify({ endpoint: `http://127.0.0.1:${server.address().port}/latest.json`, target: `darwin-native-${process.arch === "arm64" ? "aarch64" : "x86_64"}`, release: {version, notes:null, url:`http://127.0.0.1:${server.address().port}/package`, signature:packageSignature} }),
       );
     }
     const environment = isolatedEnvironment(root);
@@ -261,7 +261,7 @@ async function scenario({
     environment.AIPASS_WINDOW_TARGET = target;
     // Do not inherit release signing/notarization credentials into the app.
     for (const key of Object.keys(environment)) {
-      if (/^(APPLE_|TAURI_SIGNING_|CSC_)/.test(key)) delete environment[key];
+      if (/^(APPLE_|AIPASS_SIGNING_|CSC_)/.test(key)) delete environment[key];
     }
     child = spawn(binary, ["--verify-runtime", root], {
       cwd: root,
@@ -368,7 +368,7 @@ async function scenario({
       // Let the shipped frontend's normal timer invoke the real update commands.
       // A higher fixture version exercises discovery/download only; the signed
       // payload remains the original artifact and is never installed here.
-      assert.ok(requests.feed >= 2, "Automatic check and download did not reach the feed");
+      assert.ok(requests.feed >= 1, "Automatic check and download did not reach the feed");
       assert.equal(requests.package, 1, "Automatic download did not fetch exactly one package");
       assert.ok(!existsSync(join(root, "installed.json")), "Background download installed without a restart");
       const cache = join(root, "cache/updates");
@@ -377,7 +377,7 @@ async function scenario({
         assert.ok(!existsSync(join(cache, "metadata.json")), "Tampered update was marked ready");
       } else {
         assert.equal(digest(join(cache, "package")), digest(archive), "Cached package differs from the signed archive");
-        assert.equal(JSON.parse(read(join(cache, "metadata.json"))).version, offeredVersion);
+        assert.equal(JSON.parse(read(join(cache, "metadata.json"))).release.version, offeredVersion);
       }
       report.backgroundUpdateVerified = true;
       report.requests = requests;

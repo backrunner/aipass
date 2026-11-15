@@ -13,6 +13,8 @@ pub struct Draft {
     pub interface: InterfaceType,
     pub auth: AuthScheme,
     pub auth_touched: bool,
+    pub provider_touched: bool,
+    pub interface_touched: bool,
     pub title: String,
     pub secret_label: String,
     pub api_key: SensitiveString,
@@ -28,10 +30,12 @@ pub struct Draft {
     pub websockets: bool,
     pub websocket_touched: bool,
     pub add_fields: super::optional::AddFields,
+    pub imported: super::optional::ImportedMetadata,
 }
 
 impl Draft {
     pub fn choose_interface(&mut self, interface: InterfaceType) {
+        self.interface_touched = true;
         self.interface = interface;
         if !self.auth_touched || !auth_compatible(&self.auth, &self.interface) {
             self.auth = match self.interface {
@@ -63,6 +67,8 @@ impl Draft {
             interface: InterfaceType::AnthropicMessages,
             auth: AuthScheme::XApiKey,
             auth_touched: original.is_some(),
+            provider_touched: original.is_some(),
+            interface_touched: original.is_some(),
             title: String::new(),
             secret_label: String::new(),
             api_key: SensitiveString::default(),
@@ -78,6 +84,7 @@ impl Draft {
             websockets: true,
             websocket_touched: false,
             add_fields: Default::default(),
+            imported: Default::default(),
             original: None,
         };
         if let Some(entry) = &original {
@@ -123,6 +130,8 @@ impl Draft {
         }
         self.provider_id = id;
         self.auth_touched = true;
+        self.provider_touched = true;
+        self.interface_touched = true;
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -271,10 +280,10 @@ impl Draft {
                 title,
                 provider_kind: kind,
                 provider_id: Some(self.provider_id),
-                credential_kind: CredentialKind::Api,
-                account_identity: None,
+                credential_kind: self.imported.credential_kind.unwrap_or(CredentialKind::Api),
+                account_identity: self.imported.account_identity,
                 domains: super::editing::domains(&self.domains, &endpoints),
-                favicon_url: None,
+                favicon_url: self.imported.favicon_url,
                 endpoints,
                 interface_type: self.interface,
                 auth_scheme: self.auth,
@@ -285,7 +294,7 @@ impl Draft {
                 default_model: optional(&self.model),
                 model_aliases: super::optional::pairs(&self.add_fields.aliases),
                 headers: super::optional::pairs(self.add_fields.headers.expose()),
-                quota: None,
+                quota: self.imported.quota,
                 subscription: None,
                 gateway: None,
                 tags: lists::parse(&self.tags),

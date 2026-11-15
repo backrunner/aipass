@@ -240,6 +240,9 @@ impl Form {
             .enumerate()
             .map(|(index, input)| {
                 cx.subscribe_in(input, window, move |this, _, event, window, cx| {
+                    if matches!(event, InputEvent::Blur) && matches!(index, 3 | 7) {
+                        this.infer_provider(index, window, cx);
+                    }
                     if matches!(event, InputEvent::Change) {
                         if index == 3 && this.is_editing() {
                             let value = this.inputs[3].read(cx).value();
@@ -443,6 +446,7 @@ impl Form {
         self.action = None;
         self.draft.api_key = Default::default();
         self.draft.add_fields.headers = Default::default();
+        self.draft.imported = Default::default();
     }
     pub(super) fn save(&mut self, cx: &mut Context<Self>) {
         if self.busy || self.save_after_credential {
@@ -459,6 +463,7 @@ impl Form {
         }
         let value = |index: usize| self.inputs[index].read(cx).value().to_string();
         let mut draft = Draft::new(self.draft.original.clone());
+        draft.imported = self.draft.imported.clone();
         draft.provider_id = self.draft.provider_id.clone();
         draft.interface = self.draft.interface.clone();
         draft.auth = self.draft.auth.clone();

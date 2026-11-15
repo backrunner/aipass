@@ -3,6 +3,16 @@ use aipass_agent_protocol::SensitiveString;
 use aipass_provider_registry::BillingRule;
 use aipass_vault::SecretMetadataInput;
 
+/// Metadata supplied by a provider link that has no editable add-form control.
+/// It belongs to the reviewed draft and is sent only when the user saves it.
+#[derive(Clone, Default)]
+pub struct ImportedMetadata {
+    pub credential_kind: Option<aipass_provider_registry::CredentialKind>,
+    pub account_identity: Option<String>,
+    pub favicon_url: Option<String>,
+    pub quota: Option<aipass_provider_registry::QuotaInfo>,
+}
+
 #[derive(Default)]
 pub struct AddFields {
     pub aliases: String,

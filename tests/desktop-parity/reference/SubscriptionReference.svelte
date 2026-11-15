@@ -1,8 +1,8 @@
 <script lang="ts">
-  import App from "../../../apps/desktop/src/App.svelte";
-  import OAuthConnectDialog from "../../../apps/desktop/src/lib/components/providers/OAuthConnectDialog.svelte";
-  import SubscriptionImportDialog from "../../../apps/desktop/src/lib/components/providers/SubscriptionImportDialog.svelte";
-  import ProviderRuntimeDialog from "../../../apps/desktop/src/lib/components/providers/ProviderRuntimeDialog.svelte";
+  import App from "../../../artifacts/desktop-reference/src/App.svelte";
+  import OAuthConnectDialog from "../../../artifacts/desktop-reference/src/lib/components/providers/OAuthConnectDialog.svelte";
+  import SubscriptionImportDialog from "../../../artifacts/desktop-reference/src/lib/components/providers/SubscriptionImportDialog.svelte";
+  import ProviderRuntimeDialog from "../../../artifacts/desktop-reference/src/lib/components/providers/ProviderRuntimeDialog.svelte";
   import { subscriptionEntry } from "./subscription-fixtures";
   import { invoke } from "./bridge";
   import { scenario } from "./subscription-fixtures";

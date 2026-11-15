@@ -860,7 +860,7 @@
   "ext.browserProvider": "Browser Provider",
   "ext.updateProviderFailed": "Could not update provider",
   "ext.deleteProviderFailed": "Could not delete provider",
-  "error.browserPreview": "Open this app inside the Tauri desktop shell.",
+  "error.browserPreview": "Open this action in the AIPass desktop app.",
   "error.vaultCreationFailed": "Vault creation failed",
   "error.incorrectMasterPassword": "The master password is incorrect. Try again.",
   "error.unlockFailed": "Unlock failed",

@@ -47,6 +47,18 @@ impl Workspace {
             .update(cx, |view, cx| view.complete(completion, window, cx));
     }
     pub(super) fn sync_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.proxy.update(cx, |view, cx| {
+            view.sync(
+                self.catalog
+                    .active
+                    .iter()
+                    .chain(self.catalog.archived.iter())
+                    .cloned()
+                    .collect(),
+                cx,
+            );
+            view.activate(self.selected == 8, cx);
+        });
         self.agents.update(cx, |view, cx| {
             view.sync(&self.catalog.active, cx);
             view.activate(self.selected == 7, cx);
@@ -116,6 +128,22 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if scenario.starts_with("proxy-") {
+            self.selected = 8;
+            if scenario != "proxy-empty" {
+                let fixture: serde_json::Value = serde_json::from_str(include_str!(
+                    "../../../../tests/desktop-parity/fixtures/administration.json"
+                ))
+                .unwrap();
+                let entries: Vec<EntrySummary> =
+                    serde_json::from_value(fixture["entries"].clone()).unwrap();
+                (self.catalog.active, self.catalog.archived) =
+                    entries.into_iter().partition(|e| e.archived_at.is_none());
+            }
+            self.proxy
+                .update(cx, |view, cx| view.preview(scenario, window, cx));
+            return;
+        }
         if scenario.starts_with("agents-") {
             self.selected = 7;
             self.catalog.active = crate::agents_ui::fixtures::entries(scenario);
@@ -244,6 +272,21 @@ impl Workspace {
     pub fn has_provider_form(&self) -> bool {
         self.provider_form.is_some()
     }
+    pub fn import_provider_draft(
+        &mut self,
+        draft: aipass_desktop_native::catalog::draft::Draft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected = 0;
+        self.menu_open = false;
+        self.filter_open = false;
+        self.provider_menu_open = false;
+        self.open_provider_form(None, window, cx);
+        if let Some(form) = &self.provider_form {
+            form.update(cx, |form, cx| form.import_draft(draft, window, cx));
+        }
+    }
     pub(super) fn form_is_editing(&self, cx: &gpui::App) -> bool {
         self.provider_form
             .as_ref()
@@ -322,6 +365,7 @@ impl Workspace {
     }
     pub fn clear_providers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.copied_endpoint = None;
+        self.proxy.update(cx, |view, cx| view.clear(window, cx));
         self.agents.update(cx, |view, cx| view.clear(cx));
         self.trash.update(cx, |view, cx| view.clear(cx));
         self.close_provider_form(window, cx);

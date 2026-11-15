@@ -13,13 +13,13 @@ const destination = resolve(root, "artifacts/desktop-parity", round);
 await mkdir(destination);
 const inventory = JSON.parse(await readFile(resolve(root, "docs/gpui-migration/inventory.json")));
 const inputs = [...inventory.referenceInputs.map(input => input.path),
-  "apps/desktop/src/lib/services/serverMutation.ts", "apps/desktop/src/lib/services/serverMutation.test.ts",
-  "apps/desktop/src/lib/components/providers/ProviderModal.test.ts", "apps/desktop/src/lib/components/auth/RecoveryKitModal.test.ts",
+  "artifacts/desktop-reference/src/lib/services/serverMutation.ts", "artifacts/desktop-reference/src/lib/services/serverMutation.test.ts",
+  "artifacts/desktop-reference/src/lib/components/providers/ProviderModal.test.ts", "artifacts/desktop-reference/src/lib/components/auth/RecoveryKitModal.test.ts",
   "crates/aipass-config-writers/examples/parity_preview.rs", "crates/aipass-config-writers/src/utils.rs",
   "tests/desktop-parity/audit-proxy-layout.mjs", "tests/desktop-parity/vite.config.mjs",
   "tests/desktop-parity/reference/bridge.ts", "tests/desktop-parity/reference/business-bridge.ts",
   "tests/desktop-parity/reference/business-fixtures.ts", "tests/desktop-parity/reference/business-preview-files.json",
-  "tests/desktop-parity/generate-preview-fixtures.mjs", "apps/desktop/src/lib/components/shared/SegmentedControl.test.ts"];
+  "tests/desktop-parity/generate-preview-fixtures.mjs", "artifacts/desktop-reference/src/lib/components/shared/SegmentedControl.test.ts"];
 const digest = data => createHash("sha256").update(data).digest("hex");
 const sourceHashes = Object.fromEntries(await Promise.all(inputs.map(async path => [path, digest(await readFile(resolve(root, path)))])));
 const report = { renderer: "playwright-webkit", nativeGpuiVerified: false, baseline: inventory.baseline,

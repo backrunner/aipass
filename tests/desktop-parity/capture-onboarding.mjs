@@ -8,7 +8,7 @@ const root=resolve(import.meta.dirname,"../.."),round=process.argv[2];
 assert(/^[a-z0-9-]+$/.test(round??""));
 const output=resolve(root,"artifacts/desktop-parity",round);await mkdir(output);
 execFileSync("rtk",["proxy","cargo","build","-p","aipass-desktop-native","--features","parity-render"],{cwd:root,stdio:"pipe",timeout:180000});
-const binary=resolve(output,"aipass-desktop-native");await copyFile(resolve(root,"target/debug/aipass-desktop-native"),binary);
+const binary=resolve(output,"aipass-desktop-native");await copyFile(resolve(root,"target/debug/aipass-desktop"),binary);
 const hash=b=>createHash("sha256").update(b).digest("hex");
 const sourceHashes={};
 for(const path of execFileSync('rtk',['proxy','rg','--files','--hidden','apps/desktop-native','crates/aipass-desktop-platform','vendor','tests/desktop-parity','Cargo.toml','Cargo.lock'],{cwd:root,encoding:'utf8',maxBuffer:10*1024*1024}).trim().split('\n').filter(p=>!p.split('/').includes('target')))sourceHashes[path]=hash(await readFile(resolve(root,path)));

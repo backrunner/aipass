@@ -18,7 +18,7 @@ run("cargo",["build","-p","aipass-desktop-native","--release"]);
 const app=resolve(output,"AIPass GPUI Performance.app"), contents=resolve(app,"Contents");
 await mkdir(resolve(contents,"MacOS"),{recursive:true});
 const binary=resolve(contents,"MacOS/aipass-desktop-native");
-await copyFile(resolve(root,"target/release/aipass-desktop-native"),binary);
+await copyFile(resolve(root,"target/release/aipass-desktop"),binary);
 await writeFile(resolve(contents,"Info.plist"),`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>

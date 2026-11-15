@@ -4987,6 +4987,9 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+        if let Some(scale) = filter.scale_y {
+            assert!(scale.is_finite() && scale > 0.);
+        }
         if let Some(scale) = filter.scale {
             assert!(
                 scale.is_finite() && scale > 0.0,
@@ -5014,6 +5017,7 @@ impl Window {
             fade_left: filter.fade_left.map_or(0., |fade| fade.0 * scale_factor),
             fade_right: filter.fade_right.map_or(0., |fade| fade.0 * scale_factor),
             scale: filter.scale.unwrap_or(1.0),
+            scale_y: filter.scale_y,
             translate: filter.translate.map_or_else(Point::default, |translation| {
                 translation.scale(scale_factor)
             }),

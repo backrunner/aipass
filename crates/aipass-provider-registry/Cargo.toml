@@ -9,6 +9,7 @@ authors.workspace = true
 serde.workspace = true
 uuid.workspace = true
 time.workspace = true
+url = "2"
 
 [dev-dependencies]
 serde_json.workspace = true

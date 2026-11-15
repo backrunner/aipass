@@ -46,9 +46,9 @@ def bundle(directory, version):
     if MODE == "broken" and version == "0.2.1":
         binary.write_text("#!/bin/sh\nexit 1\n")
     else:
-        shutil.copy2(ROOT / "target/debug/aipass-desktop-native", binary)
+        shutil.copy2(ROOT / "target/debug/aipass-desktop", binary)
     binary.chmod(0o755)
-    shutil.copy2(ROOT / "apps/desktop/src-tauri/icons/icon.icns", resources / "icon.icns")
+    shutil.copy2(ROOT / "apps/desktop-native/assets/bundle/icon.icns", resources / "icon.icns")
     if MANAGED:
         for name in ("aipass-agent", "aipass-native-host"):
             sidecar = resources / name

@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import assert from "node:assert/strict";
 
 const root = resolve(import.meta.dirname, "../..");
-const samples = JSON.parse(execFileSync(resolve(root, "target/debug/aipass-desktop-native"), ["--motion-samples"], { encoding: "utf8" }));
+const samples = JSON.parse(execFileSync(resolve(root, "target/debug/aipass-desktop"), ["--motion-samples"], { encoding: "utf8" }));
 const browser = await webkit.launch();
 const results = [];
 try {

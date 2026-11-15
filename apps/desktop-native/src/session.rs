@@ -17,6 +17,7 @@ mod activity;
 mod worker;
 
 pub enum Command {
+    Administration(Box<crate::administration::Request>),
     Refresh,
     Import(crate::onboarding::Import),
     CheckCloud,
@@ -43,6 +44,7 @@ pub enum Command {
 }
 
 pub enum Reply {
+    Administration(Box<crate::administration::Completion>),
     Touched(SessionStatus),
     Trash(crate::trash::Completion),
     Pricing(Box<crate::pricing::Completion>),
@@ -144,6 +146,9 @@ impl Transport for AgentTransport {
             })?;
         }
         match command {
+            Command::Administration(request) => {
+                Ok(Reply::Administration(Box::new(request.execute(&self.0))))
+            }
             Command::Pricing(request) => Ok(Reply::Pricing(Box::new(request.execute(&self.0)))),
             Command::Trash(request) => Ok(Reply::Trash(request.execute(&self.0))),
             Command::Refresh => self.snapshot(),
@@ -246,6 +251,7 @@ pub struct Session {
     pub selected: Option<Uuid>,
     pub provider_saved: bool,
     pub provider_applied: bool,
+    pub administration_completion: Option<crate::administration::Completion>,
     pub pricing_completion: Option<crate::pricing::Completion>,
     pub trash_completion: Option<crate::trash::Completion>,
     pub tools_completion: Option<crate::provider_tools::Completion>,
@@ -274,6 +280,7 @@ impl Session {
             selected: None,
             provider_saved: false,
             provider_applied: false,
+            administration_completion: None,
             pricing_completion: None,
             trash_completion: None,
             tools_completion: None,
@@ -311,9 +318,13 @@ impl Session {
     }
 
     pub fn submit(&mut self, command: Command) -> bool {
+        let startup_preferences = matches!(&command, Command::Administration(request)
+            if request.scope.surface == crate::administration::Surface::Desktop
+                && matches!(request.operation, crate::administration::Operation::LoadPreferences { .. }));
         if matches!(
             command,
             Command::Touch
+                | Command::Administration(_)
                 | Command::Pricing(_)
                 | Command::Trash(_)
                 | Command::Provider(_)
@@ -323,6 +334,7 @@ impl Session {
                 | Command::Agents(_)
                 | Command::Subscription(_)
         ) && !self.is_unlocked()
+            && !startup_preferences
         {
             return false;
         }
@@ -342,6 +354,7 @@ impl Session {
             self.catalog = Catalog::default();
             self.selected = None;
             self.recovery = None;
+            self.administration_completion = None;
             self.pricing_completion = None;
             self.trash_completion = None;
             self.tools_completion = None;
@@ -376,6 +389,7 @@ impl Session {
         let was_unlocked = self.is_unlocked();
         self.provider_saved = false;
         self.provider_applied = false;
+        self.administration_completion = None;
         self.pricing_completion = None;
         self.trash_completion = None;
         self.tools_completion = None;
@@ -395,6 +409,24 @@ impl Session {
                     self.foreground_pending = false;
                     changed = true;
                     match completion.result {
+                        Ok(Reply::Administration(completion)) => {
+                            self.provider_applied = matches!(
+                                &completion.result,
+                                Ok(crate::administration::Outcome::Applied
+                                    | crate::administration::Outcome::SyncSaved { .. })
+                            );
+                            if completion
+                                .error()
+                                .is_some_and(|e| e.code == Some(AgentErrorCode::Locked))
+                            {
+                                self.catalog = Catalog::default();
+                                self.recovery = None;
+                                if let Some(status) = &mut self.status {
+                                    status.locked = true;
+                                }
+                            }
+                            self.administration_completion = Some(*completion);
+                        }
                         Ok(Reply::Pricing(completion)) => {
                             if completion
                                 .result
@@ -671,6 +703,7 @@ impl Session {
         self.catalog = Catalog::default();
         self.selected = None;
         self.recovery = None;
+        self.administration_completion = None;
         self.pricing_completion = None;
         self.trash_completion = None;
         self.tools_completion = None;

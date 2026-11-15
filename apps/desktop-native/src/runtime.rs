@@ -36,9 +36,31 @@ impl Gate {
         }
         Ok(guard)
     }
+    /// Drain all requests before a user quit, without stopping the resident Agent.
+    pub fn retire_with(&self, operation: impl FnOnce() -> Result<()>) -> Result<()> {
+        ensure_not_requested(self)?;
+        let result = (|| {
+            let _guard = self
+                .operations
+                .write()
+                .map_err(|_| anyhow::anyhow!("runtime lock poisoned"))?;
+            operation()?;
+            self.retired.store(true, Ordering::Release);
+            Ok(())
+        })();
+        self.requested.store(false, Ordering::Release);
+        result
+    }
     pub fn suspended(&self) -> bool {
         self.requested.load(Ordering::Acquire) || self.retired.load(Ordering::Acquire)
     }
+}
+
+fn ensure_not_requested(gate: &Gate) -> Result<()> {
+    if gate.requested.swap(true, Ordering::AcqRel) || gate.retired.load(Ordering::Acquire) {
+        bail!("native runtime is suspended");
+    }
+    Ok(())
 }
 
 pub struct Runtime {

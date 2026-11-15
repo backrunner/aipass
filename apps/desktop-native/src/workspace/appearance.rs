@@ -17,6 +17,7 @@ impl Workspace {
             input.set_editor_style(self.theme.input_style());
             cx.notify();
         });
+        self.proxy.update(cx, |view, cx| view.appearance(dark, cx));
         self.agents.update(cx, |view, cx| view.appearance(dark, cx));
         self.notes
             .update(cx, |view, cx| view.apply_appearance(dark, cx));

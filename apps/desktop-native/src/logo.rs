@@ -4,7 +4,7 @@ use gpui::{canvas, div, img, prelude::*, px, FontWeight, Rgba, TextAlign, TextRu
 use image::{imageops::FilterType, DynamicImage, ImageFormat};
 use std::io::Cursor;
 
-const ORIGINAL: &[u8] = include_bytes!("../../desktop/public/aipass-logo.png");
+const ORIGINAL: &[u8] = include_bytes!("../assets/aipass-logo.png");
 
 pub fn logo(size: f32, window: &Window) -> impl IntoElement {
     let pixels = (size * window.scale_factor()).ceil().max(1.) as u32;

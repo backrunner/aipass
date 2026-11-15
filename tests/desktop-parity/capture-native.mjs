@@ -6,7 +6,7 @@ import { PNG } from "pngjs";
 import { comparePixels } from "./compare.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
-const binary = resolve(root, "target/debug/aipass-desktop-native");
+const binary = resolve(root, "target/debug/aipass-desktop");
 const baseline = resolve(root, "artifacts/desktop-parity/reference");
 const round = process.argv[2];
 if (!round || !/^[a-z0-9-]+$/.test(round)) throw new Error("Usage: capture-native.mjs unique-round-name");

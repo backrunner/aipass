@@ -67,7 +67,7 @@ if (dmgFiles.length === 0) {
   );
 }
 
-// Publish one canonical installer. Tauri may name the DMG with a version
+// Publish one canonical installer. The packager names the DMG with a version
 // suffix, but exposing both that file and the friendly alias creates two
 // installers for the same build in CI and release downloads.
 const dmgFile = await selectBundleFile(dmgFiles);
@@ -93,6 +93,8 @@ const updateManifest = {
   notes: `See https://github.com/${repository}/releases/tag/${encodeURIComponent(releaseTag)}`,
   pub_date: new Date().toISOString(),
   platforms: {
+    "darwin-native-aarch64": platform,
+    "darwin-native-x86_64": platform,
     "darwin-aarch64": platform,
     "darwin-aarch64-app": platform,
     "darwin-x86_64": platform,
@@ -111,7 +113,6 @@ console.log(
 async function listBundleFiles() {
   const candidates = [
     join(repoRoot, "target"),
-    join(repoRoot, "apps", "desktop", "src-tauri", "target"),
   ];
   const files = [];
   for (const candidate of candidates) {

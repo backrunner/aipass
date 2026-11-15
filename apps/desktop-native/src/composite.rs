@@ -7,6 +7,7 @@ use gpui::{
 pub(crate) struct Scale {
     child: AnyElement,
     factor: f32,
+    factor_y: f32,
     origin: gpui::Point<f32>,
     tracked_origin: Option<std::rc::Rc<std::cell::Cell<gpui::Point<f32>>>>,
     offset: gpui::Point<Pixels>,
@@ -19,11 +20,19 @@ impl Scale {
         Self {
             child: child.into_any_element(),
             factor: if filters_enabled() { factor } else { 1. },
+            factor_y: if filters_enabled() { factor } else { 1. },
             origin: gpui::point(0.5, 0.5),
             tracked_origin: None,
             offset: gpui::Point::default(),
             relative_offset: gpui::Point::default(),
         }
+    }
+    pub fn scale_y(mut self, factor: f32) -> Self {
+        assert!(factor.is_finite() && factor > 0.);
+        if filters_enabled() {
+            self.factor_y = factor;
+        }
+        self
     }
     pub fn origin(mut self, origin: gpui::Point<f32>) -> Self {
         self.origin = origin;
@@ -66,7 +75,8 @@ impl Scale {
                 bounds.size.width * self.resolved_origin().x,
                 bounds.size.height * self.resolved_origin().y,
             );
-        ElementTransform::scale_around(origin, self.factor).translated(self.resolved_offset(bounds))
+        ElementTransform::scale_axes_around(origin, gpui::point(self.factor, self.factor_y))
+            .translated(self.resolved_offset(bounds))
     }
 }
 
@@ -134,6 +144,7 @@ impl Element for Scale {
                 bounds,
                 LayerFilter {
                     scale: Some(self.factor),
+                    scale_y: Some(self.factor_y),
                     scale_origin: Some(self.resolved_origin()),
                     translate: Some(self.resolved_offset(bounds)),
                     ..Default::default()

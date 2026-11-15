@@ -5,6 +5,7 @@ use std::{cell::Cell, rc::Rc};
 
 struct Probe {
     scale: f32,
+    scale_y: f32,
     origin: gpui::Point<f32>,
     offset: gpui::Point<Pixels>,
     relative_offset: gpui::Point<f32>,
@@ -39,6 +40,7 @@ impl Render for Probe {
             ),
             self.scale,
         )
+        .scale_y(self.scale_y)
         .origin(self.origin)
         .translate(self.offset)
         .translate_relative(self.relative_offset)
@@ -51,6 +53,7 @@ fn scaled_buttons_receive_visual_coordinates_and_unscaled_scroll(cx: &mut gpui::
     let scroll = Rc::new(Cell::new(0.));
     let (view, cx) = cx.add_window_view(|_, _| Probe {
         scale: 0.5,
+        scale_y: 0.5,
         origin: point(0.5, 0.5),
         offset: point(px(0.), px(0.)),
         relative_offset: point(0., 0.),
@@ -66,7 +69,10 @@ fn scaled_buttons_receive_visual_coordinates_and_unscaled_scroll(cx: &mut gpui::
     // The original [0,20] button is painted at [50,60] x [25,35].
     cx.simulate_click(point(px(55.), px(30.)), Default::default());
     assert_eq!(view.read_with(cx, |v, _| v.clicks), 1);
-    assert_eq!(position.get(), point(px(10.), px(10.)));
+    assert!(
+        (f32::from(position.get().x) - 10.).abs() < 0.0001
+            && (f32::from(position.get().y) - 10.).abs() < 0.0001
+    );
     cx.simulate_click(point(px(5.), px(5.)), Default::default());
     assert_eq!(view.read_with(cx, |v, _| v.clicks), 1);
     cx.simulate_event(ScrollWheelEvent {
@@ -77,6 +83,7 @@ fn scaled_buttons_receive_visual_coordinates_and_unscaled_scroll(cx: &mut gpui::
     assert_eq!(scroll.get(), 16.);
     view.update(cx, |v, cx| {
         v.scale = 1.;
+        v.scale_y = 1.;
         cx.notify();
     });
     cx.update(|w, cx| w.draw(cx).clear(cx));
@@ -96,6 +103,7 @@ fn dropdown_origin_and_translation_match_pointer_geometry(cx: &mut gpui::TestApp
     let position = Rc::new(Cell::new(point(px(0.), px(0.))));
     let (view, cx) = cx.add_window_view(|_, _| Probe {
         scale: 0.5,
+        scale_y: 0.5,
         origin: point(0., 0.),
         offset: point(px(15.), px(7.)),
         relative_offset: point(0., 0.),
@@ -110,7 +118,10 @@ fn dropdown_origin_and_translation_match_pointer_geometry(cx: &mut gpui::TestApp
     );
     cx.simulate_click(point(px(20.), px(12.)), Default::default());
     assert_eq!(view.read_with(cx, |v, _| v.clicks), 1);
-    assert_eq!(position.get(), point(px(10.), px(10.)));
+    assert!(
+        (f32::from(position.get().x) - 10.).abs() < 0.0001
+            && (f32::from(position.get().y) - 10.).abs() < 0.0001
+    );
 }
 
 #[gpui::test]
@@ -162,6 +173,7 @@ fn relative_dialog_translation_uses_current_layout_for_hit_testing(cx: &mut gpui
     let position = Rc::new(Cell::new(point(px(0.), px(0.))));
     let (view, cx) = cx.add_window_view(|_, _| Probe {
         scale: 0.96,
+        scale_y: 0.96,
         origin: point(0.5, 0.5),
         offset: point(px(0.), px(0.)),
         relative_offset: point(0., 0.04),
@@ -175,4 +187,42 @@ fn relative_dialog_translation_uses_current_layout_for_hit_testing(cx: &mut gpui
     assert_eq!(view.read_with(cx, |v, _| v.clicks), 1);
     assert!((f32::from(position.get().x) - 10.).abs() < 0.001);
     assert!((f32::from(position.get().y) - 10.).abs() < 0.001);
+}
+
+#[gpui::test]
+fn drawer_axis_scales_match_pointer_and_scroll_coordinates(cx: &mut gpui::TestAppContext) {
+    let position = Rc::new(Cell::new(point(px(0.), px(0.))));
+    let scroll = Rc::new(Cell::new(0.));
+    let (view, cx) = cx.add_window_view(|_, _| Probe {
+        scale: 0.25,
+        scale_y: 0.8,
+        origin: point(1., 0.5),
+        offset: point(px(0.), px(0.)),
+        relative_offset: point(0., 0.),
+        clicks: 0,
+        position: position.clone(),
+        scroll: scroll.clone(),
+    });
+    cx.update(|w, cx| w.draw(cx).clear(cx));
+    for (actual, expected) in cx
+        .update(|_, cx| cx.global::<crate::parity::Geometry>().0["scaled-button"])
+        .into_iter()
+        .zip([150., 10., 5., 16.])
+    {
+        assert!((actual - expected).abs() < 0.0001);
+    }
+    cx.simulate_click(point(px(152.5), px(18.)), Default::default());
+    assert_eq!(view.read_with(cx, |v, _| v.clicks), 1);
+    assert!(
+        (f32::from(position.get().x) - 10.).abs() < 0.0001
+            && (f32::from(position.get().y) - 10.).abs() < 0.0001
+    );
+    cx.simulate_event(ScrollWheelEvent {
+        position: point(px(152.5), px(18.)),
+        delta: ScrollDelta::Pixels(point(px(0.), px(8.))),
+        ..Default::default()
+    });
+    assert_eq!(scroll.get(), 10.);
+    cx.simulate_click(point(px(5.), px(5.)), Default::default());
+    assert_eq!(view.read_with(cx, |v, _| v.clicks), 1);
 }

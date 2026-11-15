@@ -1617,7 +1617,7 @@ struct Mask {
     fade_right: f32,
     pad: f32,
     opacity: f32,
-    alignment_pad: f32,
+    scale_y: f32,
 }
 
 @fragment
@@ -1665,7 +1665,7 @@ fn fs_mask_gaussian(input: BlurVarying) -> @location(0) vec4<f32> {
 // Where a destination pixel of a layer reads its source, undoing the layer's transform.
 fn mask_source(mask: Mask, destination_point: vec2<f32>) -> vec2<f32> {
     return mask.transform_origin
-        + (destination_point - mask.translation - mask.transform_origin) / mask.scale;
+        + (destination_point - mask.translation - mask.transform_origin) / vec2<f32>(mask.scale, mask.scale_y);
 }
 
 // How much of a layer's source point reaches the frame: nothing outside the source, and the

@@ -89,13 +89,13 @@ jobs:
           # scripts/set-release-version.mjs, so the repository files only need
           # to agree with each other here.
           root_version="$(node -p "require('./package.json').version")"
-          desktop_version="$(node -p "require('./apps/desktop/package.json').version")"
-          tauri_version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
+          desktop_version="$(node -p "require('./apps/desktop-native/package.json').version")"
+          native_version="$(node -p "require('./apps/desktop-native/desktop.json').version")"
           cargo_version="$(node -e "const fs = require('fs'); const text = fs.readFileSync('Cargo.toml', 'utf8'); const match = /\\[workspace\\.package\\][\\s\\S]*?^version\\s*=\\s*\"([^\"]+)\"/m.exec(text); console.log(match?.[1] ?? '')")"
 
           for pair in \
-            "apps/desktop/package.json:${desktop_version}" \
-            "apps/desktop/src-tauri/tauri.conf.json:${tauri_version}" \
+            "apps/desktop-native/package.json:${desktop_version}" \
+            "apps/desktop-native/desktop.json:${native_version}" \
             "Cargo.toml workspace.package:${cargo_version}"; do
             name="${pair%%:*}"
             found="${pair#*:}"
@@ -159,11 +159,11 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          AIPASS_SIGNING_PRIVATE_KEY: ${{ secrets.AIPASS_SIGNING_PRIVATE_KEY || secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
 
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_PROVISIONING_PROFILE_BASE64 TAURI_SIGNING_PRIVATE_KEY; do
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_PROVISIONING_PROFILE_BASE64 AIPASS_SIGNING_PRIVATE_KEY; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing ${name}. Configure the matching GitHub secret before publishing a macOS desktop release."
               exit 1
@@ -209,7 +209,7 @@ jobs:
             exit 1
           fi
 
-      # tauri-bundler picks notarization credentials by env var presence and
+      # Native notarization selects credentials by environment presence and
       # tries the Apple ID trio first, so the credentials for the active mode
       # are exported via GITHUB_ENV and never set as empty variables.
       - name: Prepare notarization credentials
@@ -245,30 +245,31 @@ jobs:
             } >> "${GITHUB_ENV}"
           fi
 
-      - name: Prepare Tauri release config
+      - name: Prepare native release config
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
           AIPASS_CLOUDKIT_CONTAINER: ${{ vars.AIPASS_CLOUDKIT_CONTAINER }}
           AIPASS_DESKTOP_BUILD_NUMBER: ${{ needs.resolve-release.outputs.build_number }}
-          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
-        run: node scripts/prepare-tauri-macos-release-config.mjs
+          AIPASS_SIGNING_PUBLIC_KEY: ${{ secrets.AIPASS_SIGNING_PUBLIC_KEY || secrets.TAURI_SIGNING_PUBLIC_KEY }}
+        run: node scripts/prepare-native-macos-release-config.mjs
+      - name: Install native package signer
+        run: brew install minisign
 
       - name: Build signed and notarized macOS desktop app
         env:
           CI: true
           # Keep the configured background and installation layout on CI.
-          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
           AIPASS_MACOS_UNIVERSAL: true
           AIPASS_EXTENSION_RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm --dir apps/desktop tauri build --ci --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.generated.json
+          AIPASS_SIGNING_PRIVATE_KEY: ${{ secrets.AIPASS_SIGNING_PRIVATE_KEY || secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          AIPASS_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AIPASS_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node scripts/package-desktop.mjs --ci --target universal-apple-darwin --bundles app,dmg --config apps/desktop-native/desktop.release.generated.json
 
       - name: Verify desktop and macOS process lifecycle
         run: |
-          cargo test -p aipass-desktop --lib
+          cargo test -p aipass-desktop-native --lib
           cargo test -p aipass-agent autostart::
 
       - name: Verify DMG integrity
@@ -283,11 +284,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          app_path="$(find target apps/desktop/src-tauri/target -path "*/universal-apple-darwin/release/bundle/*" -type d -name "AIPass.app" -print -quit 2>/dev/null || true)"
+          app_path="$(find target -path "*/universal-apple-darwin/release/bundle/*" -type d -name "AIPass.app" -print -quit 2>/dev/null || true)"
 
           if [[ -z "${app_path}" ]]; then
             echo "::error::Missing universal AIPass.app bundle."
-            find target apps/desktop/src-tauri/target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
+            find target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
             exit 1
           fi
 
@@ -309,11 +310,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          dmg_path="$(find target apps/desktop/src-tauri/target -path "*/universal-apple-darwin/release/bundle/*" -type f -name "*.dmg" -print -quit 2>/dev/null || true)"
+          dmg_path="$(find target -path "*/universal-apple-darwin/release/bundle/*" -type f -name "*.dmg" -print -quit 2>/dev/null || true)"
 
           if [[ -z "${dmg_path}" ]]; then
             echo "::error::Missing universal DMG bundle."
-            find target apps/desktop/src-tauri/target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
+            find target -maxdepth 6 -path "*/release/bundle/*" -print 2>/dev/null || true
             exit 1
           fi
 
@@ -394,7 +395,7 @@ jobs:
         shell: bash
         run: |
           find "${RUNNER_TEMP}" -maxdepth 1 -type f -name 'AuthKey_*.p8' -delete
-          rm -rf apps/desktop/src-tauri/.cloudkit-build
+          rm -rf apps/desktop-native/.cloudkit-build
 
   linux-desktop:
     name: Linux desktop ${{ matrix.arch }}
@@ -422,7 +423,7 @@ jobs:
       - name: Install Linux build and runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dbus-daemon libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 xdg-utils rpm minisign libfuse2t64
+          sudo apt-get install -y dbus-daemon build-essential curl wget file libssl-dev libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libsecret-1-dev libfontconfig1-dev libasound2-dev libudev-dev minisign squashfs-tools zstd libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 xdg-utils rpm minisign libfuse2t64
           command -v xdg-mime
       - run: pnpm install --frozen-lockfile
       - name: Set release version
@@ -435,13 +436,15 @@ jobs:
           else
             node scripts/set-extension-release-version.mjs "$VERSION"
           fi
+      - name: Install pinned AppImage tools
+        run: node scripts/desktop/install-linux-tools.mjs
       - name: Build signed Linux desktop packages
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AIPASS_SIGNING_PRIVATE_KEY: ${{ secrets.AIPASS_SIGNING_PRIVATE_KEY || secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          AIPASS_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AIPASS_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          test -n "$TAURI_SIGNING_PRIVATE_KEY"
-          pnpm --dir apps/desktop tauri build --ci --bundles deb,rpm,appimage --config src-tauri/tauri.linux-release.json
+          test -n "$AIPASS_SIGNING_PRIVATE_KEY"
+          node scripts/package-desktop.mjs --ci --bundles deb,rpm,appimage
       - name: Verify every Linux package signature
         run: node scripts/verify-linux-signatures.mjs target/release/bundle
       - name: Verify packaged desktop and CLI
@@ -753,8 +756,10 @@ jobs:
             const requiredPlatforms = [
               'darwin-aarch64',
               'darwin-x86_64',
+              'darwin-native-aarch64',
+              'darwin-native-x86_64',
               ...['aarch64', 'x86_64'].flatMap(arch =>
-                ['appimage', 'deb', 'rpm'].map(format => `linux-${arch}-${format}`)),
+                ['appimage', 'deb', 'rpm'].flatMap(format => [`linux-${arch}-${format}`, `linux-native-${arch}-${format}`])),
             ];
             const missing = requiredPlatforms.filter((platform) => {
               const entry = manifest.platforms?.[platform];

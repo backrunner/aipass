@@ -1,0 +1,726 @@
+{
+  "entries": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "title": "Gateway with a deliberately long provider name",
+      "favorite": true,
+      "providerKind": "third_party",
+      "credentialKind": "api",
+      "domains": [],
+      "faviconUrl": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3C/svg%3E",
+      "endpoints": [
+        {
+          "id": "api",
+          "kind": "api",
+          "url": "https://gateway.example.invalid/v1"
+        }
+      ],
+      "interfaceType": "openai_compatible",
+      "authScheme": "bearer",
+      "defaultModel": "fixture-model",
+      "maskedSecret": "••••fixture",
+      "fingerprint": "fixture-gateway",
+      "supportsWebsockets": false,
+      "secretRefs": [
+        {
+          "id": "key-a",
+          "label": "Production",
+          "masked": "••••fixture-a",
+          "fingerprint": "fixture-a"
+        },
+        {
+          "id": "key-b",
+          "label": "Fallback",
+          "masked": "••••fixture-b",
+          "fingerprint": "fixture-b"
+        }
+      ],
+      "tags": [],
+      "createdAt": "2026-11-12T04:00:00Z",
+      "updatedAt": "2026-11-12T04:00:00Z",
+      "headerNames": [
+        "X-Fixture"
+      ],
+      "maxConcurrentRequests": 4,
+      "modelAliases": [],
+      "lastUsedAt": null,
+      "archivedAt": null,
+      "deletedAt": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "title": "Anthropic fixture",
+      "favorite": false,
+      "providerKind": "official",
+      "credentialKind": "api",
+      "domains": [],
+      "faviconUrl": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3C/svg%3E",
+      "endpoints": [
+        {
+          "id": "api",
+          "kind": "api",
+          "url": "https://anthropic.example.invalid/v1"
+        }
+      ],
+      "interfaceType": "anthropic_messages",
+      "authScheme": "x_api_key",
+      "defaultModel": "fixture-claude",
+      "maskedSecret": "••••fixture",
+      "fingerprint": "fixture-anthropic",
+      "supportsWebsockets": false,
+      "secretRefs": [
+        {
+          "id": "key-c",
+          "label": "Primary",
+          "masked": "••••fixture",
+          "fingerprint": "fixture-key-c"
+        }
+      ],
+      "tags": [],
+      "createdAt": "2026-11-12T04:00:00Z",
+      "updatedAt": "2026-11-12T04:00:00Z",
+      "providerId": "00000000-0000-4000-8000-000000000002",
+      "modelAliases": [],
+      "headerNames": [],
+      "lastUsedAt": null,
+      "archivedAt": null,
+      "deletedAt": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "title": "Archived account",
+      "favorite": false,
+      "providerKind": "third_party",
+      "credentialKind": "api",
+      "domains": [],
+      "faviconUrl": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3C/svg%3E",
+      "endpoints": [
+        {
+          "id": "api",
+          "kind": "api",
+          "url": "https://archived.example.invalid/v1"
+        }
+      ],
+      "interfaceType": "openai_compatible",
+      "authScheme": "bearer",
+      "defaultModel": "fixture-model",
+      "maskedSecret": "••••fixture",
+      "fingerprint": "fixture-archived",
+      "supportsWebsockets": false,
+      "secretRefs": [
+        {
+          "id": "key-old",
+          "label": "Primary",
+          "masked": "••••fixture",
+          "fingerprint": "fixture-key-old"
+        }
+      ],
+      "tags": [],
+      "createdAt": "2026-11-12T04:00:00Z",
+      "updatedAt": "2026-11-12T04:00:00Z",
+      "archivedAt": "2026-11-12T04:00:00Z",
+      "modelAliases": [],
+      "headerNames": [],
+      "lastUsedAt": null,
+      "deletedAt": null
+    }
+  ],
+  "config": {
+    "enabled": true,
+    "bindAddr": "127.0.0.1:8787",
+    "upstreamProxy": {
+      "mode": "system"
+    },
+    "pricing": [],
+    "routes": [
+      {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "name": "Primary API group with a long name",
+        "token": "fixture-only-not-a-secret",
+        "enabled": true,
+        "strategy": "fallback",
+        "inboundProtocol": "open_ai_chat_completions",
+        "upstreamProtocol": "open_ai_chat_completions",
+        "conversionEnabled": false,
+        "targets": [
+          {
+            "id": "00000000-0000-4000-8000-000000000006",
+            "secretId": "key-a",
+            "priority": 0,
+            "providerEntryId": "00000000-0000-4000-8000-000000000001",
+            "label": "Production",
+            "baseUrl": "https://gateway.example.invalid/v1",
+            "authScheme": "bearer",
+            "weight": 1,
+            "enabled": true
+          },
+          {
+            "id": "00000000-0000-4000-8000-000000000007",
+            "secretId": "key-b",
+            "priority": 1,
+            "providerEntryId": "00000000-0000-4000-8000-000000000001",
+            "label": "Fallback",
+            "baseUrl": "https://gateway.example.invalid/v1",
+            "authScheme": "bearer",
+            "weight": 1,
+            "enabled": true
+          }
+        ],
+        "retry": {
+          "maxAttempts": 3,
+          "failureThreshold": 3,
+          "circuitOpenSeconds": 30,
+          "connectTimeoutMs": 10000,
+          "firstByteTimeoutMs": 30000,
+          "streamIdleTimeoutMs": 120000,
+          "silentRetry": false,
+          "maxSilentRetries": 3,
+          "holdOnFailure": false,
+          "holdInitialDelayMs": 500,
+          "holdMaxDelayMs": 10000,
+          "holdMaxDurationMs": 300000
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000005",
+        "name": "Disabled route",
+        "token": "fixture-only-not-a-secret-2",
+        "enabled": false,
+        "strategy": "round_robin",
+        "inboundProtocol": "anthropic_messages",
+        "upstreamProtocol": "anthropic_messages",
+        "conversionEnabled": false,
+        "targets": [],
+        "retry": {
+          "maxAttempts": 3,
+          "failureThreshold": 3,
+          "circuitOpenSeconds": 30,
+          "connectTimeoutMs": 10000,
+          "firstByteTimeoutMs": 30000,
+          "streamIdleTimeoutMs": 120000,
+          "silentRetry": false,
+          "maxSilentRetries": 3,
+          "holdOnFailure": false,
+          "holdInitialDelayMs": 500,
+          "holdMaxDelayMs": 10000,
+          "holdMaxDurationMs": 300000
+        }
+      }
+    ]
+  },
+  "status": {
+    "running": true,
+    "enabled": true,
+    "bindAddr": "127.0.0.1:8787",
+    "activeRoutes": 1,
+    "requests": 1234567,
+    "failures": 12,
+    "recentRequests": 42,
+    "recentTokens": 987654,
+    "successRateBps": 9750,
+    "averageFirstTokenMs": 360,
+    "inFlightRequests": 7,
+    "availableChannels": 1,
+    "totalChannels": 2,
+    "channels": [
+      {
+        "routeId": "00000000-0000-4000-8000-000000000004",
+        "targetId": "00000000-0000-4000-8000-000000000006",
+        "providerEntryId": "00000000-0000-4000-8000-000000000001",
+        "secretId": "key-a",
+        "inFlightRequests": 7,
+        "degraded": false,
+        "available": true,
+        "cooldownRemainingMs": 0,
+        "websocketCoolingDown": false
+      },
+      {
+        "routeId": "00000000-0000-4000-8000-000000000004",
+        "targetId": "00000000-0000-4000-8000-000000000007",
+        "providerEntryId": "00000000-0000-4000-8000-000000000001",
+        "secretId": "key-b",
+        "inFlightRequests": 0,
+        "degraded": true,
+        "available": false,
+        "cooldownRemainingMs": 12000,
+        "websocketCoolingDown": false
+      }
+    ]
+  },
+  "usage": {
+    "providerEntryId": "",
+    "secretId": "",
+    "requestCount": 6,
+    "inputTokens": 6000,
+    "outputTokens": 600,
+    "cacheReadTokens": 2400,
+    "cacheCreationTokens": 600,
+    "estimatedCostMicros": 75000,
+    "attemptCount": 6,
+    "completedAttempts": 6,
+    "successfulAttempts": 6,
+    "successRateBps": 10000,
+    "averageFirstTokenMs": 1234,
+    "providers": [
+      {
+        "providerEntryId": "00000000-0000-4000-8000-000000000001",
+        "secretId": "key-a",
+        "requestCount": 3,
+        "inputTokens": 3000,
+        "outputTokens": 300,
+        "cacheReadTokens": 1200,
+        "cacheCreationTokens": 300,
+        "estimatedCostMicros": 37500,
+        "attemptCount": 3,
+        "completedAttempts": 3,
+        "successfulAttempts": 3,
+        "successRateBps": 10000,
+        "averageFirstTokenMs": 1234
+      },
+      {
+        "providerEntryId": "00000000-0000-4000-8000-000000000001",
+        "secretId": "key-b",
+        "requestCount": 2,
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 800,
+        "cacheCreationTokens": 200,
+        "estimatedCostMicros": 25000,
+        "attemptCount": 2,
+        "completedAttempts": 2,
+        "successfulAttempts": 2,
+        "successRateBps": 10000,
+        "averageFirstTokenMs": 1234
+      },
+      {
+        "providerEntryId": "00000000-0000-4000-8000-000000000003",
+        "secretId": "key-old",
+        "requestCount": 1,
+        "inputTokens": 1000,
+        "outputTokens": 100,
+        "cacheReadTokens": 400,
+        "cacheCreationTokens": 100,
+        "estimatedCostMicros": 12500,
+        "attemptCount": 1,
+        "completedAttempts": 1,
+        "successfulAttempts": 1,
+        "successRateBps": 10000,
+        "averageFirstTokenMs": 1234
+      }
+    ],
+    "models": [
+      {
+        "providerEntryId": "00000000-0000-4000-8000-000000000001",
+        "secretId": "key-a",
+        "requestCount": 3,
+        "inputTokens": 3000,
+        "outputTokens": 300,
+        "cacheReadTokens": 1200,
+        "cacheCreationTokens": 300,
+        "estimatedCostMicros": 37500,
+        "attemptCount": 3,
+        "completedAttempts": 3,
+        "successfulAttempts": 3,
+        "successRateBps": 10000,
+        "averageFirstTokenMs": 1234,
+        "model": "fixture-model"
+      },
+      {
+        "providerEntryId": "00000000-0000-4000-8000-000000000001",
+        "secretId": "key-b",
+        "requestCount": 2,
+        "inputTokens": 2000,
+        "outputTokens": 200,
+        "cacheReadTokens": 800,
+        "cacheCreationTokens": 200,
+        "estimatedCostMicros": 25000,
+        "attemptCount": 2,
+        "completedAttempts": 2,
+        "successfulAttempts": 2,
+        "successRateBps": 10000,
+        "averageFirstTokenMs": 1234,
+        "model": "fixture-model"
+      },
+      {
+        "providerEntryId": "00000000-0000-4000-8000-000000000003",
+        "secretId": "key-old",
+        "requestCount": 1,
+        "inputTokens": 1000,
+        "outputTokens": 100,
+        "cacheReadTokens": 400,
+        "cacheCreationTokens": 100,
+        "estimatedCostMicros": 12500,
+        "attemptCount": 1,
+        "completedAttempts": 1,
+        "successfulAttempts": 1,
+        "successRateBps": 10000,
+        "averageFirstTokenMs": 1234,
+        "model": "fixture-model"
+      }
+    ]
+  },
+  "series": [
+    {
+      "date": "2026-11-12",
+      "requestCount": 6,
+      "inputTokens": 6000,
+      "outputTokens": 600,
+      "cacheReadTokens": 2400,
+      "cacheCreationTokens": 600,
+      "estimatedCostMicros": 75000,
+      "models": [
+        {
+          "model": "fixture-model",
+          "requestCount": 6,
+          "inputTokens": 6000,
+          "outputTokens": 600,
+          "cacheReadTokens": 2400,
+          "cacheCreationTokens": 600,
+          "estimatedCostMicros": 75000
+        }
+      ]
+    },
+    {
+      "date": "2026-11-09",
+      "requestCount": 36,
+      "inputTokens": 36000,
+      "outputTokens": 3600,
+      "cacheReadTokens": 14400,
+      "cacheCreationTokens": 3600,
+      "estimatedCostMicros": 450000,
+      "models": [
+        {
+          "model": "fixture-model",
+          "requestCount": 36,
+          "inputTokens": 36000,
+          "outputTokens": 3600,
+          "cacheReadTokens": 14400,
+          "cacheCreationTokens": 3600,
+          "estimatedCostMicros": 450000
+        }
+      ]
+    },
+    {
+      "date": "2026-10-24",
+      "requestCount": 138,
+      "inputTokens": 138000,
+      "outputTokens": 13800,
+      "cacheReadTokens": 55200,
+      "cacheCreationTokens": 13800,
+      "estimatedCostMicros": 1725000,
+      "models": [
+        {
+          "model": "fixture-model",
+          "requestCount": 138,
+          "inputTokens": 138000,
+          "outputTokens": 13800,
+          "cacheReadTokens": 55200,
+          "cacheCreationTokens": 13800,
+          "estimatedCostMicros": 1725000
+        }
+      ]
+    }
+  ],
+  "now": "2026-11-12T04:00:00Z",
+  "logs": [
+    {
+      "timestamp": 1794456000,
+      "level": "info",
+      "message": "event=request_started provider_entry_id=00000000-0000-4000-8000-000000000001 transport=http model=fixture-model"
+    },
+    {
+      "timestamp": 1794456001,
+      "level": "info",
+      "message": "event=request_completed status=200 outcome=success duration_ms=123 input_tokens=1200"
+    },
+    {
+      "timestamp": 1794456002,
+      "level": "warn",
+      "message": "event=retry status=Some(429) retry_after_ms=1000 reason=\"rate limited\""
+    },
+    {
+      "timestamp": 1794456003,
+      "level": "error",
+      "message": "event=request_failed status=503 outcome=failure error=\"服务暂时不可用 status=200 is part of this description\""
+    },
+    {
+      "timestamp": 1794456004,
+      "level": "debug",
+      "message": "event=fixture active=true queued=false detail=\"Synthetic validation data only\""
+    }
+  ],
+  "settingsRecords": {
+    "conflicts": [
+      {
+        "scope": "sync",
+        "origin": "Office Mac",
+        "conflictPath": "fixture/conflict.aip",
+        "targetPath": "fixture/current.aip",
+        "object": {
+          "objectId": null,
+          "objectType": "entry",
+          "lamport": 7,
+          "hashHex": "aabbccddeeff00112233",
+          "updatedAt": "2026-11-12T04:00:00Z",
+          "relativePath": "entries/fixture.aip"
+        },
+        "conflictSummary": {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "title": "Shared API account",
+          "favorite": false,
+          "providerKind": "official",
+          "credentialKind": "api",
+          "domains": [],
+          "faviconUrl": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3C/svg%3E",
+          "endpoints": [
+            {
+              "id": "api",
+              "kind": "api",
+              "url": "https://anthropic.example.invalid/v1"
+            }
+          ],
+          "interfaceType": "anthropic_messages",
+          "authScheme": "x_api_key",
+          "defaultModel": "fixture-claude",
+          "maskedSecret": "••••fixture",
+          "fingerprint": "aabbccddeeff00112233",
+          "supportsWebsockets": false,
+          "secretRefs": [
+            {
+              "id": "key-c",
+              "label": "Primary",
+              "masked": "••••fixture",
+              "fingerprint": "fixture-key-c"
+            }
+          ],
+          "tags": [],
+          "createdAt": "2026-11-12T04:00:00Z",
+          "updatedAt": "2026-11-12T04:00:00Z",
+          "providerId": "00000000-0000-4000-8000-000000000002",
+          "modelAliases": [],
+          "headerNames": [],
+          "lastUsedAt": null,
+          "archivedAt": null,
+          "deletedAt": null
+        },
+        "targetSummary": {
+          "id": "00000000-0000-4000-8000-000000000002",
+          "title": "Shared API account",
+          "favorite": false,
+          "providerKind": "official",
+          "credentialKind": "api",
+          "domains": [],
+          "faviconUrl": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3C/svg%3E",
+          "endpoints": [
+            {
+              "id": "api",
+              "kind": "api",
+              "url": "https://anthropic.example.invalid/v1"
+            }
+          ],
+          "interfaceType": "anthropic_messages",
+          "authScheme": "x_api_key",
+          "defaultModel": "fixture-claude",
+          "maskedSecret": "••••fixture",
+          "fingerprint": "aabbccddeeff00112233",
+          "supportsWebsockets": false,
+          "secretRefs": [
+            {
+              "id": "key-c",
+              "label": "Primary",
+              "masked": "••••fixture",
+              "fingerprint": "fixture-key-c"
+            }
+          ],
+          "tags": [],
+          "createdAt": "2026-11-12T04:00:00Z",
+          "updatedAt": "2026-11-12T04:00:00Z",
+          "providerId": "00000000-0000-4000-8000-000000000002",
+          "modelAliases": [],
+          "headerNames": [],
+          "lastUsedAt": null,
+          "archivedAt": null,
+          "deletedAt": null
+        },
+        "snapshotSummary": null
+      }
+    ],
+    "snapshots": [
+      {
+        "scope": "sync",
+        "origin": "Office Mac",
+        "conflictPath": "fixture/conflict.aip",
+        "targetPath": "fixture/current.aip",
+        "object": {
+          "objectId": null,
+          "objectType": "vault_snapshot",
+          "lamport": 7,
+          "hashHex": "aabbccddeeff00112233",
+          "updatedAt": "2026-11-12T04:00:00Z",
+          "relativePath": "entries/fixture.aip"
+        },
+        "conflictSummary": null,
+        "targetSummary": null,
+        "snapshotSummary": {
+          "providerCount": 3,
+          "titles": [
+            "Gateway",
+            "Anthropic",
+            "Archived"
+          ]
+        }
+      },
+      {
+        "scope": "sync",
+        "origin": "Office Mac",
+        "conflictPath": "fixture/conflict.aip",
+        "targetPath": "fixture/current.aip",
+        "object": {
+          "objectId": null,
+          "objectType": "invalid_snapshot",
+          "lamport": 7,
+          "hashHex": "aabbccddeeff00112233",
+          "updatedAt": "2026-11-12T04:00:00Z",
+          "relativePath": "entries/fixture.aip"
+        },
+        "conflictSummary": null,
+        "targetSummary": null,
+        "snapshotSummary": null
+      }
+    ],
+    "devices": [
+      {
+        "id": "00000000-0000-4000-8000-000000000100",
+        "name": "Office Mac",
+        "trusted": true,
+        "firstSeenAt": "2026-11-12T04:00:00Z",
+        "lastSeenAt": "2026-11-12T04:00:00Z",
+        "revokedAt": null,
+        "lastEpoch": 9
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000101",
+        "name": "Retired laptop",
+        "trusted": false,
+        "firstSeenAt": "2026-11-12T04:00:00Z",
+        "lastSeenAt": "2026-11-12T04:00:00Z",
+        "revokedAt": "2026-11-12T04:00:00Z",
+        "lastEpoch": 9
+      }
+    ]
+  },
+  "settingsServer": {
+    "config": {
+      "enabled": true,
+      "bindAddr": "127.0.0.1:8787",
+      "upstreamProxy": {
+        "mode": "system"
+      },
+      "pricing": [
+        {
+          "model": "fixture-model",
+          "inputMicrosPerMillion": 1000000,
+          "outputMicrosPerMillion": 2000000,
+          "cacheReadMicrosPerMillion": 100000,
+          "cacheCreationMicrosPerMillion": 1250000,
+          "cacheCreation1hMicrosPerMillion": null
+        }
+      ],
+      "routes": [
+        {
+          "id": "00000000-0000-4000-8000-000000000004",
+          "name": "Primary API group with a long name",
+          "token": "fixture-only-not-a-secret",
+          "enabled": true,
+          "strategy": "fallback",
+          "inboundProtocol": "open_ai_chat_completions",
+          "upstreamProtocol": "open_ai_chat_completions",
+          "conversionEnabled": false,
+          "targets": [
+            {
+              "id": "00000000-0000-4000-8000-000000000006",
+              "secretId": "key-a",
+              "priority": 0,
+              "providerEntryId": "00000000-0000-4000-8000-000000000001",
+              "label": "Production",
+              "baseUrl": "https://gateway.example.invalid/v1",
+              "authScheme": "bearer",
+              "weight": 1,
+              "enabled": true
+            },
+            {
+              "id": "00000000-0000-4000-8000-000000000007",
+              "secretId": "key-b",
+              "priority": 1,
+              "providerEntryId": "00000000-0000-4000-8000-000000000001",
+              "label": "Fallback",
+              "baseUrl": "https://gateway.example.invalid/v1",
+              "authScheme": "bearer",
+              "weight": 1,
+              "enabled": true
+            }
+          ],
+          "retry": {
+            "maxAttempts": 3,
+            "failureThreshold": 3,
+            "circuitOpenSeconds": 30,
+            "connectTimeoutMs": 10000,
+            "firstByteTimeoutMs": 30000,
+            "streamIdleTimeoutMs": 120000,
+            "silentRetry": false,
+            "maxSilentRetries": 3,
+            "holdOnFailure": false,
+            "holdInitialDelayMs": 500,
+            "holdMaxDelayMs": 10000,
+            "holdMaxDurationMs": 300000
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000005",
+          "name": "Disabled route",
+          "token": "fixture-only-not-a-secret-2",
+          "enabled": false,
+          "strategy": "round_robin",
+          "inboundProtocol": "anthropic_messages",
+          "upstreamProtocol": "anthropic_messages",
+          "conversionEnabled": false,
+          "targets": [],
+          "retry": {
+            "maxAttempts": 3,
+            "failureThreshold": 3,
+            "circuitOpenSeconds": 30,
+            "connectTimeoutMs": 10000,
+            "firstByteTimeoutMs": 30000,
+            "streamIdleTimeoutMs": 120000,
+            "silentRetry": false,
+            "maxSilentRetries": 3,
+            "holdOnFailure": false,
+            "holdInitialDelayMs": 500,
+            "holdMaxDelayMs": 10000,
+            "holdMaxDurationMs": 300000
+          }
+        }
+      ]
+    },
+    "panel": {
+      "settings": {
+        "enabled": true,
+        "address": "127.0.0.1",
+        "port": 8788,
+        "https": true
+      },
+      "running": true,
+      "url": "https://127.0.0.1:8788",
+      "addresses": [
+        "127.0.0.1",
+        "192.0.2.10"
+      ],
+      "certificatePem": "SYNTHETIC CERTIFICATE FIXTURE ONLY",
+      "fingerprint": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99",
+      "importedCertificate": false,
+      "error": null,
+      "hasAccessCode": true,
+      "remoteUnlockEnabled": true
+    }
+  }
+}

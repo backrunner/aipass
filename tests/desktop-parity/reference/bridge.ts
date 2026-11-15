@@ -1,9 +1,10 @@
+import {administrationInvoke} from "./administration-fixtures";
 import {agentInvoke,agentEntries} from "./agent-fixtures";
 // Deliberately test-only. Unknown commands fail and are retained in the trace.
 import { businessBridge } from "./business-bridge";
 import providerCatalog from "../fixtures/providers.json";
 import {subscriptionEntry,subscriptionInvoke} from "./subscription-fixtures";
-import type { EntrySummary } from "../../../apps/desktop/src/lib/types";
+import type { EntrySummary } from "../../../artifacts/desktop-reference/src/lib/types";
 const params = new URLSearchParams(location.search);
 const scenario = params.get("scenario") ?? "empty";
 const locale = params.get("locale") ?? "en";
@@ -21,6 +22,7 @@ const business = scenario.startsWith("business-") || scenario.startsWith("subscr
 Object.assign(window, { __parityTrace: trace });
 export async function invoke(command: string, args?: unknown) {
   trace.push({ command, args });
+  const administration=administrationInvoke(command);if(administration!==undefined)return administration;
   if(scenario.startsWith("subscription-")){const result=await subscriptionInvoke(command,args as Record<string,unknown>);if(result!==undefined)return result;}
   if (params.has("tools")) {
     if (command === "provider_probe") return {ok:true,interfaceType:"openai_compatible",status:200,modelCount:12};

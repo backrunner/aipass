@@ -1,7 +1,7 @@
 //! Desktop preferences are shared with the transitional shell, never vault data.
 use aipass_desktop_platform::preferences::AppPreferences;
 #[derive(Default)]
-pub struct Preferences(pub AppPreferences);
+pub struct Preferences(pub AppPreferences, pub Option<std::path::PathBuf>);
 impl gpui::Global for Preferences {}
 
 pub fn load(args: &[String], connected: bool) -> Result<Preferences, String> {
@@ -11,11 +11,17 @@ pub fn load(args: &[String], connected: bool) -> Result<Preferences, String> {
         .map(std::path::PathBuf::from);
     let path = match path {
         Some(path) => Some(path),
-        None if connected => Some(aipass_desktop_platform::preferences::default_path()?),
+        None if connected => Some(
+            aipass_desktop_native::runtime_check::path("preferences.json")
+                .unwrap_or(aipass_desktop_platform::preferences::default_path()?),
+        ),
         None => None,
     };
-    Ok(Preferences(match path {
-        Some(path) => aipass_desktop_platform::preferences::load(&path)?,
-        None => AppPreferences::default(),
-    }))
+    Ok(Preferences(
+        match &path {
+            Some(path) => aipass_desktop_platform::preferences::load(path)?,
+            None => AppPreferences::default(),
+        },
+        path,
+    ))
 }

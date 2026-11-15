@@ -7,6 +7,7 @@ use gpui::{div, prelude::*, px, rgb, Context, Window};
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        aipass_desktop_native::runtime_check::rendered();
         self.prepare_appearance(window, cx);
         self.appearance
             .frame(self.show_workspace, self.curtain.is_some(), window, cx);
@@ -90,7 +91,9 @@ impl Render for Desktop {
                         )),
                 )
             })
+            .child(self.settings.clone())
             .child(self.recovery.clone())
+            .child(self.provider_link_dialog(window, cx))
             .child(self.update_banner(cx))
             .children(self.curtain.clone())
             .child(self.toast.clone());

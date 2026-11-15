@@ -14,6 +14,15 @@ macro_rules! icons {
     }
 }
 icons!(
+    "arrow-up",
+    "arrow-down",
+    "file-text",
+    "file-key-2",
+    "chart-column",
+    "puzzle",
+    "grip-vertical",
+    "square",
+    "play",
     "send",
     "info",
     "history",
@@ -52,6 +61,9 @@ icons!(
     "list-filter",
     "refresh-cw",
     "rotate-ccw",
+    "rotate-cw",
+    "download",
+    "upload",
     "ellipsis",
     "chevron-down",
     "chevron-up",
@@ -64,6 +76,8 @@ icons!(
     "spinner",
     "loading",
     "circle-alert",
+    "circle-slash",
+    "loader-circle",
     "triangle-alert",
     "x"
 );
@@ -79,51 +93,35 @@ impl AssetSource for Assets {
             return Ok(Some(Cow::Owned(svg.into_bytes())));
         }
         let tool = match path {
-            "tool-cline" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/cline.svg").as_slice())
-            }
-            "tool-trae" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/trae.svg").as_slice())
-            }
-            "tool-qoder" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/qoder.svg").as_slice())
-            }
-            "tool-codex" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/codex.svg").as_slice())
-            }
+            "tool-cline" => Some(include_bytes!("../assets/tool-icons/cline.svg").as_slice()),
+            "tool-trae" => Some(include_bytes!("../assets/tool-icons/trae.svg").as_slice()),
+            "tool-qoder" => Some(include_bytes!("../assets/tool-icons/qoder.svg").as_slice()),
+            "tool-codex" => Some(include_bytes!("../assets/tool-icons/codex.svg").as_slice()),
             "tool-claude-code" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/claude-code.svg").as_slice())
+                Some(include_bytes!("../assets/tool-icons/claude-code.svg").as_slice())
             }
             "tool-gemini-cli" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/gemini-cli.svg").as_slice())
+                Some(include_bytes!("../assets/tool-icons/gemini-cli.svg").as_slice())
             }
-            "tool-opencode" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/opencode.svg").as_slice())
-            }
-            "tool-grok" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/grok.svg").as_slice())
-            }
-            "tool-pi" => Some(include_bytes!("../../desktop/public/tool-icons/pi.svg").as_slice()),
-            "tool-cursor" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/cursor.svg").as_slice())
-            }
+            "tool-opencode" => Some(include_bytes!("../assets/tool-icons/opencode.svg").as_slice()),
+            "tool-grok" => Some(include_bytes!("../assets/tool-icons/grok.svg").as_slice()),
+            "tool-pi" => Some(include_bytes!("../assets/tool-icons/pi.svg").as_slice()),
+            "tool-cursor" => Some(include_bytes!("../assets/tool-icons/cursor.svg").as_slice()),
             "tool-kimi-code" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/kimi-code.svg").as_slice())
+                Some(include_bytes!("../assets/tool-icons/kimi-code.svg").as_slice())
             }
-            "tool-zed" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/zed.svg").as_slice())
+            "tool-zed" => Some(include_bytes!("../assets/tool-icons/zed.svg").as_slice()),
+            "tool-deepseek-harness" => {
+                Some(include_bytes!("../assets/tool-icons/deepseek-harness.svg").as_slice())
             }
-            "tool-deepseek-harness" => Some(
-                include_bytes!("../../desktop/public/tool-icons/deepseek-harness.svg").as_slice(),
-            ),
-            "tool-antigravity-cli" => Some(
-                include_bytes!("../../desktop/public/tool-icons/antigravity-cli.svg").as_slice(),
-            ),
+            "tool-antigravity-cli" => {
+                Some(include_bytes!("../assets/tool-icons/antigravity-cli.svg").as_slice())
+            }
             "tool-command-code" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/command-code.svg").as_slice())
+                Some(include_bytes!("../assets/tool-icons/command-code.svg").as_slice())
             }
             "tool-workbuddy" => {
-                Some(include_bytes!("../../desktop/public/tool-icons/workbuddy.svg").as_slice())
+                Some(include_bytes!("../assets/tool-icons/workbuddy.svg").as_slice())
             }
             _ => None,
         };

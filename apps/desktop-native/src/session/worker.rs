@@ -11,6 +11,10 @@ pub(super) fn start(
         .name("desktop-agent-client".into())
         .spawn(move || {
             while let Ok(job) = jobs.recv() {
+                let administration = match &job.command {
+                    Command::Administration(request) => Some(request.scope),
+                    _ => None,
+                };
                 let credential = match &job.command {
                     Command::Credential(request) => Some(request.scope),
                     _ => None,
@@ -39,6 +43,15 @@ pub(super) fn start(
                 };
                 let activity = matches!(job.command, Command::Touch);
                 let result = transport.execute(job.command);
+                let result = match (administration, result) {
+                    (Some(scope), Err(error)) => Ok(Reply::Administration(Box::new(
+                        crate::administration::Completion {
+                            scope,
+                            result: Err(error),
+                        },
+                    ))),
+                    (_, result) => result,
+                };
                 let result = match (credential, result) {
                     (Some(scope), Err(error)) => {
                         Ok(Reply::Credential(crate::credentials::Completion {

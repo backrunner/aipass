@@ -1,7 +1,20 @@
 //! Native desktop updater. Network, cache and installation run off the GPUI thread.
 //! This does not depend on Tauri and does not accept unsigned packages.
+#[cfg(target_os = "macos")]
 mod bundle;
+#[cfg(target_os = "linux")]
+#[path = "updates/linux.rs"]
+mod bundle;
+#[cfg(windows)]
+#[path = "updates/windows.rs"]
+mod bundle;
+pub mod control;
+pub mod production;
+#[cfg(target_os = "linux")]
+mod restart;
 mod worker;
+#[cfg(windows)]
+pub use bundle::run as run_windows_helper;
 pub use worker::{Command, Host, Snapshot, Worker};
 
 use aipass_storage::atomic_write_bytes;
@@ -89,6 +102,42 @@ pub struct Updater {
 }
 
 impl Updater {
+    fn selected_channel(&self) -> aipass_agent_protocol::UpdateChannel {
+        use aipass_agent_protocol::UpdateChannel;
+        match self.config.endpoint.as_str() {
+            "https://aipass.alkinum.io/api/updates/beta/latest.json" => UpdateChannel::Beta,
+            "https://aipass.alkinum.io/api/updates/nightly/latest.json" => UpdateChannel::Nightly,
+            "https://github.com/backrunner/aipass/releases/latest/download/latest.json" => {
+                UpdateChannel::Official
+            }
+            _ => match channel(&self.config.current_version) {
+                "beta" => UpdateChannel::Beta,
+                "nightly" => UpdateChannel::Nightly,
+                _ => UpdateChannel::Official,
+            },
+        }
+    }
+    fn select_channel(&mut self, channel: aipass_agent_protocol::UpdateChannel) -> Result<()> {
+        // Retire cache before replacing the endpoint; verification remains identical.
+        self.clear()?;
+        if crate::runtime_check::active() {
+            return Ok(());
+        }
+        self.config.endpoint = match channel {
+            aipass_agent_protocol::UpdateChannel::Official => {
+                "https://github.com/backrunner/aipass/releases/latest/download/latest.json"
+            }
+            aipass_agent_protocol::UpdateChannel::Beta => {
+                "https://aipass.alkinum.io/api/updates/beta/latest.json"
+            }
+            aipass_agent_protocol::UpdateChannel::Nightly => {
+                "https://aipass.alkinum.io/api/updates/nightly/latest.json"
+            }
+        }
+        .parse()?;
+        Ok(())
+    }
+
     pub fn new(config: Config) -> Result<Self> {
         Self::create(config, false)
     }
@@ -106,7 +155,9 @@ impl Updater {
     fn create(config: Config, allow_loopback: bool) -> Result<Self> {
         validate_url(&config.endpoint, allow_loopback)?;
         ensure!(
-            config.target.starts_with("darwin-native-"),
+            ["darwin-native-", "windows-native-", "linux-native-"]
+                .iter()
+                .any(|prefix| config.target.starts_with(prefix)),
             "update_release_unavailable"
         );
         let key = PublicKey::decode(std::str::from_utf8(&STANDARD.decode(&config.public_key)?)?)?;
@@ -136,15 +187,20 @@ impl Updater {
         let response = self
             .client
             .get(self.config.endpoint.clone())
-            .send()?
-            .error_for_status()?;
+            .send()
+            .context("update_network_error")?
+            .error_for_status()
+            .context("update_network_error")?;
         if response.status() == reqwest::StatusCode::NO_CONTENT {
             return Ok(None);
         }
         ensure!(response.status().is_success(), "update_network_error");
         let bytes = bounded_read(response, MAX_MANIFEST, |_| {})?;
         let manifest: Manifest = serde_json::from_slice(&bytes)?;
-        if manifest.version <= self.config.current_version {
+        if manifest.version < self.config.current_version
+            || (manifest.version == self.config.current_version
+                && !crate::runtime_check::reinstall_same_version())
+        {
             return Ok(None);
         }
         let platform = manifest
@@ -209,8 +265,10 @@ impl Updater {
         let response = self
             .client
             .get(release.url.clone())
-            .send()?
-            .error_for_status()?;
+            .send()
+            .context("update_network_error")?
+            .error_for_status()
+            .context("update_network_error")?;
         ensure!(response.status().is_success(), "update_network_error");
         ensure!(
             response
@@ -220,7 +278,7 @@ impl Updater {
         );
         let bytes = bounded_read(response, MAX_PACKAGE, progress)?;
         self.verify(release, &bytes)?;
-        atomic_write_bytes(self.config.cache_dir.join("package"), &bytes)?;
+        atomic_write_bytes(self.config.cache_dir.join("package"), &bytes).map_err(cache_error)?;
         atomic_write_bytes(
             self.config.cache_dir.join("metadata.json"),
             &serde_json::to_vec(&Cached {
@@ -228,7 +286,8 @@ impl Updater {
                 target: self.config.target.clone(),
                 release: release.clone(),
             })?,
-        )?;
+        )
+        .map_err(cache_error)?;
         Ok(())
     }
 
@@ -238,7 +297,7 @@ impl Updater {
             match fs::remove_file(self.config.cache_dir.join(name)) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(cache_error(error)),
             }
         }
         Ok(())
@@ -324,6 +383,14 @@ fn bounded_read(mut reader: impl Read, limit: u64, progress: impl Fn(u64)) -> Re
         progress(bytes.len() as u64);
     }
     Ok(bytes)
+}
+
+fn cache_error(error: std::io::Error) -> anyhow::Error {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        anyhow::anyhow!("update_cache_permission_denied")
+    } else {
+        anyhow::Error::new(error).context("update_cache_io")
+    }
 }
 
 #[cfg(test)]

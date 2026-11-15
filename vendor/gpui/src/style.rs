@@ -501,6 +501,8 @@ pub struct LayerFilter {
     /// Uniformly scale the composited layer without affecting layout. Values must be finite and
     /// greater than zero.
     pub scale: Option<f32>,
+    /// Optional independent vertical compositor scale. Defaults to the uniform scale.
+    pub scale_y: Option<f32>,
     /// Translate the composited layer without affecting layout or hitboxes.
     pub translate: Option<Point<Pixels>>,
     /// Where the scale grows from, as a fraction of the layer's own bounds:
@@ -519,6 +521,7 @@ impl LayerFilter {
             && self.fade_left.is_none()
             && self.fade_right.is_none()
             && self.scale.is_none_or(|scale| scale == 1.0)
+            && self.scale_y.is_none_or(|scale| scale == 1.0)
             && self
                 .translate
                 .is_none_or(|translate| translate == Point::default())

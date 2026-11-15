@@ -7,7 +7,7 @@ use gpui_base::{Transition, TransitionState};
 use std::time::Duration;
 
 #[derive(Default)]
-pub(super) struct ModalMotion {
+pub(crate) struct ModalMotion {
     initialized: bool,
     popup: TransitionState<f32>,
     overlay: TransitionState<f32>,
@@ -15,7 +15,7 @@ pub(super) struct ModalMotion {
     scale: TransitionState<f32>,
 }
 #[derive(Clone, Copy)]
-pub(super) struct Frame {
+pub(crate) struct Frame {
     pub popup: f32,
     pub overlay: f32,
     pub visible: bool,

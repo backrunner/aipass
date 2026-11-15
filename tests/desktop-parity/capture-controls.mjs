@@ -13,7 +13,7 @@ const round=process.argv[2];assert(/^[a-z0-9-]+$/.test(round??''));
 const output=resolve(root,'artifacts/desktop-parity',round);await mkdir(output);
 // A workspace build may replace the debug binary without the capture feature.
 execFileSync("rtk", ["proxy", "cargo", "build", "-p", "aipass-desktop-native", "--features", "parity-render"], { cwd: root, stdio: "pipe", timeout: 180000 });
-const binary=resolve(output,'aipass-desktop-native');await copyFile(resolve(root,'target/debug/aipass-desktop-native'),binary);
+const binary=resolve(output,'aipass-desktop-native');await copyFile(resolve(root,'target/debug/aipass-desktop'),binary);
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const sourceHashes={};
 async function record(path){for(const entry of await readdir(resolve(root,path),{withFileTypes:true})){if(entry.name==='node_modules'||entry.isSymbolicLink())continue;const child=`${path}/${entry.name}`;if(entry.isDirectory())await record(child);else sourceHashes[child]=hash(await readFile(resolve(root,child)));}}

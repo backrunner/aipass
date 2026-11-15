@@ -10,7 +10,7 @@ assert(/^[a-z0-9-]+$/.test(round??""),"Provide a unique round name");
 const output=resolve(root,"artifacts/desktop-parity",round);
 await mkdir(output);
 execFileSync("rtk",["proxy","cargo","build","-p","aipass-desktop-native","--features","parity-render"],{cwd:root,stdio:"pipe",timeout:180000});
-const binary=resolve(root,"target/debug/aipass-desktop-native");
+const binary=resolve(root,"target/debug/aipass-desktop");
 const hash=bytes=>createHash("sha256").update(bytes).digest("hex");
 const sourceHashes={};
 async function record(path){for(const entry of await readdir(resolve(root,path),{withFileTypes:true})){

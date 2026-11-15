@@ -28,6 +28,39 @@ pub struct ImportForm {
 }
 impl EventEmitter<Event> for ImportForm {}
 impl ImportForm {
+    pub(super) fn relocalize(&mut self, cx: &mut Context<Self>) {
+        self.source.update(cx, |source, cx| {
+            source.label = self.locale.text("auth.import.source");
+            for (value, label) in &mut source.options {
+                if let Some(key) = match value.as_str() {
+                    "backup" => Some("auth.import.backup"),
+                    "vault" => Some("auth.import.vault"),
+                    "local" => Some("auth.import.folder"),
+                    _ => None,
+                } {
+                    *label = self.locale.text(key);
+                }
+            }
+            cx.notify();
+        });
+        for (input, key) in self.inputs.iter().zip([
+            "auth.import.path",
+            "auth.import.originalPassword",
+            "auth.import.webdavUrl",
+            "auth.import.username",
+            "auth.import.webdavPassword",
+        ]) {
+            input.update(cx, |input, cx| {
+                input.set_accessibility(
+                    gpui_base::input::InputAccessibility::new(Some(gpui::Role::TextInput))
+                        .with_label(Some(self.locale.text(key).into()))
+                        .with_value_exposed(false),
+                );
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
     pub fn new(dark: bool, chinese: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = Theme::new(dark);
         let locale = Locale::new(chinese);

@@ -1,10 +1,10 @@
 import { mount } from "svelte";
 import RecoveryReference from "./RecoveryReference.svelte";
-import App from "../../../apps/desktop/src/App.svelte";
-import UnlockTransition from "../../../apps/desktop/src/lib/components/auth/UnlockTransition.svelte";
+import App from "../../../artifacts/desktop-reference/src/App.svelte";
+import UnlockTransition from "../../../artifacts/desktop-reference/src/lib/components/auth/UnlockTransition.svelte";
 import DynamicReference from "./DynamicReference.svelte";
 import SubscriptionReference from "./SubscriptionReference.svelte";
-import "../../../apps/desktop/src/styles.scss";
+import "../../../artifacts/desktop-reference/src/styles.scss";
 window.__TAURI_INTERNALS__ ||= {};
 document.documentElement.dataset.platform = "darwin";
 const params = new URLSearchParams(location.search);

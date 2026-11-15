@@ -543,6 +543,10 @@ impl LineWrapper {
         // the next line. `/` and `?` stay break opportunities so long paths
         // and URLs (`a/b`, `foo?b=2`) can wrap.
         matches!(c, '!' | ')' | ']' | '}' | '"' | '”' | '»' | '…') ||
+        // Full-width CJK closing punctuation stays with its preceding character.
+        // Otherwise labels can wrap just the final question mark onto a new line.
+        matches!(c, '。' | '、' | '，' | '．' | '！' | '？' | '：' | '；' |
+            '）' | '］' | '｝' | '〉' | '》' | '」' | '』' | '】' | '〕' | '〗' | '〙' | '〛') ||
         // `⋯` character is special used in Zed, to keep this at the end of the line.
         matches!(c, '⋯') ||
 

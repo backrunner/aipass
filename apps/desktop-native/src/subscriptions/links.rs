@@ -1,4 +1,4 @@
-//! Desktop link policy mirrors the existing Tauri subscription bridge.
+//! Desktop link policy permits only the supported subscription destinations.
 use aipass_agent::AgentCommandError;
 use aipass_agent_protocol::AgentErrorCode;
 use std::{

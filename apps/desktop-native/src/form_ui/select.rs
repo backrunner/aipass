@@ -7,6 +7,8 @@ pub struct Choice {
     pub selected: String,
     pub placeholder: String,
     pub disabled: bool,
+    pub inline: bool,
+    pub height: Option<f32>,
     pub next: Option<gpui::FocusHandle>,
     pub label: String,
     pub aria_label: Option<String>,
@@ -31,6 +33,8 @@ impl Choice {
             selected: selected.into(),
             placeholder: String::new(),
             disabled: false,
+            inline: false,
+            height: None,
             next: None,
             label,
             aria_label: None,
@@ -92,7 +96,11 @@ impl Render for Choice {
                     crate::parity::record_bounds("form-choice-trigger", *rect, cx);
                 }
             })
-            .child(crate::form_ui::label(self.label.clone(), t).font_weight(FontWeight::MEDIUM))
+            .when(!self.inline, |el| {
+                el.child(
+                    crate::form_ui::label(self.label.clone(), t).font_weight(FontWeight::MEDIUM),
+                )
+            })
             .child(
                 Popover::new("form-choice-picker")
                     .open(open)
@@ -113,7 +121,11 @@ impl Render for Choice {
                             .disabled(self.disabled)
                             .track_focus(&focus.trigger)
                             .w_full()
-                            .h(px(34.))
+                            .h(px(self.height.unwrap_or(if self.inline {
+                                32.
+                            } else {
+                                34.
+                            })))
                             .px(px(10.))
                             .rounded(px(8.))
                             .border_1()

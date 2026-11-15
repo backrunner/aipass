@@ -33,12 +33,21 @@ The same size gate covers `gpui_apple/src/system_font_weights.rs`.
   device-pixel snapping to the layout engine's absolute edges. Per-label rounding
   must not accumulate across adjacent badges. Include display scale in the
   measurement-cache key so moving between displays refreshes snapped line metrics.
+  Keep CJK closing punctuation attached to its preceding character during wrapping.
 - GPUI Base: preserve measured disclosure heights during animation. AIPass reveal
   subtrees retain fractional extents so stacked sections and bottom scrolling do
   not accumulate independently rounded heights.
 - Apple text: map the named system font weights to their CSS classes before
   matching. Medium must not fall back to Regular, and Heavy and Black remain
   distinct. Other font families retain the upstream matching behavior.
+- Apple text: retain the nominal advance of terminal CJK punctuation. CoreText
+  can select a half-width final glyph, which made inline controls too wide and
+  allowed Chinese descriptions to skip a required wrap.
+- GPUI/Apple/WGPU: support independent horizontal and vertical compositor scales.
+  Keep drawer geometry, pointer/scroll coordinates, IME bounds and mask shader
+  layouts in agreement; use the same scale pair in Metal, WGPU and WebGL.
+- GPUI Base: allow syntax highlights on selectable text without changing the
+  selection byte offsets or copied text.
 - GPUI: add an input transform scoped to compositor subtrees. Keep hit testing,
   clips, pointer/scroll/gesture coordinates, cached views, accessibility bounds,
   native IME geometry and selection hit testing consistent with the painted scale.
@@ -79,3 +88,5 @@ Those tests do not establish Windows/Linux GPU rendering or presentation.
 
 Run `node --test tests/desktop-parity/vendor-provenance.test.mjs` after edits to
 verify that every vendored file remains inventoried and matches its recorded hash.
+
+`notify-rust` 4.18.2 is used only by the Linux GPUI backend. Its unused Windows notification dependency is removed from the local manifest; Linux behavior and upstream source remain unchanged. The archive hash, per-file hashes, MIT/Apache licenses and manifest patch are retained.

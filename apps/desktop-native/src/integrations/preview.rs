@@ -32,11 +32,14 @@ pub struct Preview {
     full: bool,
     change: usize,
     scroll: ScrollHandle,
+    error_scroll: ScrollHandle,
     focus: FocusHandle,
     panes: [FocusHandle; 2],
     allow_confirm: bool,
     pub busy: bool,
     pub managed: bool,
+    pub proxy: bool,
+    pub error: String,
     theme: Theme,
     locale: Locale,
 }
@@ -74,11 +77,14 @@ impl Preview {
             full: false,
             change: 0,
             scroll: ScrollHandle::new(),
+            error_scroll: ScrollHandle::new(),
             focus,
             panes: std::array::from_fn(|_| cx.focus_handle()),
             allow_confirm,
             busy: false,
             managed: false,
+            proxy: false,
+            error: String::new(),
             theme: Theme::new(dark),
             locale: Locale::new(chinese),
         }
@@ -118,6 +124,9 @@ impl Preview {
         cx.notify();
     }
     fn access_note(&self) -> (String, Option<String>) {
+        if self.proxy {
+            return (self.locale.text("integration.proxyNote"), None);
+        }
         let env = self.files.iter().find(|f| {
             let p = f.path.replace('\\', "/");
             p.contains("/.aipass/tools/") && (p.ends_with(".env") || p.ends_with(".ps1"))
@@ -193,12 +202,22 @@ impl Render for Preview {
             .max()
             .unwrap_or(px(80.));
         let content = div()
-            .on_children_prepainted(crate::parity::record(&[
-                "integration-dialog-header",
-                "integration-dialog-filebar",
-                "integration-dialog-code",
-                "integration-dialog-footer",
-            ]))
+            .on_children_prepainted(crate::parity::record(if self.error.is_empty() {
+                &[
+                    "integration-dialog-header",
+                    "integration-dialog-filebar",
+                    "integration-dialog-code",
+                    "integration-dialog-footer",
+                ]
+            } else {
+                &[
+                    "integration-dialog-header",
+                    "integration-dialog-filebar",
+                    "integration-dialog-error",
+                    "integration-dialog-code",
+                    "integration-dialog-footer",
+                ]
+            }))
             .w_full()
             .h(px(720.).min(window.viewport_size().height - px(48.)))
             .px(px(20.))
@@ -372,6 +391,22 @@ impl Render for Preview {
                             .child(self.files[self.active].path.clone()),
                     ),
             )
+            .when(!self.error.is_empty(), |el| {
+                el.child(
+                    div()
+                        .id("integration-error")
+                        .role(gpui::Role::Alert)
+                        .flex_shrink_0()
+                        .min_w_0()
+                        .max_h(px(96.))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.error_scroll)
+                        .text_size(px(12.))
+                        .line_height(px(16.8))
+                        .text_color(t.danger)
+                        .child(self.error.clone()),
+                )
+            })
             .child(self.code(window, cx))
             .child(
                 div()

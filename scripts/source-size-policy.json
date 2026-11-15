@@ -2,36 +2,6 @@
   "production": 1000,
   "tests": 1500,
   "legacy": {
-    "apps/desktop/src-tauri/src/commands.rs": {
-      "maxLines": 1418,
-      "owner": "apps/desktop",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
-    "apps/desktop/src-tauri/src/lib.rs": {
-      "maxLines": 2882,
-      "owner": "apps/desktop",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
-    "apps/desktop/src-tauri/src/tray.rs": {
-      "maxLines": 1417,
-      "owner": "apps/desktop",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
-    "apps/desktop/src/App.svelte": {
-      "maxLines": 3772,
-      "owner": "apps/desktop",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
-    "apps/desktop/src/lib/components/providers/ProviderDetailPane.svelte": {
-      "maxLines": 1873,
-      "owner": "apps/desktop",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
-    "apps/desktop/src/lib/components/settings/SettingsPanel.svelte": {
-      "maxLines": 1598,
-      "owner": "apps/desktop",
-      "reason": "Existing module; split along subsystem boundaries before adding behavior. This limit permits no growth."
-    },
     "apps/extension/src/content/detector.test.ts": {
       "maxLines": 1658,
       "owner": "apps/extension",

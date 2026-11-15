@@ -105,6 +105,49 @@ fn intrinsic_text_preserves_fractional_advances_through_layout(cx: &mut gpui::Te
 }
 
 const WRAPPED: &str = "A fractional label and a second clause";
+
+#[gpui::test]
+fn closing_cjk_punctuation_does_not_begin_a_wrapped_line(cx: &mut gpui::TestAppContext) {
+    let (_, cx) = cx.add_window_view(|_, _| TextProbe);
+    cx.update(|window, _| {
+        for mark in [
+            '。', '、', '，', '．', '！', '？', '：', '；', '）', '》', '」', '』', '】',
+        ] {
+            let text = format!("测试服务商仍要添加吗{mark}");
+            for width in [48., 60., 72., 84., 108.] {
+                let lines = window
+                    .text_system()
+                    .shape_text(
+                        text.clone().into(),
+                        px(12.),
+                        &[TextRun {
+                            len: text.len(),
+                            font: gpui::font(".AppleSystemUIFont"),
+                            color: gpui::black(),
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        }],
+                        Some(px(width)),
+                        None,
+                    )
+                    .unwrap();
+                for line in lines {
+                    for boundary in line.wrap_boundaries() {
+                        let index = line.unwrapped_layout.runs[boundary.run_ix].glyphs
+                            [boundary.glyph_ix]
+                            .index;
+                        assert_ne!(
+                            text[index..].chars().next(),
+                            Some(mark),
+                            "orphan {mark} at width {width}"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
 struct WrappingProbe {
     width: f32,
     truncate: bool,
@@ -157,4 +200,45 @@ fn fractional_intrinsics_preserve_fit_wrapping_and_ellipsis(cx: &mut gpui::TestA
             assert_eq!(layout.bounds().size.height > px(20.), wraps);
         });
     }
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn terminal_cjk_punctuation_retains_its_nominal_advance(cx: &mut gpui::TestAppContext) {
+    let (_, cx) = cx.add_window_view(|_, _| TextProbe);
+    cx.update(|window, _| {
+        let width = |text: &str| {
+            window
+                .text_system()
+                .shape_line(
+                    text.to_owned().into(),
+                    px(12.),
+                    &[TextRun {
+                        len: text.len(),
+                        font: gpui::font(".AppleSystemUIFont"),
+                        color: gpui::black(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }],
+                    None,
+                )
+                .width
+        };
+        for mark in ['。', '、', '，', '．', '！', '？', '：', '；'] {
+            // An interior punctuation glyph retains its full advance. Moving it
+            // to the line's end must not reclaim half an em for another control.
+            let terminal = format!("显示语言{mark}");
+            let interior = format!("{terminal}语");
+            let expected = width(&interior) - width("语");
+            assert!(
+                (width(&terminal) - expected).abs() < px(0.5),
+                "{mark}: terminal {:?}, interior {:?}",
+                width(&terminal),
+                expected
+            );
+        }
+        // Ordinary Latin punctuation keeps the existing kerning behavior.
+        assert!(width("Language.") > width("Language"));
+    });
 }

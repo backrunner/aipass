@@ -19,7 +19,7 @@ mod controls;
 #[cfg(feature = "parity-render")]
 pub mod fixtures;
 mod imports;
-mod motion;
+pub(crate) mod motion;
 mod options;
 mod scroll;
 #[cfg(all(test, feature = "parity-render"))]

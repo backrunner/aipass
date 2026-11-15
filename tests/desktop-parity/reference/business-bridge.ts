@@ -1,8 +1,9 @@
+import administration from "../fixtures/administration.json";
 import pricingFixture from "../fixtures/pricing.json";
 import gatewayFixture from "../fixtures/provider-gateway.json";
 import { fixtureTime, providers, proxyConfig, proxyStatus, timeseries, usage } from "./business-fixtures";
 import previewFiles from "./business-preview-files.json";
-import type { EntrySummary, PricingConfig, ProxyConfig, ToolConfigStatus, ToolConfigPreview } from "../../../apps/desktop/src/lib/types";
+import type { EntrySummary, PricingConfig, ProxyConfig, ToolConfigStatus, ToolConfigPreview } from "../../../artifacts/desktop-reference/src/lib/types";
 
 export function businessBridge(emit: (name: string, payload: unknown) => void, jsonRoute = false, initialEntries?: EntrySummary[]) {
   let entries = initialEntries ? structuredClone(initialEntries) : providers();
@@ -18,7 +19,7 @@ export function businessBridge(emit: (name: string, payload: unknown) => void, j
   let multiplier = 1;
   let sequence = 0;
   let cleared = false;
-  const logs = Array.from({ length: 1000 }, (_, index) => ({ timestamp: 1794456000 + index, level: "info", message: `synthetic-log-${index}` }));
+  const logs = new URLSearchParams(location.search).has("proxy") ? structuredClone(administration.logs) : Array.from({ length: 1000 }, (_, index) => ({ timestamp: 1794456000 + index, level: "info", message: `synthetic-log-${index}` }));
   const failures = new Map<string, string>();
   let applyRelease: (() => void) | undefined;
   let holdApply = false;

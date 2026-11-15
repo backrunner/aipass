@@ -196,6 +196,35 @@ impl Agents {
     }
 }
 impl Setup {
+    pub fn for_proxy(
+        request: ToolConfigRequest,
+        endpoint: String,
+        model: String,
+        protocol: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        Self {
+            request,
+            endpoint,
+            model,
+            protocol,
+            theme: Theme::new(false),
+            locale: Locale::new(false),
+            focus,
+            copied: String::new(),
+            error: String::new(),
+            busy: false,
+            scroll: Default::default(),
+        }
+    }
+    pub fn appearance(&mut self, dark: bool, cx: &mut Context<Self>) {
+        self.theme = Theme::new(dark);
+        cx.notify();
+    }
+
     fn row(
         &self,
         index: usize,

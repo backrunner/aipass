@@ -16,6 +16,10 @@ for (const arch of ["aarch64", "x86_64"]) {
     assert.ok(entry?.signature && entry?.url?.endsWith({ appimage: ".AppImage", deb: ".deb", rpm: ".rpm" }[format]), `Invalid platform ${key}`);
     assert.ok(!manifest.platforms[key], `Duplicate platform ${key}`);
     manifest.platforms[key] = entry;
+    const nativeKey=`linux-native-${arch}-${format}`;
+    assert.deepEqual(linux.platforms[nativeKey],entry,`Mismatched native platform ${nativeKey}`);
+    assert.ok(!manifest.platforms[nativeKey], `Duplicate platform ${nativeKey}`);
+    manifest.platforms[nativeKey]=entry;
   }
   fragments.push(fragment);
 }

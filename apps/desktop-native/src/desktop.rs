@@ -1,6 +1,8 @@
 mod activity;
 mod appearance;
+pub(crate) mod provider_links;
 mod session_sync;
+mod shell;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
 mod transition;
@@ -21,17 +23,27 @@ use aipass_desktop_native::{
 use gpui::{prelude::*, Context, Entity, FocusHandle, Subscription, Task, Window};
 use std::time::{Duration, Instant};
 
-gpui::actions!(desktop, [CloseWindow, LockVault]);
+gpui::actions!(desktop, [CloseWindow, QuitDesktop, LockVault]);
 #[cfg(feature = "parity-render")]
 gpui::actions!(parity, [ReplayToast]);
 
 pub fn init(cx: &mut gpui::App) {
+    cx.on_action(|_: &QuitDesktop, cx| {
+        if let Some(life) = cx.try_global::<crate::startup::Lifetime>() {
+            life.handle
+                .command(aipass_desktop_native::shell::tray::Command::Action(
+                    "quit".into(),
+                ));
+        } else {
+            cx.quit();
+        }
+    });
     #[cfg(feature = "parity-render")]
     cx.bind_keys([gpui::KeyBinding::new("cmd-shift-t", ReplayToast, None)]);
     cx.bind_keys([
         gpui::KeyBinding::new("cmd-l", LockVault, None),
         gpui::KeyBinding::new("cmd-w", CloseWindow, None),
-        gpui::KeyBinding::new("cmd-q", CloseWindow, None),
+        gpui::KeyBinding::new("cmd-q", QuitDesktop, None),
     ]);
 }
 
@@ -42,6 +54,8 @@ pub struct Desktop {
     pub(crate) updater: Option<aipass_desktop_native::updates::Worker>,
     pub(crate) update_focus: gpui::FocusHandle,
     pub(crate) runtime_gate: Option<std::sync::Arc<aipass_desktop_native::runtime::Gate>>,
+    settings: Entity<crate::settings_ui::Settings>,
+    _settings_subscription: Subscription,
     auth: Entity<AuthView>,
     workspace: Entity<Workspace>,
     toast: Entity<ErrorToast>,
@@ -69,6 +83,7 @@ pub struct Desktop {
     _focus_subscription: Subscription,
     _activation_subscription: Subscription,
     _poll: Task<()>,
+    links: provider_links::Links,
 }
 
 impl Desktop {
@@ -129,6 +144,33 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let settings = cx.new(|cx| crate::settings_ui::Settings::new(dark, chinese, cx));
+        #[cfg(feature = "parity-render")]
+        if scenario.starts_with("settings-") {
+            settings.update(cx, |v, cx| v.preview(scenario, window, cx));
+        }
+        let settings_subscription = cx.subscribe(
+            &settings,
+            |this, _, event: &crate::settings_ui::Event, cx| {
+                if let Some(worker) = &this.updater {
+                    worker.send(match event {
+                        crate::settings_ui::Event::CheckUpdates => {
+                            aipass_desktop_native::updates::Command::Check
+                        }
+                        crate::settings_ui::Event::UpdateChannel(channel) => {
+                            aipass_desktop_native::updates::Command::SelectChannel(*channel)
+                        }
+                        crate::settings_ui::Event::InstallUpdate => {
+                            aipass_desktop_native::updates::Command::Install
+                        }
+                    });
+                } else {
+                    this.settings
+                        .update(cx, |settings, cx| settings.updates_unavailable(cx));
+                }
+                cx.notify();
+            },
+        );
         let auth = cx.new(|cx| {
             AuthView::new(
                 match scenario {
@@ -297,12 +339,14 @@ impl Desktop {
                         view.read(cx).subscriptions.clone().update(cx,|view,cx|view.show_import(window,cx));
                     }
                     WorkspaceEvent::Connect => {view.read(cx).subscriptions.clone().update(cx,|view,cx|view.show(None,None,window,cx));}
-                    _ => {}
+                    WorkspaceEvent::Settings => {let connected=this.session.is_some();this.settings.update(cx,|v,cx|v.show(0,connected,window,cx));}
                 }
                 this.update_session(window, cx);
             });
         let show_workspace = session.is_none()
-            && (scenario.starts_with("agents-")
+            && (scenario.starts_with("proxy-")
+                || scenario.starts_with("settings-")
+                || scenario.starts_with("agents-")
                 || scenario.starts_with("recovery-kit")
                 || scenario.starts_with("subscription-")
                 || scenario.starts_with("providers-trash")
@@ -315,6 +359,8 @@ impl Desktop {
                         | "toast-long"
                         | "providers"
                         | "providers-reset"
+                        | "providers-link-duplicate"
+                        | "providers-link-long"
                         | "providers-reset-error"
                         | "providers-usage"
                         | "providers-usage-advanced"
@@ -394,7 +440,26 @@ impl Desktop {
                 .unwrap_or(true)
         });
         if let Some(session) = &mut session {
-            session.submit(Command::Refresh);
+            let command = cx
+                .try_global::<crate::preferences::Preferences>()
+                .filter(|p| p.1.is_some())
+                .map(|p| {
+                    Command::Administration(Box::new(
+                        aipass_desktop_native::administration::Request {
+                            scope: aipass_desktop_native::administration::Scope {
+                                surface: aipass_desktop_native::administration::Surface::Desktop,
+                                generation: 0,
+                            },
+                            operation:
+                                aipass_desktop_native::administration::Operation::LoadPreferences {
+                                    path: p.1.clone(),
+                                    preferences: p.0.clone(),
+                                },
+                        },
+                    ))
+                })
+                .unwrap_or(Command::Refresh);
+            session.submit(command);
         }
         let poll = cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor()
@@ -402,11 +467,15 @@ impl Desktop {
                 .await;
             if this
                 .update_in(cx, |this, window, cx| {
+                    this.pump_shell(window, cx);
                     if this
                         .updater
                         .as_ref()
                         .is_some_and(|worker| worker.snapshot().restarting)
                     {
+                        if let Some(life) = cx.try_global::<crate::startup::Lifetime>() {
+                            life.handle.stop();
+                        }
                         cx.quit();
                         return;
                     }
@@ -414,6 +483,7 @@ impl Desktop {
                         cx.notify();
                     }
                     this.update_session(window, cx);
+                    this.pump_links(window, cx);
                 })
                 .is_err()
             {
@@ -426,12 +496,15 @@ impl Desktop {
             cx.notify();
         });
         Self {
+            links: provider_links::Links::new(cx),
             appearance: crate::appearance::Appearance::new(dark),
             _appearance_subscription: appearance_subscription,
             _preferences_subscription: None,
             updater: None,
             update_focus: cx.focus_handle(),
             runtime_gate: None,
+            settings,
+            _settings_subscription: settings_subscription,
             auth,
             workspace,
             toast,

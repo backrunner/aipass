@@ -6,6 +6,12 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+base64.workspace = true
+url = "2"
+aipass-provider-registry = { path = "../aipass-provider-registry" }
+aipass-agent = { path = "../aipass-agent" }
+aipass-native-host = { path = "../aipass-native-host" }
+zip = "4"
 aipass-agent-protocol = { path = "../aipass-agent-protocol" }
 arboard = { version = "3", default-features = false }
 log = "0.4"
@@ -16,4 +22,5 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+uuid.workspace = true
 tempfile.workspace = true

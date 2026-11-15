@@ -254,7 +254,7 @@ struct MaskParams {
     fade_right: f32,
     pad: f32,
     opacity: f32,
-    alignment_pad: f32,
+    scale_y: f32,
 }
 
 #[repr(C)]
@@ -1450,6 +1450,7 @@ impl WgpuRendererCore {
                 source_bounds: bounds,
                 fade_bounds: bounds,
                 scale: 1.,
+                scale_y: 1.,
                 opacity: 1.,
                 ..Default::default()
             }],
@@ -3790,7 +3791,7 @@ fn mask_params(layer: LayerEffect, destination_span: Bounds<ScaledPixels>) -> Ma
         fade_right: layer.filter.fade_right,
         pad: 0.0,
         opacity: layer.filter.opacity,
-        alignment_pad: 0.0,
+        scale_y: layer.filter.scale_y.unwrap_or(layer.filter.scale),
     }
 }
 
@@ -4133,7 +4134,7 @@ mod tests {
         assert_eq!(std::mem::offset_of!(MaskParams, fade_right), 64);
         assert_eq!(std::mem::offset_of!(MaskParams, pad), 68);
         assert_eq!(std::mem::offset_of!(MaskParams, opacity), 72);
-        assert_eq!(std::mem::offset_of!(MaskParams, alignment_pad), 76);
+        assert_eq!(std::mem::offset_of!(MaskParams, scale_y), 76);
     }
 
     #[test]

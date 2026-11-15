@@ -2,6 +2,79 @@ use super::*;
 use crate::curtain::CurtainEvent;
 use gpui::px;
 
+#[gpui::test]
+fn startup_loads_agent_preferences_before_unlock_without_opening_settings(
+    cx: &mut gpui::TestAppContext,
+) {
+    use aipass_desktop_native::administration::{Completion, Operation, Outcome, Surface};
+    use aipass_desktop_native::session::{Reply, Transport};
+    struct PreferencesFirst;
+    impl Transport for PreferencesFirst {
+        fn execute(&mut self, command: Command) -> Result<Reply, aipass_agent::AgentCommandError> {
+            if let Command::Administration(request) = command {
+                assert_eq!(request.scope.surface, Surface::Desktop);
+                let Operation::LoadPreferences {
+                    mut preferences, ..
+                } = request.operation
+                else {
+                    panic!("startup must only read")
+                };
+                preferences.auto_lock_minutes = 7;
+                preferences.locale = aipass_agent_protocol::LocalePreference::System;
+                preferences.resolved_locale = Some(aipass_agent_protocol::UiLocale::ZhCn);
+                return Ok(Reply::Administration(Box::new(Completion {
+                    scope: request.scope,
+                    result: Ok(Outcome::Preferences(preferences)),
+                })));
+            }
+            RejectPassword.execute(command)
+        }
+    }
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        init(cx);
+        cx.set_global(crate::preferences::Preferences(
+            Default::default(),
+            Some("/synthetic/preferences.json".into()),
+        ));
+    });
+    let (view, cx) = cx.add_window_view(|w, cx| {
+        let mut view = Desktop::new(
+            Some(Session::new(PreferencesFirst).unwrap()),
+            "empty",
+            false,
+            false,
+            w,
+            cx,
+        );
+        view.follow_preferences(w, true, cx);
+        view
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        cx.update(|w, cx| view.update(cx, |s, cx| s.update_session(w, cx)));
+        if view.read_with(cx, |s, _| {
+            s.chinese && s.session.as_ref().unwrap().status.is_some()
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    cx.update(|_, cx| {
+        assert_eq!(
+            cx.global::<crate::preferences::Preferences>()
+                .0
+                .auto_lock_minutes,
+            7
+        );
+        let view = view.read(cx);
+        assert!(!view.show_workspace);
+        assert!(view.locale.is_chinese());
+    });
+    crate::locale::select(false);
+}
+
 struct RejectPassword;
 impl aipass_desktop_native::session::Transport for RejectPassword {
     fn execute(
@@ -90,7 +163,7 @@ fn appearance_observes_shared_preference_changes_without_rebuilding_views(
     let (desktop, cx) = workspace(cx);
     cx.update(|window, cx| {
         cx.set_global(Preferences::default());
-        desktop.update(cx, |view, cx| view.follow_preferences(window, cx));
+        desktop.update(cx, |view, cx| view.follow_preferences(window, true, cx));
     });
     let identities = desktop.read_with(cx, |view, _| {
         (view.auth.entity_id(), view.workspace.entity_id())

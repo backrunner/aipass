@@ -49,6 +49,53 @@ fn fixture() -> (
 }
 
 #[test]
+fn locked_startup_allows_preference_reads_but_never_scoped_mutations() {
+    use crate::administration::{Operation, Request, Scope, Surface};
+    let (mut session, commands, results) = fixture();
+    let request = |operation| {
+        Command::Administration(Box::new(Request {
+            scope: Scope {
+                surface: Surface::Desktop,
+                generation: 0,
+            },
+            operation,
+        }))
+    };
+    assert!(!session.submit(request(Operation::Apply(Box::new(
+        AgentRequest::ControlPanelStop
+    )))));
+    assert!(!session.submit(request(Operation::Preferences {
+        path: None,
+        previous: Default::default(),
+        preferences: Default::default(),
+    })));
+    assert!(session.submit(request(Operation::LoadPreferences {
+        path: None,
+        preferences: Default::default()
+    })));
+    assert!(matches!(
+        commands.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Command::Administration(_)
+    ));
+    results
+        .send(Ok(Reply::Administration(Box::new(
+            crate::administration::Completion {
+                scope: Scope {
+                    surface: Surface::Desktop,
+                    generation: 0,
+                },
+                result: Ok(crate::administration::Outcome::Preferences(
+                    Default::default(),
+                )),
+            },
+        ))))
+        .unwrap();
+    settle(&mut session);
+    assert!(!session.is_unlocked());
+    assert!(session.administration_completion.is_some());
+}
+
+#[test]
 fn integration_transport_failure_keeps_scope_and_successful_login_requests_catalog_refresh() {
     let (mut session, commands, results) = fixture();
     session.status = Some(status(false));
@@ -121,6 +168,75 @@ fn settle(session: &mut Session) {
         !session.pending,
         "worker failed to complete before test deadline"
     );
+}
+
+#[test]
+fn saved_sync_refreshes_catalog_and_nested_lock_failure_retires_the_session() {
+    use crate::administration::{Completion, Operation, Outcome, Request, Scope, Surface};
+    use aipass_agent_protocol::{SyncMode, SyncSettings, SyncSettingsUpdate};
+    for failure in [
+        None,
+        Some(AgentErrorCode::ServiceUnavailable),
+        Some(AgentErrorCode::Locked),
+    ] {
+        let (mut session, commands, results) = fixture();
+        session.status = Some(status(false));
+        session.catalog = Catalog::fixture();
+        session.recovery = Some("synthetic-recovery".into());
+        let scope = Scope {
+            surface: Surface::Settings,
+            generation: 31,
+        };
+        assert!(session.submit(Command::Administration(Box::new(Request {
+            scope,
+            operation: Operation::SaveSync {
+                settings: SyncSettingsUpdate {
+                    mode: SyncMode::Local,
+                    sync_folder: None,
+                    webdav_url: None,
+                    webdav_username: None,
+                    webdav_password: None,
+                    clear_webdav_password: false
+                },
+                run: true,
+            },
+        }))));
+        commands.recv_timeout(Duration::from_secs(1)).unwrap();
+        results
+            .send(Ok(Reply::Administration(Box::new(Completion {
+                scope,
+                result: Ok(Outcome::SyncSaved {
+                    settings: SyncSettings::default(),
+                    error: failure.clone().map(|code| AgentCommandError {
+                        code: Some(code),
+                        message: "synthetic sync failure".into(),
+                    }),
+                }),
+            }))))
+            .unwrap();
+        settle(&mut session);
+        assert!(
+            session.provider_applied,
+            "sync can change the catalog even before failure"
+        );
+        assert_eq!(
+            session
+                .administration_completion
+                .as_ref()
+                .unwrap()
+                .error()
+                .and_then(|e| e.code.as_ref()),
+            failure.as_ref()
+        );
+        assert_eq!(
+            session.is_unlocked(),
+            failure != Some(AgentErrorCode::Locked)
+        );
+        if failure == Some(AgentErrorCode::Locked) {
+            assert!(session.catalog.active.is_empty());
+            assert!(session.recovery.is_none());
+        }
+    }
 }
 
 #[test]

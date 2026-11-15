@@ -586,6 +586,10 @@ impl AppleTextSystemState {
         // Retrieve the glyphs from the shaped line, converting UTF16 offsets to UTF8 offsets.
         let line = CTLine::new_with_attributed_string(string.as_concrete_TypeRef());
         let glyph_runs = line.glyph_runs();
+        let mut full_advance_width = 0.0f64;
+        let utf16_len = string.char_len() as usize;
+        let trailing_cjk_punctuation =
+            text.ends_with(['。', '、', '，', '．', '！', '？', '：', '；']);
         let mut runs = <Vec<ShapedRun>>::with_capacity(glyph_runs.len() as usize);
         let mut ix_converter = StringIndexConverter::new(text);
         for run in glyph_runs.into_iter() {
@@ -596,7 +600,7 @@ impl AppleTextSystemState {
                     .downcast::<CTFont>()
                     .unwrap()
             };
-            let font_id = self.id_for_native_font(font);
+            let font_id = self.id_for_native_font(font.clone());
 
             let glyphs = match runs.last_mut() {
                 Some(run) if run.font_id == font_id => &mut run.glyphs,
@@ -615,6 +619,28 @@ impl AppleTextSystemState {
                 .zip(run.string_indices().iter())
             {
                 let glyph_utf16_ix = usize::try_from(glyph_utf16_ix).unwrap();
+                if trailing_cjk_punctuation && glyph_utf16_ix + 1 == utf16_len {
+                    // CoreText hangs terminal CJK punctuation by half an em.
+                    // CSS normal inline layout retains its complete advance.
+                    // Resolve the nominal character: the shaped run can use a
+                    // half-width alternate glyph at the end of the line.
+                    // SAFETY: these BMP characters and outputs each have one
+                    // initialized element. The advance output is optional.
+                    let character = text.chars().last().unwrap() as u16;
+                    let mut nominal_glyph = 0;
+                    if unsafe { font.get_glyphs_for_characters(&character, &mut nominal_glyph, 1) }
+                    {
+                        let advance = unsafe {
+                            font.get_advances_for_glyphs(
+                                core_text::font_descriptor::kCTFontOrientationHorizontal,
+                                &nominal_glyph,
+                                std::ptr::null_mut(),
+                                1,
+                            )
+                        };
+                        full_advance_width = full_advance_width.max(position.x + advance);
+                    }
+                }
                 if ix_converter.utf16_ix > glyph_utf16_ix {
                     // We cannot reuse current index converter, as it can only seek forward. Restart the search.
                     ix_converter = StringIndexConverter::new(text);
@@ -632,7 +658,7 @@ impl AppleTextSystemState {
         LineLayout {
             runs,
             font_size,
-            width: typographic_bounds.width.into(),
+            width: typographic_bounds.width.max(full_advance_width).into(),
             ascent: max_ascent.into(),
             descent: max_descent.into(),
             len: text.len(),

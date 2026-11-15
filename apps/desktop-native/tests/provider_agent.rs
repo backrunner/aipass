@@ -12,6 +12,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+#[path = "provider_agent/administration.rs"]
+mod administration;
 #[path = "provider_agent/credentials.rs"]
 mod credentials;
 #[path = "provider_agent/editing.rs"]
@@ -168,6 +170,7 @@ fn workflow(root: &Path) {
     assert!(restored.active[0].favorite);
     credentials::persisted(&mut transport, id, &credential_id);
     tools::workflow(&mut transport);
+    administration::workflow(&mut transport, root);
     trash::workflow(&mut transport);
 }
 

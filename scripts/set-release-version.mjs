@@ -10,8 +10,8 @@ if (!version || !semverPattern.test(version)) {
 
 for (const path of [
   "package.json",
-  "apps/desktop/package.json",
-  "apps/desktop/src-tauri/tauri.conf.json",
+  "apps/desktop-native/package.json",
+  "apps/desktop-native/desktop.json",
 ]) {
   const document = JSON.parse(await readFile(path, "utf8"));
   document.version = version;

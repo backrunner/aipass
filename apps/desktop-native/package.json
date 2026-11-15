@@ -1,0 +1,13 @@
+{
+  "name": "@aipass/desktop-native",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "cargo run -p aipass-desktop-native --bin aipass-desktop",
+    "bundle": "node ../../scripts/package-desktop.mjs",
+    "dev:register": "node ../../scripts/register-desktop-dev.mjs",
+    "dev:agent": "pnpm --filter @aipass/control-panel build && cargo build -p aipass-agent -p aipass-native-host -p aipass-cli"
+  }
+}

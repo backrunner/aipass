@@ -2,6 +2,25 @@ use super::*;
 
 const PAYLOAD: &[u8] = b"signed native updater regression payload";
 
+#[test]
+fn selected_channel_matches_the_feed_before_the_first_check() {
+    use aipass_agent_protocol::UpdateChannel;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut updater, _) = updater(dir.path());
+    assert_eq!(updater.selected_channel(), UpdateChannel::Official);
+    updater.config.current_version = "0.2.1-nightly.1".parse().unwrap();
+    assert_eq!(updater.selected_channel(), UpdateChannel::Nightly);
+    updater.config.endpoint = "https://aipass.alkinum.io/api/updates/beta/latest.json"
+        .parse()
+        .unwrap();
+    assert_eq!(updater.selected_channel(), UpdateChannel::Beta);
+    updater.config.endpoint =
+        "https://github.com/backrunner/aipass/releases/latest/download/latest.json"
+            .parse()
+            .unwrap();
+    assert_eq!(updater.selected_channel(), UpdateChannel::Official);
+}
+
 pub(super) fn updater(dir: &std::path::Path) -> (Updater, Release) {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("test-signature.json")).unwrap();
@@ -146,7 +165,11 @@ fn bounded_input_stops_oversized_responses() {
 
 #[test]
 fn feed_rejects_older_same_versions_and_tauri_targets() {
-    use std::{io::Write, net::TcpListener};
+    use std::{
+        io::Write,
+        net::{TcpListener, TcpStream},
+        time::Instant,
+    };
     for (version, target, available) in [
         ("0.1.9", "darwin-native-aarch64", Some(false)),
         ("0.2.0", "darwin-native-aarch64", Some(false)),
@@ -159,24 +182,83 @@ fn feed_rejects_older_same_versions_and_tauri_targets() {
         let (updater, release) = updater(dir.path());
         let body = serde_json::to_vec(&serde_json::json!({"version":version, "platforms":{target:{"url":release.url, "signature":release.signature}}})).unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0; 4096];
-            assert!(stream.read(&mut buffer).unwrap() > 0);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .unwrap();
-            stream.write_all(&body).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                assert!(
+                    Instant::now() < deadline,
+                    "fixture did not receive its updater request"
+                );
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    Err(error) => panic!("fixture accept: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut buffer = [0; 4096];
+                // TCP reads may split the request headers. Closing with unread
+                // request bytes can reset the connection before the client has
+                // consumed our response, especially during parallel GUI checks.
+                let mut length = 0;
+                while !buffer[..length].windows(4).any(|s| s == b"\r\n\r\n") {
+                    assert!(length < buffer.len(), "fixture request headers too large");
+                    let count = stream.read(&mut buffer[length..]).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    length += count;
+                }
+                // Local development tools may probe newly opened ports with GET /.
+                // Those probes must not consume this fixture's single feed response.
+                if !buffer[..length].starts_with(b"GET /latest.json HTTP/1.1\r\n") {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+                stream.shutdown(std::net::Shutdown::Write).unwrap();
+                assert_eq!(stream.read(&mut buffer).unwrap(), 0);
+                break;
+            }
         });
+        // Deterministically reproduce an unrelated local port-discovery probe.
+        let mut probe = TcpStream::connect(address).unwrap();
+        probe
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write!(
+            probe,
+            "GET / HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        probe.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 404 Not Found"));
         let mut config = updater.config.clone();
         config.endpoint = format!("http://{address}/latest.json").parse().unwrap();
         let updater = Updater::validation(config).unwrap();
-        assert_eq!(
-            updater.check().map(|result| result.is_some()).ok(),
-            available
-        );
+        let checked = updater.check();
         server.join().unwrap();
+        if let Some(available) = available {
+            assert_eq!(checked.unwrap().is_some(), available);
+        } else {
+            assert_eq!(
+                checked.unwrap_err().to_string(),
+                "update_release_unavailable"
+            );
+        }
     }
 }

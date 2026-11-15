@@ -20,7 +20,7 @@ const sources = [
   "../../packages/ui/package.json",
   ...files("../../packages/schemas/src"),
   "../../packages/schemas/package.json",
-  "../desktop/public/aipass-logo.png",
+  "../desktop-native/assets/aipass-logo.png",
 ].sort();
 writeFileSync(
   "embedded/source.sha256",

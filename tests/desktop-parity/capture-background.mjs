@@ -14,7 +14,7 @@ const output = resolve(root, "artifacts/desktop-parity", round);
 await mkdir(output);
 execFileSync("rtk", ["proxy", "cargo", "build", "-p", "aipass-desktop-native", "--features", "parity-render"], { cwd: root, stdio: "pipe", timeout: 180000 });
 const binary = resolve(output, "aipass-desktop-native");
-await copyFile(resolve(root,"target/debug/aipass-desktop-native"),binary);
+await copyFile(resolve(root,"target/debug/aipass-desktop"),binary);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const sourceHashes={};
 async function collect(directory) {
@@ -27,7 +27,7 @@ await collect("apps/desktop-native");
 await collect("vendor");
 for(const path of ["Cargo.toml","Cargo.lock","tests/desktop-parity/capture-background.mjs"])sourceHashes[path]=hash(await readFile(resolve(root,path)));
 const inventory = JSON.parse(await readFile(resolve(root, "docs/gpui-migration/inventory.json")));
-const source = "apps/desktop/src/lib/components/auth/HeroBackground.svelte";
+const source = "artifacts/desktop-reference/src/lib/components/auth/HeroBackground.svelte";
 const report = { baseline: inventory.baseline, sourceHashes,
   referenceSHA256: hash(execFileSync("rtk", ["proxy", "git", "show", `${inventory.baseline}:${source}`], { cwd: root })),
   binarySHA256: hash(await readFile(binary)), complete: false, transformsPassed: false,

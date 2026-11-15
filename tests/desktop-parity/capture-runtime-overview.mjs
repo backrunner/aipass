@@ -17,7 +17,7 @@ await mkdir(output);
 // A workspace build may replace the debug binary without the capture feature.
 execFileSync("rtk", ["proxy", "cargo", "build", "-p", "aipass-desktop-native", "--features", "parity-render"], { cwd: root, stdio: "pipe", timeout: 180000 });
 const binary = resolve(output, "aipass-desktop-native");
-await copyFile(resolve(root, "target/debug/aipass-desktop-native"), binary);
+await copyFile(resolve(root, "target/debug/aipass-desktop"), binary);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const sourceHashes = {};
 async function record(path) {

@@ -74,6 +74,8 @@ pub struct Workspace {
     notes: Entity<notes::Notes>,
     _tools_subscription: Subscription,
     _tools_observer: Subscription,
+    pub(crate) proxy: Entity<crate::proxy_ui::Proxy>,
+    _proxy_observer: Subscription,
     pub(crate) agents: Entity<crate::agents_ui::Agents>,
     _agents_observer: Subscription,
     pub(crate) pricing: Entity<crate::pricing_ui::Pricing>,
@@ -129,6 +131,17 @@ const ICONS: [&str; 11] = [
 ];
 
 impl Workspace {
+    pub(crate) fn open_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.provider_busy || self.provider_form.is_some() {
+            return;
+        }
+        self.selected = 8;
+        self.tag_filter = None;
+        self.select_visible(window, cx);
+        self.proxy.update(cx, |view, cx| view.activate(true, cx));
+        cx.notify();
+    }
+
     pub fn preview_state(&mut self, scenario: &str) {
         self.menu_open = scenario == "menu";
         self.filter_open = scenario == "filter";
@@ -201,10 +214,14 @@ impl Workspace {
         let subscriptions =
             cx.new(|cx| crate::subscription_ui::Subscriptions::new(dark, chinese, window, cx));
         let subscriptions_observer = cx.observe(&subscriptions, |_, _, cx| cx.notify());
+        let proxy = cx.new(|cx| crate::proxy_ui::Proxy::new(dark, chinese, cx));
+        let proxy_observer = cx.observe(&proxy, |_, _, cx| cx.notify());
         let agents =
             cx.new(|cx| crate::agents_ui::Agents::new(subscriptions.clone(), dark, chinese, cx));
         let agents_observer = cx.observe(&agents, |_, _, cx| cx.notify());
         Self {
+            proxy,
+            _proxy_observer: proxy_observer,
             agents,
             _agents_observer: agents_observer,
             theme: Theme::new(dark),
@@ -530,7 +547,10 @@ impl Render for Workspace {
                     .when(self.selected == 7, |el| {
                         el.child(div().flex_1().min_w_0().h_full().child(self.agents.clone()))
                     })
-                    .when(self.selected != 7, |el| {
+                    .when(self.selected == 8, |el| {
+                        el.child(div().flex_1().min_w_0().h_full().child(self.proxy.clone()))
+                    })
+                    .when(!matches!(self.selected, 7 | 8), |el| {
                         el.child(
                             self.pane(t.surface.opacity(0.86))
                                 .w(px(list))

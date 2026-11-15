@@ -12,6 +12,8 @@ use std::{
 #[derive(Clone, Default, Debug, serde::Serialize)]
 pub struct Snapshot {
     pub busy: bool,
+    pub checked: bool,
+    pub channel: Option<aipass_agent_protocol::UpdateChannel>,
     pub downloaded: u64,
     pub available: Option<Release>,
     pub error: Option<String>,
@@ -21,6 +23,7 @@ pub struct Snapshot {
 
 pub enum Command {
     Check,
+    SelectChannel(aipass_agent_protocol::UpdateChannel),
     Install,
     Confirm(u64),
     Dismiss,
@@ -44,11 +47,14 @@ impl Worker {
         Self::with_host(updater, args, Host::default())
     }
 
-    pub fn with_host(updater: Updater, args: Vec<String>, host: Host) -> Result<Self> {
+    pub fn with_host(mut updater: Updater, args: Vec<String>, host: Host) -> Result<Self> {
         let (sender, receiver) = mpsc::sync_channel(1);
         let epoch = Arc::new(AtomicU64::new(1));
         let worker_epoch = epoch.clone();
-        let state = Arc::new(Mutex::new(Snapshot::default()));
+        let state = Arc::new(Mutex::new(Snapshot {
+            channel: Some(updater.selected_channel()),
+            ..Default::default()
+        }));
         let shared = state.clone();
         std::thread::Builder::new()
             .name("native-updater".into())
@@ -71,6 +77,19 @@ impl Worker {
                             (Command::Check, worker_epoch.load(Ordering::Acquire))
                         }
                     };
+                    if let Command::SelectChannel(channel) = command {
+                        if let Err(error) = updater.select_channel(channel) {
+                            shared.lock().unwrap().error = Some(error.to_string());
+                            continue;
+                        }
+                        *shared.lock().unwrap() = Snapshot {
+                            channel: Some(channel),
+                            ..Default::default()
+                        };
+                        pending_install = false;
+                        due = Instant::now();
+                        continue;
+                    }
                     shared.lock().unwrap().busy = true;
                     shared.lock().unwrap().error = None;
                     let operation = Operation {
@@ -157,13 +176,25 @@ impl Operation<'_> {
         match command {
             Command::Check => {
                 let install_pending = std::mem::take(pending);
-                let Some(release) = updater.check()? else {
+                let release = updater.check()?;
+                self.shared.lock().unwrap().checked = true;
+                let Some(release) = release else {
                     updater.clear()?;
                     self.shared.lock().unwrap().available = None;
                     updater.checked(now())?;
                     return Ok(());
                 };
-                let valid_pending = install_pending && updater.cached(&release)?.is_some();
+                // A cache with matching signed release metadata can be repaired by a fresh
+                // verified download without losing the user's pending installation.
+                let valid_pending = install_pending
+                    && fs::read(updater.config.cache_dir.join("metadata.json"))
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice::<super::Cached>(&bytes).ok())
+                        .is_some_and(|cached| {
+                            cached.endpoint == updater.config.endpoint
+                                && cached.target == updater.config.target
+                                && cached.release == release
+                        });
                 updater.download(&release, |bytes| {
                     self.shared.lock().unwrap().downloaded = bytes
                 })?;
@@ -205,7 +236,7 @@ impl Operation<'_> {
                     updater.dismiss(release.version)?;
                 }
             }
-            Command::Stop => {}
+            Command::Stop | Command::SelectChannel(_) => {}
         }
         Ok(())
     }
@@ -218,7 +249,11 @@ impl Operation<'_> {
         let perform = || {
             anyhow::ensure!(self.valid(), "update confirmation expired");
             self.updater.clear()?;
-            prepared.restart(self.args, self.host.instance.as_ref())
+            crate::runtime_check::installed()?;
+            prepared.restart(
+                &crate::runtime_check::restart_args(self.args),
+                self.host.instance.as_ref(),
+            )
         };
         let installed = if let Some(runtime) = &self.host.runtime {
             runtime.install_when(consent, || self.valid(), perform)?

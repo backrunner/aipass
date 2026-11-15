@@ -1620,6 +1620,7 @@ impl MetalRenderer {
             source_bounds: bounds,
             fade_bounds: bounds,
             scale: 1.,
+            scale_y: 1.,
             opacity: 1.,
             ..Default::default()
         };
@@ -2459,10 +2460,11 @@ pub struct MaskParams {
     pub fade_left: f32,
     pub fade_right: f32,
     pub opacity: f32,
+    pub scale_y: f32,
 }
 
 const _: () = {
-    assert!(mem::size_of::<MaskParams>() == 18 * mem::size_of::<f32>());
+    assert!(mem::size_of::<MaskParams>() == 19 * mem::size_of::<f32>());
     assert!(mem::offset_of!(MaskParams, source_bounds) == 0);
     assert!(mem::offset_of!(MaskParams, fade_bounds) == 16);
     assert!(mem::offset_of!(MaskParams, transform_origin) == 32);
@@ -2473,6 +2475,7 @@ const _: () = {
     assert!(mem::offset_of!(MaskParams, fade_left) == 60);
     assert!(mem::offset_of!(MaskParams, fade_right) == 64);
     assert!(mem::offset_of!(MaskParams, opacity) == 68);
+    assert!(mem::offset_of!(MaskParams, scale_y) == 72);
 };
 
 #[repr(C)]
@@ -2501,6 +2504,7 @@ fn mask_params(layer: LayerEffect, destination_clip: Bounds<ScaledPixels>) -> Ma
         transform_origin: [layer.transform_origin.x.0, layer.transform_origin.y.0],
         translation: [layer.filter.translate.x.0, layer.filter.translate.y.0],
         scale: layer.filter.scale,
+        scale_y: layer.filter.scale_y.unwrap_or(layer.filter.scale),
         fade_top: layer.filter.fade_top,
         fade_bottom: layer.filter.fade_bottom,
         fade_left: layer.filter.fade_left,

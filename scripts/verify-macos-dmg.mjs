@@ -33,7 +33,7 @@ assert.ok(statSync(candidates[0]).size > 0, "DMG must not be empty");
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const config = JSON.parse(
   readFileSync(
-    join(repoRoot, "apps/desktop/src-tauri/tauri.conf.json"),
+    join(repoRoot, "apps/desktop-native/desktop.json"),
     "utf8",
   ),
 );

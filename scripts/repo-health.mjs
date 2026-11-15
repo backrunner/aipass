@@ -35,6 +35,10 @@ export function auditDependencies(files) {
   const failures = [];
   for (const { path, content } of files) {
     if (!isSource(path) && !isDependencyInput(path)) continue;
+    const retired = /(?:@tauri-apps\/|(?:name|package)\s*=\s*"(?:tauri(?:-[^"\n]*)?|wry|tao)"|^\s*(?:tauri(?:-[\w-]+)?|wry|tao)\s*=)/m;
+    if (/(?:package\.json|Cargo\.toml|Cargo\.lock|pnpm-lock\.yaml)$/.test(path) && retired.test(content)) {
+      failures.push(`${path}: retired desktop framework dependency is prohibited`);
+    }
     if (isExternalAdapterReference(content)) {
       failures.push(`${path}: external provider-adapter package/source reference is prohibited in executable inputs`);
     }

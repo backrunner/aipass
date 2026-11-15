@@ -7,6 +7,13 @@ use gpui_base::{
     Checkbox,
 };
 pub mod select;
+pub struct FieldStyle {
+    pub id: &'static str,
+    pub secret: bool,
+    pub height: f32,
+    pub padding: f32,
+    pub reveal: bool,
+}
 pub fn input<T: 'static>(
     label: &str,
     value: &str,
@@ -44,14 +51,44 @@ pub fn field(
     window: &Window,
     cx: &App,
 ) -> impl IntoElement {
+    field_sized(
+        input,
+        FieldStyle {
+            id,
+            secret,
+            height: if secret { 38. } else { 36. },
+            padding: 12.,
+            reveal: true,
+        },
+        t,
+        locale,
+        window,
+        cx,
+    )
+}
+pub fn field_sized(
+    input: &Entity<InputState>,
+    options: FieldStyle,
+    t: Theme,
+    locale: &Locale,
+    window: &Window,
+    cx: &App,
+) -> impl IntoElement {
+    let FieldStyle {
+        id,
+        secret,
+        height,
+        padding: horizontal_padding,
+        reveal,
+    } = options;
     let focused = input.read(cx).focus_handle(cx).is_focused(window);
     let masked = input.read(cx).presentation().is_masked();
     let state = input.clone();
     div()
         .w_full()
         .min_w_0()
-        .h(px(if secret { 38. } else { 36. }))
-        .px(px(if secret { 0. } else { 12. }))
+        .h(px(height))
+        .px(px(if secret { 0. } else { horizontal_padding }))
         .rounded(px(8.))
         .border_1()
         .border_color(t.border)
@@ -70,13 +107,14 @@ pub fn field(
             div()
                 .flex_1()
                 .min_w_0()
-                .when(secret, |el| el.px(px(12.)))
-                .when(secret && masked, |el| {
-                    el.font_family("AIPass Password Dots")
-                })
+                .when(secret, |el| el.px(px(horizontal_padding)))
+                .when(
+                    secret && masked && !input.read(cx).value().is_empty(),
+                    |el| el.font_family("AIPass Password Dots"),
+                )
                 .child(Input::new(input)),
         )
-        .when(secret, |el| {
+        .when(secret && reveal, |el| {
             el.child(
                 crate::providers::controls::icon(
                     id,

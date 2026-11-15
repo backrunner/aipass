@@ -23,16 +23,42 @@ impl Desktop {
             "progress": self.appearance.progress(),
         })
     }
-    pub fn follow_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.update_appearance_preference(cx);
+    pub fn follow_preferences(
+        &mut self,
+        window: &mut Window,
+        follow_initial: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if follow_initial {
+            self.update_appearance_preference(window, cx);
+        }
         self._preferences_subscription = Some(
-            cx.observe_global_in::<crate::preferences::Preferences>(window, |this, _, cx| {
-                this.update_appearance_preference(cx);
+            cx.observe_global_in::<crate::preferences::Preferences>(window, |this, window, cx| {
+                this.update_appearance_preference(window, cx);
             }),
         );
     }
-    fn update_appearance_preference(&mut self, cx: &mut Context<Self>) {
-        let preference = cx.global::<crate::preferences::Preferences>().0.theme;
+    fn update_appearance_preference(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let preferences = &cx.global::<crate::preferences::Preferences>().0;
+        let preference = preferences.theme;
+        let chinese = preferences
+            .resolved_locale
+            .map(|l| l == aipass_agent_protocol::UiLocale::ZhCn)
+            .unwrap_or(match preferences.locale {
+                aipass_agent_protocol::LocalePreference::ZhCn => true,
+                aipass_agent_protocol::LocalePreference::En => false,
+                aipass_agent_protocol::LocalePreference::System => self.chinese,
+            });
+        crate::locale::select(chinese);
+        if self.chinese != chinese {
+            self.auth.update(cx, |auth, cx| auth.relocalize(window, cx));
+        }
+        self.chinese = chinese;
+        self.workspace.update(cx, |view, cx| {
+            view.apply_appearance(self.appearance.dark, cx)
+        });
+        self.settings
+            .update(cx, |view, cx| view.appearance(self.appearance.dark, cx));
         self.appearance.preference = preference;
         cx.set_window_appearance(appearance::forced(preference));
         self.appearance.requested = appearance::resolve(preference, cx.window_appearance());
@@ -56,6 +82,8 @@ impl Desktop {
         self.toast
             .update(cx, |view, cx| view.apply_appearance(dark, cx));
         self.recovery
+            .update(cx, |view, cx| view.appearance(dark, cx));
+        self.settings
             .update(cx, |view, cx| view.appearance(dark, cx));
         self.theme = Theme::new(dark);
         if let Some(curtain) = &self.curtain {

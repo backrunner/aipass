@@ -21,7 +21,7 @@ for (const input of inventory.referenceInputs) {
   if (hash(await readFile(resolve(root, input.path))) !== input.sha256) throw new Error(`Reference drift: ${input.path}`);
 }
 await run("rtk", ["cargo", "build", "-p", "aipass-desktop-native", "--features", "parity-render"], { cwd: root, timeout: 180000 });
-const binary = resolve(root, "target/debug/aipass-desktop-native");
+const binary = resolve(root, "target/debug/aipass-desktop");
 const sourceHashes = {};
 async function collect(directory) {
   for (const entry of await readdir(resolve(root, directory), { withFileTypes: true })) {

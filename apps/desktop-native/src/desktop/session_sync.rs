@@ -14,11 +14,48 @@ impl Desktop {
         {
             return;
         }
+        let proxy = self.workspace.read(cx).proxy.clone();
+        if self.session.is_some() {
+            proxy.update(cx, |s, cx| s.tick(cx));
+        }
+        let settings = self.settings.clone();
+        let update = self.updater.as_ref().map(|w| w.snapshot());
+        settings.update(cx, |s, cx| s.sync_update(update, cx));
         let agents = self.workspace.read(cx).agents.clone();
         let pricing = self.workspace.read(cx).pricing.clone();
         let subscriptions = self.workspace.read(cx).subscriptions.clone();
         subscriptions.update(cx, |view, cx| view.tick(cx));
         let Some(session) = &mut self.session else {
+            if let Some(request) = proxy.update(cx, |v, _| v.take_request()) {
+                proxy.update(cx, |v, cx| {
+                    v.complete(
+                        aipass_desktop_native::administration::Completion {
+                            scope: request.scope,
+                            result: Err(aipass_agent::AgentCommandError {
+                                code: None,
+                                message: self.locale.text("tray.agentUnavailable"),
+                            }),
+                        },
+                        window,
+                        cx,
+                    )
+                });
+            }
+            if let Some(request) = settings.update(cx, |v, _| v.take_request()) {
+                settings.update(cx, |v, cx| {
+                    v.complete(
+                        aipass_desktop_native::administration::Completion {
+                            scope: request.scope,
+                            result: Err(aipass_agent::AgentCommandError {
+                                code: None,
+                                message: self.locale.text("tray.agentUnavailable"),
+                            }),
+                        },
+                        window,
+                        cx,
+                    )
+                });
+            }
             #[cfg(feature = "parity-render")]
             subscriptions.update(cx, |view, cx| view.run_preview(window, cx));
             if let Some(request) = agents.update(cx, |view, _| view.take_request()) {
@@ -35,6 +72,26 @@ impl Desktop {
             return;
         };
         let changed = session.poll();
+        if let Some(completion) = session.administration_completion.take() {
+            match completion.scope.surface {
+                aipass_desktop_native::administration::Surface::Desktop => {
+                    if let Ok(aipass_desktop_native::administration::Outcome::Preferences(
+                        preferences,
+                    )) = completion.result
+                    {
+                        let path = cx.global::<crate::preferences::Preferences>().1.clone();
+                        cx.set_global(crate::preferences::Preferences(preferences, path));
+                    }
+                    session.submit(Command::Refresh);
+                }
+                aipass_desktop_native::administration::Surface::Settings => {
+                    settings.update(cx, |v, cx| v.complete(completion, window, cx))
+                }
+                aipass_desktop_native::administration::Surface::Proxy => {
+                    proxy.update(cx, |v, cx| v.complete(completion, window, cx))
+                }
+            }
+        }
         if let Some(completion) = session.agents_completion.take() {
             agents.update(cx, |view, cx| view.complete(completion, window, cx));
         }
@@ -58,6 +115,10 @@ impl Desktop {
         if !session.pending && session.is_unlocked() && !self.close_requested {
             if let Some(action) = self.pending_command.take() {
                 session.submit(action);
+            } else if let Some(request) = settings.update(cx, |v, _| v.take_request()) {
+                session.submit(Command::Administration(Box::new(request)));
+            } else if let Some(request) = proxy.update(cx, |v, _| v.take_request()) {
+                session.submit(Command::Administration(Box::new(request)));
             } else if let Some(request) = agents.update(cx, |view, _| view.take_request()) {
                 session.submit(Command::Agents(Box::new(request)));
             } else if let Some(request) = subscriptions.update(cx, |view, _| view.take_request()) {
@@ -127,6 +188,7 @@ impl Desktop {
                 )
             });
         } else {
+            settings.update(cx, |v, cx| v.clear(window, cx));
             self.pending_command = None;
             self.workspace
                 .update(cx, |view, cx| view.clear_providers(window, cx));
@@ -147,6 +209,7 @@ impl Desktop {
         }
         let was_unlocked = self.last_unlocked.replace(unlocked);
         if was_unlocked == Some(true) && !unlocked {
+            self.links.clear(cx);
             if let Some(worker) = &self.updater {
                 worker.cancel_confirmation();
             }

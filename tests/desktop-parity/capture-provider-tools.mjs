@@ -13,12 +13,12 @@ const referencePort=currentReference?14731:14732;
 assert(/^[a-z0-9-]+$/.test(round??''));
 const output=resolve(root,'artifacts/desktop-parity',round);await mkdir(output);
 execFileSync('rtk',['proxy','cargo','build','-p','aipass-desktop-native','--features','parity-render'],{cwd:root,stdio:'pipe',timeout:180000});
-const binary=resolve(output,'aipass-desktop-native');await copyFile(resolve(root,'target/debug/aipass-desktop-native'),binary);
+const binary=resolve(output,'aipass-desktop-native');await copyFile(resolve(root,'target/debug/aipass-desktop'),binary);
 const hash=b=>createHash('sha256').update(b).digest('hex'),sourceHashes={};
 async function record(path){for(const e of await readdir(resolve(root,path),{withFileTypes:true})){if(e.isSymbolicLink()||e.name==='node_modules')continue;const p=`${path}/${e.name}`;if(e.isDirectory())await record(p);else sourceHashes[p]=hash(await readFile(resolve(root,p)));}}
 for(const p of ['apps/desktop-native','tests/desktop-parity/reference','tests/desktop-parity/fixtures'])await record(p);
 for(const p of ['Cargo.toml','Cargo.lock','tests/desktop-parity/capture-provider-tools.mjs'])sourceHashes[p]=hash(await readFile(resolve(root,p)));
-for(const p of ['apps/desktop/src/lib/components/providers/ProviderUsageProbeDialog.svelte','packages/ui/src/locales/en.json','packages/ui/src/locales/zh-CN.json'])sourceHashes[p]=hash(await readFile(resolve(root,p)));
+for(const p of ['artifacts/desktop-reference/src/lib/components/providers/ProviderUsageProbeDialog.svelte','packages/ui/src/locales/en.json','packages/ui/src/locales/zh-CN.json'])sourceHashes[p]=hash(await readFile(resolve(root,p)));
 const menu=async(p,l)=>p.getByRole('button',{name:l['providerDetail.moreActions'],exact:true}).click();
 const usage=async(p,l)=>{await menu(p,l);await p.getByRole('menuitem',{name:l['providerDetail.refreshUsage'],exact:true}).click();};
 const dialogMap={

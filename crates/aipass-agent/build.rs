@@ -18,7 +18,7 @@ fn main() {
         "../../packages/ui/package.json",
         "../../packages/schemas/src",
         "../../packages/schemas/package.json",
-        "../desktop/public/aipass-logo.png",
+        "../desktop-native/assets/aipass-logo.png",
     ] {
         println!("cargo:rerun-if-changed={}", root.join(path).display());
     }

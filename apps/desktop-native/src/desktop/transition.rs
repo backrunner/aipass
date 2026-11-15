@@ -12,6 +12,10 @@ use gpui::{AppContext, Context, Window};
 
 impl Desktop {
     pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if cx.has_global::<crate::startup::Lifetime>() {
+            crate::startup::hide(window, cx);
+            return false;
+        }
         if self.session.is_none() {
             return true;
         }
@@ -21,6 +25,7 @@ impl Desktop {
     }
 
     pub(super) fn lock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_links(cx);
         aipass_desktop_platform::clipboard::invalidate();
         if let Some(worker) = &self.updater {
             worker.cancel_confirmation();

@@ -89,3 +89,48 @@ fn diff_has_scroll_extent_and_file_mode_navigation_resets_scroll(cx: &mut TestAp
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(preview.read_with(cx, |view, _| view.full && view.scroll.offset().y < px(0.)));
 }
+
+#[gpui::test]
+fn long_failure_keeps_actions_visible_and_remains_scrollable(cx: &mut TestAppContext) {
+    cx.update(gpui_base::init);
+    let mut preview = None;
+    let (_, cx) = cx.add_window_view(|w, cx| {
+        let view = cx.new(|cx| {
+            let mut view = Preview::new(
+                ToolConfigPreviewResponse {
+                    preview_id: None,
+                    tool: ToolConfigTool::Codex,
+                    mode: ToolConfigMode::Plaintext,
+                    entry_id: uuid::Uuid::nil(),
+                    entry_title: String::new(),
+                    target_path: "/synthetic/config.toml".into(),
+                    summary: String::new(),
+                    preview: "+ fixture = true".into(),
+                    files: vec![],
+                },
+                true,
+                false,
+                false,
+                w,
+                cx,
+            );
+            view.error = "Synthetic operation failed\n".repeat(80);
+            view
+        });
+        preview = Some(view.clone());
+        gpui_base::Root::new(view, w, cx)
+    });
+    cx.simulate_resize(gpui::size(px(960.), px(640.)));
+    cx.update(|w, cx| w.draw(cx).clear(cx));
+    preview.unwrap().read_with(cx, |view, cx| {
+        assert!(view.can_confirm());
+        assert!(view.error_scroll.max_offset().y > px(100.));
+        let geometry = &cx.global::<crate::parity::Geometry>().0;
+        let error = geometry["integration-dialog-error"];
+        let footer = geometry["integration-dialog-footer"];
+        let code = geometry["integration-dialog-code"];
+        assert!(error[3] <= 96.);
+        assert!(code[3] >= 120.);
+        assert!(footer[1] + footer[3] <= 616.);
+    });
+}

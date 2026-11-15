@@ -135,57 +135,68 @@ fn compositor_scales_the_complete_subtree_at_each_display_scale() {
         .unwrap()
         .expect("Metal renderer");
     for device_scale in [1., 2.] {
-        let viewport = bounds(0., 0., 128. * device_scale, 96. * device_scale);
-        let source = bounds(
-            20. * device_scale,
-            20. * device_scale,
-            80. * device_scale,
-            40. * device_scale,
-        );
-        let mut scene = Scene::default();
-        scene.insert_primitive(quad(viewport, 0x000000, viewport));
-        scene.push_filter(
-            source,
-            source.center(),
-            viewport,
-            Filter {
-                scale: 0.5,
-                ..Default::default()
-            },
-        );
-        scene.insert_primitive(quad(source, 0xffffff, viewport));
-        scene.insert_primitive(quad(
-            bounds(
-                40. * device_scale,
+        for scale_y in [0.5, 0.8] {
+            let viewport = bounds(0., 0., 128. * device_scale, 96. * device_scale);
+            let source = bounds(
                 20. * device_scale,
                 20. * device_scale,
+                80. * device_scale,
                 40. * device_scale,
-            ),
-            0xff0000,
-            viewport,
-        ));
-        scene.pop_filter();
-        scene.finish();
-        let image = renderer
-            .render_scene_to_image(
-                &scene,
-                size(
-                    DevicePixels((128. * device_scale) as i32),
-                    DevicePixels((96. * device_scale) as i32),
+            );
+            let mut scene = Scene::default();
+            scene.insert_primitive(quad(viewport, 0x000000, viewport));
+            scene.push_filter(
+                source,
+                source.center(),
+                viewport,
+                Filter {
+                    scale: 0.5,
+                    scale_y: Some(scale_y),
+                    ..Default::default()
+                },
+            );
+            scene.insert_primitive(quad(source, 0xffffff, viewport));
+            scene.insert_primitive(quad(
+                bounds(
+                    40. * device_scale,
+                    20. * device_scale,
+                    20. * device_scale,
+                    40. * device_scale,
                 ),
-            )
-            .unwrap();
-        let pixel = |x, y| {
-            image
-                .get_pixel((x * device_scale) as u32, (y * device_scale) as u32)
-                .0
-        };
-        assert!(pixel(30., 40.)[0] < 10, "old bounds must be empty");
-        assert!(pixel(45., 40.)[1] > 240, "parent must be scaled");
-        assert!(
-            pixel(55., 40.)[0] > 240 && pixel(55., 40.)[1] < 10,
-            "child must share its parent's transform"
-        );
+                0xff0000,
+                viewport,
+            ));
+            scene.pop_filter();
+            scene.finish();
+            let image = renderer
+                .render_scene_to_image(
+                    &scene,
+                    size(
+                        DevicePixels((128. * device_scale) as i32),
+                        DevicePixels((96. * device_scale) as i32),
+                    ),
+                )
+                .unwrap();
+            let pixel = |x, y| {
+                image
+                    .get_pixel((x * device_scale) as u32, (y * device_scale) as u32)
+                    .0
+            };
+            assert!(
+                pixel(45., 40. - 20. * scale_y - 3.)[0] < 10,
+                "vertical bounds must be transformed"
+            );
+            assert!(
+                pixel(45., 40. - 20. * scale_y + 3.)[1] > 240,
+                "independent vertical scaling must preserve content"
+            );
+            assert!(pixel(30., 40.)[0] < 10, "old bounds must be empty");
+            assert!(pixel(45., 40.)[1] > 240, "parent must be scaled");
+            assert!(
+                pixel(55., 40.)[0] > 240 && pixel(55., 40.)[1] < 10,
+                "child must share its parent's transform"
+            );
+        }
     }
 }
 

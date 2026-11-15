@@ -1,3 +1,4 @@
+mod admin_ui;
 mod agents_ui;
 mod appearance;
 mod assets;
@@ -9,6 +10,7 @@ mod desktop;
 mod disclosure;
 mod form_ui;
 mod integrations;
+mod launch;
 mod locale;
 mod logo;
 mod menu;
@@ -17,8 +19,11 @@ mod preferences;
 mod provider_icon;
 mod provider_tools_ui;
 mod providers;
+mod proxy_ui;
 mod recovery_kit;
 mod scroll_fade;
+mod settings_ui;
+mod startup;
 mod subscription_ui;
 mod theme;
 mod toast;
@@ -27,6 +32,7 @@ mod typography;
 mod update_ui;
 #[cfg(feature = "parity-render")]
 mod update_validation;
+mod window_visibility;
 mod workspace;
 
 use aipass_desktop_native::session::{AgentTransport, Session};
@@ -34,13 +40,39 @@ use desktop::Desktop;
 use gpui::{prelude::*, px, size, App, Bounds, WindowBounds, WindowOptions};
 
 fn main() {
+    aipass_desktop_native::runtime_check::initialize().unwrap_or_else(|e| {
+        eprintln!("Invalid runtime fixture: {e}");
+        std::process::exit(2);
+    });
     typography::init();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = if aipass_desktop_native::runtime_check::active() {
+        Vec::new()
+    } else {
+        std::env::args().skip(1).collect()
+    };
+    #[cfg(windows)]
+    if args == ["--remove-login-start"] {
+        let result = std::env::current_exe()
+            .map_err(anyhow::Error::from)
+            .and_then(|exe| aipass_agent::autostart::uninstall_windows_tray_entries(&exe));
+        if let Err(error) = result {
+            eprintln!("Could not remove login entries: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     #[cfg(feature = "parity-render")]
     let args = parity::launch::arguments(args).unwrap_or_else(|error| {
         eprintln!("Invalid isolated launch fixture: {error}");
         std::process::exit(2);
     });
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        println!("AIPass native desktop\n\nUsage: aipass-desktop-native [--vault <absolute path>]\n       aipass-desktop-native --parity-preview [synthetic comparison options]");
+        return;
+    }
     if args.iter().any(|arg| arg == "--motion-samples") {
         let samples: Vec<_> = [0.0, 60.0, 135.0, 270.0, 405.0, 539.0, 540.0, 600.0,
             660.0, 661.0, 795.0, 930.0, 1065.0, 1200.0].into_iter().map(|ms| {
@@ -52,9 +84,45 @@ fn main() {
         );
         return;
     }
-    if !args.iter().any(|arg| arg == "--parity-preview") {
-        eprintln!("GPUI migration is not yet a production desktop. Use --parity-preview for isolated UI comparison.");
+    let launch = launch::Launch::parse(&args).unwrap_or_else(|error| {
+        eprintln!("Could not start AIPass: {error}");
         std::process::exit(2);
+    });
+    let preview = launch == launch::Launch::Preview;
+    let target = match &launch {
+        launch::Launch::Desktop { target, .. } => target.clone(),
+        _ => "main".into(),
+    };
+    let forwarded_links = args
+        .iter()
+        .filter(|value| launch::provider_link_argument(value))
+        .cloned()
+        .map(aipass_agent_protocol::SensitiveString::new)
+        .collect();
+    if !preview {
+        aipass_desktop_native::shell::logging::init();
+        let _ = aipass_desktop_native::shell::logging::log_event(
+            "desktop.startup.begin",
+            &[("target", &target)],
+        );
+        #[cfg(target_os = "macos")]
+        if aipass_desktop_native::shell::self_install::install_from_dmg_if_needed() {
+            return;
+        }
+    }
+    let mut args = args;
+    let link_inbox = desktop::provider_links::Inbox::default();
+    if !preview {
+        for argument in &mut args {
+            if launch::provider_link_argument(argument) {
+                if let Some(link) =
+                    aipass_desktop_native::provider_links::parse(std::mem::take(argument))
+                {
+                    link_inbox.receive(link);
+                }
+            }
+        }
+        args.retain(|arg| !arg.is_empty());
     }
     #[cfg(not(feature = "parity-render"))]
     if args.iter().any(|arg| arg.starts_with("--update-config=")) {
@@ -149,13 +217,21 @@ fn main() {
     let agent_fixture = agents_ui::fixtures::SCENARIOS.contains(&scenario.as_str());
     #[cfg(not(feature = "parity-render"))]
     let agent_fixture = false;
-    if !subscription_fixture
+    #[cfg(feature = "parity-render")]
+    let administration_fixture =
+        scenario.starts_with("settings-") || scenario.starts_with("proxy-");
+    #[cfg(not(feature = "parity-render"))]
+    let administration_fixture = false;
+    if !administration_fixture
+        && !subscription_fixture
         && !agent_fixture
         && !matches!(
             scenario.as_str(),
             "empty"
                 | "providers"
                 | "providers-reset"
+                | "providers-link-duplicate"
+                | "providers-link-long"
                 | "providers-reset-error"
                 | "providers-usage"
                 | "providers-usage-advanced"
@@ -228,7 +304,9 @@ fn main() {
         eprintln!("Unknown comparison scenario: {scenario}");
         std::process::exit(2);
     }
-    if (scenario.ends_with("-motion")
+    if (scenario.starts_with("settings-")
+        || scenario.starts_with("proxy-")
+        || scenario.ends_with("-motion")
         || scenario.starts_with("providers")
         || scenario.starts_with("agents-")
         || scenario.starts_with("subscription-")
@@ -300,6 +378,7 @@ fn main() {
     let session = args
         .iter()
         .find_map(|arg| arg.strip_prefix("--vault="))
+        .filter(|_| preview)
         .map(|path| {
             AgentTransport::for_vault(path.into())
                 .and_then(|transport| Session::new(transport).map_err(Into::into))
@@ -309,6 +388,20 @@ fn main() {
             eprintln!("Could not initialize Agent client: {error}");
             std::process::exit(2);
         });
+    let (session, mut lifetime) = match launch {
+        launch::Launch::Preview => (session, None),
+        launch::Launch::Desktop { vault, ref target } => {
+            let context =
+                startup::connect(vault, target, forwarded_links).unwrap_or_else(|error| {
+                    eprintln!("Could not initialize AIPass: {error}");
+                    std::process::exit(2);
+                });
+            let Some((session, lifetime)) = context else {
+                return;
+            };
+            (Some(session), Some(lifetime))
+        }
+    };
     #[cfg(feature = "parity-render")]
     let session = updater
         .as_mut()
@@ -318,10 +411,38 @@ fn main() {
         eprintln!("Could not load desktop preferences: {error}");
         std::process::exit(2);
     });
-    gpui_platform::application()
-        .with_assets(assets::Assets)
-        .run(move |cx: &mut App| {
+    let application = gpui_platform::application().with_assets(assets::Assets);
+    let application = if preview {
+        application
+    } else {
+        application.with_quit_mode(gpui::QuitMode::Explicit)
+    };
+    if !preview {
+        let inbox = link_inbox.clone();
+        let handle = lifetime.as_ref().unwrap().handle.clone();
+        application.on_open_urls(move |urls| {
+            for url in urls {
+                if let Some(target) = launch::launch_link_target(&url) {
+                    handle.event(aipass_desktop_native::shell::Event::Activate(target));
+                    continue;
+                }
+                if let Some(link) = aipass_desktop_native::provider_links::parse(url) {
+                    inbox.receive(link);
+                }
+            }
+        });
+        application.on_reopen(|cx| {
+            cx.set_activation_policy(gpui::ActivationPolicy::Regular);
+            cx.activate(true);
+            for handle in cx.windows() {
+                let _ = handle.update(cx, |_, w, cx| startup::activate(w, cx));
+            }
+        });
+    }
+    application.run(move |cx: &mut App| {
             gpui_base::init(cx);
+            if !preview { cx.set_global(link_inbox); }
+            if let Some(lifetime) = lifetime.take() { cx.set_global(lifetime); }
             cx.set_global(preferences);
             // Explicit fixture colors stay deterministic; normal windows honor
             // the shared preference, whose default is the system appearance.
@@ -338,8 +459,17 @@ fn main() {
             cx.text_system().prewarm_fonts(&[gpui::font("PingFang SC")]);
             desktop::init(cx);
             cx.on_app_quit(|cx| {
+                let shell = cx.try_global::<startup::Lifetime>().map(|life| life.handle.clone());
+                let size = if !aipass_desktop_native::runtime_check::active() && shell.is_some() {
+                    cx.windows().first().and_then(|handle| handle.update(cx, |_, w, _| {
+                        let size = w.viewport_size();
+                        aipass_desktop_native::shell::geometry::Size { width: f32::from(size.width), height: f32::from(size.height) }
+                    }).ok())
+                } else { None };
                 aipass_desktop_platform::clipboard::invalidate();
-                cx.background_executor().spawn(async {
+                cx.background_executor().spawn(async move {
+                    if let Some(size) = size { let _ = aipass_desktop_native::shell::geometry::save(size); }
+                    if let Some(shell) = shell { if !shell.stopped() { let _ = shell.quit(); } }
                     let _ = aipass_desktop_platform::clipboard::clear_now();
                 })
             }).detach();
@@ -348,7 +478,10 @@ fn main() {
                 cx.set_global(parity::MotionTrace { output: Some(output), frames: Vec::new() });
             }
             if reduced { cx.set_reduce_motion(true); }
-            let dimensions = if large {
+            let dimensions = if !preview {
+                let stored = if aipass_desktop_native::runtime_check::active() {aipass_desktop_native::shell::geometry::Size {width:960.,height:640.}} else {{ let stored=aipass_desktop_native::shell::geometry::load();cx.primary_display().map(|d| {let size=d.bounds().size;stored.fit(f32::from(size.width),f32::from(size.height))}).unwrap_or(stored) }};
+                size(px(stored.width), px(stored.height))
+            } else if large {
                 size(px(1280.), px(820.))
             } else {
                 size(px(960.), px(640.))
@@ -361,15 +494,15 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(640.))),
-                    focus: !screenshot_only,
-                    show: !screenshot_only,
+                    focus: !screenshot_only && target != "tray",
+                    show: !screenshot_only && target != "tray",
                     titlebar: None,
                     window_background: gpui::WindowBackgroundAppearance::Transparent,
-                    app_id: Some("com.alkinum.aipass.gpui-parity".into()),
+                    app_id: Some(if preview { "com.alkinum.aipass.gpui-parity" } else { "com.alkinum.aipass" }.into()),
                     ..Default::default()
                 },
                 |window, cx| {
-                    window.set_window_title("AIPass GPUI Parity");
+                    window.set_window_title(if preview { "AIPass GPUI Parity" } else { "AIPass" });
                     #[cfg(feature = "parity-render")]
                     if session.is_none() {
                         if let Err(error) = parity::launch::observe(window) {
@@ -378,9 +511,10 @@ fn main() {
                     }
                     let dark = appearance::resolve(preference, window.appearance());
                     let view = cx.new(|cx| Desktop::new(session, &scenario, dark, chinese, window, cx));
-                    if !fixed_appearance {
-                        view.update(cx, |view, cx| view.follow_preferences(window, cx));
-                    }
+                    view.update(cx, |view, cx| view.follow_preferences(window, !fixed_appearance, cx));
+                    if !preview { startup::attach(&view, &target, window, cx); }
+                    #[cfg(feature = "parity-render")]
+                    if scenario.starts_with("providers-link-") { view.update(cx, |view,cx|view.preview_provider_link(scenario.ends_with("-long"),window,cx)); }
                     #[cfg(feature = "parity-render")]
                     if let Some(context) = updater.take() {
                         let view = view.downgrade();
@@ -503,7 +637,9 @@ fn main() {
                     cx.update(|cx| cx.quit());
                 }).detach();
             }
-            if !screenshot_only { cx.activate(true); }
+            if !preview { startup::start(cx); }
+            if !screenshot_only && target != "tray" { cx.activate(true); }
+            else if !preview { cx.set_activation_policy(gpui::ActivationPolicy::Accessory); }
         });
 }
 

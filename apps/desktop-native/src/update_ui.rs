@@ -1,11 +1,9 @@
 use aipass_desktop_native::updates::Command;
-#[cfg(feature = "parity-render")]
 use aipass_desktop_native::updates::Worker;
 use gpui::{div, prelude::*, px, Context};
 use gpui_base::{Button, Dialog, DialogPopup};
 
 impl crate::desktop::Desktop {
-    #[cfg(feature = "parity-render")]
     pub(crate) fn enable_updates(
         &mut self,
         worker: Worker,

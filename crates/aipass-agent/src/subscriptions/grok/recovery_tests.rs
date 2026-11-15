@@ -1,6 +1,60 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+// Local service discovery is unrelated to the retry/replay assertion. Only
+// empty connections and unauthenticated GET / probes are filtered; authenticated
+// root requests and every API-path request remain observable.
+async fn receive(listener: &tokio::net::TcpListener) -> (tokio::net::TcpStream, String) {
+    loop {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        let header_end = loop {
+            let mut chunk = [0; 4096];
+            let n = socket.read(&mut chunk).await.unwrap();
+            if n == 0 {
+                break None;
+            }
+            bytes.extend_from_slice(&chunk[..n]);
+            assert!(bytes.len() <= 16384, "oversized fixture request");
+            if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                break Some(end + 4);
+            }
+        };
+        let Some(header_end) = header_end else {
+            continue;
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]).to_string();
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap_or(0);
+        assert!(length <= 4096);
+        while bytes.len() < header_end + length {
+            let mut chunk = [0; 4096];
+            let n = socket.read(&mut chunk).await.unwrap();
+            assert_ne!(n, 0, "incomplete fixture body");
+            bytes.extend_from_slice(&chunk[..n]);
+        }
+        let authenticated = headers.lines().any(|line| {
+            line.split_once(':')
+                .is_some_and(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        });
+        if headers.starts_with("GET / HTTP/") && !authenticated {
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            continue;
+        }
+        return (socket, String::from_utf8(bytes).unwrap());
+    }
+}
+
 fn account(root: &std::path::Path) -> (Context, mpsc::Sender<Value>, mpsc::Receiver<Value>) {
     std::fs::write(root.join("auth.json"),json!({"https://auth.x.ai":{"key":"new","email":"alice","expires_at":"2040-01-01T00:00:00Z"}}).to_string()).unwrap();
     let (mut c, tx, rx) =
@@ -17,10 +71,11 @@ async fn server(statuses: Vec<u16>) -> (String, tokio::task::JoinHandle<Vec<Stri
     let handle = tokio::spawn(async move {
         let mut requests = vec![];
         for status in statuses {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = [0; 4096];
-            let n = socket.read(&mut bytes).await.unwrap();
-            requests.push(String::from_utf8_lossy(&bytes[..n]).to_string());
+            let (mut socket, request) =
+                tokio::time::timeout(Duration::from_secs(3), receive(&listener))
+                    .await
+                    .unwrap();
+            requests.push(request);
             let body = if status == 200 {
                 r#"{"ok":true}"#
             } else {
@@ -28,15 +83,57 @@ async fn server(statuses: Vec<u16>) -> (String, tokio::task::JoinHandle<Vec<Stri
             };
             socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
         }
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), listener.accept())
-                .await
-                .is_err(),
-            "unexpected extra request"
-        );
+        if let Ok((_, request)) =
+            tokio::time::timeout(Duration::from_millis(100), receive(&listener)).await
+        {
+            panic!("unexpected extra request: {:?}", request.lines().next());
+        }
         requests
     });
+    // Deterministically reproduce discovery before the intended request, so it
+    // cannot consume a response even when no external scanner is running.
+    let discovery = Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(url.strip_suffix("fixture").unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(discovery.status(), 404);
     (url, handle)
+}
+
+#[tokio::test]
+async fn discovery_filter_retains_authenticated_root_and_generation_traffic() {
+    for path in ["/", "/fixture"] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}{path}", listener.local_addr().unwrap());
+        let handle = tokio::spawn(async move {
+            let (mut socket, request) =
+                tokio::time::timeout(Duration::from_secs(3), receive(&listener))
+                    .await
+                    .unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            request
+        });
+        let client = Client::builder().no_proxy().build().unwrap();
+        let response = if path == "/" {
+            client.get(url).bearer_auth("fixture").send().await.unwrap()
+        } else {
+            client.post(url).body("fixture").send().await.unwrap()
+        };
+        assert_eq!(response.status(), 200);
+        let request = handle.await.unwrap();
+        assert!(request.starts_with(if path == "/" {
+            "GET / HTTP/"
+        } else {
+            "POST /fixture HTTP/"
+        }));
+    }
 }
 
 #[tokio::test]

@@ -22,11 +22,23 @@ pub fn apply(action: &str, window: &mut Window, cx: &mut App) -> anyhow::Result<
                 .copied()
                 .ok_or_else(|| anyhow::anyhow!("capture target missing: {id}"))?;
             let height = f32::from(window.viewport_size().height);
-            if bounds[1] >= 80. && bounds[1] + bounds[3] <= height - 48. {
+            let (top, bottom) = if id.starts_with("settings-") {
+                cx.try_global::<super::Geometry>()
+                    .and_then(|g| g.0.get("settings-body"))
+                    .map(|b| (b[1] + 16., b[1] + b[3] - 16.))
+                    .unwrap_or((80., height - 20.))
+            } else {
+                (80., height - 20.)
+            };
+            if bounds[1] >= top && bounds[1] + bounds[3] <= bottom {
                 return Ok(());
             }
-            let position = point(px(bounds[0] + bounds[2] / 2.), px(height - 60.));
-            let delta = height / 2. - (bounds[1] + bounds[3] / 2.);
+            let position = point(px(bounds[0] + bounds[2] / 2.), px(bottom - 12.));
+            let delta = if bounds[1] < top {
+                top - bounds[1]
+            } else {
+                bottom - bounds[1] - bounds[3]
+            };
             window.dispatch_event(
                 PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
                     position,

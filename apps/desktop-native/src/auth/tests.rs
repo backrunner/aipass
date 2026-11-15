@@ -3,6 +3,35 @@ use gpui::TestAppContext;
 use std::{cell::Cell, rc::Rc};
 
 #[gpui::test]
+fn language_change_updates_reset_and_import_controls_without_clearing_input(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_base::init);
+    let (view, cx) = cx.add_window_view(|w, cx| AuthView::new(Mode::Recover, false, false, w, cx));
+    cx.update(|w, cx| {
+        view.update(cx, |s, cx| {
+            s.password
+                .update(cx, |v, cx| v.set_value("synthetic-draft", w, cx));
+            let identity = s.password.entity_id();
+            for chinese in [true, false] {
+                crate::locale::select(chinese);
+                s.relocalize(w, cx);
+                assert_eq!(
+                    s.reset_confirmation
+                        .read(cx)
+                        .presentation()
+                        .placeholder()
+                        .as_ref(),
+                    s.locale.text("auth.reset.placeholder")
+                );
+                assert_eq!(s.password.entity_id(), identity);
+                assert_eq!(s.password.read(cx).value(), "synthetic-draft");
+            }
+        })
+    });
+}
+
+#[gpui::test]
 fn appearance_keeps_password_identity_focus_and_pending_state(cx: &mut TestAppContext) {
     cx.update(gpui_base::init);
     let (view, cx) =

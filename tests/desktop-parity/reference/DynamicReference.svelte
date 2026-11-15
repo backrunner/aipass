@@ -1,14 +1,14 @@
 <script lang="ts">
   // Mount the real baseline components. All mutations below affect fixtures only.
-  import App from "../../../apps/desktop/src/App.svelte";
-  import ErrorToast from "../../../apps/desktop/src/lib/components/shared/ErrorToast.svelte";
-  import UpdateNotification from "../../../apps/desktop/src/lib/components/shared/UpdateNotification.svelte";
-  import UpdateRestartConfirmModal from "../../../apps/desktop/src/lib/components/shared/UpdateRestartConfirmModal.svelte";
-  import UsageChart from "../../../apps/desktop/src/lib/components/server/UsageChart.svelte";
+  import App from "../../../artifacts/desktop-reference/src/App.svelte";
+  import ErrorToast from "../../../artifacts/desktop-reference/src/lib/components/shared/ErrorToast.svelte";
+  import UpdateNotification from "../../../artifacts/desktop-reference/src/lib/components/shared/UpdateNotification.svelte";
+  import UpdateRestartConfirmModal from "../../../artifacts/desktop-reference/src/lib/components/shared/UpdateRestartConfirmModal.svelte";
+  import UsageChart from "../../../artifacts/desktop-reference/src/lib/components/server/UsageChart.svelte";
   import { ProxyStatusGrid } from "@aipass/ui";
   import type { ProxyStatus } from "@aipass/schemas";
-  import type { UsageTimeseriesPoint } from "../../../apps/desktop/src/lib/types";
-  import type { UpdateProgress } from "../../../apps/desktop/src/lib/services/updates";
+  import type { UsageTimeseriesPoint } from "../../../artifacts/desktop-reference/src/lib/types";
+  import type { UpdateProgress } from "../../../artifacts/desktop-reference/src/lib/services/updates";
 
   const params = new URLSearchParams(location.search);
   const scenario = params.get("scenario") ?? "toast";

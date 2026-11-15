@@ -2,7 +2,6 @@
 members = [
   "crates/aipass-desktop-platform",
   "apps/desktop-native",
-  "apps/desktop/src-tauri",
   "crates/aipass-agent",
   "crates/aipass-agent-protocol",
   "crates/aipass-crypto",
@@ -17,7 +16,7 @@ members = [
   "crates/aipass-proxy",
   "crates/aipass-mcp-proxy"
 ]
-exclude = ["vendor/gpui", "vendor/gpui-base", "vendor/block", "vendor/gpui_apple", "vendor/gpui_wgpu"]
+exclude = ["vendor/notify-rust", "vendor/gpui", "vendor/gpui-base", "vendor/block", "vendor/gpui_apple", "vendor/gpui_wgpu"]
 resolver = "2"
 
 [workspace.package]
@@ -80,4 +79,5 @@ gpui_wgpu = { path = "vendor/gpui_wgpu" }
 gpui = { path = "vendor/gpui" }
 
 [patch.crates-io]
+notify-rust = { path = "vendor/notify-rust" }
 block = { path = "vendor/block" }

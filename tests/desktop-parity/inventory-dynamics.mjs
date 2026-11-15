@@ -3,7 +3,7 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "../..");
-const files = ["apps/desktop/src/App.svelte"];
+const files = ["artifacts/desktop-reference/src/App.svelte"];
 async function collect(path) {
   for (const entry of await readdir(resolve(root, path), { withFileTypes: true })) {
     const next = `${path}/${entry.name}`;
@@ -11,7 +11,7 @@ async function collect(path) {
     else if (/\.(svelte|ts|scss)$/.test(next) && !next.includes(".test.")) files.push(next);
   }
 }
-for (const path of ["apps/desktop/src/lib/components", "apps/desktop/src/lib/services", "packages/ui/src/components", "packages/ui/src/actions", "packages/ui/src/styles"]) await collect(path);
+for (const path of ["artifacts/desktop-reference/src/lib/components", "artifacts/desktop-reference/src/lib/services", "packages/ui/src/components", "packages/ui/src/actions", "packages/ui/src/styles"]) await collect(path);
 const surfaces = [];
 for (const path of files.sort()) {
   const source = await readFile(resolve(root, path), "utf8");

@@ -35,7 +35,7 @@ test("Linux manifests keep architecture and installer format through release mer
     const result = run(merge, [output]);
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(readFileSync(join(output, "latest.json"), "utf8"));
-    assert.equal(Object.keys(manifest.platforms).length, 7);
+    assert.equal(Object.keys(manifest.platforms).length, 13);
     for (const arch of ["aarch64", "x86_64"]) {
       assert.ok(!existsSync(join(output, `latest-linux-${arch}.json`)));
       for (const format of ["deb", "rpm", "appimage"]) {

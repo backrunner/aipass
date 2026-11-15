@@ -21,6 +21,7 @@ pub struct Theme {
     pub danger_soft: Rgba,
     pub warning: Rgba,
     pub success: Rgba,
+    pub success_soft: Rgba,
 }
 
 impl Theme {
@@ -77,6 +78,7 @@ impl Theme {
                 danger_soft: rgb(0xf1a6a0).opacity(0.14),
                 warning: rgb(0xe2b070),
                 success: rgb(0x8ad8be),
+                success_soft: rgb(0x8ad8be).opacity(0.14),
             }
         } else {
             Self {
@@ -98,6 +100,7 @@ impl Theme {
                 danger_soft: rgb(0xb42318).opacity(0.08),
                 warning: rgb(0xb25e09),
                 success: rgb(0x18794e),
+                success_soft: rgb(0x18794e).opacity(0.1),
             }
         }
     }

@@ -15,7 +15,7 @@ use gpui::{prelude::*, Context, Entity, ScrollHandle, Subscription, Window};
 use std::collections::{BTreeMap, VecDeque};
 #[cfg(feature = "parity-render")]
 pub(crate) mod fixtures;
-mod setup;
+pub(crate) mod setup;
 #[cfg(all(test, feature = "parity-render"))]
 mod tests;
 mod view;

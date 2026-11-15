@@ -11,7 +11,7 @@ const root=resolve(import.meta.dirname,'../..'), round=process.argv[2];
 assert(/^[a-z0-9-]+$/.test(round??''));
 const output=resolve(root,'artifacts/desktop-parity',round);await mkdir(output);
 execFileSync('rtk',['proxy','cargo','build','-p','aipass-desktop-native','--features','parity-render'],{cwd:root,stdio:'pipe',timeout:180000});
-const binary=resolve(output,'aipass-desktop-native');await copyFile(resolve(root,'target/debug/aipass-desktop-native'),binary);
+const binary=resolve(output,'aipass-desktop-native');await copyFile(resolve(root,'target/debug/aipass-desktop'),binary);
 const hash=b=>createHash('sha256').update(b).digest('hex'), sourceHashes={};
 async function record(path){for(const e of await readdir(resolve(root,path),{withFileTypes:true})){if(e.isSymbolicLink()||e.name==='node_modules')continue;const p=`${path}/${e.name}`;if(e.isDirectory())await record(p);else sourceHashes[p]=hash(await readFile(resolve(root,p)));}}
 for(const p of ['apps/desktop-native','vendor','tests/desktop-parity/reference','tests/desktop-parity/fixtures'])await record(p);
