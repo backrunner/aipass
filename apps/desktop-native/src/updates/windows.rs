@@ -80,7 +80,7 @@ impl Prepared {
             std::thread::sleep(Duration::from_millis(25));
         }
         // The independent helper owns cleanup once the desktop releases its files.
-        self.stage.keep();
+        drop(self.stage.keep());
         Ok(())
     }
 }

@@ -1736,7 +1736,7 @@ Newest entries last within each section.
 - **Root cause**: `MenuItemKind::as_ref` is crate-private in the pinned `muda` dependency. macOS uses the Swift tray and never compiles this adapter; lease imports/constants were not gated with their Unix-only uses.
 - **Fix**: clear the retained menu with public `remove_at` calls in reverse order, and gate the descriptor constant and `ensure` import with `cfg(unix)`. Remove the unused `anyhow` dependency from the vault crate.
 - **Guardrail**: verify visibility in the pinned dependency source, gate platform-only imports/constants together with their uses, and require native Linux/Windows CI for adapters excluded by the macOS build. Do not infer cross-platform compilation from a local macOS pass or suppress its warnings.
-- **Watch points**: `shell/classic.rs`, `runtime/instance.rs`, Linux packaging and Windows workspace jobs in `.github/workflows/ci.yml`.
+- **Watch points**: `shell/classic.rs`, `runtime/instance.rs`, Linux packaging and Windows workspace jobs in `.github/workflows/ci.yml`. Windows-only updater handoff must also consume the must-use `TempDir::keep` path (explicitly drop the path when the independent helper owns directory cleanup).
 
 
 ### Native NSIS replacement must retain legacy process-local flags
