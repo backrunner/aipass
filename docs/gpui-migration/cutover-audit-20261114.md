@@ -1,25 +1,33 @@
 # Tauri removal audit, 2026-11-14
 
-**Current removal gate (user instruction, 2026-11-14): complete UI acceptance.**
+> Historical checkpoint. Production cutover is now implemented; see [the native cutover record](native-cutover-20261115.md) for current ownership and validation. The findings below describe the earlier state.
+
+**Current scope (user instruction, 2026-11-15): finish non-animation UI and functions.**
 
 After all UI surfaces, states, controls and appearance are accepted, remove Tauri.
-The user's subsequent instruction waives foreground smoothness sampling; it is
-no longer a cleanup prerequisite and must not be recorded as a performance pass.
-Functional regression and production behavior may be
-reviewed afterward. The Keychain-dependent workspace test, production lifecycle
-and updater functional checks below are deferred work, not prerequisites for
-this UI-first cleanup. Do not remove resources or shared code still needed by
+The latest instruction waives animation matching as well as foreground smoothness
+sampling; neither is a cleanup prerequisite or a recorded performance pass.
+The latest clarification also skips Keychain-dependent regression and reuses
+passing checks with unchanged inputs. The [UI continuation](native-final-states-20261115.md)
+records the new file/preview/link/inference fixes and the remaining live Tauri
+dependencies; it supersedes historical claims that those native flows are absent.
+Functional completion is now active rather than deferred. The earlier UI-first
+cleanup permission remains conditional on the non-animation UI gate; production
+lifecycle/artifact acceptance is separate and is not established by UI checks.
+Do not remove resources or shared code still needed by
 GPUI, the Agent or the LAN control panel, and keep the resulting tree buildable.
 The mandatory workspace Clippy and structural repository checks still apply.
 
-UI acceptance is not complete: local-proxy/settings pages and integrated native
-interaction remain open. The [onboarding and Agent checkpoint](native-onboarding-agents-20261114.md) adds the previously missing authentication setup/recovery/loading branches and Agent management page with bounded comparison evidence.
+UI acceptance is not complete. The [settings and local-proxy checkpoint](native-administration-20261115.md)
+implements those previously missing pages and records their bounded comparison
+and regression evidence. Expanded state coverage and integrated native interaction
+remain open. The [onboarding and Agent checkpoint](native-onboarding-agents-20261114.md) adds the previously missing authentication setup/recovery/loading branches and Agent management page with bounded comparison evidence.
 The [native interaction checkpoint](native-acceptance-20261114.md) records partial
 real-window acceptance and visibility diagnostics; it does not close the integrated
 input or appearance gate. Its visible-window follow-up closes the subscription
 proxy Tab/input gap and verifies cancellation, selectors and form scrolling;
 system appearance round-trip presentation remains interrupted.
-Keep Tauri for these UI gaps only.
+Keep Tauri while those non-animation UI gaps and replacement dependencies remain.
 The original production audit below is historical; it does not override this
 new removal criterion.
 
@@ -60,9 +68,10 @@ local-proxy or integrated-input acceptance requirements.
 
 ## Coverage boundary
 
-The immutable [inventory](inventory.json) contains 98 reference surfaces. Its 45
-Rust/Swift lifecycle paths still exactly match the current tracked Tauri lifecycle
-sources, excluding the comparison example. The table below accounts for every
+The immutable [inventory](inventory.json) contains 98 reference surfaces and 45
+Rust/Swift lifecycle paths from the frozen reference. CLI installation and
+deep-link parsing have since moved to the shared desktop-platform crate, so that
+historical lifecycle path list no longer exactly matches the candidate. The table below accounts for every
 surface group. It records implementation scope, not 98 successful UI checks.
 Existing comparison reports remain evidence for their specific cases only.
 
@@ -78,9 +87,11 @@ Existing comparison reports remain evidence for their specific cases only.
 | Desktop shared | 7 | Window chrome, notices, modal controls and isolated updater controls exist. Sync status and complete state/interaction coverage remain open. |
 | Shared UI package | 27 | Native primitives cover portions of provider/auth controls. Proxy controls and complete control/state mapping remain open. The Svelte package must remain for the LAN control panel. |
 
-The existing three-round acceptance contract remains in force. A component's
-presence, an offscreen image or a passing Rust event test does not accept physical
-input, animation presentation, every state or production lifecycle.
+The original three-round acceptance contract is historical. The latest user
+instruction reuses passing cases with unchanged inputs instead of repeating the
+full matrix. A component's presence, an offscreen image or a passing Rust event
+test does not prove physical input, every state or production lifecycle.
+Animation presentation and Keychain-dependent regression are waived.
 
 ## Original production blockers (historical)
 

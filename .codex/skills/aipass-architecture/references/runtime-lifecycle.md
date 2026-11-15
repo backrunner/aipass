@@ -2,23 +2,23 @@
 
 ## Process Model
 
-- `aipass-desktop` is the Tauri shell. It owns the WebView, windows, native tray UI, singleton server, updater, and desktop-to-agent bridge.
-- The tray is a mode/UI of `aipass-desktop`, not a separate core service. On macOS it uses the Swift bridge in `tray_swift.rs`; other platforms use Tauri tray menus in `tray.rs`.
+- `aipass-desktop` is the native GPUI app. It owns presentation, windows, native tray UI, singleton server, updater, and desktop-to-agent bridge.
+- The tray is a mode/UI of `aipass-desktop`, not a separate core service. On macOS it uses the Swift bridge in `shell/swift.rs`; other platforms use native tray-icon menus in `shell/classic.rs`.
 - `aipass-agent` is a headless, per-vault service. It owns the locked/unlocked session and accepts authenticated framed requests over a local socket.
 - `aipass-native-host` is a transient stdio process launched by Chromium. It validates Native Messaging requests and forwards allowed work to the agent.
 - The CLI is another agent client. Multiple surfaces converge on the same per-vault agent.
 
 ## Desktop Startup
 
-The primary path in `apps/desktop/src-tauri/src/lib.rs` is:
+The primary path in `apps/desktop-native/src/main.rs` and `startup.rs` is:
 
 ```text
-logging -> acquire desktop singleton -> build Tauri/plugins -> setup
+logging -> acquire desktop singleton -> build GPUI window and platform adapters -> setup
         -> select window target -> start singleton server -> build tray
         -> ensure agent/autostart asynchronously -> frontend reports ready -> reveal target
 ```
 
-`AIPASS_WINDOW_TARGET` selects `main`, `server`, or `tray`. Windows desktop login entries use `--login-start --vault <absolute path> --login-version <version>`; `launch_options` sets the equivalent environment before threads start. The current version starts tray; replayed older or legacy login arguments reveal main. An explicit target overrides login mode. This also handles NSIS/Explorer updater restarts that replay argv but lose inherited environment. The initial window is intentionally hidden in Tauri configuration and is revealed after the frontend calls the desktop-ready command. Do not make agent readiness block Tauri setup or window creation.
+`AIPASS_WINDOW_TARGET` selects `main`, `server`, or `tray`. Windows desktop login entries use `--login-start --vault <absolute path> --login-version <version>`; `launch` sets the equivalent environment before threads start. The current version starts tray; replayed older or legacy login arguments reveal main. An explicit target overrides login mode. This also handles NSIS/Explorer updater restarts that replay argv but lose inherited environment. The initial window is intentionally hidden in native window options and is revealed when the native view is ready. Do not make agent readiness block GPUI setup or window creation.
 
 The singleton implementation distinguishes release, packaged-development, and live-development instances. Keep their socket names and autostart behavior separate so a dev session does not replace a release tray process.
 
@@ -114,7 +114,7 @@ Useful desktop events include `desktop.startup.begin`, `desktop.setup.begin`, `d
 
 When startup is slow, measure these intervals before editing:
 
-1. process start -> Tauri setup;
+1. process start -> GPUI setup;
 2. setup -> frontend ready/window reveal;
 3. agent spawn -> listener bind;
 4. listener bind -> successful `SessionStatus`;

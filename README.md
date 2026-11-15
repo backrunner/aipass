@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/desktop/public/aipass-logo.png" width="144" alt="AIPass logo">
+  <img src="apps/desktop-native/assets/aipass-logo.png" width="144" alt="AIPass logo">
 </p>
 
 <h1 align="center">AIPass</h1>
@@ -59,7 +59,7 @@ Use Node.js 26, pnpm 12.3.4, and stable Rust (Homebrew on macOS). See the [devel
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm --filter @aipass/desktop dev
+pnpm --filter @aipass/desktop-native dev
 ```
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and report security issues through [SECURITY.md](SECURITY.md).

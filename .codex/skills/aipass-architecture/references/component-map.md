@@ -4,8 +4,7 @@
 
 | Component | Owns | Must not own |
 | --- | --- | --- |
-| `apps/desktop/src` | Svelte presentation, interaction state, invoking Tauri commands | Vault files, provider credentials, sync objects, final tool config |
-| `apps/desktop/src-tauri` | Desktop lifecycle, Tauri IPC bridge, windows, tray, singleton, updater, native-host installation | A second vault/session implementation |
+| `apps/desktop-native` | GPUI presentation, Agent session, windows, tray, singleton, signed updater, native-host installation | A second vault/session implementation |
 | `crates/aipass-agent` | Local service, authenticated IPC, vault session, CRUD, sync orchestration, proxy and pricing state, config writes | Browser or Svelte presentation |
 | `crates/aipass-agent-protocol` | Typed requests/responses, framed IPC contract, error codes, protocol version, secret-aware DTOs | Business persistence or UI behavior |
 | `crates/aipass-vault` | Encrypted records, vault lifecycle, audit and grants | Desktop or browser integration |

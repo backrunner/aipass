@@ -13,17 +13,17 @@ The repository's [contribution guide](https://github.com/backrunner/aipass/blob/
 
 - Node.js 26 (`.nvmrc`) and pnpm 12.3.4 (`package.json`).
 - Stable Rust; on macOS use Homebrew's latest `rust` formula.
-- The [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/).
+- Native platform build dependencies listed in `.github/workflows/ci.yml`; macOS packaging also uses Swift and minisign.
 
 ```bash
 nvm install
 nvm use
 npm install --global pnpm@12.3.4
 pnpm install --frozen-lockfile
-pnpm --filter @aipass/desktop dev
+pnpm --filter @aipass/desktop-native dev
 ```
 
-Development builds use the isolated `aipass-dev://` scheme. Register a development build for extension-triggered launches with `pnpm --filter @aipass/desktop dev:register`. Release builds use `aipass://`.
+Development builds use the isolated `aipass-dev://` scheme. Register a development build for extension-triggered launches with `pnpm --filter @aipass/desktop-native dev:register`. Release builds use `aipass://`.
 
 Build the extension with `pnpm --filter @aipass/extension build`; the package is written to `apps/extension/build/aipass-extension.zip`.
 
@@ -40,7 +40,7 @@ Browser extension ──┘          ├──> Encrypted sync
                                └──> Tool configuration writers
 ```
 
-- `apps/desktop`: Svelte UI and Tauri bridge.
+- `apps/desktop-native`: Rust GPUI interface and native platform adapters.
 - `crates/aipass-agent`: trusted local service and final credential access.
 - `crates/aipass-vault`, `aipass-sync`: vault storage and encrypted sync.
 - `crates/aipass-cli`, `aipass-native-host`: CLI and browser boundaries.
@@ -73,7 +73,7 @@ cargo test --workspace
 cargo build --workspace
 ```
 
-The gate includes a finished macOS DMG/updater bundle and all four runtime scenarios. Follow the [repository guardrails](https://github.com/backrunner/aipass/blob/main/.codex/skills/aipass-repo-guardrails/SKILL.md) for the complete commands. Local validation runs on macOS; Linux and Windows jobs run in GitHub Actions. Desktop UI changes must be reviewed at the Tauri minimum of 960×640.
+The gate includes a finished macOS DMG/updater bundle and all four runtime scenarios. Follow the [repository guardrails](https://github.com/backrunner/aipass/blob/main/.codex/skills/aipass-repo-guardrails/SKILL.md) for the complete commands. Local validation runs on macOS; Linux and Windows jobs run in GitHub Actions. Desktop UI changes must be reviewed at the desktop minimum of 960×640.
 
 Never commit real API keys, updater private keys, or unencrypted vault exports.
 

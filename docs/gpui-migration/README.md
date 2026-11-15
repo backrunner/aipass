@@ -5,15 +5,26 @@ Subscription checkpoint: [component audit and remaining gaps](ui-subscriptions-2
 Reference: `65a1f1f5a5e1b51311132659f9b972131c8ea551`.
 Worktree: `/Volumes/BRData/projects/aipass-gpui`, branch `refactor/gpui-desktop`.
 
-This migration is **in progress, not accepted**. Tauri remains the executable
-reference until every surface and lifecycle has a working native replacement.
-The native executable is not yet the production desktop entry point.
+The native cutover is implemented in `apps/desktop-native`. The retired desktop
+application and its Rust/JavaScript framework dependencies are removed. Startup,
+tray, singleton activation, provider links, CloudKit, authenticated CLI update
+control and native packaging now use the Rust/GPUI application. See the
+[current cutover record](native-cutover-20261115.md) for validation and limits.
+
+The latest user instruction (2026-11-15) excludes Keychain-dependent regression,
+animation fidelity and smoothness sampling, and reuses passing checks with
+unchanged inputs. Those exclusions are not performance or Keychain passes.
+Shared Svelte controls and locales remain for the LAN control panel. Historical
+reference captures below retain their original evidence status; the browser
+reference can be reconstructed from the pinned Git revision without installing
+the retired framework.
 
 ## Contract
 
 - Port the existing design, including colors, typography, icons, translucent
   backgrounds, spacing, clipping, scroll masks, focus, keyboard navigation,
-  context menus, dialogs, drawers, title bar, tray and animations.
+  context menus, dialogs, drawers, title bar and tray. Existing motion can remain;
+  further animation matching is outside the current requested scope.
 - Preserve Agent authority, authenticated typed IPC, secret clipboard ownership,
   lock invalidation, background work cancellation and existing settings formats.
 - No WebView in the final GPUI desktop. Shared Svelte controls remain necessary
@@ -22,17 +33,18 @@ The native executable is not yet the production desktop entry point.
   A source inventory is a coverage floor, not a complete state-space test.
 - Use identical synthetic fixtures, locale, viewport, display scale, font and
   OS version for each reference/native pair. Do not capture personal vault data.
-- Cover 960×640 and 1280×820, English/Chinese, light/dark, reduced/normal motion,
+- Cover 960×640 and 1280×820, English/Chinese, light/dark,
   empty/populated/long content, loading/success/failure and disabled states.
-- Perform three rounds: initial comparison, correction comparison, full
+- The original plan used three rounds: initial comparison, correction comparison, full
   regression after integration. Each round must retain both images, difference
-  images, geometry, interaction traces and source/artifact hashes.
-- Sample animations at 0/25/50/75/100 percent and at semantic boundaries (for
-  example unlock at 540 ms and 660 ms of 1200 ms). Check cancellation, reversal,
-  repeated activation, focus restoration and reduced motion separately.
+  images, geometry, interaction traces and source/artifact hashes. The latest user
+  instruction reuses unchanged passing cases; only new/affected cases are rerun.
+- Animation frame sampling and motion matching are waived by the 2026-11-15
+  instruction. Input cancellation, repeated activation, focus restoration and
+  correct settled states still require functional checks.
 - User clarification, 2026-11-12: exact pixels are not required. Components,
   layout, shape and style must remain consistent, as must the requested motion
-  and interaction behavior. Review controls/states, hierarchy/alignment/wrapping,
+  and interaction behavior, subject to the later motion waiver above. Review controls/states, hierarchy/alignment/wrapping,
   dimensions/radii/icon silhouettes, and typography/colors/borders/shadows.
 - Pixel differences remain diagnostics. Rasterization, gradient quantization and
   device-pixel snapping may be recorded without failing acceptance when they do
@@ -53,10 +65,12 @@ The native executable is not yet the production desktop entry point.
 5. Replace singleton, launch, deep links, updater, bundle scripts and CI entry
    points; remove Tauri runtime and desktop JS dependencies after parity passes.
 6. Run the complete macOS gate, native startup/update artifact acceptance and
-   three full visual/interaction rounds. Remote Linux/Windows evidence is separate.
+   affected visual/interaction cases. Reuse prior unchanged passes per the user.
+   Remote Linux/Windows evidence is separate.
 
 `inventory.json` is generated from the immutable reference, never the candidate.
-Pending, absent, skipped or failed evidence blocks acceptance.
+Pending, absent or failed in-scope evidence remains explicit. User-waived checks
+do not block the requested UI cleanup and must not be counted as passed.
 
 The [component and motion validation method](component-validation.md) adds
 per-control geometry and declared-style observations, fixed-time auth background
@@ -65,14 +79,28 @@ and remaining visual differences are explicit failures, not accepted coverage.
 The native root, provider coordinator and background renderer are now split by
 responsibility; the repository size gate continues to enforce the existing limits.
 
-## Current evidence (2026-11-14)
+## Current evidence (2026-11-15)
+
+The [settings and local-proxy checkpoint](native-administration-20261115.md)
+implements the missing administration surfaces, platform browser adapters and
+independent-axis drawer rendering. It records source-bound comparisons and
+focused native regressions, with remaining state/real-window acceptance explicit.
+The continuation expands populated sync/certificate/pricing/access-code and
+installed-tool coverage, fixes inline bind editing and records the recovered
+native connection's stale-frame limitation. Geometry exports are not a native
+presentation pass.
+It supersedes the historical claims below that settings/proxy UI is absent;
+it does not accept cutover or remove Tauri.
+The [administration failure and retry checkpoint](native-administration-results-20261115.md)
+adds acknowledged partial saves, retained sync drafts, bounded result feedback
+and isolated real-Agent persistence/sync checks.
 
 The [post-delivery cutover audit](cutover-audit-20261114.md) accounts for all 98
-reference surface groups and the 45 current Tauri lifecycle sources. Four signed
+reference surface groups and 45 Tauri lifecycle source paths. Four signed
 implementation commits were pushed through `2003fc3` after complete macOS Rust,
-Node and seven-scenario Tauri artifact checks. Settings, Agent/proxy pages,
-vault import, secure copy, pricing, permanent deletion and production platform
-integration remain blockers. Tauri has not been removed.
+Node and seven-scenario Tauri artifact checks. Its missing-page/action inventory
+is historical and superseded by the linked follow-ups; implementation does not
+accept all states or integrated native interaction. Tauri has not been removed.
 
 The [provider maintenance follow-up](ui-provider-tools-20261114.md) implements
 Reset Provider, endpoint/usage actions and the separate Notes card, with scoped
@@ -303,7 +331,7 @@ Apply the shell wrapper required by the repository instructions.
 ```sh
 pnpm install --frozen-lockfile
 pnpm --filter @aipass/schemas... build
-npm ci --prefix tests/desktop-parity --ignore-scripts
+pnpm --filter aipass-desktop-parity install --frozen-lockfile
 node tests/desktop-parity/setup.mjs
 node tests/desktop-parity/node_modules/playwright/cli.js install webkit
 node node_modules/vite/bin/vite.js --config tests/desktop-parity/vite.config.mjs

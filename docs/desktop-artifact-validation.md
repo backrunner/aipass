@@ -82,11 +82,10 @@ For a local/branch build without Developer ID, generate a disposable signing set
 runtime_signing_dir="$(mktemp -d)/signing"
 trap 'rm -rf "$runtime_signing_dir"' EXIT
 node scripts/prepare-runtime-check-build.mjs "$runtime_signing_dir"
-TAURI_SIGNING_PRIVATE_KEY="$runtime_signing_dir/updater.key" \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' \
-TAURI_BUNDLER_DMG_IGNORE_CI=true \
-  pnpm --dir apps/desktop tauri build --ci --bundles app,dmg \
-  --config "$runtime_signing_dir/tauri.runtime-check.json"
+AIPASS_SIGNING_PRIVATE_KEY="$runtime_signing_dir/updater.key" \
+AIPASS_SIGNING_PRIVATE_KEY_PASSWORD='' \
+  node scripts/package-desktop.mjs --ci --bundles app,dmg \
+  --config "$runtime_signing_dir/desktop.runtime-check.json"
 node scripts/verify-macos-dmg.mjs target/release/bundle/dmg
 node scripts/verify-macos-runtime.mjs target/release/bundle runtime-check-reports
 rm -rf "$runtime_signing_dir"

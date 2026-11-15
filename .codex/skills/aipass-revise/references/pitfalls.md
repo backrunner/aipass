@@ -5,6 +5,13 @@ Newest entries last within each section.
 
 ## Sync lifecycle (aipass-agent server / session / sync_watch)
 
+### Notification setup failure must preserve polling
+- **Symptom**: automatic local sync never published its bootstrap snapshot; sync status remained absent when filesystem notification setup failed.
+- **Root cause**: `sync_watch.rs` moved the only channel sender into the optional notification callback. Failed watcher creation dropped it, so `RecvTimeoutError::Disconnected` ended the scheduler before any sync.
+- **Fix**: the scheduler retains its own sender for its lifetime. Notifications only accelerate the existing bounded polling loop; explicit stop/shutdown still terminates it.
+- **Guardrail**: inject an unavailable notification backend and require both bootstrap and a subsequent local mutation to publish automatically within the original deadlines. Keep ordinary-notification coverage and join the injected test worker on teardown.
+- **Watch points**: `sync_watch::watch_loop_with` and `vault_sync::tests::local_writes_still_publish_when_filesystem_notifications_are_unavailable`.
+
 ### Audit events multiplied encrypted snapshot storage
 - **Symptom**: one macOS vault accumulated hundreds of GiB in `sync-cache` and `sync-outbox`; CloudKit stopped accepting snapshots above the 11 MiB IPC limit.
 - **Root cause**: each immutable sync snapshot included the growing local audit directory, every failed retry kept another full snapshot in both directories, and automatic usage/subscription refresh wrote audit events repeatedly. CloudKit also retained every successful historical snapshot.
@@ -550,6 +557,13 @@ Newest entries last within each section.
 - **Watch points**: ProviderDetailPane, ProviderFormFields, desktop provider_inputs, App saveProvider, ProviderItemFields and AgentAccountDetail. Agent statistics must follow the active entry/secret, never a pending switch selection, and label local request coverage.
 
 ## Endpoint inference (three implementations)
+
+### Native form blur and imported draft ownership
+- **Symptom**: native add forms kept Anthropic defaults after an OpenAI endpoint was entered; provider links had parsers but no native review/duplicate flow, and optional imported metadata was discarded when saving a fresh draft.
+- **Root cause**: `apps/desktop-native/src/providers/form.rs` observed only input changes; the Tauri app also inferred on endpoint/domain blur and buffered provider links until unlock. Native save reconstructed a draft without imported metadata.
+- **Fix**: move Agent endpoint evidence into `aipass-provider-registry/src/inference.rs`, restore native blur inference with separate provider/interface/auth touched flags, and feed bounded OS links into the existing editable form. Preserve metadata through explicit Save; clear queued links, confirmation drafts and editors on lock/cancel.
+- **Guardrail**: compare inference with the shared schema cases, preserve explicit choices, and test unlocked versus locked arrivals, duplicate cancel/confirm, escaped endpoint/query identity, optional metadata and retained secret-editor handles after retirement. Receiving a link must never dispatch an add command.
+- **Watch points**: native `provider_links`, `desktop/provider_links`, `providers/{import,inference,form}`, registry inference, Agent browser inference and `packages/schemas/src/index.ts`.
 
 ### Native provider edits must preserve desktop normalization and secret merges
 - **Symptom**: advanced alias/header fields were missing or ignored; inferred domains became fixed overrides, so changing the API base could retain an old matching host.
@@ -1410,7 +1424,7 @@ Newest entries last within each section.
 - **Evidence**: A disposable loopback observer received `GET / HTTP/1.1` with `User-Agent: LocalStack/1.0` from the running local service scanner.
 - **Fix**: Reuse probe-aware accepts in Agent proxy fixtures and keep unauthenticated root discovery out of image fixture request counters. Preserve assertions for authenticated root and every API-path request.
 - **Guardrail**: Inject discovery before the intended request in a regression test and prove authenticated/API traffic is still captured. Do not stop unrelated apps, retry until green, or relax production proxy behavior to repair test isolation.
-- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs, proxy/tests/image_api.rs, proxy/search/tests/probes.rs (search redirect and oversize-query negative assertions) and subscriptions/cli_accounts/grok/process_tests.rs (empty TCP and unauthenticated root probes must not consume the single-use grant).
+- **Watch points**: proxy_service/tests.rs, proxy_service/tests/lifecycle.rs, proxy_service/tests/routing.rs, proxy/tests/image_api.rs, proxy/search/tests/probes.rs (search redirect and oversize-query negative assertions), subscriptions/cli_accounts/grok/process_tests.rs (empty TCP and unauthenticated root probes must not consume the single-use grant), and subscriptions/grok/recovery_tests.rs (negative replay checks must read the accepted HTTP request rather than count TCP accepts).
 
 
 ### Extension detection must pair each extension with its own host
@@ -1670,3 +1684,48 @@ Newest entries last within each section.
 - **Fix**: resolve the shared System preference at startup and observe both window appearance and preference changes. Update existing view/editor styles without rebuilding their entities. Crossfade complete frames, including deferred overlays, once; seed row interaction colors from the new palette. Retain outgoing materials, preserve the background clock and clamp Metal/WGPU image samples to their tile's texel centers.
 - **Guardrail**: test defaults, preference changes, retained input/focus, reduced motion, interruption, resize/lock cancellation and exclusive live-popup input. Compare both directions at minimum size, with menus, dialogs and bilingual controls. Test atlas neighbors with contrasting pixels; do not widen pixel tolerances to hide texture bleed. Synthetic AppKit notifications do not prove foreground frame pacing or manual system-setting interaction.
 - **Watch points**: native `appearance`, `desktop/appearance`, `backdrop/appearance`, all mounted views' `apply_appearance`, GPUI complete-frame paint, Metal/WGPU image shaders and `capture-appearance.mjs`.
+
+
+### Native administration lost user edits behind background refresh
+- **Symptom**: proxy actions could be silently discarded while a status poll was pending; collapsed retry fields and reindexed price rows could lose their edited values or save the wrong row.
+- **Root cause**: one busy flag covered reads and writes, disclosure visibility controlled serialization, and field subscription closures retained their former row keys.
+- **Fix**: queue the user operation behind a scoped background read, serialize retained editors independently of disclosure visibility, and move editor identity plus its tracked key when deleting a price row. Closing or navigating away from a read retires its completion generation.
+- **Guardrail**: test a user mutation arriving during polling, collapse-before-save, deletion above an edited row, and stale replies after drawer navigation. Compare populated logs and charts using the same fixture in both renderers; matching only the dialog outline cannot establish content parity.
+- **Watch points**: `administration.rs`, `settings_ui`, `proxy_ui`, `admin_ui::Fields`, and `tests/desktop-parity/capture-administration.mjs`.
+
+
+### Settings parity needs descendant bounds and full CJK advances
+- **Symptom**: matching drawer and card outlines hid misplaced actions, oversized password placeholders, unequal segmented controls and a Chinese description that did not wrap.
+- **Root cause**: the comparison observed only outer boxes; masked editors applied the password glyph font to placeholders; intrinsic grid sizing differed from CSS flex; CoreText selected a half-width alternate for terminal CJK punctuation.
+- **Fix**: observe individual cards, segments and control-panel sections; retain the ordinary font for empty masked editors; calculate the inline grid constraint from shaped copy and option widths; retain terminal punctuation's nominal glyph advance in the Apple text backend.
+- **Guardrail**: pair rendered-image review with descendant geometry in both languages/themes. Test terminal versus interior punctuation widths and rerun native captures after renderer edits. Preserve failed rounds and the original half-pixel tolerance. Offscreen exports cannot accept real-window input or system appearance interaction.
+- **Watch points**: `settings_ui/presentation.rs`, `form_ui.rs`, `typography/tests.rs`, `vendor/gpui_apple/src/text_system.rs`, and `capture-administration.mjs`.
+
+### Native administration descendants and icon paint
+
+- Reproduce populated rows, scrolled sections and inline editors; empty cards and outer bounds alone do not validate the controls. A GPUI SVG can reserve the correct layout while remaining invisible when its own paint color is unset. Review the paired rendered images alongside bounds and set each monochrome icon color explicitly.
+- Inline bind-address editing must retain its draft on Agent rejection and keep the editing lifetime separate from transient notices. Test Enter, Escape, focus restoration and a save queued behind a failed background refresh.
+- Preserve fractional settings-card geometry through nested rows and scroll offsets. Mixed-script metadata needs ascent/descent from fallback glyph runs; the requested system font alone does not describe its CSS normal line box. Keep the existing comparison threshold.
+- Long selectable integration values need real horizontal scroll extent and edge fades; compare endpoint/token value and action columns independently. Keep the protocol-specific endpoint shared with the setup guide.
+
+### Local updater fixtures can be consumed by port discovery
+
+- A one-response HTTP fixture intermittently returned connection refused even though its server thread had served a request. Recorded request headers showed LocalStack's `GET /` discovery probe arriving before the updater's `GET /latest.json`.
+- Match the intended request path, return 404 for unrelated probes and keep accepting within a deadline. Include a deliberate discovery probe in the regression. Accepted sockets must explicitly return to blocking mode on macOS after a nonblocking listener. Do not stop unrelated local services or weaken the updater assertion.
+
+### Composite administration writes must retain each owner's acknowledgement
+
+- **Symptom**: a later language/file write hid a successful policy update; failed sync kept the submitted password editor and concealed the saved destination. Refreshing conflicts reset an unsaved mode, and follow-up reads erased successful write notices.
+- **Root cause**: `administration.rs` returned only the last error for several durable writes; `settings_ui.rs` treated readback, drafts and mutation feedback as one state. Adding partial-success outcomes also requires session handling to inspect nested errors and refresh after possible sync mutations.
+- **Fix**: save only changed Agent settings; return acknowledged preferences/target with the later error; retire acknowledged password input; preserve mode drafts and notices across reads. Render bounded result banners above tabs and use the acknowledged locale for preference-save feedback.
+- **Guardrail**: test partial failure, readback after a lost reply, retry without repeating confirmed writes, nested lock failure, catalog refresh and successful feedback after rescan. Run the native adapter against a disposable real Agent for persistence and local-sync failure/retry. Do not infer rollback from an error or mark a partial write wholly successful.
+- **Watch points**: `administration/preferences.rs`, `administration/tests.rs`, `settings_ui/failure_tests.rs`, `session/tests.rs`, `proxy_ui/tests.rs`, and `tests/provider_agent/administration.rs`.
+
+
+### Native desktop cutover: preserve the restart target and signed package boundary (2026-11-15)
+
+- **Symptom**: cached installation succeeds, but the replacement inherits the login/tray target and fails the main-window restart contract.
+- **Root cause**: inherited launch environment can disagree with the caller's restart intent. A framework removal also leaves resource paths and test-tool dependencies outside the runtime crate.
+- **Fix**: UI update workers pass an explicit main-window target; authenticated CLI updates explicitly retain the tray target. Runtime fixtures preserve those same target contracts after replacement. Native packaging verifies minisign signatures, keeps typed Agent readiness and records the new PID before retiring the previous instance.
+- **Regression**: the macOS finished-artifact gate exercises main/tray startup, valid and tampered automatic downloads, manual installation, authenticated CLI installation and cached restart. Launch parsing covers matching login versions with explicit target overrides. The repository gate rejects framework dependencies in Cargo/pnpm manifests and lockfiles; frozen reference tooling builds without installing the retired framework.
+- **Watch points**: `apps/desktop-native/src/startup.rs`, `launch.rs`, `runtime_check.rs`, `updates/`, `scripts/desktop/` and `tests/desktop-parity/setup.mjs`. Test keys and loopback update feeds are restricted to isolated runtime fixtures; they must not become production trust overrides.

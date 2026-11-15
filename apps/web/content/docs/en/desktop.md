@@ -7,7 +7,7 @@ order: 5
 
 # Desktop app
 
-The desktop app is the primary interface to the vault. It is a Tauri app and talks to the same background agent as the CLI, so an unlock in the app also unlocks `aipass` and the browser extension.
+The desktop app is the primary interface to the vault. It is a native GPUI app and talks to the same background agent as the CLI, so an unlock in the app also unlocks `aipass` and the browser extension.
 
 ## Vault, unlock, and lock
 
