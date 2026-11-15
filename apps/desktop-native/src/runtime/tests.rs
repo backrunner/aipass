@@ -162,3 +162,26 @@ fn cache_cleanup_completes_before_service_shutdown() {
         ["cache", "suspend", "stop", "install"]
     );
 }
+
+#[test]
+fn retirement_drains_requests_before_cleanup_and_prevents_agent_restarts() {
+    let gate = Arc::new(Gate::default());
+    let pending_request = gate.enter().unwrap();
+    let (shutdown, received) = mpsc::channel();
+    let closing = gate.clone();
+    let worker = std::thread::spawn(move || {
+        closing.retire_with(|| Ok(())).unwrap();
+        shutdown.send(()).unwrap();
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !gate.suspended() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(gate.enter().is_err());
+    assert!(received.try_recv().is_err());
+    drop(pending_request);
+    received.recv_timeout(Duration::from_secs(2)).unwrap();
+    worker.join().unwrap();
+    assert!(gate.enter().is_err());
+}

@@ -258,7 +258,7 @@ pub fn start(shell: Handle) {
         } else {
             observe(&shell)
         };
-        let result = initial.and_then(|_| {
+        let mut result = initial.and_then(|_| {
             if check.restarted_from.is_none() && check.config.mode == Mode::Install {
                 let install = (|| -> anyhow::Result<()> {
                     let context = shell
@@ -347,14 +347,29 @@ pub fn start(shell: Handle) {
         if matches!(result, Ok(false)) {
             return;
         }
+        if check.config.mode != Mode::Interactive {
+            shell.stop();
+            // Drain existing requests and permanently reject new status polls
+            // before shutting down the fixture Agent. Otherwise a late poll
+            // can restart it between the shutdown and the window's Quit event.
+            let cleanup = shell
+                .gate
+                .retire_with(|| Ok(()))
+                .and_then(|()| shell.client().shutdown());
+            if let Err(error) = cleanup {
+                let cleanup_error = format!("fixture Agent cleanup failed: {error:#}");
+                result = Err(match result {
+                    Err(original) => format!("{original}; {cleanup_error}"),
+                    _ => cleanup_error,
+                });
+            }
+        }
         let report = serde_json::json!({"ok":result.is_ok(),"error":result.err(),"pid":std::process::id(),"restartedFrom":check.restarted_from,"version":env!("CARGO_PKG_VERSION")});
         let _ = atomic_write_bytes(
             check.root.join("result.json"),
             &serde_json::to_vec_pretty(&report).unwrap(),
         );
         if check.config.mode != Mode::Interactive {
-            let _ = shell.client().shutdown();
-            shell.stop();
             shell.event(Event::Quit);
         }
     });

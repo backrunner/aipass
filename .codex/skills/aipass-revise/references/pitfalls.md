@@ -1811,3 +1811,11 @@ Newest entries last within each section.
   explicit executable-version check. Never disable updater signature checks.
 - Run packaging-tool/bootstrap checks before long Rust regression stages; keep
   disposable key cleanup in the workflow's always-run cleanup step.
+
+### Runtime-check teardown must retire polling before Agent shutdown
+
+- An artifact fixture's final raw Agent shutdown can race with ordinary status
+  polling and create a second Agent after successful verification. Drain and
+  retire the shared request gate before shutting down the fixture Agent.
+- Publish success only after cleanup, retain cleanup errors in the result, and
+  keep the no-restart assertion for failed update scenarios.
