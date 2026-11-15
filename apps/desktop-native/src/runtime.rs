@@ -90,13 +90,14 @@ impl Runtime {
         allow_disconnect: bool,
         operation: impl FnOnce() -> Result<()>,
     ) -> Result<bool> {
-        self.install_when(allow_disconnect, || true, operation)
+        self.install_when(allow_disconnect, || true, || Ok(()), operation)
     }
 
     pub fn install_when(
         &self,
         allow_disconnect: bool,
         authorized: impl Fn() -> bool,
+        prepare: impl FnOnce() -> Result<()>,
         operation: impl FnOnce() -> Result<()>,
     ) -> Result<bool> {
         if self.gate.requested.swap(true, Ordering::AcqRel) {
@@ -121,6 +122,11 @@ impl Runtime {
         if self.services.proxy_running()? && !allow_disconnect {
             return Ok(false);
         }
+        // Complete fallible cache housekeeping under the exclusive gate, after
+        // consent but before interrupting the Agent or clipboard. A cache ACL
+        // failure must leave the running services untouched.
+        prepare()?;
+        anyhow::ensure!(authorized(), "update confirmation expired");
         aipass_desktop_platform::clipboard::clear_now().map_err(anyhow::Error::msg)?;
         let result = self
             .services

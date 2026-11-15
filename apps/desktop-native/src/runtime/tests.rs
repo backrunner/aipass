@@ -61,7 +61,12 @@ fn fresh_proxy_state_requires_confirmation_without_stopping_anything() {
     fake.proxy.store(true, Ordering::Relaxed);
     let runtime = Runtime::new(Arc::new(Gate::default()), fake.clone());
     assert!(!runtime
-        .install(false, || panic!("unconfirmed installation"))
+        .install_when(
+            false,
+            || true,
+            || panic!("unconfirmed cache cleanup"),
+            || panic!("unconfirmed installation"),
+        )
         .unwrap());
     assert!(fake.events.lock().unwrap().is_empty());
     assert!(runtime.gate.enter().is_ok());
@@ -101,6 +106,7 @@ fn locking_while_requests_drain_invalidates_pending_consent() {
         runtime.install_when(
             true,
             || worker_authorized.load(Ordering::Acquire),
+            || panic!("expired consent must not clear the cache"),
             || panic!("expired consent must not replace the application"),
         )
     });
@@ -114,4 +120,45 @@ fn locking_while_requests_drain_invalidates_pending_consent() {
     assert!(worker.join().unwrap().is_err());
     assert!(fake.events.lock().unwrap().is_empty());
     assert!(gate.enter().is_ok());
+}
+
+#[test]
+fn cache_cleanup_failure_leaves_agent_running_and_reopens_requests() {
+    let fake = Arc::new(Fake::default());
+    let runtime = Runtime::new(Arc::new(Gate::default()), fake.clone());
+    let error = runtime
+        .install_when(
+            true,
+            || true,
+            || bail!("update_cache_permission_denied"),
+            || panic!("read-only cache must not replace the application"),
+        )
+        .unwrap_err();
+    assert_eq!(error.to_string(), "update_cache_permission_denied");
+    assert!(fake.events.lock().unwrap().is_empty());
+    assert!(runtime.gate.enter().is_ok());
+}
+
+#[test]
+fn cache_cleanup_completes_before_service_shutdown() {
+    let fake = Arc::new(Fake::default());
+    let runtime = Runtime::new(Arc::new(Gate::default()), fake.clone());
+    assert!(runtime
+        .install_when(
+            true,
+            || true,
+            || {
+                fake.events.lock().unwrap().push("cache");
+                Ok(())
+            },
+            || {
+                fake.events.lock().unwrap().push("install");
+                Ok(())
+            },
+        )
+        .unwrap());
+    assert_eq!(
+        *fake.events.lock().unwrap(),
+        ["cache", "suspend", "stop", "install"]
+    );
 }

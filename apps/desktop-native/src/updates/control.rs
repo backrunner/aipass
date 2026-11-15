@@ -95,12 +95,18 @@ pub fn handle(
                         "--window-target=tray".into(),
                     ];
                     // CLI's explicit Install operation authorizes service interruption.
-                    runtime.install(true, || {
-                        updater.clear()?;
-                        crate::runtime_check::installed()?;
-                        prepared
-                            .restart(&crate::runtime_check::restart_args(&args), Some(&instance))
-                    })?;
+                    runtime.install_when(
+                        true,
+                        || true,
+                        || updater.clear(),
+                        || {
+                            crate::runtime_check::installed()?;
+                            prepared.restart(
+                                &crate::runtime_check::restart_args(&args),
+                                Some(&instance),
+                            )
+                        },
+                    )?;
                     Ok(())
                 })();
                 match result {

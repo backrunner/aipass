@@ -270,11 +270,15 @@ pub fn start(shell: Handle) {
                         .check()?
                         .ok_or_else(|| anyhow::anyhow!("fixture release missing"))?;
                     let prepared = updater.prepare_install(&release)?;
-                    context.runtime.install(true, || {
-                        updater.clear()?;
-                        installed()?;
-                        prepared.restart(&restart_args(&[]), Some(&context.instance))
-                    })?;
+                    context.runtime.install_when(
+                        true,
+                        || true,
+                        || updater.clear(),
+                        || {
+                            installed()?;
+                            prepared.restart(&restart_args(&[]), Some(&context.instance))
+                        },
+                    )?;
                     shell.stop();
                     shell.event(Event::Quit);
                     Ok(())

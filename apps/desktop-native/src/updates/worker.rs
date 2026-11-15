@@ -248,7 +248,6 @@ impl Operation<'_> {
         }
         let perform = || {
             anyhow::ensure!(self.valid(), "update confirmation expired");
-            self.updater.clear()?;
             crate::runtime_check::installed()?;
             prepared.restart(
                 &crate::runtime_check::restart_args(self.args),
@@ -256,8 +255,9 @@ impl Operation<'_> {
             )
         };
         let installed = if let Some(runtime) = &self.host.runtime {
-            runtime.install_when(consent, || self.valid(), perform)?
+            runtime.install_when(consent, || self.valid(), || self.updater.clear(), perform)?
         } else {
+            self.updater.clear()?;
             perform()?;
             true
         };

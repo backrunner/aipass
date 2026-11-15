@@ -1787,3 +1787,12 @@ Newest entries last within each section.
   Windows Known Folder lookup, which verifies directory existence.
 - Keep production profile and pipe-owner validation intact. Compare provider,
   CLI and installed-runtime fixtures when changing their environment setup.
+
+### Reject cache cleanup failures before updater service interruption
+
+- A verified cached package can be readable while its directory is not writable.
+  Perform fallible cache cleanup after consent, under the exclusive runtime gate,
+  before clearing the clipboard or stopping the Agent.
+- Keep UI, authenticated CLI and artifact-check installation paths aligned.
+  Assert no suspend/stop/restore on preparation failure, no cleanup before
+  consent, and normal recovery for failures after shutdown.
