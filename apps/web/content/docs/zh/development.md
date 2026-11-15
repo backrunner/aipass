@@ -13,17 +13,17 @@ order: 10
 
 - Node.js 26（`.nvmrc`）和 pnpm 12.3.4（`package.json`）。
 - 稳定版 Rust；macOS 本地使用 Homebrew 的最新 `rust` formula。
-- 对应平台的 [Tauri 依赖](https://v2.tauri.app/start/prerequisites/)。
+- `.github/workflows/ci.yml` 中列出的原生平台编译依赖；macOS 打包另需 Swift 和 minisign。
 
 ```bash
 nvm install
 nvm use
 npm install --global pnpm@12.3.4
 pnpm install --frozen-lockfile
-pnpm --filter @aipass/desktop dev
+pnpm --filter @aipass/desktop-native dev
 ```
 
-开发构建使用独立的 `aipass-dev://` scheme。运行 `pnpm --filter @aipass/desktop dev:register`，可为浏览器扩展注册开发应用的启动入口。发布构建使用 `aipass://`。
+开发构建使用独立的 `aipass-dev://` scheme。运行 `pnpm --filter @aipass/desktop-native dev:register`，可为浏览器扩展注册开发应用的启动入口。发布构建使用 `aipass://`。
 
 运行 `pnpm --filter @aipass/extension build` 构建扩展，产物位于 `apps/extension/build/aipass-extension.zip`。
 
@@ -40,7 +40,7 @@ Browser extension ──┘          ├──> Encrypted sync
                                └──> Tool configuration writers
 ```
 
-- `apps/desktop`：Svelte 界面和 Tauri 桥接。
+- `apps/desktop-native`：Rust GPUI 界面和原生平台适配。
 - `crates/aipass-agent`：可信本地服务与最终凭据访问。
 - `crates/aipass-vault`、`aipass-sync`：保险库存储和加密同步。
 - `crates/aipass-cli`、`aipass-native-host`：CLI 与浏览器边界。
@@ -73,7 +73,7 @@ cargo test --workspace
 cargo build --workspace
 ```
 
-完整检查还包含已生成的 macOS DMG/更新包，以及四项运行场景；命令见[仓库验证规则](https://github.com/backrunner/aipass/blob/main/.codex/skills/aipass-repo-guardrails/SKILL.md)。本地在 macOS 执行，Linux 和 Windows 交给 GitHub Actions。桌面界面改动需在 Tauri 最小窗口 960×640 下检查。
+完整检查还包含已生成的 macOS DMG/更新包，以及四项运行场景；命令见[仓库验证规则](https://github.com/backrunner/aipass/blob/main/.codex/skills/aipass-repo-guardrails/SKILL.md)。本地在 macOS 执行，Linux 和 Windows 交给 GitHub Actions。桌面界面改动需在 桌面最小窗口 960×640 下检查。
 
 不要提交真实 API 密钥、更新签名私钥或明文保险库导出。
 

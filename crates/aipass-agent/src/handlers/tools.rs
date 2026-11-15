@@ -99,11 +99,16 @@ pub(super) fn handle(
             );
             let result = with_vault(state, false, |vault| {
                 let (entry, plan, content) = build_tool_config_plan(vault, &request_for_closure, false)?;
-                if managed {
+                // Quick Integration also binds the displayed preimage. Legacy
+                // callers without a preview retain their existing contract.
+                if managed || request_for_closure.preview_id.is_some() {
                     let stamp = crate::tool_switch::preview_id(vault, state, &request_for_closure, &plan).map_err(crate::tool_credentials::error)?;
                     if request_for_closure.preview_id.as_deref() != Some(stamp.as_str()) {
                         return Err(ServiceError::new(AgentErrorCode::Conflict, "Agent credentials changed; preview again"));
                     }
+                }
+                if managed {
+                    let stamp = request_for_closure.preview_id.as_deref().expect("validated managed preview");
                     crate::tool_credentials::preserve(vault, state, &request_for_closure.tool)?;
                     let after = crate::tool_switch::preview_id(vault, state, &request_for_closure, &plan).map_err(crate::tool_credentials::error)?;
                     if after != stamp {
@@ -381,3 +386,7 @@ fn require_installed(
         }
     })
 }
+
+#[cfg(test)]
+#[path = "tools/tests.rs"]
+mod tests;

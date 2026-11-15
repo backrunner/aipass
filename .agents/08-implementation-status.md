@@ -1,3 +1,5 @@
+> Desktop cutover (2026-11-15): `apps/desktop-native` now owns GPUI, tray, singleton, CloudKit and signed updates. `scripts/package-desktop.mjs` creates native bundles. Older WebView bridge examples below describe the previous design, not executable dependencies. See `docs/gpui-migration/native-cutover-20261115.md`.
+
 # AIPass 1.0 Implementation Status
 
 更新时间：2026-05-28

@@ -46,8 +46,8 @@ Before modifying any of these areas, read its pitfalls entry and verify the guar
 - Sync execution / startup sync / realtime watch (`aipass-agent` server, session, sync_watch)
 - Proxy runtime config and credential snapshot (`aipass-agent` proxy_service, handlers)
 - Endpoint/provider/interface inference (three implementations: `packages/schemas`, extension `detector.ts`, `aipass-agent` server)
-- Update channel resolution (`apps/desktop` updates service + call sites)
-- Tray actions vs UI actions vs agent-side validation (`src-tauri/tray.rs`, `ServerDetailPane.svelte`, `proxy_service.rs`)
+- Update channel resolution (`apps/desktop-native/src/updates/` + UI/CLI call sites)
+- Tray actions vs UI actions vs agent-side validation (`apps/desktop-native/src/shell/tray.rs`, `proxy_ui/`, `proxy_service.rs`)
 - Agent readiness semantics (`aipass-agent` client/server SessionStatus)
 
 ## Process rules

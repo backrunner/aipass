@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const directory = resolve(process.argv[2]);
-const base = JSON.parse(readFileSync("apps/desktop/src-tauri/tauri.conf.json", "utf8"));
+const base = JSON.parse(readFileSync("apps/desktop-native/desktop.json", "utf8"));
 const overlay = process.argv[3] ? JSON.parse(readFileSync(process.argv[3], "utf8")) : {};
-const key = overlay.plugins?.updater?.pubkey ?? base.plugins.updater.pubkey;
+const key = overlay.updaterPublicKey ?? base.updaterPublicKey;
 const temporary = mkdtempSync(join(tmpdir(), "aipass-public-signatures-"));
 try {
   const publicKey = join(temporary, "updater.pub");

@@ -1,0 +1,23 @@
+{
+  "productName": "AIPass",
+  "identifier": "com.alkinum.aipass",
+  "version": "0.3.0",
+  "binary": "aipass-desktop",
+  "minimumWindow": {
+    "width": 960,
+    "height": 640
+  },
+  "defaultWindow": {
+    "width": 1280,
+    "height": 820
+  },
+  "schemes": [
+    "aipass",
+    "ccswitch",
+    "aipass-provider"
+  ],
+  "updaterPublicKey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEzNzFGOTlBNDg5MDA0N0EKUldSNkJKQkltdmx4bzh3RDdERzJXcUtuQ1UrTWNUTjZsRjdPYUJsbTNLcmFqaUFLaUxTbnc1QisK",
+  "macOS": {
+    "minimumSystemVersion": "13.0"
+  }
+}

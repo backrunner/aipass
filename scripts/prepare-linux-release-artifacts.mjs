@@ -22,7 +22,7 @@ for (const [directory, extension, format] of [["deb", ".deb", "deb"], ["rpm", ".
   assert.ok(signature, `Missing ${format} signature`);
   copyFileSync(source, join(output, name));
   copyFileSync(`${source}.sig`, join(output, `${name}.sig`));
-  platforms[`linux-${arch}-${format}`] = {
+  platforms[`linux-${arch}-${format}`] = platforms[`linux-native-${arch}-${format}`] = {
     url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`,
     signature,
   };

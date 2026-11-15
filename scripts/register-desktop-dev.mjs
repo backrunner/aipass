@@ -1,41 +1,15 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
-import { pnpmCommand } from "./pnpm-command.mjs";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const scriptsDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(scriptsDir, "..");
-
-run("pnpm", [
-  "--filter",
-  "@aipass/desktop",
-  "tauri",
-  "build",
-  "--debug",
-  "--features",
-  "custom-protocol",
-  ...(process.platform === "darwin" ? ["--bundles", "app"] : ["--no-bundle"]),
-  "--ci",
-  "--config",
-  "src-tauri/tauri.dev.conf.json"
-]);
-
-if (process.platform === "darwin") {
-  const bundleDir = join(repoRoot, "target", "debug", "bundle", "macos");
-  const appBundle = join(bundleDir, "AIPass Dev.app");
-  if (!existsSync(appBundle)) {
-    throw new Error(`development desktop app bundle was not found at ${appBundle}`);
-  }
-  const lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
-  run("codesign", ["--force", "--deep", "--sign", "-", appBundle]);
-  run(lsregister, ["-f", appBundle]);
-  console.log(`registered aipass-dev:// with ${appBundle}`);
-} else {
-  console.log("development desktop built; the debug app registers aipass-dev:// on startup");
-}
-
-function run(command, args) {
-  execFileSync(...(command === "pnpm" ? pnpmCommand(args) : [command, args]), { cwd: repoRoot, stdio: "inherit", env: process.env });
-}
+import { run,root } from "./desktop/common.mjs";
+import { packageMacos } from "./desktop/macos.mjs";
+import { readFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+run("pnpm",["--filter","@aipass/control-panel","build"]);
+run("pnpm",["--filter","@aipass/extension...","build"]);
+run("cargo",["build","-p","aipass-desktop-native","-p","aipass-agent","-p","aipass-native-host","-p","aipass-cli","--features","aipass-desktop-native/packaged"]);
+if(process.platform==="darwin") {
+ const base=JSON.parse(readFileSync(join(root,"apps/desktop-native/desktop.json")));
+ const output=join(root,"target/debug/bundle");mkdirSync(output,{recursive:true});
+ const app=packageMacos({...base,productName:"AIPass Dev",identifier:"com.alkinum.aipass.dev",schemes:["aipass-dev"],updaterArtifacts:false,notarize:false,macOS:{...base.macOS,signingIdentity:"-"}},join(root,"target/debug"),output,["app"]);
+ run("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",["-f",app]);
+ console.log(`Registered aipass-dev:// with ${app}`);
+} else {console.log("Built native development desktop");}

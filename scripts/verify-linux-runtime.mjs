@@ -91,7 +91,6 @@ for (const target of ["main", "tray"]) {
       XDG_DATA_HOME: join(home, ".local/share"),
       XDG_CACHE_HOME: join(home, ".cache"),
       AIPASS_WINDOW_TARGET: target,
-      WEBKIT_DISABLE_DMABUF_RENDERER: "1",
       LIBGL_ALWAYS_SOFTWARE: "1",
     };
     for (const key of [
@@ -131,7 +130,7 @@ for (const target of ["main", "tray"]) {
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     writeFileSync(join(report, "result.json"), JSON.stringify(result, null, 2));
     assert.equal(result.ok, true, result.error);
-    assert.equal(result.version, version, "Unexpected running package version");
+    assert.equal(result.version.replaceAll("-", "~"), version, "Unexpected running package version");
     for (const [name, installed] of [
       ["aipass", join(home, ".local/bin/aipass")],
       ["aipass-agent", join(home, ".local/lib/AIPass/aipass-agent")],

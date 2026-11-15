@@ -29,6 +29,9 @@ test("enforces new-module limits and no growth for documented legacy modules", (
   assert.equal(auditFileSizes([file("crates/core/src/old.rs", 4), file("crates/core/src/new.rs", 4)], policy).length, 1);
   assert.equal(auditFileSizes([file("crates/core/src/old.rs", 3)], policy).length, 1);
   assert.equal(auditFileSizes([], policy).length, 1);
+  assert.equal(auditFileSizes([file("vendor/gpui/src/input_transform.rs", 4)], { ...policy, legacy: {} }).length, 1);
+  assert.equal(auditFileSizes([file("vendor/gpui_apple/src/system_font_weights.rs", 4)], { ...policy, legacy: {} }).length, 1);
+  assert.equal(auditFileSizes([file("vendor/gpui/src/window.rs", 100)], { ...policy, legacy: {} }).length, 0);
 });
 
 test("rejects fingerprinted shared sources without LF checkout rules and exempts binary assets", () => {
@@ -57,5 +60,11 @@ test("rejects fingerprinted shared sources without LF checkout rules and exempts
     assert.equal(auditEmbeddedLineEndings(root).length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retired desktop framework cannot return through manifests or lockfiles", () => {
+  for (const [path, content] of [["apps/desktop-native/package.json", '{"dependencies":{"@tauri-apps/api":"2"}}'], ["Cargo.lock", 'name = "tauri-runtime-wry"'], ["apps/desktop-native/Cargo.toml", 'tauri = "2"'], ["apps/desktop-native/Cargo.toml", 'shell = { package = "tauri-runtime", version = "2" }']]) {
+    assert.ok(auditDependencies([{path,content}]).some(value=>value.includes("retired desktop framework")));
   }
 });

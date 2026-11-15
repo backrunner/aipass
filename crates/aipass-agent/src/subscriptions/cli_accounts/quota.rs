@@ -15,7 +15,7 @@ pub(super) fn copilot_usage(v: &Value, models: &Value) -> Result<Value> {
             .as_str(),
         "business" | "enterprise"
     );
-    let windows = v["quota_snapshots"]
+    let mut windows = v["quota_snapshots"]
         .as_object()
         .into_iter()
         .flatten()
@@ -58,7 +58,7 @@ pub(super) fn copilot_usage(v: &Value, models: &Value) -> Result<Value> {
             let mut window =
                 json!({"name":name,"used":used.clamp(0.0,100.0),"span":2592000,"resetsAt":reset,"aside":name != "chat"});
             if premium {
-                let scoped = models
+                let mut scoped = models
                     .as_object()
                     .into_iter()
                     .flatten()
@@ -68,6 +68,7 @@ pub(super) fn copilot_usage(v: &Value, models: &Value) -> Result<Value> {
                     })
                     .map(|(id, _)| id.to_owned())
                     .collect::<Vec<_>>();
+                scoped.sort();
                 // An unknown billing multiplier cannot exhaust unrelated free models.
                 if !scoped.is_empty() {
                     window["models"] = json!(scoped);
@@ -77,6 +78,9 @@ pub(super) fn copilot_usage(v: &Value, models: &Value) -> Result<Value> {
             Some(window)
         })
         .collect::<Vec<_>>();
+    // Preserve the presentation order independently of serde_json's globally
+    // unified preserve_order feature or the vendor's object insertion order.
+    windows.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     if windows.is_empty() && v["copilot_plan"].is_null() {
         return Err("Copilot returned no allowance data".into());
     }
@@ -103,6 +107,7 @@ pub(super) fn codex_usage(value: &Value) -> Result<Value> {
         Some(b) if !b.is_empty() => b.iter().map(|(k, v)| (k.as_str(), v)).collect(),
         _ => vec![("codex", base)],
     };
+    entries.sort_by_key(|(id, _)| *id);
     let base_id = base["limitId"].as_str().unwrap_or("codex");
     if !entries.iter().any(|(id, _)| *id == base_id)
         && (base["primary"].is_object() || base["secondary"].is_object())

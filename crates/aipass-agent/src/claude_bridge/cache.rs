@@ -266,9 +266,12 @@ while read -r input; do :; done
                 .join("request-cache");
             let sent = std::fs::read_to_string(path).unwrap();
             if client {
-                assert!(sent.starts_with(
-                    "1\n{\"cache_control\":{\"ttl\":\"1h\",\"type\":\"ephemeral\"}}\n"
-                ));
+                let mut lines = sent.lines();
+                assert_eq!(lines.next(), Some("1"));
+                assert_eq!(
+                    serde_json::from_str::<Value>(lines.next().unwrap()).unwrap(),
+                    json!({"cache_control":{"ttl":"1h","type":"ephemeral"}})
+                );
                 assert!(report.is_none());
             } else {
                 assert!(!sent.starts_with("1\n"));

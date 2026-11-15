@@ -1,0 +1,9 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -159,6 +159,3 @@
+ [target.'cfg(target_os="macos")'.dev-dependencies.oslog]
+ version = "0.2"
+ 
+-[target.'cfg(target_os="windows")'.dependencies.winrt-notification]
+-version = "0.8"
+-package = "tauri-winrt-notification"

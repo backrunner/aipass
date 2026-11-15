@@ -12,6 +12,7 @@ mod proxy_settings;
 mod review_followup;
 mod runtime_status;
 mod stability;
+mod streaming_tool_call;
 mod subscriptions;
 mod transparency;
 
@@ -3675,81 +3676,6 @@ fn anthropic_client_to_chat_completions_upstream_non_streaming() {
         .to_ascii_lowercase()
         .starts_with("anthropic-version:")
         || line.to_ascii_lowercase().starts_with("anthropic-beta:")));
-}
-
-#[test]
-fn anthropic_client_to_chat_completions_upstream_streaming_tool_call() {
-    let sse = concat!(
-            "data: {\"id\":\"chatcmpl_1\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Let me check.\"},\"finish_reason\":null}]}\n\n",
-            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
-            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\"\"}}]},\"finish_reason\":null}]}\n\n",
-            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\":\\\"Paris\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
-            "data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":9}}\n\n",
-            "data: [DONE]\n\n",
-        );
-    let (upstream_addr, upstream) = mock_upstream("200 OK", "text/event-stream", sse.to_string());
-    let bind_addr = available_addr();
-    let token = "aipass_conv_am_cc_stream_test";
-    let route = conversion_route(
-        token,
-        ProxyProtocol::AnthropicMessages,
-        ProxyProtocol::AnthropicMessages,
-        vec![conversion_target(
-            format!("http://{upstream_addr}/v1"),
-            0,
-            ProxyProtocol::OpenAiChatCompletions,
-        )],
-        1,
-    );
-    let _proxy = start_proxy(bind_addr, route);
-
-    let response = reqwest::blocking::Client::new()
-        .post(format!("http://{bind_addr}/v1/messages"))
-        .bearer_auth(token)
-        .json(&serde_json::json!({
-            "model": "claude-test",
-            "messages": [{"role": "user", "content": "weather?"}],
-            "max_tokens": 64,
-            "stream": true
-        }))
-        .send()
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.text().unwrap();
-
-    for expected in [
-        "event: message_start",
-        "event: content_block_start",
-        "event: content_block_delta",
-        "event: content_block_stop",
-        "event: message_delta",
-        "event: message_stop",
-    ] {
-        assert!(body.contains(expected), "missing {expected} in:\n{body}");
-    }
-    assert!(!body.contains("[DONE]"));
-    // serde_json emits object keys in sorted order.
-    assert!(
-        body.contains("\"text\":\"Let me check.\",\"type\":\"text_delta\""),
-        "{body}"
-    );
-    assert!(
-        body.contains("\"id\":\"call_1\",\"input\":{},\"name\":\"lookup\",\"type\":\"tool_use\""),
-        "{body}"
-    );
-    assert!(
-        body.contains("\"partial_json\":\"{\\\"city\\\":\\\"Paris\\\"}\""),
-        "{body}"
-    );
-    assert!(body.contains("\"stop_reason\":\"tool_use\""), "{body}");
-    assert!(body.contains("\"output_tokens\":9"), "{body}");
-
-    let (headers, body) = upstream.join().unwrap();
-    let sent: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(sent["stream"], true);
-    // Usage reporting is requested on the converted CC stream.
-    assert_eq!(sent["stream_options"]["include_usage"], true);
-    assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
 }
 
 #[test]

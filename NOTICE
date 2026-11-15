@@ -18,3 +18,10 @@ in crates/aipass-proxy-conversion/third-party/LICENSE-CLIProxyAPI.
 
 OpenCode model API-family metadata is derived from models.dev (MIT).
 Its license is retained in crates/aipass-agent/src/subscriptions/LICENSE-MODELS-DEV.
+
+The native GPUI preview includes Apache-2.0-licensed GPUI from Zed Industries
+and Sonora contributors, and GPUI Base from Longbridge contributors. AIPass's
+rendering/input compatibility modifications, fixed source revisions and retained
+licenses are documented in vendor/README.md and vendor/upstream.json.
+Its Objective-C Blocks dependency includes MIT-licensed block 0.1.6 by Steven
+Sheldon, with an AIPass FFI compatibility correction. See vendor/block/LICENSE-MIT.

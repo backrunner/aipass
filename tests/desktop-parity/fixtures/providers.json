@@ -1,0 +1,266 @@
+{
+  "active": [
+    {
+      "title": "Gateway with a deliberately long provider name",
+      "favorite": true,
+      "providerId": "custom_openai_compatible",
+      "providerKind": "third_party",
+      "credentialKind": "api",
+      "accountIdentity": null,
+      "domains": [
+        "gateway.example.invalid"
+      ],
+      "faviconUrl": null,
+      "endpoints": [
+        {
+          "id": "api",
+          "kind": "api",
+          "url": "https://gateway.example.invalid/v1",
+          "region": null,
+          "deployment": null,
+          "apiVersion": null
+        }
+      ],
+      "interfaceType": "openai_compatible",
+      "authScheme": "bearer",
+      "maxConcurrentRequests": 4,
+      "supportsWebsockets": false,
+      "maskedSecret": "••••fixture",
+      "fingerprint": "fixture-only",
+      "secretRefs": [
+        {
+          "id": "key-a",
+          "label": "Production",
+          "masked": "••••fixture-a",
+          "fingerprint": "fixture-a"
+        },
+        {
+          "id": "key-b",
+          "label": "Fallback",
+          "masked": "••••fixture-b",
+          "fingerprint": "fixture-b"
+        }
+      ],
+      "defaultModel": "fixture-model",
+      "modelAliases": [
+        [
+          "fast",
+          "fixture-model"
+        ]
+      ],
+      "quota": null,
+      "subscription": null,
+      "gateway": null,
+      "tags": [
+        "work"
+      ],
+      "notes": "Synthetic provider.\nTwo lines of notes.",
+      "headerNames": [
+        "X-Fixture"
+      ],
+      "createdAt": "2026-11-12T04:00:00Z",
+      "updatedAt": "2026-11-12T04:00:00Z",
+      "lastUsedAt": null,
+      "archivedAt": null,
+      "deletedAt": null,
+      "id": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "title": "Anthropic fixture",
+      "favorite": false,
+      "providerId": "anthropic",
+      "providerKind": "official",
+      "credentialKind": "api",
+      "accountIdentity": null,
+      "domains": [
+        "anthropic.example.invalid"
+      ],
+      "faviconUrl": null,
+      "endpoints": [
+        {
+          "id": "api",
+          "kind": "api",
+          "url": "https://anthropic.example.invalid/v1",
+          "region": null,
+          "deployment": null,
+          "apiVersion": null
+        }
+      ],
+      "interfaceType": "anthropic_messages",
+      "authScheme": "x_api_key",
+      "maxConcurrentRequests": 4,
+      "supportsWebsockets": false,
+      "maskedSecret": "••••fixture",
+      "fingerprint": "fixture-only",
+      "secretRefs": [
+        {
+          "id": "key-a",
+          "label": "Production",
+          "masked": "••••fixture-a",
+          "fingerprint": "fixture-a"
+        },
+        {
+          "id": "key-b",
+          "label": "Fallback",
+          "masked": "••••fixture-b",
+          "fingerprint": "fixture-b"
+        }
+      ],
+      "defaultModel": "fixture-claude",
+      "modelAliases": [
+        [
+          "fast",
+          "fixture-model"
+        ]
+      ],
+      "quota": null,
+      "subscription": null,
+      "gateway": null,
+      "tags": [],
+      "notes": "Synthetic provider.\nTwo lines of notes.",
+      "headerNames": [
+        "X-Fixture"
+      ],
+      "createdAt": "2026-11-12T04:00:00Z",
+      "updatedAt": "2026-11-12T04:00:00Z",
+      "lastUsedAt": "2020-01-01T00:00:00Z",
+      "archivedAt": null,
+      "deletedAt": null,
+      "id": "00000000-0000-4000-8000-000000000002"
+    }
+  ],
+  "archived": [
+    {
+      "title": "Archived account",
+      "favorite": true,
+      "providerId": "custom_openai_compatible",
+      "providerKind": "third_party",
+      "credentialKind": "api",
+      "accountIdentity": null,
+      "domains": [
+        "gateway.example.invalid"
+      ],
+      "faviconUrl": null,
+      "endpoints": [
+        {
+          "id": "api",
+          "kind": "api",
+          "url": "https://gateway.example.invalid/v1",
+          "region": null,
+          "deployment": null,
+          "apiVersion": null
+        }
+      ],
+      "interfaceType": "openai_compatible",
+      "authScheme": "bearer",
+      "maxConcurrentRequests": 4,
+      "supportsWebsockets": false,
+      "maskedSecret": "••••fixture",
+      "fingerprint": "fixture-only",
+      "secretRefs": [
+        {
+          "id": "key-a",
+          "label": "Production",
+          "masked": "••••fixture-a",
+          "fingerprint": "fixture-a"
+        },
+        {
+          "id": "key-b",
+          "label": "Fallback",
+          "masked": "••••fixture-b",
+          "fingerprint": "fixture-b"
+        }
+      ],
+      "defaultModel": "fixture-model",
+      "modelAliases": [
+        [
+          "fast",
+          "fixture-model"
+        ]
+      ],
+      "quota": null,
+      "subscription": null,
+      "gateway": null,
+      "tags": [
+        "work"
+      ],
+      "notes": "Synthetic provider.\nTwo lines of notes.",
+      "headerNames": [
+        "X-Fixture"
+      ],
+      "createdAt": "2026-11-12T04:00:00Z",
+      "updatedAt": "2026-11-12T04:00:00Z",
+      "lastUsedAt": null,
+      "archivedAt": "2026-11-12T04:00:00Z",
+      "deletedAt": null,
+      "id": "00000000-0000-4000-8000-000000000003"
+    }
+  ],
+  "trash": [
+    {
+      "title": "Deleted account",
+      "favorite": true,
+      "providerId": "custom_openai_compatible",
+      "providerKind": "third_party",
+      "credentialKind": "api",
+      "accountIdentity": null,
+      "domains": [
+        "gateway.example.invalid"
+      ],
+      "faviconUrl": null,
+      "endpoints": [
+        {
+          "id": "api",
+          "kind": "api",
+          "url": "https://gateway.example.invalid/v1",
+          "region": null,
+          "deployment": null,
+          "apiVersion": null
+        }
+      ],
+      "interfaceType": "openai_compatible",
+      "authScheme": "bearer",
+      "maxConcurrentRequests": 4,
+      "supportsWebsockets": false,
+      "maskedSecret": "••••fixture",
+      "fingerprint": "fixture-only",
+      "secretRefs": [
+        {
+          "id": "key-a",
+          "label": "Production",
+          "masked": "••••fixture-a",
+          "fingerprint": "fixture-a"
+        },
+        {
+          "id": "key-b",
+          "label": "Fallback",
+          "masked": "••••fixture-b",
+          "fingerprint": "fixture-b"
+        }
+      ],
+      "defaultModel": "fixture-model",
+      "modelAliases": [
+        [
+          "fast",
+          "fixture-model"
+        ]
+      ],
+      "quota": null,
+      "subscription": null,
+      "gateway": null,
+      "tags": [
+        "work"
+      ],
+      "notes": "Synthetic provider.\nTwo lines of notes.",
+      "headerNames": [
+        "X-Fixture"
+      ],
+      "createdAt": "2026-11-12T04:00:00Z",
+      "updatedAt": "2026-11-12T04:00:00Z",
+      "lastUsedAt": null,
+      "archivedAt": null,
+      "deletedAt": "2026-11-12T04:00:00Z",
+      "id": "00000000-0000-4000-8000-000000000004"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "extends": "@aipass/tsconfig/base.json",
+  "compilerOptions": {
+    "checkJs": false,
+    "typeRoots": [
+      "./node_modules",
+      "../../node_modules/@types"
+    ],
+    "paths": {
+      "@aipass/schemas": [
+        "../../packages/schemas/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "reference/business-*.ts",
+    "../../artifacts/desktop-reference/src/vite-env.d.ts"
+  ]
+}

@@ -1,3 +1,4 @@
+pub mod inference;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -902,30 +903,7 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
     ]
 }
 
-pub fn match_provider_by_domain(domain: &str) -> Option<ProviderDefinition> {
-    let normalized = domain
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .split('/')
-        .next()
-        .unwrap_or(domain)
-        .split('@')
-        .next_back()
-        .unwrap_or(domain)
-        .split(':')
-        .next()
-        .unwrap_or(domain)
-        .to_lowercase();
-    default_provider_definitions()
-        .into_iter()
-        .find(|definition| {
-            definition
-                .domains
-                .iter()
-                .any(|known| normalized == *known || normalized.ends_with(&format!(".{known}")))
-        })
-}
+pub use inference::match_provider_by_domain;
 
 pub fn provider_kind_for_id(provider_id: Option<&str>) -> ProviderKind {
     provider_id

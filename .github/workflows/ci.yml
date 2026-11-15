@@ -11,19 +11,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Tauri Linux dependencies
+      - name: Install native Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dbus-daemon gnome-keyring libsecret-tools libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils
+          sudo apt-get install -y dbus-daemon gnome-keyring libsecret-tools build-essential curl wget file libssl-dev libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libsecret-1-dev libfontconfig1-dev libasound2-dev libudev-dev minisign squashfs-tools zstd libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - name: Verify isolated Linux native credential stores
-        run: dbus-run-session -- node scripts/verify-linux-keyring.mjs
-      - run: cargo build --workspace
+      - name: Run cargo test --workspace
+        shell: bash
+        run: |
+          cargo test --workspace --message-format=json-render-diagnostics | tee rust-test-artifacts.jsonl
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+      - name: Verify isolated Linux native credential stores
+        run: dbus-run-session -- node scripts/verify-linux-keyring.mjs
+      - run: cargo build --workspace
       - name: Verify Linux startup without systemd
         run: node scripts/verify-linux-autostart.mjs target/debug
 
@@ -60,13 +63,15 @@ jobs:
       - name: Install Linux desktop and validation dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dbus-daemon libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 xdg-utils
+          sudo apt-get install -y dbus-daemon build-essential curl wget file libssl-dev libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libsecret-1-dev libfontconfig1-dev libasound2-dev libudev-dev minisign squashfs-tools zstd libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 xdg-utils
           command -v xdg-mime
       - run: pnpm install --frozen-lockfile
+      - name: Install pinned AppImage tools
+        run: node scripts/desktop/install-linux-tools.mjs
       - name: Prepare disposable updater signing key
         run: node scripts/prepare-runtime-check-build.mjs "${RUNNER_TEMP}/aipass-linux-runtime-signing"
       - name: Build signed Linux test packages
-        run: pnpm --dir apps/desktop tauri build --ci --bundles deb,appimage --config "${AIPASS_RUNTIME_BUILD_CONFIG}"
+        run: node scripts/package-desktop.mjs --ci --bundles deb,appimage --config "${AIPASS_RUNTIME_BUILD_CONFIG}"
       - name: Verify packaged CLI, main window and tray startup
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' node scripts/verify-linux-runtime.mjs
       - name: Verify official Cursor Local API integration
@@ -105,7 +110,7 @@ jobs:
         run: |
           mapfile -t images < <(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage')
           test "${#images[@]}" -eq 1
-          version="$(node -p "require('./apps/desktop/package.json').version")"
+          version="$(node -p "require('./apps/desktop-native/package.json').version")"
           dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' node scripts/verify-linux-updater.mjs "${images[0]}" "$version"
       - name: Remove disposable signing key
         if: always()
@@ -136,19 +141,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Verify desktop and macOS process lifecycle
         run: |
-          cargo test -p aipass-desktop --lib
+          cargo test -p aipass-desktop-native --lib
           cargo test -p aipass-agent autostart::
       - name: Verify isolated proxy uninstall recovery
         run: |
           cargo build -p aipass-agent -p aipass-cli
           node scripts/verify-proxy-uninstall.mjs target/debug
+      - name: Install native package signer
+        run: brew install minisign
       - name: Prepare disposable updater signing key
         run: node scripts/prepare-runtime-check-build.mjs "${RUNNER_TEMP}/aipass-runtime-signing"
       - name: Build macOS test app and DMG with ad hoc signing
-        env:
-          # CI normally skips Finder's background and icon layout in Tauri.
-          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
-        run: pnpm --dir apps/desktop tauri build --ci --bundles app,dmg --config "${AIPASS_RUNTIME_BUILD_CONFIG}"
+        run: node scripts/package-desktop.mjs --ci --bundles app,dmg --config "${AIPASS_RUNTIME_BUILD_CONFIG}"
       - name: Verify app bundle
         shell: bash
         run: |
@@ -203,6 +207,13 @@ jobs:
       - run: pnpm build
       - name: Verify embedded Svelte control panel is reproducible
         run: git diff --exit-code -- apps/control-panel/embedded
+      - name: Install native Windows packaging tools
+        run: |
+          choco install nsis -y --no-progress
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          node scripts/desktop/install-windows-minisign.mjs
+      - name: Prepare disposable updater signing key
+        run: node scripts/prepare-runtime-check-build.mjs "${{ runner.temp }}/aipass-windows-runtime-signing"
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Verify production Agent recovery locking
         run: cargo test -p aipass-agent --test uninstall_recovery_lock
@@ -213,10 +224,8 @@ jobs:
         run: node scripts/verify-cli-runtime.mjs target/debug windows-runtime-check-reports/cli-debug
       - name: Verify isolated proxy uninstall recovery
         run: node scripts/verify-proxy-uninstall.mjs target/debug
-      - name: Prepare disposable updater signing key
-        run: node scripts/prepare-runtime-check-build.mjs "${{ runner.temp }}/aipass-windows-runtime-signing"
       - name: Build Windows NSIS test installer
-        run: pnpm --dir apps/desktop tauri build --ci --bundles nsis --config "$env:AIPASS_RUNTIME_BUILD_CONFIG"
+        run: node scripts/package-desktop.mjs --ci --bundles nsis --config "$env:AIPASS_RUNTIME_BUILD_CONFIG"
       - name: Verify installed main, tray, CLI, Native Messaging and uninstall
         run: node scripts/verify-windows-runtime.mjs target/release/bundle/nsis
       - name: Remove disposable signing key

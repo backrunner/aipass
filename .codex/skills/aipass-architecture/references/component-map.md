@@ -4,8 +4,7 @@
 
 | Component | Owns | Must not own |
 | --- | --- | --- |
-| `apps/desktop/src` | Svelte presentation, interaction state, invoking Tauri commands | Vault files, provider credentials, sync objects, final tool config |
-| `apps/desktop/src-tauri` | Desktop lifecycle, Tauri IPC bridge, windows, tray, singleton, updater, native-host installation | A second vault/session implementation |
+| `apps/desktop-native` | GPUI presentation, Agent session, windows, tray, singleton, signed updater, native-host installation | A second vault/session implementation |
 | `crates/aipass-agent` | Local service, authenticated IPC, vault session, CRUD, sync orchestration, proxy and pricing state, config writes | Browser or Svelte presentation |
 | `crates/aipass-agent-protocol` | Typed requests/responses, framed IPC contract, error codes, protocol version, secret-aware DTOs | Business persistence or UI behavior |
 | `crates/aipass-vault` | Encrypted records, vault lifecycle, audit and grants | Desktop or browser integration |
@@ -25,7 +24,7 @@ The actual Rust workspace is listed in `Cargo.toml`; the JavaScript workspace an
 ## Primary Data Paths
 
 ```text
-Svelte UI -> Tauri command -> AgentClient -> authenticated local socket -> agent -> vault/sync/proxy/writer
+GPUI view -> native Session -> AgentClient -> authenticated local socket -> agent -> vault/sync/proxy/writer
 CLI ------------------------> AgentClient -> authenticated local socket -> agent -> core owner
 Web page -> extension -> Chromium Native Messaging -> native host -> AgentClient -> agent
 agent -> aipass-sync -> encrypted folder, iCloud/OneDrive-style folder, or WebDAV remote
@@ -37,7 +36,7 @@ The per-vault socket and auth token are derived from a canonical vault path and 
 ## Change Routing
 
 - New agent operation: add protocol DTOs in `aipass-agent-protocol`, implement the handler in `aipass-agent`, then add thin surface adapters.
-- Desktop feature: keep view state in Svelte and durable behavior in a Tauri command or, preferably, an agent request when it touches core state.
+- Desktop feature: keep view state in GPUI and durable behavior in typed Agent requests.
 - Browser feature: validate browser input in the native host, then use an agent request. Do not return master passwords to browser-controlled UI.
 - Sync feature: resolve provider paths and execute in Rust through the agent and `aipass-sync`.
 - Tool integration: generate/apply through `aipass-config-writers` behind an agent plan; plaintext modes require explicit user choice.
@@ -48,7 +47,7 @@ The per-vault socket and auth token are derived from a canonical vault path and 
 - Web page DOM -> extension content script: untrusted.
 - Extension -> native host: validate extension ID, message type, protocol version, origin, and capability.
 - Native host/desktop/CLI -> agent: authenticated, versioned local IPC.
-- WebView -> Tauri: narrow commands; secrets should have minimal frontend lifetime.
+- GPUI -> Agent: typed requests through the runtime gate; secrets have minimal view-state lifetime.
 - Remote sync/WebDAV -> sync engine: untrusted encrypted data; authenticate and validate before merge.
 - Tool config files -> writers: external mutable state; use plans, backups, and rollback.
 

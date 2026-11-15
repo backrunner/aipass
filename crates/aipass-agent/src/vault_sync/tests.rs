@@ -1187,6 +1187,15 @@ fn corrupted_remote_and_wrong_import_password_leave_existing_vault_untouched() {
 
 #[test]
 fn local_writes_publish_automatically_without_manual_sync() {
+    automatic_publish(false);
+}
+
+#[test]
+fn local_writes_still_publish_when_filesystem_notifications_are_unavailable() {
+    automatic_publish(true);
+}
+
+fn automatic_publish(polling_only: bool) {
     let temp = tempdir().unwrap();
     let state = first(&temp.path().join("vault"));
     let dir = temp.path().join("cloud");
@@ -1200,15 +1209,23 @@ fn local_writes_publish_automatically_without_manual_sync() {
             .map_err(ServiceError::internal)
     })
     .unwrap();
-    struct StopWatcher(Arc<AgentState>);
+    struct StopWatcher(Arc<AgentState>, Option<std::thread::JoinHandle<()>>);
     impl Drop for StopWatcher {
         fn drop(&mut self) {
             self.0.shutdown.store(true, Ordering::Relaxed);
             self.0.sync_watcher.lock().unwrap().take();
+            if let Some(handle) = self.1.take() {
+                handle.join().unwrap();
+            }
         }
     }
-    let _stop = StopWatcher(state.clone());
-    crate::sync_watch::restart_sync_watcher(&state, &settings);
+    let polling = if polling_only {
+        Some(crate::sync_watch::polling_only_for_test(state.clone()))
+    } else {
+        crate::sync_watch::restart_sync_watcher(&state, &settings);
+        None
+    };
+    let _stop = StopWatcher(state.clone(), polling);
     let remote = aipass_sync::FolderSnapshotRemote(&dir);
     let wait_for = |count, phase| {
         // Bootstrap and the subsequent independent mutation each have the same

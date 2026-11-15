@@ -20,7 +20,7 @@ Use this skill to build a current architecture model before changing code. Treat
 - Svelte UI, CLI, extension, and native host are clients. Do not create an alternate storage or secret-handling authority in them.
 - Cross-process agent messages use `aipass-agent-protocol`, including protocol versioning, authenticated frames, structured errors, and `SensitiveString` for secrets.
 - A sync provider sees encrypted objects only. Browser pages and sync remotes are untrusted inputs.
-- Distinguish the desktop process, its tray UI, and the agent process. The tray is owned by the Tauri desktop process; it is not the agent.
-- Validate desktop UI at the Tauri minimum viewport `960x640`.
+- Distinguish the desktop process, its tray UI, and the agent process. The tray is owned by the native desktop process; it is not the agent.
+- Validate desktop UI at the desktop minimum viewport `960x640`.
 
 Before editing, trace the request from entry surface to final owner and identify every IPC or persistence boundary it crosses. Keep the change in the narrowest owning component and reuse existing protocol types and agent commands.

@@ -11,7 +11,7 @@ AIPass is a local-first credential manager for AI workflows. It stores AI provid
 
 The product has three parts that share one vault:
 
-- **Desktop app** — a Tauri desktop app where you add, search, probe, and archive provider credentials, manage multiple keys per provider, route traffic through a local proxy, and export or import encrypted backups.
+- **Desktop app** — a native GPUI desktop app where you add, search, probe, and archive provider credentials, manage multiple keys per provider, route traffic through a local proxy, and export or import encrypted backups.
 - **CLI** — the `aipass` command line for scripting vault operations, injecting credentials into tool environments, and configuring AI CLI tools with rollback. See the [CLI reference](/docs/cli).
 - **Browser extension** — a Chrome extension that detects AI provider consoles and fills keys through short-lived, origin-bound grants over Native Messaging. See the [extension guide](/docs/extension).
 

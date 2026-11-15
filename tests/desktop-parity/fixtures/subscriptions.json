@@ -1,0 +1,155 @@
+{
+  "snapshot": {
+    "plan": "Pro",
+    "status": "active",
+    "consoleUrl": "https://chatgpt.com/codex/settings/usage",
+    "quotaUnavailable": false,
+    "windows": [
+      {
+        "id": "five",
+        "label": "Codex \u00b7 primary",
+        "usedPercent": 37.5,
+        "resetsAt": "2026-11-13T15:00:00Z",
+        "windowMinutes": 300
+      },
+      {
+        "id": "week",
+        "label": "Codex \u00b7 secondary",
+        "usedPercent": 84,
+        "resetsAt": "2026-11-20T08:00:00Z",
+        "windowMinutes": 10080
+      }
+    ],
+    "observedAt": "2026-11-13T08:30:00Z",
+    "source": "community:codex",
+    "stale": false
+  },
+  "task": {
+    "ticket": "00000000-0000-4000-8000-000000000010",
+    "phase": "complete",
+    "total": 6,
+    "completed": 6,
+    "results": [
+      {
+        "sourceId": "00000000-0000-4000-8000-000000000020",
+        "source": {
+          "provider": "anthropic",
+          "root": "/synthetic/subscription-fixtures",
+          "selector": "file"
+        },
+        "accountIdentity": "alice@example.invalid:fixture-workspace",
+        "status": "imported",
+        "entryId": "00000000-0000-4000-8000-000000000030",
+        "action": null,
+        "errorCode": null
+      },
+      {
+        "sourceId": "00000000-0000-4000-8000-000000000021",
+        "source": {
+          "provider": "codex",
+          "root": "/synthetic/subscription-fixtures",
+          "selector": "file"
+        },
+        "accountIdentity": "alice@example.invalid:workspace-two",
+        "status": "existing",
+        "entryId": "00000000-0000-4000-8000-000000000031",
+        "action": null,
+        "errorCode": null
+      },
+      {
+        "sourceId": "00000000-0000-4000-8000-000000000022",
+        "source": {
+          "provider": "copilot",
+          "root": "/synthetic/subscription-fixtures",
+          "selector": "file"
+        },
+        "accountIdentity": null,
+        "status": "needs_login",
+        "entryId": null,
+        "action": "login",
+        "errorCode": null
+      },
+      {
+        "sourceId": "00000000-0000-4000-8000-000000000023",
+        "source": {
+          "provider": "gemini-cli",
+          "root": "/synthetic/subscription-fixtures",
+          "selector": "file"
+        },
+        "accountIdentity": null,
+        "status": "not_found",
+        "entryId": null,
+        "action": "install_cli",
+        "errorCode": null
+      },
+      {
+        "sourceId": "00000000-0000-4000-8000-000000000024",
+        "source": {
+          "provider": "cursor",
+          "root": "/synthetic/subscription-fixtures",
+          "selector": "file"
+        },
+        "accountIdentity": null,
+        "status": "failed",
+        "entryId": null,
+        "action": "retry",
+        "errorCode": "task_failed"
+      },
+      {
+        "sourceId": "00000000-0000-4000-8000-000000000025",
+        "source": {
+          "provider": "kiro",
+          "root": "/synthetic/subscription-fixtures",
+          "selector": "file"
+        },
+        "accountIdentity": null,
+        "status": "cancelled",
+        "entryId": null,
+        "action": null,
+        "errorCode": null
+      }
+    ]
+  },
+  "runtime": {
+    "subscription": {
+      "quotaUseLimitPercent": 80,
+      "allowPaidCredits": false,
+      "autoResetCredits": false,
+      "nativeSwitch": null
+    },
+    "quotaTracking": true,
+    "quotaRefreshSeconds": 120,
+    "proxy": {
+      "mode": "custom",
+      "url": "http://127.0.0.1:7890",
+      "hasCredentials": true,
+      "clearCredentials": false
+    },
+    "balance": {
+      "url": "https://example.invalid/account/balance",
+      "post": true,
+      "body": null,
+      "headers": [
+        [
+          "Authorization",
+          null
+        ]
+      ],
+      "jsonPath": "$.data.balance",
+      "unit": "USD"
+    },
+    "webhooks": [
+      {
+        "id": "00000000-0000-4000-8000-000000000123",
+        "url": "https://example.invalid/webhook",
+        "enabled": true,
+        "events": [
+          "quota_low",
+          "quota_exhausted"
+        ],
+        "hasSecret": true,
+        "clearSecret": false
+      }
+    ]
+  }
+}

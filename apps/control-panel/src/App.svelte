@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { scrollMask, ProviderIcon, Card, EmptyState, ProxyRouteList, ProxyStatusGrid, VaultSidebar, ProviderListPane, ProviderEmptyState, Button, IconButton, SidebarItem, SelectField, Field, SwitchField, Modal } from "@aipass/ui";
   import { ArrowRight, Check, CircleHelp, KeyRound, Languages, Layers, LockKeyhole, LogOut, Monitor, Moon, Pencil, Play, Server, ShieldCheck, ShieldAlert, Square, Sun, Terminal, X } from "lucide-svelte";
-  import logoUrl from "../../desktop/public/aipass-logo.png?inline";
+  import logoUrl from "../../desktop-native/assets/aipass-logo.png?inline";
   import { ApiError, request } from "./api";
   import type { Preview, Snapshot, Target } from "./types";
   import ProxyLogsDialog from "./ProxyLogsDialog.svelte";

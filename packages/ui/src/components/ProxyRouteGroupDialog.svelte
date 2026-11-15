@@ -132,7 +132,7 @@
     members = reorderItems(members, index, index + direction);
   }
 
-  // Use pointer events: Tauri's native file-drop handler can consume HTML DnD.
+  // Pointer events keep group reordering independent of native file drops.
   function startDrag(event: PointerEvent, index: number) {
     if (event.button !== 0 || dragPointerId !== null) return;
     event.preventDefault();

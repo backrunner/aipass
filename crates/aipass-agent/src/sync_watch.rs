@@ -164,13 +164,32 @@ fn local_write_stamp(root: &std::path::Path) -> u64 {
 }
 
 fn watch_loop(state: Arc<AgentState>, stop: Arc<AtomicBool>) {
+    watch_loop_with(state, stop, |tx| {
+        notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            if event.as_ref().map(relevant_event).unwrap_or(true) {
+                let _ = tx.send(());
+            }
+        })
+        .ok()
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn polling_only_for_test(state: Arc<AgentState>) -> thread::JoinHandle<()> {
+    thread::spawn(move || watch_loop_with(state, Arc::new(AtomicBool::new(false)), |_| None))
+}
+
+fn watch_loop_with(
+    state: Arc<AgentState>,
+    stop: Arc<AtomicBool>,
+    make_watcher: impl FnOnce(mpsc::Sender<()>) -> Option<notify::RecommendedWatcher>,
+) {
     let (tx, rx) = mpsc::channel::<()>();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.as_ref().map(relevant_event).unwrap_or(true) {
-            let _ = tx.send(());
-        }
-    })
-    .ok();
+    let mut watcher = make_watcher(tx.clone());
+    // Notifications accelerate the scheduler but do not own its lifetime.
+    // If watcher creation fails, dropping its callback must not disconnect the
+    // channel and terminate the polling fallback before its first sync.
+    let _polling_keepalive = tx;
     if let Some(watcher) = &mut watcher {
         let _ = watcher.watch(&state.vault_dir, RecursiveMode::Recursive);
     }

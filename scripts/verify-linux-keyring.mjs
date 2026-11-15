@@ -6,12 +6,12 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
+  readFileSync,
   rmSync,
-  statSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { testExecutable } from "./cargo-test-artifacts.mjs";
 
 assert.equal(process.platform, "linux");
 assert.ok(
@@ -27,7 +27,7 @@ assert.equal(
   false,
   "Refusing an existing credential-store session",
 );
-const deps = resolve(process.argv[2] ?? "target/debug/deps");
+const artifacts = readFileSync(resolve(process.argv[2] ?? "rust-test-artifacts.jsonl"), "utf8");
 const root = mkdtempSync("/tmp/aipass-native-");
 const env = {
   ...process.env,
@@ -67,24 +67,6 @@ let diagnostics = "";
 daemon.stderr.on("data", (v) => {
   diagnostics += v;
 });
-const binary = (name, test) =>
-  readdirSync(deps)
-    .filter((p) => p.startsWith(name + "-"))
-    .map((p) => join(deps, p))
-    .filter((p) => statSync(p).isFile() && statSync(p).mode & 0o111)
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
-    .find((path) => {
-      try {
-        return execFileSync(path, ["--list"], {
-          env,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 10_000,
-        }).includes(test);
-      } catch {
-        return false;
-      }
-    });
 try {
   for (let i = 0; i < 100; i++) {
     assert.ok(!stopped, `Disposable keyring exited: ${diagnostics}`);
@@ -106,8 +88,8 @@ try {
       "native_auth::linux_keyring::tests::isolated_linux_secret_service_roundtrip",
     ],
   ]) {
-    const executable = binary(name, test);
-    assert.ok(executable, `Build ${name} library tests first`);
+    const executable = testExecutable(artifacts, name);
+    assert.ok(execFileSync(executable, ["--list"], { env, encoding: "utf8", timeout: 10_000 }).includes(test), `Missing native credential test: ${test}`);
     execFileSync(executable, ["--exact", test, "--ignored", "--nocapture"], {
       env,
       stdio: "inherit",

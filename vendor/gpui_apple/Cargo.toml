@@ -1,0 +1,190 @@
+# Modified by AIPass: resolve workspace inheritance and pin renderer dependencies.
+[package]
+name = "gpui_apple"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+path = "src/gpui_apple.rs"
+doctest = false
+
+[features]
+default = []
+bench-support = [ "gpui/bench-support",]
+test-support = [ "gpui/test-support",]
+runtime_shaders = []
+font-kit = [ "dep:font-kit", "dep:core-text", "dep:objc2-core-text", "dep:pathfinder_geometry",]
+
+[workspace]
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+declare_interior_mutable_const = "deny"
+redundant_clone = "deny"
+disallowed_methods = "deny"
+type_complexity = "allow"
+let_underscore_future = "allow"
+single_range_in_vec_init = "allow"
+too_many_arguments = "allow"
+large_enum_variant = "allow"
+nonminimal_bool = "allow"
+
+[dependencies.gpui]
+default-features = false
+git = "https://github.com/sonorahq/gpui"
+rev = "8ddac49c8b5a079149b33b4581e03f74e05237e0"
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.anyhow]
+version = "1.0.86"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.async-task]
+version = "4.7"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.block2]
+version = "0.6"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.collections]
+version = "0.1.0"
+git = "https://github.com/sonorahq/gpui"
+rev = "8ddac49c8b5a079149b33b4581e03f74e05237e0"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.core-foundation]
+version = "0.10"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.core-foundation-sys]
+version = "0.8.6"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.core-graphics]
+version = "0.24"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.core-text]
+version = "21"
+optional = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.derive_more]
+version = "2.1"
+features = [ "deref", "deref_mut", "from_str",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.dispatch2]
+version = "0.3"
+default-features = false
+features = [ "std",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.etagere]
+version = "0.2"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.foreign-types]
+version = "0.5"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.futures]
+version = "0.3.34"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.font-kit]
+git = "https://github.com/zed-industries/font-kit"
+rev = "94b0f28166665e8fd2f53ff6d268a14955c82269"
+package = "zed-font-kit"
+version = "0.14.1-zed"
+default-features = false
+optional = true
+features = [ "source",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.gpui_util]
+git = "https://github.com/sonorahq/gpui"
+rev = "8ddac49c8b5a079149b33b4581e03f74e05237e0"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.image]
+version = "0.25.1"
+default-features = false
+features = [ "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "rayon", "tga", "tiff", "webp",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.libc]
+version = "0.2"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.log]
+version = "0.4"
+default-features = false
+features = [ "std",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.mach2]
+version = "0.6"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.metal]
+version = "0.33"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2]
+version = "0.6"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-core-foundation]
+version = "=0.3.2"
+default-features = false
+features = [ "std", "CFData", "CFDictionary", "CFString", "CFNumber", "CFBase",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-core-text]
+version = "0.3.2"
+default-features = false
+features = [ "std", "CTFont", "CTFontDescriptor",]
+optional = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-core-video]
+version = "=0.3.2"
+default-features = false
+features = [ "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVMetalTexture", "CVMetalTextureCache", "CVReturn", "objc2", "objc2-metal",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-metal]
+version = "0.3"
+default-features = false
+features = [ "MTLDevice", "MTLPixelFormat", "MTLTexture",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-foundation]
+version = "=0.3.2"
+default-features = false
+features = [ "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSNull", "NSObjCRuntime", "NSObject", "NSProcessInfo", "NSRange", "NSRunLoop", "NSSet", "NSString", "NSURL", "NSValue", "objc2-core-foundation", "std", "NSThread", "NSNotification", "NSOperation", "block2",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-quartz-core]
+version = "=0.3.2"
+default-features = false
+features = [ "std", "CALayer", "CAMetalLayer",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.objc2-security]
+version = "0.3.2"
+default-features = false
+features = [ "std", "SecBase", "SecItem",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.parking_lot]
+version = "0.12.1"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.pathfinder_geometry]
+version = "0.5"
+optional = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.smallvec]
+version = "1.6"
+features = [ "union", "const_new",]
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.thiserror]
+version = "2.0.12"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".build-dependencies.cbindgen]
+version = "0.28.0"
+default-features = false
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.gpui]
+default-features = false
+features = [ "test-support",]
+git = "https://github.com/sonorahq/gpui"
+rev = "8ddac49c8b5a079149b33b4581e03f74e05237e0"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.objc2-core-video]
+version = "=0.3.2"
+default-features = false
+features = [ "CVBuffer", "CVImageBuffer", "CVBase",]

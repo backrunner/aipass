@@ -502,74 +502,7 @@ pub(super) fn provider_guess_interface(origin: &str) -> Option<InterfaceType> {
     match_provider_by_domain(origin).and_then(|provider| provider.interfaces.first().cloned())
 }
 
-pub(super) fn infer_interface_from_endpoint(endpoint: &str) -> Option<InterfaceType> {
-    let endpoint = endpoint.to_lowercase();
-    // Keep in sync with OPENAI_COMPATIBLE_ENDPOINT_PATTERN in
-    // packages/schemas/src/index.ts. `/v\d` covers versioned API paths such
-    // as /v2, /api/paas/v4, and /v1beta.
-    const OPENAI_COMPATIBLE_EVIDENCE: &[&str] = &[
-        "openai",
-        "chat/completions",
-        "messages",
-        "gateway",
-        "one-api",
-        "one_api",
-        "one api",
-        "oneapi",
-        "new-api",
-        "new_api",
-        "new api",
-        "newapi",
-        "litellm",
-        "sub2api",
-        "openrouter",
-        "veloera",
-        "omniroute",
-        "metapi",
-        "onehub",
-        "donehub",
-        "anyrouter",
-        "siliconflow",
-        "deepseek",
-        "moonshot",
-        "dashscope",
-        "qwen",
-        "bigmodel",
-        "zhipu",
-        "volcengine",
-        "volces",
-        "ark",
-        "together",
-        "fireworks",
-        "groq",
-        "x.ai",
-        "mistral",
-        "perplexity",
-        "cerebras",
-        "nvidia",
-        "nim",
-        "novita",
-        "huggingface",
-        "hugging face",
-    ];
-    let has_versioned_api_path = endpoint
-        .as_bytes()
-        .windows(3)
-        .any(|window| window[0] == b'/' && window[1] == b'v' && window[2].is_ascii_digit());
-    if endpoint.contains("generativelanguage") || endpoint.contains("gemini") {
-        Some(InterfaceType::Gemini)
-    } else if endpoint.contains("anthropic") || endpoint.contains("claude") {
-        Some(InterfaceType::AnthropicMessages)
-    } else if has_versioned_api_path
-        || OPENAI_COMPATIBLE_EVIDENCE
-            .iter()
-            .any(|keyword| endpoint.contains(keyword))
-    {
-        Some(InterfaceType::OpenAiCompatible)
-    } else {
-        None
-    }
-}
+pub(super) use aipass_provider_registry::inference::infer_interface_from_endpoint;
 
 pub(super) fn default_auth_for_interface(interface_type: &InterfaceType) -> AuthScheme {
     match interface_type {

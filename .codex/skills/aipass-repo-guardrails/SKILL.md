@@ -9,9 +9,10 @@ Use this skill whenever you change, review, commit, or push code in the AIPass r
 
 ## Repository shape
 
-- `apps/desktop`
-  - Svelte UI only.
-  - `src-tauri` is the desktop bridge into Rust.
+- `apps/desktop-native`
+  - Rust GPUI presentation, native lifecycle, tray and signed updates.
+  - `crates/aipass-desktop-platform` owns shared platform adapters.
+- `apps/control-panel` and `packages/ui` retain the browser-based Svelte UI.
 - `crates/aipass-agent`
   - Primary local core service.
   - Owns vault access, sync execution, config writes, and trusted local IPC.
@@ -26,8 +27,8 @@ Use this skill whenever you change, review, commit, or push code in the AIPass r
 
 ## Desktop UI Scope
 
-- The authoritative desktop viewport is the Tauri window minimum of `960x640`, configured in `apps/desktop/src-tauri/tauri.conf.json` and `tauri.dev.conf.json`.
-- Desktop UI validation must cover that minimum window for pages, lists, forms, and dialogs. Do not introduce phone-sized or browser-preview responsive workarounds for the Tauri desktop surface unless the product explicitly adds that target.
+- The authoritative desktop viewport is `960x640`, recorded in `apps/desktop-native/desktop.json`.
+- Desktop UI validation must cover that minimum window for pages, lists, forms, and dialogs. Do not introduce phone-sized or browser-preview responsive workarounds for the native desktop surface unless the product explicitly adds that target.
 
 ## UI copy and compactness
 
@@ -151,9 +152,9 @@ For a desktop display fix, typical commands are:
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
-pnpm --filter @aipass/desktop typecheck
-# Only when related behavior changes; pass test files directly to Vitest.
-pnpm --dir apps/desktop exec vitest run src/lib/components/integration/IntegrationCard.test.ts
+cargo check -p aipass-desktop-native --all-targets
+# Only when related behavior changes, select the affected native tests.
+cargo test -p aipass-desktop-native --lib
 ```
 
 Use the actual affected package and tests. For a localized Rust logic fix outside
@@ -233,11 +234,10 @@ pnpm install --frozen-lockfile
 runtime_signing_dir="$(mktemp -d)/signing"
 trap 'rm -rf "$runtime_signing_dir"' EXIT
 node scripts/prepare-runtime-check-build.mjs "$runtime_signing_dir"
-TAURI_SIGNING_PRIVATE_KEY="$runtime_signing_dir/updater.key" \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' \
-TAURI_BUNDLER_DMG_IGNORE_CI=true \
-  pnpm --dir apps/desktop tauri build --ci --bundles app,dmg \
-  --config "$runtime_signing_dir/tauri.runtime-check.json"
+AIPASS_SIGNING_PRIVATE_KEY="$runtime_signing_dir/updater.key" \
+AIPASS_SIGNING_PRIVATE_KEY_PASSWORD='' \
+  node scripts/package-desktop.mjs --ci --bundles app,dmg \
+  --config "$runtime_signing_dir/desktop.runtime-check.json"
 app_path="$(find target -path "*/release/bundle/macos/AIPass.app" -type d -print -quit)"
 test -n "${app_path}"
 test -x "${app_path}/Contents/MacOS/aipass-desktop"
@@ -271,5 +271,5 @@ Before a release tag push:
 
 - Run the complete branch gate above against the tagged commit.
 - Re-read `release.yml` and execute every command reproducible natively on macOS for the exact tag. Never start an Ubuntu/Linux container or VM for release validation; platform-specific Linux/Windows jobs run in GitHub Actions.
-- Confirm every required GitHub, Apple, Tauri, and Cloudflare secret and external prerequisite without printing secret values.
+- Confirm every required GitHub, Apple, updater-signing, and Cloudflare secret and external prerequisite without printing secret values.
 - Verify required remote release credentials and prerequisites before pushing the tag. Validate macOS assertions locally and monitor all required GitHub Actions release jobs through completion. Missing local Linux/Windows execution is not a blocker and must not trigger container setup.

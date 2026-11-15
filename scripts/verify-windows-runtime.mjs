@@ -67,8 +67,9 @@ try {
   const installer = join(bundle, installers[0]);
   const installOptions = { env: proxyFixture.env, timeout: 120_000, windowsVerbatimArguments: true };
   const versionKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AIPass";
-  // Force genuine manual upgrade/downgrade decisions with the same disposable
-  // package, exercising the old-uninstaller handoff rather than just /UPDATE.
+  // Exercise passive replacements over both older and newer registered
+  // versions. Native replacement drains the old process and preserves proxy
+  // recovery state without invoking the destructive uninstall flow.
   for (const version of ["0.0.0", "999.0.0"]) {
     writeFileSync(join(reports, "installer-stage.json"), JSON.stringify({ stage: "manual-replacement", previousVersion: version }));
     execFileSync("reg.exe", ["add", versionKey, "/v", "DisplayVersion", "/t", "REG_SZ", "/d", version, "/f"], { stdio: "pipe" });

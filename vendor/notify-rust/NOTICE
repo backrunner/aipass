@@ -1,0 +1,2 @@
+notify-rust 4.18.2, https://github.com/hoodie/notify-rust.
+AIPass uses this crate only through gpui_linux. The unused Windows notification backend dependency is removed; Linux source is unchanged.

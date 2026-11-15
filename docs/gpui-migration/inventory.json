@@ -1,0 +1,3393 @@
+{
+  "baseline": "65a1f1f5a5e1b51311132659f9b972131c8ea551",
+  "minimumViewport": [
+    960,
+    640
+  ],
+  "defaultViewport": [
+    1280,
+    820
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "locales": [
+    "en",
+    "zh-CN"
+  ],
+  "requiredRounds": [
+    "initial",
+    "correction",
+    "regression"
+  ],
+  "surfaces": [
+    {
+      "id": "apps/desktop/src/App",
+      "source": "apps/desktop/src/App.svelte",
+      "sha256": "73ec81a43c747077962413aeaa596943209f4a6162709146e66f413e0c9277ad",
+      "props": [],
+      "branches": [
+        "errorToast",
+        "!statusReady || status.initialSyncPending",
+        "showAuthScreen",
+        "showWorkspace",
+        "showAgents",
+        "showServer",
+        "canShowUpdatePrompt && updateAvailableVersion",
+        "canShowUpdatePrompt",
+        "showSettings && !status.locked",
+        "showForm",
+        "showWorkspace && !showAuthScreen && !lockTransitioning",
+        "showOAuthConnect && showWorkspace && !showAuthScreen && !lockTransitioning",
+        "showCommunityConnect && showWorkspace && !showAuthScreen && !lockTransitioning",
+        "unlockTransitioning",
+        "lockTransitioning"
+      ],
+      "motion": [
+        "boot-spin 800ms linear infinite",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/AuthErrorNotice",
+      "source": "apps/desktop/src/lib/components/auth/AuthErrorNotice.svelte",
+      "sha256": "34ec5c14f1ab11ffda45464cc8214439d63e83b7d83d02de6240d3e693bdb4bd",
+      "props": [
+        "error",
+        "detail"
+      ],
+      "branches": [
+        "detail"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/AuthScreen",
+      "source": "apps/desktop/src/lib/components/auth/AuthScreen.svelte",
+      "sha256": "985d877f8461dda937d1073ba3ee38bcc8338ebc612a8a696423e5f8e350c77f",
+      "props": [
+        "status",
+        "authMode",
+        "busyMode",
+        "error",
+        "errorDetail",
+        "password",
+        "createPassword",
+        "createPasswordConfirm",
+        "recoveryKeyInput",
+        "recoveryPassword",
+        "recoveryPasswordConfirm",
+        "showCreatePassword",
+        "showUnlockPassword",
+        "showRecoveryPassword",
+        "createPasswordStrength",
+        "recoveryPasswordStrength",
+        "onModeChange",
+        "onCreate",
+        "onUnlock",
+        "onRecover",
+        "resetOpen",
+        "resetConfirm",
+        "resetBusy",
+        "onResetRequest",
+        "onReset",
+        "onResetCancel",
+        "importBusy",
+        "cloudCheckBusy",
+        "cloudDefault",
+        "onImport",
+        "onCheckCloud"
+      ],
+      "branches": [
+        "showCreate && setupMode === \"choose\"",
+        "cloudDefault",
+        "showCreate && setupMode === \"import\"",
+        "showCreate",
+        "createMismatch",
+        "createMatches",
+        "cloudDefault",
+        "showRecover",
+        "recoverMismatch",
+        "recoverMatches",
+        "!resetOpen",
+        "resetOpen",
+        "showUnlock",
+        "error"
+      ],
+      "motion": [
+        "border-color 120ms ease, box-shadow 120ms ease",
+        "background-color 80ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/HeroBackground",
+      "source": "apps/desktop/src/lib/components/auth/HeroBackground.svelte",
+      "sha256": "0755d70d26d33abed520e6e44306291c11c4e4462a22491dacb30eda3e5d48c3",
+      "props": [
+        "active",
+        "fillProgress"
+      ],
+      "branches": [],
+      "motion": [
+        "drift-a 18s ease-in-out infinite alternate",
+        "drift-b 22s ease-in-out infinite alternate",
+        "drift-c 26s ease-in-out infinite alternate",
+        "transform 700ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "wave-drift 5s linear infinite",
+        "7s",
+        "alternate",
+        "4.5s",
+        "alternate-reverse",
+        "none !important",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/ImportVaultForm",
+      "source": "apps/desktop/src/lib/components/auth/ImportVaultForm.svelte",
+      "sha256": "ac6b94e812fb6524d097e5877a48e2260365c3340600f0f7a2782ffd4b1d9ced",
+      "props": [
+        "busy",
+        "onImport",
+        "onBack"
+      ],
+      "branches": [
+        "usesPath",
+        "pickerError",
+        "source === \"webdav\""
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/PasswordField",
+      "source": "apps/desktop/src/lib/components/auth/PasswordField.svelte",
+      "sha256": "a20dfc9a6a7e553efceaac4f9634f09babd83d6d44393ba9492a4dc484abf20e",
+      "props": [
+        "label",
+        "value",
+        "show",
+        "autocomplete",
+        "placeholder",
+        "withToggle",
+        "disabled",
+        "autofocus"
+      ],
+      "branches": [
+        "withToggle",
+        "show"
+      ],
+      "motion": [
+        "border-color 120ms ease, box-shadow 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/PasswordStrengthMeter",
+      "source": "apps/desktop/src/lib/components/auth/PasswordStrengthMeter.svelte",
+      "sha256": "cde84bf826d898da47bf97286c23b2f0dcde89f64744631dd3546fc1d3fc8eed",
+      "props": [
+        "strength",
+        "showHint"
+      ],
+      "branches": [
+        "showHint && strength.hint"
+      ],
+      "motion": [
+        "background-color 120ms ease, border-color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/RecoveryKitModal",
+      "source": "apps/desktop/src/lib/components/auth/RecoveryKitModal.svelte",
+      "sha256": "92c741dfc75769f5fe6125ef162b0ff5f0b834042b230ba08745ee99e5791b1e",
+      "props": [
+        "recoveryKey",
+        "copied",
+        "onCopy",
+        "onDownload",
+        "onAcknowledge"
+      ],
+      "branches": [
+        "recoveryKey",
+        "copied === \"recovery-key\"",
+        "onDownload"
+      ],
+      "motion": [
+        "recovery-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "recovery-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "recovery-content-in 280ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "recovery-content-out 220ms cubic-bezier(0.4, 0, 0.85, 0.4)",
+        "background-color 80ms ease, color 120ms ease",
+        "none !important"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/auth/UnlockTransition",
+      "source": "apps/desktop/src/lib/components/auth/UnlockTransition.svelte",
+      "sha256": "af39410597feef1fe19d305ba70ed27d9c558f0f1f28404046db4e5f1580f1c3",
+      "props": [
+        "direction"
+      ],
+      "branches": [],
+      "motion": [
+        "rise 1200ms forwards",
+        "descend",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/AgentAccountDetail",
+      "source": "apps/desktop/src/lib/components/integration/AgentAccountDetail.svelte",
+      "sha256": "8c4375a5fac3562c4212062777081c273730b6b42e698c705983e5512cef27e6",
+      "props": [
+        "entry",
+        "secretId",
+        "invokeTauri",
+        "onRefreshEntries"
+      ],
+      "branches": [
+        "entry.credentialKind === \"oauth\"",
+        "entry.subscription || entry.credentialKind === \"oauth\"",
+        "entry.quota",
+        "entry.quota.used != null",
+        "entry.quota.limit",
+        "usageFailed"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/AgentManagementPage",
+      "source": "apps/desktop/src/lib/components/integration/AgentManagementPage.svelte",
+      "sha256": "46fd571ee3578152fdf9561929b69d819d4d6a5ab4edf55c32c0523a3dd1053c",
+      "props": [
+        "entries",
+        "invokeTauri",
+        "onRefreshEntries",
+        "snapshot"
+      ],
+      "branches": [
+        "tools.length",
+        "error && !tools.length",
+        "!loading",
+        "activeTool",
+        "message",
+        "error",
+        "!detection?.binaryFound && !detection?.extensionFound",
+        "needsRuntime",
+        "activeStatus?.state && ![\"ready\", \"unmanaged\", \"not_logged_in\"].includes(activeStatus.state)",
+        "activeStatus.operationId",
+        "activeStatus?.overrides.length",
+        "activeEntry && (activeStatus?.state === \"ready\" || (activeStatus?.state === \"unmanaged\" && activeStatus.mode === \"official\"))",
+        "activeStatus?.state !== \"not_logged_in\"",
+        "setupTool && setupDetails && setupRequest"
+      ],
+      "motion": [
+        "agent-scan 1s linear infinite"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/DiffViewer",
+      "source": "apps/desktop/src/lib/components/integration/DiffViewer.svelte",
+      "sha256": "b28e146c1a862f0f7534c37860822a1e9d136b16064d2b35d493540c58ae36a4",
+      "props": [
+        "rows"
+      ],
+      "branches": [
+        "changes.length > 0"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/IntegrationCard",
+      "source": "apps/desktop/src/lib/components/integration/IntegrationCard.svelte",
+      "sha256": "20d7374a5983718c22ab00b7bee43c14d9faa1382a402c9a74e3119bb210b998",
+      "props": [
+        "tools",
+        "detections",
+        "codexMode",
+        "codexModeOptions",
+        "onCodexModeChange",
+        "onPreview",
+        "onSetup",
+        "onRefresh",
+        "resetKey",
+        "disabled",
+        "showContext",
+        "localProxy",
+        "nativeSwitch",
+        "statuses",
+        "onRestore",
+        "onReconnect"
+      ],
+      "branches": [
+        "sortedTools.length && showContext && $$slots.default",
+        "tool.disabledReason",
+        "!tool.setupGuide",
+        "tool.id === \"codex\" && codexModeOptions.length > 0",
+        "statuses[tool.id]",
+        "status.accountIdentity && (!status.mode || status.mode === \"official\")",
+        "status.mode === \"official\" && [\"login_required\", \"renewal_required\"].includes(status.state)",
+        "status.operationId",
+        "![\"ready\", \"unmanaged\", \"api_key_invalid\", \"api_key_changed\"].includes(status.state)",
+        "[\"api_key_invalid\", \"api_key_changed\"].includes(status.state)",
+        "status.overrides.length",
+        "state.error",
+        "state.applied"
+      ],
+      "motion": [
+        "integration-scan-spin 800ms linear infinite"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/IntegrationPreviewDialog",
+      "source": "apps/desktop/src/lib/components/integration/IntegrationPreviewDialog.svelte",
+      "sha256": "0a20cc503affae65075de4b24a9af6ecabd917b4589808092b8f9064c72563cd",
+      "props": [
+        "open",
+        "preview",
+        "toolName",
+        "busy",
+        "localProxy",
+        "allowConfirm",
+        "managedSwitch",
+        "onConfirm",
+        "onOpenChange"
+      ],
+      "branches": [
+        "preview",
+        "preview",
+        "files.length > 1",
+        "item.unchanged",
+        "item.showDiff",
+        "bodies.length === 1",
+        "bodies[0].unchanged",
+        "bodies[0].showDiff",
+        "launchCommand",
+        "allowConfirm"
+      ],
+      "motion": [
+        "preview-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "preview-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "preview-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "preview-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4)",
+        "background-color 80ms ease, color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/IntegrationSetupDialog",
+      "source": "apps/desktop/src/lib/components/integration/IntegrationSetupDialog.svelte",
+      "sha256": "a2f923ce30786bbf115486076930f22d4f768e3a9326162c6fb01fb571b557d1",
+      "props": [
+        "tool",
+        "endpoint",
+        "model",
+        "protocol",
+        "onCopyKey",
+        "onClose"
+      ],
+      "branches": [
+        "error"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/IntegrationToolIcon",
+      "source": "apps/desktop/src/lib/components/integration/IntegrationToolIcon.svelte",
+      "sha256": "c78ad9dfb93153b258d5cd5c9b522036fce26d7696a72fc0269b88ac02fcee60",
+      "props": [
+        "tool",
+        "size"
+      ],
+      "branches": [
+        "icon"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/ProviderIntegration",
+      "source": "apps/desktop/src/lib/components/integration/ProviderIntegration.svelte",
+      "sha256": "17eb98f9bb00af2a78380a49fe8a7974f175efb21380428b83d91fc6601e9bb2",
+      "props": [
+        "entry",
+        "invokeTauri",
+        "detections",
+        "onPreview",
+        "onApply",
+        "onRefresh",
+        "checkRevision",
+        "disabled"
+      ],
+      "branches": [
+        "tools.length",
+        "entry.credentialKind !== \"oauth\"",
+        "message",
+        "error",
+        "pendingLogin && !loginOpen",
+        "loginOpen && pendingLogin",
+        "setupTool && setupDetails"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/integration/ToolLoginDialog",
+      "source": "apps/desktop/src/lib/components/integration/ToolLoginDialog.svelte",
+      "sha256": "0ec84ad74a150c9961e3c4ad3734d481722e85c8c08a82f9125baf7dfe50d8a2",
+      "props": [
+        "request",
+        "invokeTauri",
+        "onClose",
+        "onComplete"
+      ],
+      "branches": [
+        "error",
+        "login?.url",
+        "login?.userCode",
+        "login?.requiresCode",
+        "login?.url && !error",
+        "login?.requiresCode && !error"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/pricing/CredentialPricingDialog",
+      "source": "apps/desktop/src/lib/components/pricing/CredentialPricingDialog.svelte",
+      "sha256": "e72a1ac00914f82870df7bdddd401bafa05d13435eac83facdbb4d0c63c34192",
+      "props": [
+        "entryId",
+        "secret",
+        "assignment",
+        "groups",
+        "onSave",
+        "onEditGroup",
+        "onClose"
+      ],
+      "branches": [
+        "groupId",
+        "secret.billing",
+        "secret.billing.rate",
+        "secret.billing.currency",
+        "secret.billing.unitPrice",
+        "secret.billing.note",
+        "Number.isFinite(referenceRate) && referenceRate >= 0",
+        "error"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/pricing/PricingGroupDialog",
+      "source": "apps/desktop/src/lib/components/pricing/PricingGroupDialog.svelte",
+      "sha256": "74f480ead421bce619352cba46a33248cbea6155711c153faa2a3129b6ce8395",
+      "props": [
+        "group",
+        "assignedCount",
+        "onSave",
+        "onDeleteGroup",
+        "onDeleteVersion",
+        "onClose"
+      ],
+      "branches": [
+        "error",
+        "view === \"delete\"",
+        "view === \"confirm\"",
+        "rule.offPeak.enabled",
+        "group && versionsDesc.length > 0",
+        "group"
+      ],
+      "motion": [
+        "dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4)",
+        "none !important",
+        "background-color 80ms ease, color 120ms ease",
+        "border-color 120ms ease, box-shadow 120ms ease",
+        "background-color 80ms ease, color 120ms ease",
+        "background-color 80ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/AccountLocationButton",
+      "source": "apps/desktop/src/lib/components/providers/AccountLocationButton.svelte",
+      "sha256": "929ece9c4aa4fe60e533dc120331a61110a0806ecbd5a78125011bb83841b826",
+      "props": [
+        "path",
+        "onOpen"
+      ],
+      "branches": [
+        "error"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ClaudeConnectPane",
+      "source": "apps/desktop/src/lib/components/providers/ClaudeConnectPane.svelte",
+      "sha256": "e1b0715d31aabb1fe009fbc3a7835598ce835bcb23b2775dc795652045e12a88",
+      "props": [
+        "invokeTauri",
+        "onBack",
+        "onConnected"
+      ],
+      "branches": [
+        "checking || starting",
+        "status && !status.available",
+        "login",
+        "login.url",
+        "error",
+        "feedback"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ClaudeQuotaTracker",
+      "source": "apps/desktop/src/lib/components/providers/ClaudeQuotaTracker.svelte",
+      "sha256": "df77c2698061b599462670463692c5de2c62840198ffb231221c56f0a7e95491",
+      "props": [
+        "window",
+        "compact"
+      ],
+      "branches": [
+        "window",
+        "isInWarmup",
+        "!compact",
+        "isInWarmup && window.warmupEndsAt",
+        "isNearLimit"
+      ],
+      "motion": [
+        "width 300ms ease, background-color 300ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/CommunityConnectDialog",
+      "source": "apps/desktop/src/lib/components/providers/CommunityConnectDialog.svelte",
+      "sha256": "74713fad07ec8d92f9b38b54446014d9f5d337570786d6d33f9099d4d123170e",
+      "props": [
+        "invokeTauri",
+        "initialProvider",
+        "entryId",
+        "onBack",
+        "onClose",
+        "onConnected"
+      ],
+      "branches": [
+        "loading",
+        "providers.length",
+        "!entryId",
+        "providerId === p.id",
+        "!filteredProviders.length",
+        "onBack",
+        "error",
+        "provider",
+        "cliOwned",
+        "checkingCli",
+        "cliStatus && !cliStatus.available",
+        "!cliStatus",
+        "method",
+        "method.type === \"api\"",
+        "method.native",
+        "prompt.type === \"select\"",
+        "method?.type === \"api\"",
+        "keyPage",
+        "login?.status === \"pending\"",
+        "login.url",
+        "login.method === \"code\"",
+        "error",
+        "busy && !login",
+        "busy"
+      ],
+      "motion": [
+        "background 120ms ease, color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/CredentialManager",
+      "source": "apps/desktop/src/lib/components/providers/CredentialManager.svelte",
+      "sha256": "0cd66387a2f66dad283cc50db6e7324d1047c626f3f6d11f31d9bdb779d4c853",
+      "props": [
+        "entry",
+        "onAddCredential",
+        "onRemoveCredential",
+        "onSetPrimary",
+        "onReorderCredential"
+      ],
+      "branches": [
+        "credentials.length === 0",
+        "isPrimary(credential)",
+        "!isPrimary(credential)",
+        "credential.group",
+        "credential.endpoint",
+        "credential.defaultModel"
+      ],
+      "motion": [
+        "border-color 150ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/CredentialPicker",
+      "source": "apps/desktop/src/lib/components/providers/CredentialPicker.svelte",
+      "sha256": "ac38945a6656546810162ec74775ef50367eabadc6037b2eae756faccb2d0073",
+      "props": [
+        "entry",
+        "value",
+        "onValueChange"
+      ],
+      "branches": [
+        "selected",
+        "active"
+      ],
+      "motion": [
+        "border-color 120ms ease, background 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/CredentialTags",
+      "source": "apps/desktop/src/lib/components/providers/CredentialTags.svelte",
+      "sha256": "2a3ba176af357776d90fc98b8f72644e500d8487b5a6956b096472beb76a0053",
+      "props": [
+        "format",
+        "group"
+      ],
+      "branches": [
+        "group"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/CustomBalanceEndpointConfig",
+      "source": "apps/desktop/src/lib/components/providers/CustomBalanceEndpointConfig.svelte",
+      "sha256": "d3e37ae9e6dc56d681792f8f782faab4264e5d9897a6a743f1a96e162cdd908c",
+      "props": [
+        "endpoints",
+        "onAddEndpoint",
+        "onRemoveEndpoint",
+        "onUpdateEndpoint",
+        "onTestEndpoint"
+      ],
+      "branches": [
+        "endpoints.length === 0",
+        "endpoint.method === \"POST\" && endpoint.body !== undefined",
+        "testResults[endpoint.id]",
+        "testResults[endpoint.id].success"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/CustomHeadersConfig",
+      "source": "apps/desktop/src/lib/components/providers/CustomHeadersConfig.svelte",
+      "sha256": "e19825da3faf3864aac4eb3fbbca00002b42c974100b8cd388c33e4675b7e00c",
+      "props": [
+        "headers",
+        "onAddHeader",
+        "onRemoveHeader",
+        "onUpdateHeader"
+      ],
+      "branches": [
+        "headers.length === 0"
+      ],
+      "motion": [
+        "opacity 150ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/OAuthConnectDialog",
+      "source": "apps/desktop/src/lib/components/providers/OAuthConnectDialog.svelte",
+      "sha256": "ed1406fdbe2d448afa634c2e6e62da3ab6d63bd591203722b2d3e00d1f67eba5",
+      "props": [
+        "invokeTauri",
+        "onClose",
+        "onConnected",
+        "onImportCli",
+        "initialProvider"
+      ],
+      "branches": [
+        "selected && selected !== \"claude\"",
+        "selected === \"claude\"",
+        "loading",
+        "failed",
+        "!visible.length",
+        "failed"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderDetailPane",
+      "source": "apps/desktop/src/lib/components/providers/ProviderDetailPane.svelte",
+      "sha256": "9b398cf4bfa7c804fb5b5f944c77f0507f4153e1f3f9dadc45da3c25517a844d",
+      "props": [
+        "invokeTauri",
+        "selected",
+        "showArchived",
+        "showTrash",
+        "copied",
+        "credentialClickAction",
+        "revealedSecrets",
+        "newSecretLabel",
+        "newSecretKey",
+        "secretBusy",
+        "probeResult",
+        "probing",
+        "usageProbeResult",
+        "usageProbing",
+        "notice",
+        "editMode",
+        "draft",
+        "onProbe",
+        "onUsageProbe",
+        "onApplyUsageProbe",
+        "onEditStart",
+        "onEditCancel",
+        "onEditSave",
+        "onFavorite",
+        "onRestore",
+        "onDelete",
+        "onArchive",
+        "onTrash",
+        "onRevealSecret",
+        "onReadSecret",
+        "onCopySecret",
+        "onUpdateSecret",
+        "onRemoveSecret",
+        "onAddSecret",
+        "onCopyValue",
+        "onInferDraftFromDomain",
+        "onProviderChanged",
+        "onInterfaceChanged",
+        "onAuthChanged",
+        "onPreviewToolConfig",
+        "onApplyToolConfig",
+        "onRefreshToolDetections",
+        "pricingGroups",
+        "pricingAssignments",
+        "toolDetections",
+        "onSetPricingAssignment",
+        "onUpsertPricingGroup",
+        "onDeletePricingGroup",
+        "onDeletePricingVersion"
+      ],
+      "branches": [
+        "selected",
+        "editMode && !isSubscription",
+        "!isSubscription",
+        "!isSubscription && selected.accountIdentity",
+        "(!editMode || isSubscription) && !showTrash",
+        "editMode && !isSubscription",
+        "showTrash",
+        "showArchived",
+        "!isSubscription",
+        "notice",
+        "selected.websocketWarning",
+        "saving && draft.websocketPreferenceTouched && draft.supportsWebsockets && selected.supportsWebsockets === false",
+        "showTrash && selected.deletedAt",
+        "days !== undefined",
+        "isSubscription",
+        "editingSecretId === secret.id",
+        "editingSecretVisible",
+        "pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)",
+        "pricingAssignment.groupId",
+        "pricingAssignment.multiplier !== 1",
+        "editMode",
+        "copied === `secret:${secret.id",
+        "revealedSecrets[secret.id]",
+        "showAddSecret",
+        "probeResult",
+        "probeResult.modelCount !== undefined",
+        "probeResult.websocket",
+        "probeResult.error",
+        "usageProbeResult",
+        "usageProbeResult.quota?.remaining != null",
+        "usageProbeResult.quota?.used != null",
+        "usageProbeResult.gateway?.group",
+        "usageProbeResult.error",
+        "hasQuota",
+        "selected.quota?.unit",
+        "selected.quota?.limit",
+        "selected.quota?.used != null",
+        "selected.quota?.resetAt",
+        "hasSubscription || isSubscription",
+        "!showTrash && !showArchived",
+        "!isSubscription || selected.notes",
+        "pricingSecret",
+        "pricingDialogOpen"
+      ],
+      "motion": [
+        "detail-in 280ms cubic-bezier(0.32, 0.72, 0, 1)",
+        "none",
+        "background-color 80ms ease, color 120ms ease, border-color 120ms ease",
+        "background-color 80ms ease",
+        "kv-copy-flash 900ms ease-out",
+        "none",
+        "opacity 120ms ease, color 120ms ease",
+        "background-color 80ms ease, color 120ms ease",
+        "color 120ms ease",
+        "border-color 120ms ease, box-shadow 120ms ease",
+        "background-color 80ms ease, color 120ms ease, border-color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderHealthMonitor",
+      "source": "apps/desktop/src/lib/components/providers/ProviderHealthMonitor.svelte",
+      "sha256": "7c0e7ecaa19fe1591489522c9e5f333a6941b6bfdbec3cb46329fe6191828aaf",
+      "props": [
+        "health",
+        "autoRefresh",
+        "compact"
+      ],
+      "branches": [
+        "health",
+        "autoRefresh",
+        "!compact",
+        "health.responseTime !== undefined",
+        "health.uptime !== undefined",
+        "health.errorRate !== undefined",
+        "health.consecutiveFailures > 0",
+        "health.message"
+      ],
+      "motion": [
+        "pulse 2s ease-in-out infinite"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderItemFields",
+      "source": "apps/desktop/src/lib/components/providers/ProviderItemFields.svelte",
+      "sha256": "107d2f4a9f8f38f54ceb92e90d09dabdfa93f64220332c1ed17e8b9cfc889f26",
+      "props": [
+        "entry",
+        "draft",
+        "editing",
+        "copied",
+        "section",
+        "onCopyValue",
+        "onProviderChanged",
+        "onInterfaceChanged",
+        "onAuthChanged",
+        "onInferDraftFromDomain"
+      ],
+      "branches": [
+        "section === \"endpoint\"",
+        "!editing && endpoint",
+        "copied === \"endpoint\"",
+        "section === \"notes\"",
+        "entry.headerNames?.length || editing",
+        "entry.headerNames?.length",
+        "editing",
+        "entry.gateway?.group"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderModal",
+      "source": "apps/desktop/src/lib/components/providers/ProviderModal.svelte",
+      "sha256": "5bf926c6c057545fcd7a19e5c9c846e76b4cf228e556d1bae13cdfede65038af",
+      "props": [
+        "formMode",
+        "draft",
+        "error",
+        "saving",
+        "onSave",
+        "onClose",
+        "onInferDraftFromDomain",
+        "onInferDraftFromEndpoint",
+        "onProviderChanged",
+        "onInterfaceChanged",
+        "onAuthChanged"
+      ],
+      "branches": [
+        "error"
+      ],
+      "motion": [
+        "background-color 80ms ease, color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderOptimizationConfig",
+      "source": "apps/desktop/src/lib/components/providers/ProviderOptimizationConfig.svelte",
+      "sha256": "da51a3488037af4925acbe5ddd8c2acdf2d8f9061c0e97953a817852649f2c37",
+      "props": [
+        "config",
+        "providerId",
+        "onConfigChange"
+      ],
+      "branches": [
+        "config.enableHealthMonitoring",
+        "config.enableRateLimitDetection",
+        "config.enableQuotaTracking",
+        "isClaudeProvider",
+        "config.enableClaudeWarmup",
+        "config.enableAutoFailover",
+        "isClaudeProvider"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderProxyConfig",
+      "source": "apps/desktop/src/lib/components/providers/ProviderProxyConfig.svelte",
+      "sha256": "07d574b40689af4e8dcf3647f77f58ed162201e066f4b9c99bf0e812d048c872",
+      "props": [
+        "config",
+        "onConfigChange"
+      ],
+      "branches": [
+        "config.enabled",
+        "!config.useSystemProxy"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderRuntimeDialog",
+      "source": "apps/desktop/src/lib/components/providers/ProviderRuntimeDialog.svelte",
+      "sha256": "e19d01c4f0ab99d036651dc63355f63172a9ccaac5f7b62572fe31086f5200af",
+      "props": [
+        "id",
+        "providerTitle",
+        "providerId",
+        "onClose",
+        "onSaved",
+        "activeSection",
+        "invokeTauri"
+      ],
+      "branches": [
+        "error",
+        "notice",
+        "loading",
+        "options",
+        "providerId === \"codex\" || providerId === \"anthropic\"",
+        "options.proxy?.mode === \"custom\"",
+        "options.proxy.hasCredentials",
+        "options.balance",
+        "options.balance.post",
+        "dirty",
+        "!options.webhooks.length",
+        "hook.hasSecret",
+        "dirty",
+        "dirty"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderRuntimePanel",
+      "source": "apps/desktop/src/lib/components/providers/ProviderRuntimePanel.svelte",
+      "sha256": "8d33756f76bd68da01ebfe4d4fd79cc2c9e7ec0aa734c936ef6e4b22f5a34499",
+      "props": [],
+      "branches": [
+        "loading",
+        "options",
+        "error",
+        "dialogOpen"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderSelectOption",
+      "source": "apps/desktop/src/lib/components/providers/ProviderSelectOption.svelte",
+      "sha256": "53d998d6f9a5f465f39f68d6bf9452f8e8e09bf005f9e2b10da5650d19725b1e",
+      "props": [
+        "entry",
+        "showStatus",
+        "showIdentity",
+        "compact"
+      ],
+      "branches": [
+        "showStatus",
+        "subtitle && !compact"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/ProviderUsageProbeDialog",
+      "source": "apps/desktop/src/lib/components/providers/ProviderUsageProbeDialog.svelte",
+      "sha256": "80a131a7cac7c0753d189f5c16f1b0d69c810826f26673dfd36d375bd039f4e4",
+      "props": [
+        "open",
+        "selected",
+        "usageProbeResult",
+        "usageProbing",
+        "onOpenChange",
+        "onUsageProbe",
+        "onApplyUsageProbe"
+      ],
+      "branches": [
+        "usageSecretOptions.length > 1",
+        "usageMode === \"new_api_advanced\"",
+        "usageProbeError",
+        "activeUsageResult",
+        "activeUsageResult.status !== undefined",
+        "activeUsageResult.endpoint",
+        "activeUsageResult.error",
+        "activeUsageResult.quota",
+        "activeUsageResult.quota.used != null",
+        "activeUsageResult.quota.resetAt || activeUsageResult.quota.unit",
+        "activeUsageResult.quota.unit",
+        "activeUsageResult.quota.resetAt",
+        "activeUsageResult.gateway",
+        "activeUsageResult.gateway.group",
+        "activeUsageResult.gateway.rate",
+        "activeUsageResult.ok && !usageCanApply"
+      ],
+      "motion": [
+        "usage-overlay-in 180ms ease",
+        "usage-content-in 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "background-color 80ms ease, color 120ms ease",
+        "border-color 120ms ease, box-shadow 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/QuotaDisplay",
+      "source": "apps/desktop/src/lib/components/providers/QuotaDisplay.svelte",
+      "sha256": "4bd73c533432731cb0854b961655b16839648426f892e1dc2a5e402c2a4fdfc4",
+      "props": [
+        "quota",
+        "compact",
+        "showLabel"
+      ],
+      "branches": [
+        "hasData",
+        "showLabel && quota?.label",
+        "quota?.remaining",
+        "statusTone === \"success\"",
+        "statusTone === \"warning\"",
+        "statusTone === \"danger\"",
+        "!compact && quota.unit",
+        "!compact && percentage !== null",
+        "!compact && (quota?.used || quota?.limit)",
+        "quota?.used",
+        "quota?.limit",
+        "!compact && quota?.resetAt"
+      ],
+      "motion": [
+        "width 300ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/RateLimitMonitor",
+      "source": "apps/desktop/src/lib/components/providers/RateLimitMonitor.svelte",
+      "sha256": "5b7fb1f4a24c9f47df51c3c1065de6b5b3243855d6d1fe2277720708119b5dd8",
+      "props": [
+        "status",
+        "compact"
+      ],
+      "branches": [
+        "isActive",
+        "status?.occurrenceCount",
+        "!compact",
+        "shouldWait && status?.retryAfter",
+        "status?.nextAvailableAt",
+        "shouldSwitch",
+        "status?.lastOccurrence"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/RoutingStrategyConfig",
+      "source": "apps/desktop/src/lib/components/providers/RoutingStrategyConfig.svelte",
+      "sha256": "2044884d416d18e602d10598ab281f66a81516e9eb7db2388ba15f901c92f3b1",
+      "props": [
+        "strategy",
+        "affinity",
+        "enableFallback",
+        "fallbackProviders",
+        "onStrategyChange",
+        "onAffinityChange",
+        "onFallbackToggle"
+      ],
+      "branches": [
+        "enableFallback",
+        "fallbackProviders.length > 0"
+      ],
+      "motion": [
+        "border-color 150ms ease, background-color 150ms ease",
+        "border-color 150ms ease, background-color 150ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/SubscriptionAccountCard",
+      "source": "apps/desktop/src/lib/components/providers/SubscriptionAccountCard.svelte",
+      "sha256": "1c951ab25e9a3343247a7fee67eda18424f5d2e247b7afcd9766519f1e2a07a3",
+      "props": [
+        "entry"
+      ],
+      "branches": [
+        "account.scope",
+        "entry.accountIdentity && entry.accountIdentity !== account.account"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/SubscriptionDisplay",
+      "source": "apps/desktop/src/lib/components/providers/SubscriptionDisplay.svelte",
+      "sha256": "cfa5cd5f8ff8d7f94ccf40e180db196492e553d23a0ec3920b4677ea78a13904",
+      "props": [
+        "subscription",
+        "compact"
+      ],
+      "branches": [
+        "hasData && subscription",
+        "subscription.plan || subscription.status",
+        "subscription.plan",
+        "subscription.status",
+        "subscription.creditsRemaining",
+        "subscription.creditsCurrency",
+        "!compact",
+        "subscription.subscriptionExpiresAt",
+        "subscription.billingPeriodEndsAt",
+        "subscription.windows && subscription.windows.length > 0",
+        "window.usedPercent !== null && window.usedPercent !== undefined",
+        "subscription.error"
+      ],
+      "motion": [
+        "width 300ms ease, background-color 300ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/SubscriptionImportDialog",
+      "source": "apps/desktop/src/lib/components/providers/SubscriptionImportDialog.svelte",
+      "sha256": "6887b05e159474b1388514ebc067c8e5763e5bea83e7d88a759d2441ab3f9450",
+      "props": [
+        "invokeTauri",
+        "open",
+        "launch",
+        "busy",
+        "onChanged",
+        "onLogin"
+      ],
+      "branches": [
+        "open",
+        "busy",
+        "task?.phase === \"cancelled\"",
+        "error",
+        "result.accountIdentity",
+        "sourceName(result.source)",
+        "result.action === \"login\"",
+        "result.action === \"install_cli\"",
+        "result.errorCode && result.status === \"failed\"",
+        "!busy",
+        "busy",
+        "!results.length"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/SubscriptionPolicyFields",
+      "source": "apps/desktop/src/lib/components/providers/SubscriptionPolicyFields.svelte",
+      "sha256": "ddc9b5b5c03538b2477413472bed7a44a1a0e47a204793e2bb8c47e59522f555",
+      "props": [
+        "id",
+        "providerId",
+        "policy",
+        "busy",
+        "dirty",
+        "invokeTauri",
+        "onChanged",
+        "onSaved"
+      ],
+      "branches": [
+        "error",
+        "notice",
+        "providerId === \"codex\"",
+        "policy.nativeSwitch"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/SubscriptionReconnect",
+      "source": "apps/desktop/src/lib/components/providers/SubscriptionReconnect.svelte",
+      "sha256": "288eaadfa846b26aacb4ac1a3f1a34b40d174d5b7ebdd41b2c2db559d446c167",
+      "props": [
+        "invokeTauri",
+        "entryId",
+        "providerId",
+        "onConnected"
+      ],
+      "branches": [
+        "supported",
+        "open"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/SubscriptionUsageCard",
+      "source": "apps/desktop/src/lib/components/providers/SubscriptionUsageCard.svelte",
+      "sha256": "9f429daa0b328cab7a9fd40d8cb287666362ed869fc2d91b7d180ec44690b777",
+      "props": [
+        "subscription",
+        "entryId",
+        "providerId",
+        "refreshing",
+        "invokeTauri",
+        "error",
+        "refreshable",
+        "onRefresh"
+      ],
+      "branches": [
+        "subscription?.plan || subscription?.status",
+        "subscription?.status",
+        "failure || (stale && hasUsage)",
+        "!hasUsage && !failure",
+        "hasUsage",
+        "used !== null",
+        "date(window.resetsAt)",
+        "subscription?.creditsRemaining?.trim()",
+        "dates.length",
+        "reconnect && entryId && providerId && invokeTauri",
+        "hasUsage && date(subscription?.observedAt)",
+        "subscription?.consoleUrl && invokeTauri",
+        "refreshable && !consoleOnly"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/TrashConfirmModal",
+      "source": "apps/desktop/src/lib/components/providers/TrashConfirmModal.svelte",
+      "sha256": "3855d1404cc4bb9fd7a5ac5c07b3a14d1f8ab2585a3449e69096858005ca61d8",
+      "props": [
+        "onDelete",
+        "onEmpty",
+        "onError"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/providers/WebhookNotificationConfig",
+      "source": "apps/desktop/src/lib/components/providers/WebhookNotificationConfig.svelte",
+      "sha256": "b94c9419caafc5ee91ec5182112b486180ee7feaa1d7330b00722fe60291f5cb",
+      "props": [
+        "webhooks",
+        "onAddWebhook",
+        "onRemoveWebhook",
+        "onUpdateWebhook",
+        "onTestWebhook"
+      ],
+      "branches": [
+        "webhooks.length === 0",
+        "testResults[webhook.id]",
+        "testResults[webhook.id].success"
+      ],
+      "motion": [
+        "opacity 150ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/server/ChannelIndicator",
+      "source": "apps/desktop/src/lib/components/server/ChannelIndicator.svelte",
+      "sha256": "c600369ad8c079a4a7f0361707dcf6dd9599eeb372989aa2fbf8d536c6c6d79e",
+      "props": [
+        "channels",
+        "routes"
+      ],
+      "branches": [
+        "active > 0",
+        "blocked || degraded",
+        "blocked"
+      ],
+      "motion": [
+        "channel-spin 1.5s linear infinite",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/server/ProxyLogsDialog",
+      "source": "apps/desktop/src/lib/components/server/ProxyLogsDialog.svelte",
+      "sha256": "854b52ee781efd32f81095c01c6457c720a228a9b9b6960264204546f9a68f43",
+      "props": [
+        "providers",
+        "config",
+        "open",
+        "onOpenChange",
+        "onLoadLogs"
+      ],
+      "branches": [
+        "loading && logs.length > 0",
+        "refreshFailed && logs.length > 0",
+        "logs.length > 0",
+        "loading"
+      ],
+      "motion": [
+        "proxy-log-spin 1s linear infinite",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/server/SearchSettingsDialog",
+      "source": "apps/desktop/src/lib/components/server/SearchSettingsDialog.svelte",
+      "sha256": "9fe70b018fa5358ec59b1d1ad6b9f71b81251da427509ebae29683d49ed11f78",
+      "props": [
+        "open",
+        "config",
+        "entries",
+        "onOpenChange",
+        "onSave",
+        "onCopy"
+      ],
+      "branches": [
+        "draft.apis.length === 0",
+        "error"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/server/ServerDetailPane",
+      "source": "apps/desktop/src/lib/components/server/ServerDetailPane.svelte",
+      "sha256": "f42ccddebaca95f3584cffc2459551962b8e7455854281222b8b304867448c45",
+      "props": [
+        "config",
+        "status",
+        "series",
+        "hourlySeries",
+        "usageByRange",
+        "entries",
+        "archivedEntries",
+        "selectedRouteId",
+        "busy",
+        "toolDetections",
+        "onStart",
+        "onStop",
+        "onSaveConfig",
+        "onRotateToken",
+        "onCopyToken",
+        "onCopyEndpoint",
+        "onClearUsage",
+        "onPreviewIntegration",
+        "onApplyIntegration",
+        "onRefreshToolDetections",
+        "onLoadProxyLogs"
+      ],
+      "branches": [
+        "enabledRoutes.length > 0",
+        "editingBindAddr && !status.running",
+        "!status.running",
+        "logsOpening",
+        "status.running && status.degraded",
+        "status.running",
+        "!status.running && config.routes.some((route) => Boolean(route.token))",
+        "integrateRoute",
+        "integrateRoute.token",
+        "ProxyLogsDialog",
+        "setupTool && integrateRoute"
+      ],
+      "motion": [
+        "logs-opening-spin 1s linear infinite",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/server/UsageBreakdown",
+      "source": "apps/desktop/src/lib/components/server/UsageBreakdown.svelte",
+      "sha256": "47795b8b5d59feacbd4b59995e488e95ca7c721a5914bb20968070aa9f1592ad",
+      "props": [
+        "usage",
+        "routes",
+        "status",
+        "entries",
+        "archivedEntries"
+      ],
+      "branches": [
+        "hasData",
+        "row.sublabel"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/server/UsageChart",
+      "source": "apps/desktop/src/lib/components/server/UsageChart.svelte",
+      "sha256": "d3b41c2c18299b30f7b729ae0d499fbf6e0fe1faa88762fb618802e33362d5e7",
+      "props": [
+        "series",
+        "hourlySeries",
+        "range"
+      ],
+      "branches": [
+        "legendModels.length > 0",
+        "hasData",
+        "segments.length > 0",
+        "segmentHeight > 0",
+        "index % labelEvery === 0 || index === points.length - 1",
+        "hoveredPoint"
+      ],
+      "motion": [
+        "background-color 80ms ease, color 120ms ease",
+        "filter 100ms ease, opacity 100ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/server/UsageRangeMenu",
+      "source": "apps/desktop/src/lib/components/server/UsageRangeMenu.svelte",
+      "sha256": "057f0899f2c1d0e85115dad66158eb12255671335af351869b38c892aaa791dc",
+      "props": [
+        "range"
+      ],
+      "branches": [
+        "range === option.value"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/settings/CcSwitchImportPanel",
+      "source": "apps/desktop/src/lib/components/settings/CcSwitchImportPanel.svelte",
+      "sha256": "3138d94278aec6d511d0916881d1835bb6dad549f5c917d4323681c97e41b725",
+      "props": [
+        "enabled",
+        "toggling",
+        "detection",
+        "onDetect",
+        "onChange",
+        "onImport"
+      ],
+      "branches": [
+        "detection?.configPath"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/settings/ControlPanelSettings",
+      "source": "apps/desktop/src/lib/components/settings/ControlPanelSettings.svelte",
+      "sha256": "5d7f8555643b3beab114d48fcaafa8a235f63b71311f35c042621073be552453",
+      "props": [
+        "onCopyAccessCode"
+      ],
+      "branches": [
+        "status?.remoteUnlockEnabled",
+        "accessCode",
+        "settings.https",
+        "status?.fingerprint",
+        "!!certificateFile !== !!privateKeyFile",
+        "status?.url",
+        "status?.url",
+        "error || status?.error",
+        "settingsSaveFailed",
+        "notice"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/settings/ModelPricingFields",
+      "source": "apps/desktop/src/lib/components/settings/ModelPricingFields.svelte",
+      "sha256": "f1e5b0b2746d3194e7f7f988c83237be58b7dd97ab0e234916d3ca000c387f44",
+      "props": [
+        "pricing",
+        "onChange",
+        "onNumber",
+        "onRemove"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/settings/SecurityPolicySettings",
+      "source": "apps/desktop/src/lib/components/settings/SecurityPolicySettings.svelte",
+      "sha256": "fe4e1b8b3e3b4dbc7f5229ab0f0fec1014669012998c1e797e995662a9c9f524",
+      "props": [
+        "autoLockMinutes",
+        "clipboardClearSeconds",
+        "credentialClickAction",
+        "confirmSecretCopy",
+        "lockOnSleep",
+        "lockOnScreenLock",
+        "autoLockOptions",
+        "onSavePreferences"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/settings/SettingsPanel",
+      "source": "apps/desktop/src/lib/components/settings/SettingsPanel.svelte",
+      "sha256": "86b15284b4e84eedf196a20257267af06afd52d260260e5e9f1b776a120cb78e",
+      "props": [
+        "autoLockMinutes",
+        "clipboardClearSeconds",
+        "credentialClickAction",
+        "confirmSecretCopy",
+        "lockOnSleep",
+        "lockOnScreenLock",
+        "newPassword",
+        "exportPath",
+        "exportPassword",
+        "importPath",
+        "importPassword",
+        "syncMode",
+        "syncFolder",
+        "webdavUrl",
+        "webdavUsername",
+        "webdavPassword",
+        "hasSavedWebdavPassword",
+        "syncConflicts",
+        "conflictsLoading",
+        "conflictBusy",
+        "browserExtensionStatus",
+        "browserExtensionBusy",
+        "onImportCcSwitch",
+        "officialAccountsImport",
+        "ccSwitchDetection",
+        "securityBusy",
+        "backupBusy",
+        "syncState",
+        "devices",
+        "devicesLoading",
+        "initialTab",
+        "error",
+        "notice",
+        "serverConfig",
+        "serverBusy",
+        "onCopyAccessCode",
+        "onClose",
+        "proxyRunning",
+        "onCheckProxyRunning",
+        "onUpdateChannelChanged",
+        "onSavePreferences",
+        "onChangeMasterPassword",
+        "onRotateVault",
+        "onExportVault",
+        "onImportVault",
+        "onRunSync",
+        "onSaveSyncSettings",
+        "onClearSavedWebdavPassword",
+        "onLoadSyncConflicts",
+        "onResolveSyncConflict",
+        "onRevokeDevice",
+        "onLoadBrowserExtensionStatus",
+        "onInstallBrowserExtension",
+        "onDetectCcSwitch",
+        "onSaveServerConfig"
+      ],
+      "branches": [
+        "error || operationError || notice",
+        "error || operationError",
+        "serverSaveFailed",
+        "notice",
+        "conflictsLoading",
+        "syncConflicts.length === 0",
+        "conflict.object.objectType === \"vault_snapshot\"",
+        "conflict.snapshotSummary",
+        "devicesLoading",
+        "devices.length === 0",
+        "device.trusted",
+        "serverDraft.upstreamProxy.mode === \"environment\"",
+        "serverDraft.upstreamProxy.mode === \"custom\"",
+        "browserExtensionStatus",
+        "browserExtensionStatus.extensionInstalled && browserExtensionStatus.nativeHostConfigured",
+        "!browserExtensionStatus.chromeInstalled",
+        "!browserExtensionStatus.zipExists",
+        "!browserExtensionStatus.extensionInstalled || !browserExtensionStatus.nativeHostConfigured",
+        "appVersion",
+        "updateErrorText",
+        "updateCheck?.available",
+        "updateInstalling",
+        "updateProgress?.phase === \"installing\"",
+        "updateProgressPercent !== undefined",
+        "updateCheck.notes",
+        "updateCheck && !updateErrorText"
+      ],
+      "motion": [
+        "overlay-in 240ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "overlay-out 220ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "drawer-genie-in 380ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "drawer-genie-out 280ms cubic-bezier(0.55, 0, 0.7, 0.2)",
+        "none !important",
+        "background-color 80ms ease, color 120ms ease",
+        "color 120ms ease, background-color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/settings/SyncTargetSettings",
+      "source": "apps/desktop/src/lib/components/settings/SyncTargetSettings.svelte",
+      "sha256": "493aac7c3c81baeac050b9e6907e414ee69b883e4107aa20cf8abff65a673238",
+      "props": [
+        "syncMode",
+        "syncFolder",
+        "webdavUrl",
+        "webdavUsername",
+        "webdavPassword",
+        "hasSavedWebdavPassword",
+        "syncBusy",
+        "savingSyncSettings",
+        "iCloudSupported",
+        "onSave",
+        "onRun",
+        "onClear"
+      ],
+      "branches": [
+        "syncMode === \"local\"",
+        "syncMode === \"icloud\"",
+        "syncMode === \"onedrive\"",
+        "hasSavedWebdavPassword",
+        "syncMode === \"webdav\" && hasSavedWebdavPassword"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/shared/AppTitleBar",
+      "source": "apps/desktop/src/lib/components/shared/AppTitleBar.svelte",
+      "sha256": "088726e2bc3820abbd9638591b5859cb2b792c06920e6dbb03e51cf5960e82cb",
+      "props": [
+        "title",
+        "showAppMenu",
+        "onOpenSettings",
+        "onLock",
+        "onResetProvider",
+        "showResetProvider"
+      ],
+      "branches": [
+        "isMac",
+        "showAppMenu",
+        "showResetProvider",
+        "!isMac",
+        "isMaximized"
+      ],
+      "motion": [
+        "opacity 120ms ease",
+        "background-color 80ms ease, color 120ms ease",
+        "background-color 80ms ease, color 80ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/shared/ConfirmModal",
+      "source": "apps/desktop/src/lib/components/shared/ConfirmModal.svelte",
+      "sha256": "7b02677979f9209af0442a3acf595401d88c4a9ed578f51891df25deb5bf65cc",
+      "props": [
+        "open",
+        "title",
+        "description",
+        "confirmLabel",
+        "cancelLabel",
+        "tone",
+        "onOpenChange",
+        "onConfirm"
+      ],
+      "branches": [
+        "$$slots.icon"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/shared/ErrorToast",
+      "source": "apps/desktop/src/lib/components/shared/ErrorToast.svelte",
+      "sha256": "c0311b16c73d8e2aafbd6ecbbecee800b6105fa6edd398d5f89d9bc08fb6d3b2",
+      "props": [
+        "message",
+        "onDismiss"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/shared/SegmentedControl",
+      "source": "apps/desktop/src/lib/components/shared/SegmentedControl.svelte",
+      "sha256": "8ce91319775a641b0fd5195b9f90962b3d1871f59aaf82da03e15345a242da42",
+      "props": [
+        "options",
+        "value",
+        "ariaLabel",
+        "onChange"
+      ],
+      "branches": [],
+      "motion": [
+        "background-color 80ms ease, color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/shared/SyncStatusPill",
+      "source": "apps/desktop/src/lib/components/shared/SyncStatusPill.svelte",
+      "sha256": "8d155d8f8cd77047570c6e6ea3ffb9e4c50439cee4a5d43b941964cd9a70f3e3",
+      "props": [
+        "state",
+        "onClick"
+      ],
+      "branches": [],
+      "motion": [
+        "background-color 80ms ease, color 120ms ease",
+        "pulse 1.2s ease-in-out infinite"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/shared/UpdateNotification",
+      "source": "apps/desktop/src/lib/components/shared/UpdateNotification.svelte",
+      "sha256": "6824856172017602fff9b3eb2342f1b6d58106257945363356ce711fa949953d",
+      "props": [
+        "version",
+        "installing",
+        "confirmChecking",
+        "progress",
+        "error",
+        "onInstall",
+        "onDismiss"
+      ],
+      "branches": [
+        "installing",
+        "progress?.phase === \"installing\"",
+        "percent !== undefined",
+        "error"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "apps/desktop/src/lib/components/shared/UpdateRestartConfirmModal",
+      "source": "apps/desktop/src/lib/components/shared/UpdateRestartConfirmModal.svelte",
+      "sha256": "aa844f28715e04522ea398908437e90a8656d19f77aa05f68e4c7151669710f8",
+      "props": [
+        "open",
+        "onOpenChange",
+        "onConfirm"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Badge",
+      "source": "packages/ui/src/components/Badge.svelte",
+      "sha256": "6642c21edff97224d69471c930c152c7197a24dba74157046219f6ebd2e117c2",
+      "props": [
+        "tone",
+        "size"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Banner",
+      "source": "packages/ui/src/components/Banner.svelte",
+      "sha256": "aff66a23f131a57c9bcb4718755cfc2eed9f79f42e18171f2b3e39073830aa4c",
+      "props": [
+        "tone"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Brand",
+      "source": "packages/ui/src/components/Brand.svelte",
+      "sha256": "7e47e555fae10330562a0419148986a7ccd639e489245eb7296039d2a8eee6a2",
+      "props": [
+        "size",
+        "responsive"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Button",
+      "source": "packages/ui/src/components/Button.svelte",
+      "sha256": "9b3ded9c4e8adad0fc5b0655efad3a5bb7131e9eb76641db14d7aab3756eeb1f",
+      "props": [
+        "variant",
+        "size",
+        "type",
+        "disabled",
+        "loading",
+        "block"
+      ],
+      "branches": [
+        "loading"
+      ],
+      "motion": [
+        "background-color 80ms ease,\n      border-color 120ms ease,\n      color 120ms ease",
+        "spin 0.7s linear infinite"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Card",
+      "source": "packages/ui/src/components/Card.svelte",
+      "sha256": "b2385a01323c9b745fa1ec74507e2e9d8fe0a69e90507f22a39e9b0604a6be3b",
+      "props": [
+        "title",
+        "padded",
+        "collapsible",
+        "open"
+      ],
+      "branches": [
+        "hasActions",
+        "collapsible",
+        "$$slots.title",
+        "$$slots.footer",
+        "title || $$slots.title || $$slots.actions",
+        "$$slots.title",
+        "$$slots.actions",
+        "$$slots.footer"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Collapsible",
+      "source": "packages/ui/src/components/Collapsible.svelte",
+      "sha256": "cfe4246593d75db003e41fd104c4ccd1a6cd555ed1d9e6e5b8a9a607d0249410",
+      "props": [],
+      "branches": [
+        "icon",
+        "heading",
+        "summary",
+        "actions"
+      ],
+      "motion": [
+        "background-color 120ms ease",
+        "transform 180ms ease",
+        "grid-template-rows 220ms ease, opacity 180ms ease",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/CredentialBillingFields",
+      "source": "packages/ui/src/components/CredentialBillingFields.svelte",
+      "sha256": "0914f714f7f9f6602098b60f27be21afedac31b8d28c8b7e7d300e6f00eb935d",
+      "props": [
+        "value",
+        "disabled"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/EmptyState",
+      "source": "packages/ui/src/components/EmptyState.svelte",
+      "sha256": "a6accb691f72ae3fb15092d1056cfcb7d78ba57e44a48cc8ba43bdeadf089234",
+      "props": [],
+      "branches": [
+        "icon",
+        "description",
+        "children"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Field",
+      "source": "packages/ui/src/components/Field.svelte",
+      "sha256": "81a8b150921f8b9f4dcddd2ec6a0db1aa5e4ec606ada92b453db9274b37d9be4",
+      "props": [
+        "label",
+        "hint"
+      ],
+      "branches": [
+        "hint"
+      ],
+      "motion": [
+        "border-color 120ms ease, background-color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/IconButton",
+      "source": "packages/ui/src/components/IconButton.svelte",
+      "sha256": "439d6ec2973ab84a72459a65b660111232a8ad7f8f6ec0e92e6f3c24d427c177",
+      "props": [
+        "label",
+        "size",
+        "tone",
+        "disabled",
+        "pressed",
+        "title"
+      ],
+      "branches": [],
+      "motion": [
+        "background-color 80ms ease,\n      border-color 120ms ease,\n      color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Logo",
+      "source": "packages/ui/src/components/Logo.svelte",
+      "sha256": "5fd4c09163161a0f9e998b770a1c1bbb7747042dd1dfac5a9f7b5b076f039d75",
+      "props": [
+        "size",
+        "alt",
+        "rounded"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/Modal",
+      "source": "packages/ui/src/components/Modal.svelte",
+      "sha256": "210386251de0129166c6da5b963609ed8df4a89b24d54aee2dcae6c0511d0ed0",
+      "props": [
+        "open",
+        "title",
+        "description",
+        "titleId",
+        "size",
+        "busy",
+        "layer",
+        "returnFocus",
+        "showClose",
+        "onOpenChange"
+      ],
+      "branches": [
+        "showClose",
+        "$$slots.default",
+        "$$slots.footer"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProgressButton",
+      "source": "packages/ui/src/components/ProgressButton.svelte",
+      "sha256": "cb9d7276ce3d9714747789977546f83fa0ad3adeccd6bd7b8c71222a1e982ddd",
+      "props": [
+        "variant",
+        "size",
+        "type",
+        "disabled",
+        "loading",
+        "block",
+        "progress",
+        "indeterminate"
+      ],
+      "branches": [
+        "loading"
+      ],
+      "motion": [
+        "background-color 80ms ease,\n      border-color 120ms ease,\n      color 120ms ease",
+        "width 180ms ease-out",
+        "progress-slide 1.2s ease-in-out infinite",
+        "spin 0.7s linear infinite",
+        "none"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProviderEmptyState",
+      "source": "packages/ui/src/components/ProviderEmptyState.svelte",
+      "sha256": "f4d72275e952ba839881ff3f45feb9814204049b22624aae179992f8c9c90c22",
+      "props": [
+        "icon",
+        "title",
+        "description",
+        "actions"
+      ],
+      "branches": [
+        "description",
+        "actions"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProviderFormFields",
+      "source": "packages/ui/src/components/ProviderFormFields.svelte",
+      "sha256": "69051f0d2cc6f011179df8f08ac0d3c6481e1c7b3ac2ac73f7d9ae0b85f1fb7e",
+      "props": [
+        "formMode",
+        "draft",
+        "onInferDraftFromDomain",
+        "onInferDraftFromEndpoint",
+        "onProviderChanged",
+        "onInterfaceChanged",
+        "onAuthChanged",
+        "itemLayout",
+        "showWebsocketSetting",
+        "showConcurrencySetting",
+        "websocketWarning",
+        "websocketProbing",
+        "compactProviderSelect",
+        "showSecretLabel",
+        "showSecretFields",
+        "isOfficialOauth"
+      ],
+      "branches": [
+        "showSecretFields",
+        "showSecretLabel && (formMode === \"add\" || itemLayout)",
+        "showApiKey",
+        "detailsVisible",
+        "visibleFields.has(\"endpoint\")",
+        "isOfficialOauth && formMode === \"edit\"",
+        "visibleFields.has(\"defaultModel\")",
+        "visibleFields.has(\"tag\")",
+        "visibleFields.has(\"notes\")",
+        "visibleFields.has(\"domain\")",
+        "showConcurrencySetting",
+        "showWebsocketSetting && (draft.interfaceType === \"openai_compatible\" || draft.interfaceType === \"azure_openai\")",
+        "websocketWarning",
+        "websocketProbing",
+        "visibleFields.has(\"consoleUrl\")",
+        "visibleFields.has(\"modelAlias\")",
+        "visibleFields.has(\"header\")",
+        "formMode === \"edit\" && draft.existingHeaderNames?.length",
+        "visibleFields.has(\"group\")",
+        "visibleFields.has(\"billing\")",
+        "detailsAvailable.length > 0 || advancedAvailable.length > 0",
+        "itemLayout",
+        "fields.length"
+      ],
+      "motion": [
+        "background-color 120ms ease",
+        "background-color 120ms ease, box-shadow 120ms ease, color 120ms ease",
+        "background-color 80ms ease, color 120ms ease",
+        "background-color 80ms ease, color 120ms ease",
+        "background-color 80ms ease, border-color 120ms ease, color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProviderIcon",
+      "source": "packages/ui/src/components/ProviderIcon.svelte",
+      "sha256": "7140b65055883ad0599b97416aada024a47b5647b789d64065bfaf611218c42a",
+      "props": [
+        "title",
+        "kind",
+        "faviconUrl",
+        "providerId",
+        "credentialKind",
+        "domain",
+        "size"
+      ],
+      "branches": [
+        "showIcon",
+        "monochrome"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProviderListPane",
+      "source": "packages/ui/src/components/ProviderListPane.svelte",
+      "sha256": "bd5b02915c626cb9023d32d9730445bfa5f21898e83a1d898de72733468b4afb",
+      "props": [
+        "readOnly",
+        "supportedFilters",
+        "entries",
+        "filterEntries",
+        "selectedId",
+        "showArchived",
+        "showTrash",
+        "showFavorites",
+        "providerFilter",
+        "query",
+        "routeGroups",
+        "onSearch",
+        "onAdd",
+        "onConnectOAuth",
+        "onRefreshAccounts",
+        "refreshAccountsBusy",
+        "officialAccountsImport",
+        "onFilterChange",
+        "onEmptyTrash",
+        "onSelect",
+        "onAddAsRoute",
+        "onAddToGroup"
+      ],
+      "branches": [
+        "providerFilter === option.value",
+        "!readOnly",
+        "showTrash",
+        "officialAccountsImport",
+        "entries.length === 0",
+        "showTrash",
+        "showFavorites",
+        "!readOnly && !showArchived && !showTrash && !showFavorites",
+        "entry.credentialKind === \"oauth\"",
+        "entrySubtitle(entry)",
+        "readOnly"
+      ],
+      "motion": [
+        "refresh-spin 1s linear infinite",
+        "background-color 80ms ease",
+        "color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProxyCredentialPicker",
+      "source": "packages/ui/src/components/ProxyCredentialPicker.svelte",
+      "sha256": "80a41eb6f83556d90322731411faae14d82a3fd4fac4ba7c6c251de5fd4746f7",
+      "props": [
+        "options",
+        "disabled",
+        "onSelect"
+      ],
+      "branches": [
+        "option.disabled"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProxyRouteGroupDialog",
+      "source": "packages/ui/src/components/ProxyRouteGroupDialog.svelte",
+      "sha256": "0d1a19d3f392f834c6020e37fd0ebe82465099ec2af23d2fe9baaf4b73c7d528",
+      "props": [
+        "route",
+        "entries",
+        "status",
+        "onSave",
+        "onClose",
+        "credentialAvailable",
+        "createTarget"
+      ],
+      "branches": [
+        "bindModels",
+        "silentRetry",
+        "holdOnFailure",
+        "!member.enabled",
+        "member.enabled && member.targetId && degradedTargetIds.has(member.targetId)",
+        "bindModels",
+        "strategy === \"round_robin\"",
+        "missing.enabled && degradedTargetIds.has(missing.id)",
+        "saveError"
+      ],
+      "motion": [
+        "dialog-overlay-in 220ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "dialog-overlay-out 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "dialog-content-in 260ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "width 200ms ease",
+        "dialog-content-out 200ms cubic-bezier(0.4, 0, 0.85, 0.4)",
+        "background-color 80ms ease, color 120ms ease",
+        "opacity 120ms ease, border-color 120ms ease",
+        "transform 160ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProxyRouteList",
+      "source": "packages/ui/src/components/ProxyRouteList.svelte",
+      "sha256": "4cd08e814ded8e3d7060c164deac053ccb7f85e17b6124a09e7f6c39a03d84ba",
+      "props": [
+        "routes",
+        "entries",
+        "status",
+        "selectedRouteId",
+        "busy",
+        "onSelect",
+        "onSave",
+        "onDelete",
+        "onToggle",
+        "credentialAvailable",
+        "createTarget",
+        "onEditorOpen"
+      ],
+      "branches": [
+        "routes.length === 0",
+        "route.enabled && route.targets.some((target) => target.enabled && degradedTargetIds.has(target.id))",
+        "dialogOpen"
+      ],
+      "motion": [
+        "background-color 80ms ease",
+        "color 120ms ease",
+        "background-color 150ms ease",
+        "transform 150ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/ProxyStatusGrid",
+      "source": "packages/ui/src/components/ProxyStatusGrid.svelte",
+      "sha256": "0e3833f3bfbc64a26e7c17a95d5fe8c9924bc58cf64303cc8bd783ed336dca77",
+      "props": [
+        "status",
+        "availableChannels",
+        "totalChannels"
+      ],
+      "branches": [],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/SearchField",
+      "source": "packages/ui/src/components/SearchField.svelte",
+      "sha256": "4a74e256a6d5e7f41979b9f92874e0febf3da2bf144e8d77cd7c347ea6e1ddac",
+      "props": [
+        "value",
+        "placeholder",
+        "label",
+        "disabled",
+        "onValueChange"
+      ],
+      "branches": [],
+      "motion": [
+        "border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/SecretField",
+      "source": "packages/ui/src/components/SecretField.svelte",
+      "sha256": "14667f6928b9b4eac0d225b10f7fd79916b827dc13b686f0af23ee165294852e",
+      "props": [
+        "label",
+        "masked",
+        "revealedValue",
+        "canRemove",
+        "busy",
+        "copied",
+        "onReveal",
+        "onCopy",
+        "onRemove"
+      ],
+      "branches": [
+        "revealedValue",
+        "copied",
+        "canRemove"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/SelectField",
+      "source": "packages/ui/src/components/SelectField.svelte",
+      "sha256": "a75a8ab3ebb62d3dd0db85f1429f5a25d84d115fe157396224b09ceda54d6936",
+      "props": [
+        "value",
+        "label",
+        "ariaLabel",
+        "placeholder",
+        "disabled",
+        "options",
+        "onValueChange"
+      ],
+      "branches": [
+        "label",
+        "options.length === 0",
+        "selected"
+      ],
+      "motion": [
+        "border-color 120ms ease, background-color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/SidebarItem",
+      "source": "packages/ui/src/components/SidebarItem.svelte",
+      "sha256": "97af9ce5e2dedadf0549dc687a1c983239a5a26c6b12066150efd9bafbd73f0d",
+      "props": [
+        "label",
+        "count",
+        "active",
+        "disabled"
+      ],
+      "branches": [
+        "count !== undefined"
+      ],
+      "motion": [
+        "background-color 80ms ease, color 120ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/SwitchField",
+      "source": "packages/ui/src/components/SwitchField.svelte",
+      "sha256": "644b17b85ca8fb51c70350f246b6e1b95f040e8185a2b5817bbf3e9be5c88816",
+      "props": [
+        "checked",
+        "label",
+        "description",
+        "disabled",
+        "onCheckedChange"
+      ],
+      "branches": [
+        "description"
+      ],
+      "motion": [
+        "background-color 150ms ease",
+        "transform 150ms ease"
+      ],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    },
+    {
+      "id": "packages/ui/src/components/VaultSidebar",
+      "source": "packages/ui/src/components/VaultSidebar.svelte",
+      "sha256": "fc544fb0bb57c416dd33862b902154459b70e1fd8761b1aa78f3cef1080af437",
+      "props": [
+        "showArchived",
+        "showTrash",
+        "showFavorites",
+        "showServer",
+        "showAgents",
+        "providerFilter",
+        "providerCounts",
+        "trashCount",
+        "onFilterChange",
+        "onFavoriteView",
+        "onArchiveView",
+        "onTrashView",
+        "onServerView",
+        "onAgentView"
+      ],
+      "branches": [
+        "onAgentView"
+      ],
+      "motion": [],
+      "native": null,
+      "cases": [],
+      "status": "pending"
+    }
+  ],
+  "nativeLifecycleSources": [
+    "apps/desktop/src-tauri/build.rs",
+    "apps/desktop/src-tauri/src/auth_tasks.rs",
+    "apps/desktop/src-tauri/src/cli_install.rs",
+    "apps/desktop/src-tauri/src/cloudkit.rs",
+    "apps/desktop/src-tauri/src/command_handler.rs",
+    "apps/desktop/src-tauri/src/commands.rs",
+    "apps/desktop/src-tauri/src/commands/provider_runtime.rs",
+    "apps/desktop/src-tauri/src/deeplink.rs",
+    "apps/desktop/src-tauri/src/launch_options.rs",
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/logging.rs",
+    "apps/desktop/src-tauri/src/main.rs",
+    "apps/desktop/src-tauri/src/models.rs",
+    "apps/desktop/src-tauri/src/oauth_browser.rs",
+    "apps/desktop/src-tauri/src/panel_commands.rs",
+    "apps/desktop/src-tauri/src/preferences.rs",
+    "apps/desktop/src-tauri/src/provider_inputs.rs",
+    "apps/desktop/src-tauri/src/runtime_check.rs",
+    "apps/desktop/src-tauri/src/runtime_check/ui.rs",
+    "apps/desktop/src-tauri/src/runtime_lifecycle.rs",
+    "apps/desktop/src-tauri/src/secret_clipboard.rs",
+    "apps/desktop/src-tauri/src/secret_clipboard/tests.rs",
+    "apps/desktop/src-tauri/src/self_install.rs",
+    "apps/desktop/src-tauri/src/singleton.rs",
+    "apps/desktop/src-tauri/src/startup.rs",
+    "apps/desktop/src-tauri/src/subscription_import.rs",
+    "apps/desktop/src-tauri/src/tool_commands.rs",
+    "apps/desktop/src-tauri/src/tray.rs",
+    "apps/desktop/src-tauri/src/tray/classic_menu.rs",
+    "apps/desktop/src-tauri/src/tray_i18n.rs",
+    "apps/desktop/src-tauri/src/tray_lifecycle.rs",
+    "apps/desktop/src-tauri/src/tray_swift.rs",
+    "apps/desktop/src-tauri/src/updates.rs",
+    "apps/desktop/src-tauri/src/updates/control.rs",
+    "apps/desktop/src-tauri/src/updates/linux.rs",
+    "apps/desktop/src-tauri/src/window_chrome.rs",
+    "apps/desktop/src-tauri/src/window_geometry.rs",
+    "apps/desktop/src-tauri/swift-tray/Package.swift",
+    "apps/desktop/src-tauri/swift-tray/Sources/AipassTray/CloudKitTransport.swift",
+    "apps/desktop/src-tauri/swift-tray/Sources/AipassTray/DesignTokens.swift",
+    "apps/desktop/src-tauri/swift-tray/Sources/AipassTray/TrayBridge.swift",
+    "apps/desktop/src-tauri/swift-tray/Sources/AipassTray/TrayPanelController.swift",
+    "apps/desktop/src-tauri/swift-tray/Sources/AipassTray/TrayPanelView.swift",
+    "apps/desktop/src-tauri/swift-tray/Sources/AipassTray/TrayStatus.swift",
+    "apps/desktop/src-tauri/swift-tray/Sources/TrayPreview/main.swift"
+  ],
+  "referenceInputs": [
+    {
+      "path": "apps/desktop/src/App.operations.test.ts",
+      "sha256": "a8bedf896246a6739e95ffdc520b37549a30683047b3abd6d80cdfe1ed249aa1"
+    },
+    {
+      "path": "apps/desktop/src/App.repro.test.ts",
+      "sha256": "b5790df8d8963c49b54e66e6c8d6129085b32d093d600d9b5b90afede0406b23"
+    },
+    {
+      "path": "apps/desktop/src/App.svelte",
+      "sha256": "73ec81a43c747077962413aeaa596943209f4a6162709146e66f413e0c9277ad"
+    },
+    {
+      "path": "apps/desktop/src/App.test.ts",
+      "sha256": "6c4b0cfb6caa5b7d932ec3e42f420da628a2e8ba2c2a088516f97fba532f816f"
+    },
+    {
+      "path": "apps/desktop/src/lib/build.ts",
+      "sha256": "9e363eb0818b3478c1e96d96fcdc646fdeae3a5d0ca4a9000615861780f2003b"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/AuthErrorNotice.svelte",
+      "sha256": "34ec5c14f1ab11ffda45464cc8214439d63e83b7d83d02de6240d3e693bdb4bd"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/AuthScreen.svelte",
+      "sha256": "985d877f8461dda937d1073ba3ee38bcc8338ebc612a8a696423e5f8e350c77f"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/AuthScreen.test.ts",
+      "sha256": "e70b90ae7d4680537fbac240c569c892f4103774eb34d7c69252232280189e84"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/HeroBackground.svelte",
+      "sha256": "0755d70d26d33abed520e6e44306291c11c4e4462a22491dacb30eda3e5d48c3"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/ImportVaultForm.svelte",
+      "sha256": "ac6b94e812fb6524d097e5877a48e2260365c3340600f0f7a2782ffd4b1d9ced"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/PasswordField.svelte",
+      "sha256": "a20dfc9a6a7e553efceaac4f9634f09babd83d6d44393ba9492a4dc484abf20e"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/PasswordStrengthMeter.svelte",
+      "sha256": "cde84bf826d898da47bf97286c23b2f0dcde89f64744631dd3546fc1d3fc8eed"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/RecoveryKitModal.svelte",
+      "sha256": "92c741dfc75769f5fe6125ef162b0ff5f0b834042b230ba08745ee99e5791b1e"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/auth/UnlockTransition.svelte",
+      "sha256": "af39410597feef1fe19d305ba70ed27d9c558f0f1f28404046db4e5f1580f1c3"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/AgentAccountDetail.svelte",
+      "sha256": "8c4375a5fac3562c4212062777081c273730b6b42e698c705983e5512cef27e6"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/AgentManagementCache.test.ts",
+      "sha256": "7b04e4cbd93c8f222df9b89d7ad306bb3f4d7c6f2052fc2439dbd1f8ca4d5632"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/AgentManagementPage.svelte",
+      "sha256": "46fd571ee3578152fdf9561929b69d819d4d6a5ab4edf55c32c0523a3dd1053c"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/AgentManagementPage.test.ts",
+      "sha256": "98c8ea5b6a8a46b6a3747ab15531d1e7d829136ae7a266b6252b3bfa55ed9e88"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/AgentNavigation.test.ts",
+      "sha256": "e13e90c9f2a25a0865f22fc6504efad6ecf2089c96c0c7eaed1d496f79f9b587"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/DiffViewer.svelte",
+      "sha256": "b28e146c1a862f0f7534c37860822a1e9d136b16064d2b35d493540c58ae36a4"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/DiffViewer.test.ts",
+      "sha256": "c0d130d7bfee906c068d1787acc257c5d00e230e5403d23fafec2541d672c8f0"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationCard.svelte",
+      "sha256": "20d7374a5983718c22ab00b7bee43c14d9faa1382a402c9a74e3119bb210b998"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationCard.test.ts",
+      "sha256": "63157dd2054128e91be896f069d6ae4cfa9156ea79cd5cc5ed4804dc3b9a28b5"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationPreviewDialog.svelte",
+      "sha256": "0a20cc503affae65075de4b24a9af6ecabd917b4589808092b8f9064c72563cd"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationPreviewDialog.test.ts",
+      "sha256": "5af923349f15e53592b0651d0f9b3d4c50eb47353f41b4305b352cd8d4ce10dc"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationSetupDialog.svelte",
+      "sha256": "a2f923ce30786bbf115486076930f22d4f768e3a9326162c6fb01fb571b557d1"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/IntegrationToolIcon.svelte",
+      "sha256": "c78ad9dfb93153b258d5cd5c9b522036fce26d7696a72fc0269b88ac02fcee60"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/ProviderIntegration.svelte",
+      "sha256": "17eb98f9bb00af2a78380a49fe8a7974f175efb21380428b83d91fc6601e9bb2"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/ProviderIntegration.test.ts",
+      "sha256": "9c8e64f7ff26088004a79a6482f304444450ed8714d218c44708e7347ae29233"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/ToolLoginDialog.svelte",
+      "sha256": "0ec84ad74a150c9961e3c4ad3734d481722e85c8c08a82f9125baf7dfe50d8a2"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/integration/__fixtures__/AgentManagementHarness.svelte",
+      "sha256": "ef37f5b4de20c017e1d7d53b160bc23bc056e959e4dde5115441c139c11a0772"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/pricing/CredentialPricingDialog.svelte",
+      "sha256": "e72a1ac00914f82870df7bdddd401bafa05d13435eac83facdbb4d0c63c34192"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/pricing/PricingGroupDialog.svelte",
+      "sha256": "74f480ead421bce619352cba46a33248cbea6155711c153faa2a3129b6ce8395"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/pricing/PricingGroupDialog.test.ts",
+      "sha256": "3fd83d891105d16ed34cbdeaa404e9bfc39516cf7dd10cf106dfbc60d2729342"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/AccountLocationButton.svelte",
+      "sha256": "929ece9c4aa4fe60e533dc120331a61110a0806ecbd5a78125011bb83841b826"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ClaudeConnectPane.svelte",
+      "sha256": "e1b0715d31aabb1fe009fbc3a7835598ce835bcb23b2775dc795652045e12a88"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ClaudeConnectPane.test.ts",
+      "sha256": "17aebe4d86008bf9ac02a7e024d244e80e5b1d06fed643e9de11bb63ab1f4230"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ClaudeQuotaTracker.svelte",
+      "sha256": "df77c2698061b599462670463692c5de2c62840198ffb231221c56f0a7e95491"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CommunityConnectDialog.svelte",
+      "sha256": "74713fad07ec8d92f9b38b54446014d9f5d337570786d6d33f9099d4d123170e"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CommunityConnectDialog.test.ts",
+      "sha256": "f484e8f2746ce1c6b042c806487d077973619ebbec969e969bbf800d294f2c24"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CredentialManager.svelte",
+      "sha256": "0cd66387a2f66dad283cc50db6e7324d1047c626f3f6d11f31d9bdb779d4c853"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CredentialPicker.svelte",
+      "sha256": "ac38945a6656546810162ec74775ef50367eabadc6037b2eae756faccb2d0073"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CredentialTags.svelte",
+      "sha256": "2a3ba176af357776d90fc98b8f72644e500d8487b5a6956b096472beb76a0053"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CustomBalanceEndpointConfig.svelte",
+      "sha256": "d3e37ae9e6dc56d681792f8f782faab4264e5d9897a6a743f1a96e162cdd908c"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/CustomHeadersConfig.svelte",
+      "sha256": "e19825da3faf3864aac4eb3fbbca00002b42c974100b8cd388c33e4675b7e00c"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/OAuthConnectDialog.svelte",
+      "sha256": "ed1406fdbe2d448afa634c2e6e62da3ab6d63bd591203722b2d3e00d1f67eba5"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/OAuthConnectDialog.test.ts",
+      "sha256": "ebca6a9e9c430d1bd6acadca1746e79486f7e6b54b71661f75e9892838afa94f"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderDetailPane.svelte",
+      "sha256": "9b398cf4bfa7c804fb5b5f944c77f0507f4153e1f3f9dadc45da3c25517a844d"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderDetailPane.test.ts",
+      "sha256": "b8f3c398d9753ed31c265d9985528ee62d1e6993140f66be855e440f8b002bfd"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderFormFields.test.ts",
+      "sha256": "68ea0fed5bb82e22fd37a8be6f587099a0d98a46ed29e78050bb38d6bf6e39be"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderHealthMonitor.svelte",
+      "sha256": "7c0e7ecaa19fe1591489522c9e5f333a6941b6bfdbec3cb46329fe6191828aaf"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderIcon.test.ts",
+      "sha256": "0a14d88515e489563fbff79ea8a411f32f2548583564f5a3ad65fec0f9dd04eb"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderItemFields.svelte",
+      "sha256": "107d2f4a9f8f38f54ceb92e90d09dabdfa93f64220332c1ed17e8b9cfc889f26"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderModal.svelte",
+      "sha256": "5bf926c6c057545fcd7a19e5c9c846e76b4cf228e556d1bae13cdfede65038af"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderOptimizationConfig.svelte",
+      "sha256": "da51a3488037af4925acbe5ddd8c2acdf2d8f9061c0e97953a817852649f2c37"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderProxyConfig.svelte",
+      "sha256": "07d574b40689af4e8dcf3647f77f58ed162201e066f4b9c99bf0e812d048c872"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderRuntimeDialog.svelte",
+      "sha256": "e19d01c4f0ab99d036651dc63355f63172a9ccaac5f7b62572fe31086f5200af"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderRuntimePanel.svelte",
+      "sha256": "8d33756f76bd68da01ebfe4d4fd79cc2c9e7ec0aa734c936ef6e4b22f5a34499"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderRuntimePanel.test.ts",
+      "sha256": "aa16c0d626c69c6cf47038fa3f93182a16fcbe7e9ed37a537bd10c10b2e6245e"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderSelectOption.svelte",
+      "sha256": "53d998d6f9a5f465f39f68d6bf9452f8e8e09bf005f9e2b10da5650d19725b1e"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/ProviderUsageProbeDialog.svelte",
+      "sha256": "80a131a7cac7c0753d189f5c16f1b0d69c810826f26673dfd36d375bd039f4e4"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/QuotaDisplay.svelte",
+      "sha256": "4bd73c533432731cb0854b961655b16839648426f892e1dc2a5e402c2a4fdfc4"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/RateLimitMonitor.svelte",
+      "sha256": "5b7fb1f4a24c9f47df51c3c1065de6b5b3243855d6d1fe2277720708119b5dd8"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/RoutingStrategyConfig.svelte",
+      "sha256": "2044884d416d18e602d10598ab281f66a81516e9eb7db2388ba15f901c92f3b1"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionAccountCard.svelte",
+      "sha256": "1c951ab25e9a3343247a7fee67eda18424f5d2e247b7afcd9766519f1e2a07a3"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionDisplay.svelte",
+      "sha256": "cfa5cd5f8ff8d7f94ccf40e180db196492e553d23a0ec3920b4677ea78a13904"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionImportDialog.svelte",
+      "sha256": "6887b05e159474b1388514ebc067c8e5763e5bea83e7d88a759d2441ab3f9450"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionImportDialog.test.ts",
+      "sha256": "0bff5a34c31d292e2f7a3d5ad650a8c0c7f17c9e1fc92ac7d8952861f7d0edcc"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionPolicyFields.svelte",
+      "sha256": "ddc9b5b5c03538b2477413472bed7a44a1a0e47a204793e2bb8c47e59522f555"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionReconnect.svelte",
+      "sha256": "288eaadfa846b26aacb4ac1a3f1a34b40d174d5b7ebdd41b2c2db559d446c167"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionUsageCard.svelte",
+      "sha256": "9f429daa0b328cab7a9fd40d8cb287666362ed869fc2d91b7d180ec44690b777"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/SubscriptionUsageCard.test.ts",
+      "sha256": "20ce4f7bab89d560bd8f38d361eaf9db9dd8390b6f97a02796567c3fa384fa64"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/TrashConfirmModal.svelte",
+      "sha256": "3855d1404cc4bb9fd7a5ac5c07b3a14d1f8ab2585a3449e69096858005ca61d8"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/WebhookNotificationConfig.svelte",
+      "sha256": "b94c9419caafc5ee91ec5182112b486180ee7feaa1d7330b00722fe60291f5cb"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/providers/__fixtures__/SubscriptionImportHarness.svelte",
+      "sha256": "694e4f3a2472635e0c5b0f5ff72667f5f69b28bc9dcc6f621ed5aa0f09322765"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ChannelIndicator.svelte",
+      "sha256": "c600369ad8c079a4a7f0361707dcf6dd9599eeb372989aa2fbf8d536c6c6d79e"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ProxyLogsDialog.svelte",
+      "sha256": "854b52ee781efd32f81095c01c6457c720a228a9b9b6960264204546f9a68f43"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ProxyLogsDialog.test.ts",
+      "sha256": "a7677ec53905fd494b1bf7e978e2df40281859532b0c945eb6d3f01d2b775d04"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/RouteGroupDialog.test.ts",
+      "sha256": "c79c7738eaf50bfd36b997aa1aada42906fc7f8050c0d995a1abf2f69e8b4c06"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/RouteListPane.test.ts",
+      "sha256": "0c393736353ac48ba582a1db6af39e808f0d96d493a9e6d111177546ad55546d"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/SearchSettingsDialog.svelte",
+      "sha256": "9fe70b018fa5358ec59b1d1ad6b9f71b81251da427509ebae29683d49ed11f78"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/SearchSettingsDialog.test.ts",
+      "sha256": "9e2054b51ae3916223b81c34ba58b7902ea044d7339f6f7b4d6a568b18ff7930"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ServerDetailPane.svelte",
+      "sha256": "f42ccddebaca95f3584cffc2459551962b8e7455854281222b8b304867448c45"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/ServerDetailPane.test.ts",
+      "sha256": "e5e1501bdad7c6a06ca20b7d03adea6167dc53d20c911fae11b7bc8cec4add02"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/UsageBreakdown.svelte",
+      "sha256": "47795b8b5d59feacbd4b59995e488e95ca7c721a5914bb20968070aa9f1592ad"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/UsageBreakdown.test.ts",
+      "sha256": "d236a49188e4bc81244dc28fb8ae3164780f6370f5ca835528bdcf590b7d5d55"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/UsageChart.svelte",
+      "sha256": "d3b41c2c18299b30f7b729ae0d499fbf6e0fe1faa88762fb618802e33362d5e7"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/UsageChart.test.ts",
+      "sha256": "b142651803b9de53d5908c993252453d4f5655b68c425df08f692e613752e22d"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/server/UsageRangeMenu.svelte",
+      "sha256": "057f0899f2c1d0e85115dad66158eb12255671335af351869b38c892aaa791dc"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/CcSwitchImportPanel.svelte",
+      "sha256": "3138d94278aec6d511d0916881d1835bb6dad549f5c917d4323681c97e41b725"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/ControlPanelSettings.svelte",
+      "sha256": "5d7f8555643b3beab114d48fcaafa8a235f63b71311f35c042621073be552453"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/ControlPanelSettings.test.ts",
+      "sha256": "cb431ff74248088eb71d91da3a7254d64a6bb198ed4e511da3afdbea497596f9"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/ModelPricingFields.svelte",
+      "sha256": "f1e5b0b2746d3194e7f7f988c83237be58b7dd97ab0e234916d3ca000c387f44"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/SecurityPolicySettings.svelte",
+      "sha256": "fe4e1b8b3e3b4dbc7f5229ab0f0fec1014669012998c1e797e995662a9c9f524"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/SettingsPanel.svelte",
+      "sha256": "86b15284b4e84eedf196a20257267af06afd52d260260e5e9f1b776a120cb78e"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/SettingsPanel.test.ts",
+      "sha256": "754ac3602b5bf99b2c2c84837e4c1169d24594cb30206e6a63bd2f7d0f0d941c"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/SyncTargetSettings.svelte",
+      "sha256": "493aac7c3c81baeac050b9e6907e414ee69b883e4107aa20cf8abff65a673238"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/settings/SyncTargetSettings.test.ts",
+      "sha256": "f00e6b393f02ac9cb34e19f5ee385ac2a2d5a364bdf484abfc8b4bf9d88b3e8f"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/AppTitleBar.svelte",
+      "sha256": "088726e2bc3820abbd9638591b5859cb2b792c06920e6dbb03e51cf5960e82cb"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/Collapsible.test.ts",
+      "sha256": "fd868e7726b40615f4d2211b2a831abe432d7aeb5215d58d8454d29f4164cbfe"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/CollapsibleHarness.svelte",
+      "sha256": "9becdb1181628bb2b49b973dd237a136e7c3a6252242fb446a2b19bfada0def2"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/ConfirmModal.svelte",
+      "sha256": "7b02677979f9209af0442a3acf595401d88c4a9ed578f51891df25deb5bf65cc"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/ConfirmModal.test.ts",
+      "sha256": "11426a9daf18ad78875b5f8f1ab22b31fdeec5cee651fe678235730110af7835"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/ErrorToast.svelte",
+      "sha256": "c0311b16c73d8e2aafbd6ecbbecee800b6105fa6edd398d5f89d9bc08fb6d3b2"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/SegmentedControl.svelte",
+      "sha256": "8ce91319775a641b0fd5195b9f90962b3d1871f59aaf82da03e15345a242da42"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/SyncStatusPill.svelte",
+      "sha256": "8d155d8f8cd77047570c6e6ea3ffb9e4c50439cee4a5d43b941964cd9a70f3e3"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/UpdateNotification.svelte",
+      "sha256": "6824856172017602fff9b3eb2342f1b6d58106257945363356ce711fa949953d"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/UpdateRestartConfirmModal.svelte",
+      "sha256": "aa844f28715e04522ea398908437e90a8656d19f77aa05f68e4c7151669710f8"
+    },
+    {
+      "path": "apps/desktop/src/lib/components/shared/UpdateRestartConfirmModal.test.ts",
+      "sha256": "1d204c9358a965002b47004503afb3e853db5a3a412464dc18af9be90ce2b660"
+    },
+    {
+      "path": "apps/desktop/src/lib/platform.ts",
+      "sha256": "0df0255a4a55ff19880a1465442a67ea58c84e39dd84b39d9186126054be215e"
+    },
+    {
+      "path": "apps/desktop/src/lib/services/agentManagement.ts",
+      "sha256": "c8ffa0e4d94107961dfd8f05a03cd7aed8f5524c857a6a6e62c148df13371792"
+    },
+    {
+      "path": "apps/desktop/src/lib/services/secretClipboard.ts",
+      "sha256": "89cd3d2720dd61ec4453e8f4fc6e6cdd868bee32a177d337c03181e00ac62779"
+    },
+    {
+      "path": "apps/desktop/src/lib/services/serverUsage.test.ts",
+      "sha256": "402af62fde29efe38574d9f9a568dea08289f597120426f52e368975ddffb18a"
+    },
+    {
+      "path": "apps/desktop/src/lib/services/serverUsage.ts",
+      "sha256": "24e6b648ff1e69215ffb0257eca6cd108da442043acfa845cbd25cba205b8d7e"
+    },
+    {
+      "path": "apps/desktop/src/lib/services/toolConfig.ts",
+      "sha256": "2b4d384a6c04b88179b04674578a8fbf4d8b602987263273b649bb14c18184b8"
+    },
+    {
+      "path": "apps/desktop/src/lib/services/updates.test.ts",
+      "sha256": "269be52b9c40a7545ff6bd6143d103a7bb8fe1cd8f7b487a24d6d96c04fe748e"
+    },
+    {
+      "path": "apps/desktop/src/lib/services/updates.ts",
+      "sha256": "b13c5159f5ad25faff9620207f827236dfc1ae83cc41c9d6a7795ecba791a3ec"
+    },
+    {
+      "path": "apps/desktop/src/lib/stores/appearance.ts",
+      "sha256": "6321646fdd629bd41606cfdd648b3d541cf299f0683aba8636df91ed5afd0782"
+    },
+    {
+      "path": "apps/desktop/src/lib/stores/i18n.ts",
+      "sha256": "1995a523c962b9731c909f751032ae873554655e1865e2c017452f2e29090adf"
+    },
+    {
+      "path": "apps/desktop/src/lib/types.ts",
+      "sha256": "d594a14195d04949f39174c19f2bb785d9ed6b2cbc6ae2fd8a8643816cfa6833"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/agent-credentials.test.ts",
+      "sha256": "031e37411c2261ec183a6fca9c1353e6f00bfc5f5ec79048d797f0936e1de06a"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/agent-credentials.ts",
+      "sha256": "336f94fb91232faac0528b773f478ecccfb4c039a08b9002e76d5468477ba01b"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/auth.test.ts",
+      "sha256": "48e39f20e6573a4a6484f40d83a6618db8ffefd740f7cc53d2aae51a150f0bf1"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/auth.ts",
+      "sha256": "4aad9bf1cc653e713912483360d1aec3e25de59f121151cd3a7ffa8924a6155f"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/config-diff.test.ts",
+      "sha256": "2299eda4880ed152ec5acc33577d39ce063ba661f91b06dc7d0ca828c1bc10ae"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/config-diff.ts",
+      "sha256": "68580671f6f66ab3eba22001ce363540b59e814c7e9a7ec307c138fda11b116a"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/deeplink.test.ts",
+      "sha256": "ef4598eba1412e01fbadc13ba8389f0a04a3ada853ee1d49f06bf941e90db835"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/deeplink.ts",
+      "sha256": "9fab4510b07f4a581e384cb73486fae59d6b9ea5fffbc254a9dcf65d250adf87"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/format.test.ts",
+      "sha256": "fcc761876d507d3e357d318ef679bf69b2af692ea00ffa94e4b5cacba4312c29"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/format.ts",
+      "sha256": "a6f98b1475b8c0ddbca6eef7904faff334512e7a6bb954d08e44c436bc9c4102"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/highlight.test.ts",
+      "sha256": "5c5e7253008377ce1a60b1de489069916aa0957e50dbde92a321a1dd2ddcb5ed"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/highlight.ts",
+      "sha256": "221c3600cfb98e750bf42ed23854ed309db9f206def25766121e45c0c9fcd37d"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/integration-setup.ts",
+      "sha256": "c92242751843fa22a197218411834d550d816c68be52c018c9e1a59928467f31"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/integrations.test.ts",
+      "sha256": "1b5f34104f47e668751b8c84eef634e71a75f7d0dca9e313aaca12b8f0da8ff4"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/integrations.ts",
+      "sha256": "f0a574d64eaa97ef9030f2191522c637b906afdd38279fff5c6a2061ddc5ee81"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/official-accounts.test.ts",
+      "sha256": "17ba0eec15dd67d93e8a9cf00c2fe05f0af0f780eafacf523ecfb282037cd280"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/official-accounts.ts",
+      "sha256": "9749ceee2a3902d9fed85556e06af40a752a7588c2f7191adab5d8806b413e96"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/provider-domains.test.ts",
+      "sha256": "4c780cd3718731e17f6cf226623981bb5c9c3fd9cfc1eb497c83750560ccb612"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/providers.test.ts",
+      "sha256": "220f6bb52622ed5a6bb94f3e8f9a11f1681598f42e1dfbb02b5ea8306e590cac"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/providers.ts",
+      "sha256": "c762864c220cddee03987ebbd068707dd6a26e11b598d001171bba11d58349fb"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/proxyLogs.test.ts",
+      "sha256": "c66269e4c16b9278af7aabaf7177f2753984660b43ceb4d9922ae95cc04e5ed0"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/proxyLogs.ts",
+      "sha256": "11c7838a4fada58d504f4b3d0415c02c354aa797231550b07323bf427840f11e"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/scrollMask.test.ts",
+      "sha256": "a37856ed022ffde30bae119e30b061ce8551a4c46aa119ed7759d496aea1f7a4"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/server.test.ts",
+      "sha256": "b96d4a1c75273ee019b8387ab7b7163171a8e88fd4f88eda719be2a1aa448e14"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/server.ts",
+      "sha256": "79949c49a3e04240c3c12d20241f210b39be73712ed676239332597180b07e59"
+    },
+    {
+      "path": "apps/desktop/src/lib/utils/usageProbe.ts",
+      "sha256": "823114ab24fe2d0f8062940ff6ed85fbcd194f7000c3ac5bf2cb1ddb0a6c42ea"
+    },
+    {
+      "path": "apps/desktop/src/linux-window.scss",
+      "sha256": "3e70c51abc2df617f210744f0b9993f09283938bbd05ea97280eaa1757cd44dd"
+    },
+    {
+      "path": "apps/desktop/src/main.ts",
+      "sha256": "532083bcb76c178e77604b3547adb07a061f4de9376a3862723c5cb6a6f905b0"
+    },
+    {
+      "path": "apps/desktop/src/styles.scss",
+      "sha256": "cc04b94e236d3dd7e1cebbd6cd136e945c6f839afef4850fc06ea9423ee12156"
+    },
+    {
+      "path": "packages/ui/src/actions/scrollMask.ts",
+      "sha256": "f043396f7d56d0ad82280403902908affaffd0b7785ceebeef664f5d02fceb5f"
+    },
+    {
+      "path": "packages/ui/src/assets.d.ts",
+      "sha256": "b3bfa1a66d6965c26c348a562aa7ef3d7010fa9ef2e0cfb572dfe02b08495bb4"
+    },
+    {
+      "path": "packages/ui/src/components/Badge.svelte",
+      "sha256": "6642c21edff97224d69471c930c152c7197a24dba74157046219f6ebd2e117c2"
+    },
+    {
+      "path": "packages/ui/src/components/Banner.svelte",
+      "sha256": "aff66a23f131a57c9bcb4718755cfc2eed9f79f42e18171f2b3e39073830aa4c"
+    },
+    {
+      "path": "packages/ui/src/components/Brand.svelte",
+      "sha256": "7e47e555fae10330562a0419148986a7ccd639e489245eb7296039d2a8eee6a2"
+    },
+    {
+      "path": "packages/ui/src/components/Button.svelte",
+      "sha256": "9b3ded9c4e8adad0fc5b0655efad3a5bb7131e9eb76641db14d7aab3756eeb1f"
+    },
+    {
+      "path": "packages/ui/src/components/Card.svelte",
+      "sha256": "b2385a01323c9b745fa1ec74507e2e9d8fe0a69e90507f22a39e9b0604a6be3b"
+    },
+    {
+      "path": "packages/ui/src/components/Collapsible.svelte",
+      "sha256": "cfe4246593d75db003e41fd104c4ccd1a6cd555ed1d9e6e5b8a9a607d0249410"
+    },
+    {
+      "path": "packages/ui/src/components/CredentialBillingFields.svelte",
+      "sha256": "0914f714f7f9f6602098b60f27be21afedac31b8d28c8b7e7d300e6f00eb935d"
+    },
+    {
+      "path": "packages/ui/src/components/EmptyState.svelte",
+      "sha256": "a6accb691f72ae3fb15092d1056cfcb7d78ba57e44a48cc8ba43bdeadf089234"
+    },
+    {
+      "path": "packages/ui/src/components/Field.svelte",
+      "sha256": "81a8b150921f8b9f4dcddd2ec6a0db1aa5e4ec606ada92b453db9274b37d9be4"
+    },
+    {
+      "path": "packages/ui/src/components/IconButton.svelte",
+      "sha256": "439d6ec2973ab84a72459a65b660111232a8ad7f8f6ec0e92e6f3c24d427c177"
+    },
+    {
+      "path": "packages/ui/src/components/Logo.svelte",
+      "sha256": "5fd4c09163161a0f9e998b770a1c1bbb7747042dd1dfac5a9f7b5b076f039d75"
+    },
+    {
+      "path": "packages/ui/src/components/Modal.svelte",
+      "sha256": "210386251de0129166c6da5b963609ed8df4a89b24d54aee2dcae6c0511d0ed0"
+    },
+    {
+      "path": "packages/ui/src/components/ProgressButton.svelte",
+      "sha256": "cb9d7276ce3d9714747789977546f83fa0ad3adeccd6bd7b8c71222a1e982ddd"
+    },
+    {
+      "path": "packages/ui/src/components/ProviderEmptyState.svelte",
+      "sha256": "f4d72275e952ba839881ff3f45feb9814204049b22624aae179992f8c9c90c22"
+    },
+    {
+      "path": "packages/ui/src/components/ProviderFormFields.svelte",
+      "sha256": "69051f0d2cc6f011179df8f08ac0d3c6481e1c7b3ac2ac73f7d9ae0b85f1fb7e"
+    },
+    {
+      "path": "packages/ui/src/components/ProviderIcon.svelte",
+      "sha256": "7140b65055883ad0599b97416aada024a47b5647b789d64065bfaf611218c42a"
+    },
+    {
+      "path": "packages/ui/src/components/ProviderListPane.svelte",
+      "sha256": "bd5b02915c626cb9023d32d9730445bfa5f21898e83a1d898de72733468b4afb"
+    },
+    {
+      "path": "packages/ui/src/components/ProxyCredentialPicker.svelte",
+      "sha256": "80a41eb6f83556d90322731411faae14d82a3fd4fac4ba7c6c251de5fd4746f7"
+    },
+    {
+      "path": "packages/ui/src/components/ProxyRouteGroupDialog.svelte",
+      "sha256": "0d1a19d3f392f834c6020e37fd0ebe82465099ec2af23d2fe9baaf4b73c7d528"
+    },
+    {
+      "path": "packages/ui/src/components/ProxyRouteList.svelte",
+      "sha256": "4cd08e814ded8e3d7060c164deac053ccb7f85e17b6124a09e7f6c39a03d84ba"
+    },
+    {
+      "path": "packages/ui/src/components/ProxyStatusGrid.svelte",
+      "sha256": "0e3833f3bfbc64a26e7c17a95d5fe8c9924bc58cf64303cc8bd783ed336dca77"
+    },
+    {
+      "path": "packages/ui/src/components/SearchField.svelte",
+      "sha256": "4a74e256a6d5e7f41979b9f92874e0febf3da2bf144e8d77cd7c347ea6e1ddac"
+    },
+    {
+      "path": "packages/ui/src/components/SecretField.svelte",
+      "sha256": "14667f6928b9b4eac0d225b10f7fd79916b827dc13b686f0af23ee165294852e"
+    },
+    {
+      "path": "packages/ui/src/components/SelectField.svelte",
+      "sha256": "a75a8ab3ebb62d3dd0db85f1429f5a25d84d115fe157396224b09ceda54d6936"
+    },
+    {
+      "path": "packages/ui/src/components/SidebarItem.svelte",
+      "sha256": "97af9ce5e2dedadf0549dc687a1c983239a5a26c6b12066150efd9bafbd73f0d"
+    },
+    {
+      "path": "packages/ui/src/components/SwitchField.svelte",
+      "sha256": "644b17b85ca8fb51c70350f246b6e1b95f040e8185a2b5817bbf3e9be5c88816"
+    },
+    {
+      "path": "packages/ui/src/components/VaultSidebar.svelte",
+      "sha256": "fc544fb0bb57c416dd33862b902154459b70e1fd8761b1aa78f3cef1080af437"
+    },
+    {
+      "path": "packages/ui/src/helpers.ts",
+      "sha256": "aee9eb05ecc931af04b784f4dd2e589de8f573fd90ad3f8c53de1c480d3bf186"
+    },
+    {
+      "path": "packages/ui/src/i18n.test.ts",
+      "sha256": "7926b635308eab81b48cf4a6909fb24976d97f20946a38b8a91f2af91a402cc3"
+    },
+    {
+      "path": "packages/ui/src/i18n.ts",
+      "sha256": "6e361db25922f7dace04a8fc7d7a30110d7518c5808554e3a71a35f535d2f331"
+    },
+    {
+      "path": "packages/ui/src/index.test.ts",
+      "sha256": "f32b22b84b182859220ec87c2a1d06654d043774500151bc7c9c39dd606a2dc0"
+    },
+    {
+      "path": "packages/ui/src/index.ts",
+      "sha256": "30140eb1e0885a34c7b2504eb68d865ee0b3e82b5e25f289c314583843edfd07"
+    },
+    {
+      "path": "packages/ui/src/locales/aliases.json",
+      "sha256": "e869bc56c5048b80726d1c251a9868e5c36f96c4a6afdc7543b09478e77fe977"
+    },
+    {
+      "path": "packages/ui/src/locales/en.json",
+      "sha256": "d03989994d486904870f39f9c15848c869e11c0571843649b00cb721f0b2270b"
+    },
+    {
+      "path": "packages/ui/src/locales/zh-CN.json",
+      "sha256": "3449a70e3b93b6c29c59a765cc4bf350bf89cdc2a6e49db4a9483db327bcab38"
+    },
+    {
+      "path": "packages/ui/src/provider-icons.ts",
+      "sha256": "b9018964d3462a82d1e63fe60da79bfd7034fb7723f7264d61ba4f9dd8c54be0"
+    },
+    {
+      "path": "packages/ui/src/styles/base.scss",
+      "sha256": "cf7bae55267729e8d66f74d8a60662d9373f836132e973cc7ecfb9cef8801abd"
+    },
+    {
+      "path": "packages/ui/src/styles/select-menu.scss",
+      "sha256": "105b51b17486f6286aec9a005ee079828f1ebe29c8303e565e4a6eaed808beb6"
+    },
+    {
+      "path": "packages/ui/src/types.ts",
+      "sha256": "b324d7c8d1f94e41888ce20da7fdfc5eb9b0c5a9c68b04f7a88db07d3e45f01b"
+    }
+  ]
+}

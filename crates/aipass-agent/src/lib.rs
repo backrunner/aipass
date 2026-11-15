@@ -53,8 +53,8 @@ pub use autostart::{
 pub use client::{AgentClient, AgentClientConfig, AgentCommandError};
 pub use launcher::{agent_binary_candidates, agent_binary_path};
 pub use paths::{
-    agent_service_name, agent_socket_path, canonical_vault_dir, cloud_sync_dir, default_vault_dir,
-    namespace_for_vault_dir,
+    agent_runtime_dir, agent_service_name, agent_socket_path, canonical_vault_dir, cloud_sync_dir,
+    default_vault_dir, namespace_for_vault_dir,
 };
 pub use server::{run_server, ServerOptions};
 pub use windows_service::{

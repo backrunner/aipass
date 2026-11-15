@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "tests/desktop-parity"
 allowBuilds:
   '@parcel/watcher': true
   esbuild: true
