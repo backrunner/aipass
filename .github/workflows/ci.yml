@@ -207,6 +207,13 @@ jobs:
       - run: pnpm build
       - name: Verify embedded Svelte control panel is reproducible
         run: git diff --exit-code -- apps/control-panel/embedded
+      - name: Install native Windows packaging tools
+        run: |
+          choco install nsis -y --no-progress
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          node scripts/desktop/install-windows-minisign.mjs
+      - name: Prepare disposable updater signing key
+        run: node scripts/prepare-runtime-check-build.mjs "${{ runner.temp }}/aipass-windows-runtime-signing"
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Verify production Agent recovery locking
         run: cargo test -p aipass-agent --test uninstall_recovery_lock
@@ -217,12 +224,6 @@ jobs:
         run: node scripts/verify-cli-runtime.mjs target/debug windows-runtime-check-reports/cli-debug
       - name: Verify isolated proxy uninstall recovery
         run: node scripts/verify-proxy-uninstall.mjs target/debug
-      - name: Install native Windows packaging tools
-        run: |
-          choco install nsis minisign -y --no-progress
-          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Prepare disposable updater signing key
-        run: node scripts/prepare-runtime-check-build.mjs "${{ runner.temp }}/aipass-windows-runtime-signing"
       - name: Build Windows NSIS test installer
         run: node scripts/package-desktop.mjs --ci --bundles nsis --config "$env:AIPASS_RUNTIME_BUILD_CONFIG"
       - name: Verify installed main, tray, CLI, Native Messaging and uninstall

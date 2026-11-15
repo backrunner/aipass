@@ -1803,3 +1803,11 @@ Newest entries last within each section.
   reads. Explicitly set accepted sockets to blocking mode with a read timeout.
 - Do not turn every read error into EOF. Preserve incomplete-header failures,
   and reproduce the inherited mode with fragmented requests on all platforms.
+
+### Pin the Windows Minisign tool used for disposable updater keys
+
+- Chocolatey's Minisign can predate `-W` even when installation succeeds.
+  Install the pinned upstream Windows archive with a verified SHA-256 and
+  explicit executable-version check. Never disable updater signature checks.
+- Run packaging-tool/bootstrap checks before long Rust regression stages; keep
+  disposable key cleanup in the workflow's always-run cleanup step.
