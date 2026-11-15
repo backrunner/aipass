@@ -11,6 +11,6 @@ export function packageWindows(config,binaryDir,output,targets) {
   writeFileSync(join(stage,"desktop.json"),JSON.stringify(config));
   mkdirSync(join(output,"nsis"),{recursive:true});
   const installer=join(output,"nsis",`AIPass_${config.version}_${process.arch}-setup.exe`);
-  run(process.env.MAKENSIS??"makensis",["/V2",`/DVERSION=${config.version}`,`/DPAYLOAD=${stage}`,`/DOUTPUT=${installer}`,join(root,"apps/desktop-native/bundle/windows/installer.nsi")]);
+  run(process.env.MAKENSIS??"makensis",["/V2","/WX",`/DVERSION=${config.version}`,`/DPAYLOAD=${stage}`,`/DOUTPUT=${installer}`,join(root,"apps/desktop-native/bundle/windows/installer.nsi")]);
   sign(installer,config.updaterPublicKey);
 }

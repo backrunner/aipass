@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { root,run,copy,resources } from "./common.mjs";
 import { sign } from "./sign.mjs";
 export function packageLinux(config,binaryDir,output,targets) {
+  const runtime=process.env.APPIMAGETOOL_RUNTIME_FILE;
+  if(targets.includes("appimage")&&!runtime)throw new Error("APPIMAGETOOL_RUNTIME_FILE must point to the verified runtime from install-linux-tools.mjs");
   const arch=process.arch==="arm64"?"aarch64":"x86_64";
   for(const format of targets) {
     if(!["deb","rpm","appimage"].includes(format))throw new Error(`Unsupported package ${format}`);
@@ -26,7 +28,7 @@ export function packageLinux(config,binaryDir,output,targets) {
       writeFileSync(join(stage,"aipass.desktop"),entry);copy(join(root,"apps/desktop-native/bundle/icons/icon.png"),join(stage,"aipass.png"));symlinkSync("aipass.png",join(stage,".DirIcon"));
       writeFileSync(join(stage,"AppRun"),'#!/bin/sh\nAPPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexport APPDIR\nexec "$APPDIR/usr/bin/aipass-desktop" "$@"\n');chmodSync(join(stage,"AppRun"),0o755);
       // CI installs a versioned AppImage tool and supplies its verified runtime.
-      run(process.env.APPIMAGETOOL??"appimagetool",["--no-appstream",stage,file],{env:{...process.env,ARCH:arch,APPIMAGE_EXTRACT_AND_RUN:"1"}});
+      run(process.env.APPIMAGETOOL??"appimagetool",["--no-appstream","--runtime-file",runtime,stage,file],{env:{...process.env,ARCH:arch,APPIMAGE_EXTRACT_AND_RUN:"1"}});
     }
     sign(file,config.updaterPublicKey);
   }

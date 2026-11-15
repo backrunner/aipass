@@ -67,11 +67,11 @@ Agent Run entry. The headless Agent uses the Windows GUI subsystem and
 supervisor: explicit quit and updater shutdown do not immediately respawn them.
 The legacy explicit SCM APIs remain separate and require service permissions.
 
-The Windows updater exits from inside the pinned Tauri plugin's install call.
-Use its before-exit callback for owned clipboard cleanup; do not rely on code
-after install or a Tauri exit event. Preserve the versioned login argv behavior
-when changing updater launch handling. Signed Windows upgrade/restart still
-requires separate native acceptance.
+The Windows updater hands a signed package to a separate native helper, which
+waits on the retained desktop process handle before running NSIS. The runtime
+gate drains requests and performs owned clipboard/Agent cleanup before exit.
+Preserve explicit restart targets and versioned login arguments. Signed Windows
+upgrade/restart requires its own native acceptance.
 
 Keep Run values literal, idempotent, correctly quoted and within the documented
 260 UTF-16-unit limit. Respect Windows-disabled startup state; normal ensure

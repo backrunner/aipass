@@ -20,7 +20,7 @@ exclude = ["vendor/notify-rust", "vendor/gpui", "vendor/gpui-base", "vendor/bloc
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["AIPass contributors"]

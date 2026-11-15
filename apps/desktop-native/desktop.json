@@ -1,7 +1,7 @@
 {
   "productName": "AIPass",
   "identifier": "com.alkinum.aipass",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "binary": "aipass-desktop",
   "minimumWindow": {
     "width": 960,

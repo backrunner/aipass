@@ -1729,3 +1729,19 @@ Newest entries last within each section.
 - **Fix**: UI update workers pass an explicit main-window target; authenticated CLI updates explicitly retain the tray target. Runtime fixtures preserve those same target contracts after replacement. Native packaging verifies minisign signatures, keeps typed Agent readiness and records the new PID before retiring the previous instance.
 - **Regression**: the macOS finished-artifact gate exercises main/tray startup, valid and tampered automatic downloads, manual installation, authenticated CLI installation and cached restart. Launch parsing covers matching login versions with explicit target overrides. The repository gate rejects framework dependencies in Cargo/pnpm manifests and lockfiles; frozen reference tooling builds without installing the retired framework.
 - **Watch points**: `apps/desktop-native/src/startup.rs`, `launch.rs`, `runtime_check.rs`, `updates/`, `scripts/desktop/` and `tests/desktop-parity/setup.mjs`. Test keys and loopback update feeds are restricted to isolated runtime fixtures; they must not become production trust overrides.
+
+
+### Cross-platform native tray code must use the public menu API
+- **Symptom**: Linux Clippy/packaging and Windows Clippy fail with E0624 in `shell/classic.rs`; Windows also rejects a Unix-only import.
+- **Root cause**: `MenuItemKind::as_ref` is crate-private in the pinned `muda` dependency. macOS uses the Swift tray and never compiles this adapter; lease imports/constants were not gated with their Unix-only uses.
+- **Fix**: clear the retained menu with public `remove_at` calls in reverse order, and gate the descriptor constant and `ensure` import with `cfg(unix)`. Remove the unused `anyhow` dependency from the vault crate.
+- **Guardrail**: verify visibility in the pinned dependency source, gate platform-only imports/constants together with their uses, and require native Linux/Windows CI for adapters excluded by the macOS build. Do not infer cross-platform compilation from a local macOS pass or suppress its warnings.
+- **Watch points**: `shell/classic.rs`, `runtime/instance.rs`, Linux packaging and Windows workspace jobs in `.github/workflows/ci.yml`.
+
+
+### Native NSIS replacement must retain legacy process-local flags
+- **Symptom**: the Windows runtime gate's passive replacement would wait for UI, and an interrupted replacement would restore proxy configuration prematurely.
+- **Root cause**: the native installer omitted the legacy `/P` passive launch and `/AIPASS_REPLACE` uninstall handoff used by existing installers and the runtime gate.
+- **Fix**: treat `/P` as noninteractive; skip proxy restoration only for the current uninstall process when `/AIPASS_REPLACE` is present. The next ordinary uninstall still restores the backup. Retain stop/autostart cleanup in both paths. Correct quoted registry command strings and compile NSIS with warnings treated as errors.
+- **Guardrail**: keep upgrade/downgrade, updater, interrupted replacement and subsequent ordinary uninstall in the real Windows NSIS gate; never persist a skip-restoration flag.
+- **Watch points**: `apps/desktop-native/bundle/windows/installer.nsi`, `scripts/verify-windows-runtime.mjs`, and Agent `--prepare-uninstall` ownership checks.

@@ -1,6 +1,8 @@
 //! Native instance ownership survives replacement through an inherited lease.
 //! No commands or credentials are accepted through the lease file.
-use anyhow::{ensure, Context, Result};
+#[cfg(unix)]
+use anyhow::ensure;
+use anyhow::{Context, Result};
 use std::{
     fs::{File, OpenOptions},
     path::Path,
@@ -8,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(unix)]
 const LEASE_FD: &str = "AIPASS_NATIVE_INSTANCE_FD";
 
 #[derive(Clone)]

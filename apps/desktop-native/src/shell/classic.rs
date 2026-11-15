@@ -30,8 +30,8 @@ impl NativeTray {
     fn update(&self, value: &TrayStatusDto) -> Result<()> {
         super::i18n::set_locale(value.locale);
         // Keep the menu instance alive: Linux indicators do not support replacement.
-        for item in self.menu.items() {
-            self.menu.remove(item.as_ref())?;
+        for index in (0..self.menu.items().len()).rev() {
+            self.menu.remove_at(index);
         }
         self.menu
             .append(&MenuItem::new(&value.agent_text, false, None))?;
