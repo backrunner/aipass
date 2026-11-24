@@ -59,6 +59,9 @@ pub(super) fn descriptor() -> Result<File> {
         SYS_getegid,
         SYS_prlimit64,
         SYS_getrusage,
+        // bubblewrap's PID 1 inherits this filter and calls wait() to report
+        // the worker's exit status. wait4 only reaps an existing child.
+        SYS_wait4,
         SYS_uname,
         SYS_getrandom,
         SYS_execve,

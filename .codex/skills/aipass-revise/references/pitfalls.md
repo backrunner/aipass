@@ -1467,3 +1467,4 @@ Newest entries last within each section.
 - A valid release checksum and executable header could grant a program that never spoke the subscription protocol. Both local and GitHub enable paths in `provider_plugins/mod.rs` used to persist after passive inspection.
 - Before saving a grant, verify the reviewed bytes in the selected runtime with a nonce-bound handshake and clean shutdown. Keep credentials and the HTTP broker out of this session. Serialize the final digest check and grant with vault lock and disable.
 - Exercise passive preview, package cleanup after rejection, and revocation between verification and grant persistence.
+- Bubblewrap applies the worker's seccomp filter to its PID 1 supervisor too. Preserve `wait4` so the supervisor can reap the worker and forward its exit status. Run `plugin_sandbox` on Linux to check both clean exit and denial of child processes, host files and network access.
