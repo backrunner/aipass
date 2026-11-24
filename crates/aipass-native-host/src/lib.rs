@@ -15,97 +15,17 @@ pub use protocol::{
 pub use request::{handle_request, handle_request_with_config};
 
 #[cfg(test)]
+mod test_agent;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use aipass_agent::{run_server, AgentClient, AgentClientConfig, ServerOptions};
-    use aipass_agent_protocol::{AgentRequest, SessionStatus, SessionUnlockMode};
+    use crate::test_agent::RunningAgent;
+    use aipass_agent_protocol::AgentRequest;
     use aipass_crypto::SecretString;
     use aipass_vault::scan_for_plaintext;
     use std::path::PathBuf;
-    use std::thread::{self, JoinHandle};
-    use std::time::Duration;
-    use tempfile::{tempdir, TempDir};
     use uuid::Uuid;
-
-    struct RunningAgent {
-        dir: TempDir,
-        password: String,
-        client: AgentClient,
-        handle: Option<JoinHandle<()>>,
-    }
-
-    impl RunningAgent {
-        fn start() -> Self {
-            let dir = tempdir().unwrap();
-            let vault_dir = dir.path().join("vault");
-            let password = "correct horse battery staple".to_string();
-            aipass_vault::Vault::create(&vault_dir, &SecretString::new(&password)).unwrap();
-            // Keep sibling agent settings and startup sync inside this fixture.
-            // Otherwise macOS defaults to the host's real iCloud directory.
-            let settings = aipass_agent::session::PersistedSyncSettings {
-                mode: aipass_agent_protocol::SyncMode::Local,
-                sync_folder: Some(dir.path().join("sync")),
-                ..Default::default()
-            };
-            let settings_path = aipass_agent::session::sync_settings_path(&vault_dir);
-            std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-            std::fs::write(&settings_path, serde_json::to_vec(&settings).unwrap()).unwrap();
-            let server_vault_dir = vault_dir.clone();
-            let handle = thread::spawn(move || {
-                run_server(ServerOptions::without_desktop_tray(server_vault_dir)).unwrap();
-            });
-            let client = AgentClient::new(AgentClientConfig::for_vault(vault_dir).unwrap());
-            for _ in 0..50 {
-                if client
-                    .request::<SessionStatus>(&AgentRequest::SessionStatus)
-                    .is_ok()
-                {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Self {
-                dir,
-                password,
-                client,
-                handle: Some(handle),
-            }
-        }
-
-        fn config(&self) -> NativeHostConfig {
-            NativeHostConfig {
-                vault_dir: self.client.config.vault_dir.clone(),
-                allowed_extension_ids: vec![],
-            }
-        }
-
-        fn config_with_allowed_extension(&self, extension_id: &str) -> NativeHostConfig {
-            NativeHostConfig {
-                vault_dir: self.client.config.vault_dir.clone(),
-                allowed_extension_ids: vec![extension_id.to_string()],
-            }
-        }
-
-        fn unlock(&self) {
-            let _: SessionStatus = self
-                .client
-                .request(&AgentRequest::SessionUnlock {
-                    mode: SessionUnlockMode::Password {
-                        password: self.password.as_str().into(),
-                    },
-                })
-                .unwrap();
-        }
-    }
-
-    impl Drop for RunningAgent {
-        fn drop(&mut self) {
-            let _ = self.client.shutdown();
-            if let Some(handle) = self.handle.take() {
-                let _ = handle.join();
-            }
-        }
-    }
 
     #[test]
     fn rejects_unknown_extension() {

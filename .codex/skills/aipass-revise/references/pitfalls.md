@@ -20,6 +20,7 @@ Newest entries last within each section.
 - **Watch points**: `vault_sync/storage/cache_retention.rs`, checkpoint/outbox compaction and locked sync; `keeps_other_targets_checkpoints_parents_and_unsent_uploads` and `unreadable_checkpoint_aborts_before_removing_any_body`.
 
 ### Agent integration fixtures inherited the host cloud directory
+- Run the native-host fixture Agent in a child process with a disposable home and an explicit fixture keychain. The unlock audit runs in the Agent dependency's production configuration and can otherwise block on the user's login keychain.
 - **Symptom**: native-host tests on macOS stalled in initial sync while reading the host's iCloud files.
 - **Root cause**: `crates/aipass-native-host/src/lib.rs` `RunningAgent::start` created a vault at the temporary root and omitted sync settings; sibling agent settings were shared and macOS selected its real iCloud default.
 - **Fix**: place each fixture vault under its own temporary root and persist a local sync folder before starting the agent.
