@@ -20,6 +20,28 @@ fn native_worker_isolates_files_network_and_child_processes() {
         &source,
         r#"
         use std::{io::{self,BufRead},net::{SocketAddr,TcpStream},time::Duration};
+        fn can_connect(target: SocketAddr) -> bool {
+            #[cfg(windows)]
+            {
+                // Rust's Winsock initializer panics if an LPAC denies WSAStartup.
+                // Test that refusal directly before attempting the loopback connection.
+                #[link(name = "ws2_32")]
+                extern "system" {
+                    fn WSAStartup(version: u16, data: *mut std::ffi::c_void) -> i32;
+                    fn WSACleanup() -> i32;
+                }
+                // WSADATA fits in 512 bytes on 32- and 64-bit Windows.
+                let mut data = [0_u64; 64];
+                if unsafe { WSAStartup(0x0202, data.as_mut_ptr().cast()) } != 0 {
+                    return false;
+                }
+                let connected = TcpStream::connect_timeout(&target, Duration::from_millis(300)).is_ok();
+                unsafe { WSACleanup(); }
+                connected
+            }
+            #[cfg(not(windows))]
+            { TcpStream::connect_timeout(&target, Duration::from_millis(300)).is_ok() }
+        }
         fn main() {
             if std::env::args().nth(1).as_deref() == Some("--child") { return; }
             let mut input=io::stdin().lock().lines();
@@ -28,10 +50,11 @@ fn native_worker_isolates_files_network_and_child_processes() {
             let target:SocketAddr=input.next().unwrap().unwrap().parse().unwrap();
             let readable=std::fs::read(read).is_ok();
             let writable=std::fs::write(write,b"marker").is_ok();
-            let connected=TcpStream::connect_timeout(&target,Duration::from_millis(300)).is_ok();
+            let connected=can_connect(target);
             let exe=std::env::args_os().next().unwrap();
             let spawned=std::process::Command::new(exe).arg("--child").status().is_ok_and(|s|s.success());
-            println!("read={readable} write={writable} connect={connected} spawn={spawned}");
+            let inherited=std::env::var_os("AIPASS_PLUGIN_TEST_MARKER").is_some();
+            println!("read={readable} write={writable} connect={connected} spawn={spawned} inherit={inherited}");
         }
     "#,
     )
@@ -49,8 +72,18 @@ fn native_worker_isolates_files_network_and_child_processes() {
         .unwrap()
         .success());
     let run = |program: &Path, args: &[&std::ffi::OsStr]| {
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        #[cfg(windows)]
+        if !args.is_empty() {
+            // Match the environment supplied by the Agent's broker launcher.
+            command
+                .env_clear()
+                .env("SystemRoot", std::env::var_os("SystemRoot").unwrap())
+                .env("AIPASS_PLUGIN_AGENT_PID", std::process::id().to_string());
+        }
+        let mut child = command
             .args(args)
+            .env("AIPASS_PLUGIN_TEST_MARKER", "fixture-only")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -75,7 +108,7 @@ fn native_worker_isolates_files_network_and_child_processes() {
     };
     assert_eq!(
         run(&entry, &[]),
-        "read=true write=true connect=true spawn=true"
+        "read=true write=true connect=true spawn=true inherit=true"
     );
     fs::remove_file(&write).unwrap();
     assert_eq!(
@@ -83,7 +116,7 @@ fn native_worker_isolates_files_network_and_child_processes() {
             Path::new(env!("CARGO_BIN_EXE_aipass-agent")),
             &["--plugin-native".as_ref(), entry.as_os_str()]
         ),
-        "read=false write=false connect=false spawn=false"
+        "read=false write=false connect=false spawn=false inherit=false"
     );
     assert!(!write.exists());
 }

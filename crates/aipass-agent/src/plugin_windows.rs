@@ -28,6 +28,40 @@ use windows_sys::Win32::{
 fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
+
+fn worker_environment(stage: &Path) -> Result<Vec<u16>> {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt, path::PathBuf};
+    use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
+
+    let mut buffer = vec![0; 32_768];
+    let count = unsafe { GetSystemWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    ensure!(
+        count > 0 && (count as usize) < buffer.len(),
+        "Cannot resolve Windows system root"
+    );
+    let windows = PathBuf::from(OsString::from_wide(&buffer[..count as usize]));
+    let system = windows.join("System32");
+    // CreateProcessW needs a Unicode environment to initialize an AppContainer.
+    // Seed only system and staging paths. Never pass the broker environment.
+    let mut block = Vec::new();
+    for (key, path) in [
+        ("APPDATA", stage),
+        ("LOCALAPPDATA", stage),
+        ("PATH", system.as_path()),
+        ("SystemRoot", windows.as_path()),
+        ("TEMP", stage),
+        ("TMP", stage),
+        ("USERPROFILE", stage),
+        ("windir", windows.as_path()),
+    ] {
+        block.extend(key.encode_utf16());
+        block.push(b'=' as u16);
+        block.extend(wide(path.as_os_str()));
+    }
+    block.push(0);
+    Ok(block)
+}
+
 fn check(ok: i32) -> Result<()> {
     if ok == 0 {
         Err(std::io::Error::last_os_error().into())
@@ -272,7 +306,7 @@ pub(crate) fn run(path: &Path) -> Result<()> {
         ] = stdio;
         startup.lpAttributeList = attrs.ptr();
         let mut info = PROCESS_INFORMATION::default();
-        let env = [0u16; 2];
+        let env = worker_environment(parent)?;
         check(CreateProcessW(
             image.as_ptr(),
             null_mut(),
