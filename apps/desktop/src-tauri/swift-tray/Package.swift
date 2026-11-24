@@ -9,6 +9,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "AipassTray", path: "Sources/AipassTray"),
+        .testTarget(name: "AipassTrayTests", dependencies: ["AipassTray"]),
         .executableTarget(
             name: "TrayPreview",
             dependencies: ["AipassTray"],

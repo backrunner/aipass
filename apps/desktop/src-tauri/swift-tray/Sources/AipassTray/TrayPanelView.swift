@@ -12,9 +12,16 @@ public final class TrayViewModel: ObservableObject {
     public init() {}
 
     public func apply(status: TrayStatus) {
+        if self.status.agentState == "locked" && status.agentState != "locked" { clearUnlockDraft() }
         self.status = status
         lastUpdated = Date()
-        busyAction = nil
+        if busyAction != "unlock" { busyAction = nil }
+    }
+
+    func clearUnlockDraft() {
+        unlockPassword = ""
+        isPasswordVisible = false
+        unlockError = nil
     }
 
     func markBusy(_ action: String) {
@@ -162,6 +169,7 @@ public struct TrayPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(model.busyAction == "unlock")
+                    .accessibilityLabel(model.isPasswordVisible ? model.status.text("password.hide") : model.status.text("password.show"))
                     .help(model.isPasswordVisible ? model.status.text("password.hide") : model.status.text("password.show"))
                 }
                 .padding(.leading, 9)
@@ -362,6 +370,7 @@ public struct TrayPanelView: View {
                     .contentShape(RoundedRectangle(cornerRadius: TrayMetrics.rowRadius, style: .continuous))
             }
             .buttonStyle(TrayRowButtonStyle())
+            .accessibilityLabel(model.status.text("ext.refresh"))
             .help(model.status.text("ext.refresh"))
 
             if let lastUpdated = model.lastUpdated {

@@ -90,7 +90,8 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
     func closePanel() {
         panel?.orderOut(nil)
         removeDismissMonitors()
-        viewModel.clearBusy()
+        viewModel.clearUnlockDraft()
+        if viewModel.busyAction != "unlock" { viewModel.clearBusy() }
     }
 
     private func makePanel() -> NSPanel {
@@ -191,12 +192,10 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
     /// Called by the bridge with the Rust-side unlock outcome (nil = success).
     func reportUnlockResult(_ error: String?) {
         viewModel.clearBusy()
-        if let error {
+        if let error, panel?.isVisible == true, status?.agentState == "locked" {
             viewModel.unlockError = error
         } else {
-            viewModel.unlockError = nil
-            viewModel.unlockPassword = ""
-            viewModel.isPasswordVisible = false
+            viewModel.clearUnlockDraft()
         }
     }
 
@@ -204,9 +203,15 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
 
     private func showContextMenu() {
         guard let statusItem else { return }
+        statusItem.menu = makeContextMenu()
+        statusItem.button?.performClick(nil)
+    }
+
+    func makeContextMenu() -> NSMenu {
         let snapshot = status
         let text: (String) -> String = (snapshot ?? .checking).text
         let menu = NSMenu()
+        menu.autoenablesItems = false
         menu.delegate = self
 
         let agentLine = NSMenuItem(title: snapshot?.agentText ?? text("tray.checking"), action: nil, keyEquivalent: "")
@@ -222,6 +227,7 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
         menu.addItem(makeItem(text("tray.repairAutostart"), action: "repair-autostart"))
 
         let proxyMenu = NSMenu()
+        proxyMenu.autoenablesItems = false
         let proxyLine = NSMenuItem(title: snapshot?.proxyText ?? text("tray.checking"), action: nil, keyEquivalent: "")
         proxyLine.isEnabled = false
         proxyMenu.addItem(proxyLine)
@@ -234,6 +240,7 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
         proxyItem.submenu = proxyMenu
         menu.addItem(proxyItem)
         let panelMenu = NSMenu()
+        panelMenu.autoenablesItems = false
         let panelLine = NSMenuItem(title: snapshot?.panelUrl ?? text("tray.panelOff"), action: nil, keyEquivalent: "")
         panelLine.isEnabled = false
         panelMenu.addItem(panelLine)
@@ -247,8 +254,7 @@ final class TrayPanelController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(makeItem(text("tray.quit"), action: "quit"))
 
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
+        return menu
     }
 
     private func makeItem(_ title: String, action: String, enabled: Bool = true) -> NSMenuItem {
