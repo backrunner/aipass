@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn lookup_and_fill_uses_short_lived_grant() {
-        let agent = RunningAgent::start();
+        let mut agent = RunningAgent::start();
         agent.unlock();
         let config = agent.config();
         let save = handle_request_with_config(
@@ -249,6 +249,9 @@ mod tests {
         );
         assert!(fill.ok, "{fill:?}");
         assert_eq!(fill.data["secret"], "sk-ant-api03-browser-secret");
+        // Include the Agent's complete persisted state, including files held
+        // exclusively by the running Windows listener.
+        agent.stop();
         let matches =
             scan_for_plaintext(agent.dir.path(), &["sk-ant-api03-browser-secret"]).unwrap();
         assert!(

@@ -34,7 +34,9 @@ impl RunningAgent {
             .unwrap();
         let home = dir.path().join("home");
         let vault = dir.path().join("vault");
-        std::fs::create_dir(&home).unwrap();
+        // Windows resolves these known folders when claiming the IPC listener.
+        std::fs::create_dir_all(home.join("AppData/Roaming")).unwrap();
+        std::fs::create_dir_all(home.join("AppData/Local")).unwrap();
         let password = "correct horse battery staple".to_owned();
         aipass_vault::Vault::create(&vault, &SecretString::new(&password)).unwrap();
         let settings = aipass_agent::session::PersistedSyncSettings {
@@ -63,7 +65,6 @@ impl RunningAgent {
                 "AIPASS_PROXY_RECOVERY_KEYCHAIN",
                 home.join(".aipass/proxy-recovery/fixture.keychain-db"),
             );
-        #[cfg(unix)]
         command.env(
             "AIPASS_AGENT_RUNTIME_DIR",
             aipass_agent::paths::agent_runtime_dir().unwrap(),
@@ -76,16 +77,18 @@ impl RunningAgent {
             child: command.spawn().unwrap(),
         };
         let deadline = Instant::now() + Duration::from_secs(10);
-        while fixture
+        while let Err(error) = fixture
             .client
             .request::<SessionStatus>(&AgentRequest::SessionStatus)
-            .is_err()
         {
             assert!(
                 fixture.child.try_wait().unwrap().is_none(),
                 "fixture exited during startup"
             );
-            assert!(Instant::now() < deadline, "fixture failed to become ready");
+            assert!(
+                Instant::now() < deadline,
+                "fixture failed to become ready: {error}"
+            );
             thread::sleep(Duration::from_millis(50));
         }
         fixture
@@ -115,10 +118,10 @@ impl RunningAgent {
             })
             .unwrap();
     }
-}
-
-impl Drop for RunningAgent {
-    fn drop(&mut self) {
+    pub fn stop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
         let _ = self.client.shutdown();
         let deadline = Instant::now() + Duration::from_secs(3);
         while let Ok(None) = self.child.try_wait() {
@@ -129,5 +132,11 @@ impl Drop for RunningAgent {
             thread::sleep(Duration::from_millis(20));
         }
         let _ = self.child.wait();
+    }
+}
+
+impl Drop for RunningAgent {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
