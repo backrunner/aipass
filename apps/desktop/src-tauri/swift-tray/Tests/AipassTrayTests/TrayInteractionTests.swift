@@ -32,7 +32,7 @@ final class TrayInteractionTests: XCTestCase {
         window.orderFront(nil)
         defer { window.orderOut(nil) }
         view.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        window.displayIfNeeded()
         let elements = descendants(of: view)
         let buttons = elements.filter { $0.accessibilityRole?() == .button }
         for (label, action) in [

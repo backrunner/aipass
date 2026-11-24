@@ -23,7 +23,7 @@ const projects = surfaces.map((surface) => ({
 export default defineConfig({
   testDir: "./scripts/ui-e2e",
   fullyParallel: true,
-  workers: 4,
+  workers: process.platform === "darwin" ? 2 : 4,
   forbidOnly: !!process.env.CI,
   outputDir: outputRoot + "test-results",
   reporter: [["list"], ["html", { open: "never", outputFolder: outputRoot + "playwright-report" }]],
@@ -34,7 +34,16 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    ...projects,
+    ...projects.map(project => ({
+      ...project,
+      use: {
+        ...project.use,
+        // A locked macOS display stops GPU vsync, including in headless Chromium.
+        launchOptions: process.platform === "darwin"
+          ? { args: ["--disable-gpu", "--disable-frame-rate-limit"] }
+          : undefined,
+      },
+    })),
     ...projects.filter(({ name }) => name !== "extension").map(project => ({
       ...project, name: project.name + "-webkit", use: { ...project.use, browserName: "webkit" },
     })),
