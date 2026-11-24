@@ -138,8 +138,7 @@
   ) => MaybePromise = () => {};
   export let onUpsertPricingGroup: (
     group: PricingGroup,
-    applyScope: PricingApplyScope,
-    assign?: { entryId: string; secretId: string }
+    applyScope: PricingApplyScope
   ) => MaybePromise = () => {};
   export let onDeletePricingGroup: (groupId: string) => MaybePromise = () => {};
   export let onDeletePricingVersion: (groupId: string, effectiveFrom: number) => MaybePromise = () => {};
@@ -191,20 +190,14 @@
   let pricingDialogGroupId: string | undefined;
   let pricingDialogAssign: { entryId: string; secretId: string } | undefined;
 
-  function assignmentFor(secretId: string): CredentialAssignment | undefined {
-    return pricingAssignments.find(
-      (assignment) => assignment.entryId === selected?.id && assignment.secretId === secretId
-    );
-  }
-
-  function pricingGroupName(groupId: string | undefined): string {
-    if (!groupId) return "";
-    return pricingGroups.find((item) => item.id === groupId)?.name ?? "";
-  }
+  $: selectedAssignments = new Map(pricingAssignments
+    .filter(item => item.entryId === selected?.id)
+    .map(item => [item.secretId, item]));
+  $: groupNames = new Map(pricingGroups.map(group => [group.id, group.name]));
 
   function openPricingDialog(secretId: string) {
     if (!selected) return;
-    const assignment = assignmentFor(secretId);
+    const assignment = selectedAssignments.get(secretId);
     pricingDialogGroupId = assignment?.groupId;
     pricingDialogAssign = assignment?.groupId
       ? undefined
@@ -212,9 +205,11 @@
     pricingDialogOpen = true;
   }
 
-  async function savePricingGroup(group: PricingGroup, applyScope: PricingApplyScope) {
-    await onUpsertPricingGroup(group, applyScope, pricingDialogAssign);
-    pricingDialogOpen = false;
+  function assignmentWriter(entryId: string, secretId: string) {
+    return (groupId: string) => {
+      const assignment = pricingAssignments.find(item => item.entryId === entryId && item.secretId === secretId);
+      return onSetPricingAssignment(entryId, secretId, groupId, assignment?.multiplier ?? 1);
+    };
   }
 
   async function deletePricingGroup(groupId: string) {
@@ -542,7 +537,7 @@
         <Card title={$t("providerDetail.credentials")} padded={false}>
           <ProviderItemFields entry={selected} bind:draft editing={editMode} section="endpoint" {onCopyValue} {copied} />
           {#each selected.secretRefs as secret (secret.id)}
-            {@const pricingAssignment = assignmentFor(secret.id)}
+            {@const pricingAssignment = selectedAssignments.get(secret.id)}
             {#if editingSecretId === secret.id}
               <div class="credential-inline-editor">
                 <input
@@ -584,10 +579,10 @@
                 <div class="credential-heading">
                   <span class="kv-label" title={secret.label}><KeyRound size={13} /><span>{secret.label}</span></span>
                   {#if pricingAssignment && (pricingAssignment.groupId || pricingAssignment.multiplier !== 1)}
-                    <button type="button" class="pricing-badge" title={pricingGroupName(pricingAssignment.groupId)}
-                      aria-label={`${$t("pricing.credentialSettings")}: ${pricingGroupName(pricingAssignment.groupId)} ×${pricingAssignment.multiplier}`}
+                    <button type="button" class="pricing-badge" title={groupNames.get(pricingAssignment.groupId ?? "") ?? ""}
+                      aria-label={`${$t("pricing.credentialSettings")}: ${groupNames.get(pricingAssignment.groupId ?? "") ?? ""} ×${pricingAssignment.multiplier}`}
                       on:click|stopPropagation={() => (pricingSecretId = secret.id)}>
-                      {#if pricingAssignment.groupId}<span>{pricingGroupName(pricingAssignment.groupId)}</span>{/if}
+                      {#if pricingAssignment.groupId}<span>{groupNames.get(pricingAssignment.groupId ?? "") ?? ""}</span>{/if}
                       {#if pricingAssignment.multiplier !== 1}<span class="pricing-multiplier">×{pricingAssignment.multiplier}</span>{/if}
                     </button>
                   {/if}
@@ -780,7 +775,7 @@
 
   {#if pricingSecret}
     <CredentialPricingDialog
-      entryId={selected.id} secret={pricingSecret} assignment={assignmentFor(pricingSecret.id)}
+      entryId={selected.id} secret={pricingSecret} assignment={selectedAssignments.get(pricingSecret.id)}
       groups={pricingGroups} onSave={onSetPricingAssignment}
       onEditGroup={() => { const id = pricingSecretId; pricingSecretId = ""; openPricingDialog(id); }}
       onClose={() => (pricingSecretId = "")}
@@ -791,7 +786,8 @@
     <PricingGroupDialog
       group={pricingDialogGroup}
       assignedCount={pricingDialogGroupId ? pricingAssignments.filter(item => item.groupId === pricingDialogGroupId).length : pricingDialogAssign ? 1 : 0}
-      onSave={savePricingGroup}
+      onSave={onUpsertPricingGroup}
+      onAssign={pricingDialogAssign ? assignmentWriter(pricingDialogAssign.entryId, pricingDialogAssign.secretId) : undefined}
       onDeleteGroup={deletePricingGroup}
       onDeleteVersion={onDeletePricingVersion}
       onClose={() => {

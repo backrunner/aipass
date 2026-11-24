@@ -63,6 +63,7 @@
   let clearUsageConfirmOpen = false;
   let searchOpen = false;
   let logsOpen = false;
+  let logTrigger: HTMLElement | undefined;
   let logsOpening = false;
   let ProxyLogsDialog: typeof import("./ProxyLogsDialog.svelte").default | undefined;
   let lastBindAddr = config.bindAddr;
@@ -135,8 +136,9 @@
   }
   $: if (status.running) editingBindAddr = false;
 
-  async function openProxyLogs() {
+  async function openProxyLogs(event: MouseEvent) {
     if (logsOpening) return;
+    logTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
     logsOpening = true;
     try {
       if (!ProxyLogsDialog) {
@@ -306,7 +308,7 @@
 </ConfirmModal>
 
 {#if ProxyLogsDialog}
-  <svelte:component this={ProxyLogsDialog} open={logsOpen} onLoadLogs={onLoadProxyLogs} {config} providers={[...entries, ...archivedEntries]} onOpenChange={(open) => (logsOpen = open)} />
+  <svelte:component this={ProxyLogsDialog} open={logsOpen} returnFocus={logTrigger} onLoadLogs={onLoadProxyLogs} {config} providers={[...entries, ...archivedEntries]} onOpenChange={(open) => (logsOpen = open)} />
 {/if}
 
 <style lang="scss">

@@ -23,8 +23,8 @@
   </div>
   <div class="meta">
     <span class="label">{strength.label}</span>
-    {#if showHint && strength.hint}
-      <span class="hint">{strength.hint}</span>
+    {#if showHint && strength.hints?.length}
+      <span class="hints">{#each strength.hints as hint}<span>{hint}</span>{/each}</span>
     {/if}
   </div>
 </div>
@@ -64,7 +64,11 @@
     color: var(--text-secondary);
   }
 
-  .hint {
+  .hints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
     color: var(--text-tertiary);
   }
 

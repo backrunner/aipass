@@ -58,6 +58,12 @@
   $: recoverMatches = recoveryPassword.length > 0 && recoveryPassword === recoveryPasswordConfirm;
   $: recoverMismatch = recoveryPasswordConfirm.length > 0 && recoveryPassword !== recoveryPasswordConfirm;
   $: recoverReady = recoveryKeyInput.trim().length > 0 && recoverMatches;
+  function cancelCreate() {
+    createPassword = "";
+    createPasswordConfirm = "";
+    showCreatePassword = false;
+    setupMode = "choose";
+  }
 </script>
 
 <main class="auth-shell">
@@ -88,6 +94,7 @@
         </div>
 
         <PasswordField
+          id="create-password"
           label={$t("auth.masterPassword")}
           autocomplete="new-password"
           bind:value={createPassword}
@@ -98,6 +105,7 @@
         <PasswordStrengthMeter strength={createPasswordStrength} />
 
         <PasswordField
+          id="confirm-create-password"
           label={$t("auth.confirmPassword")}
           autocomplete="new-password"
           withToggle={false}
@@ -118,7 +126,7 @@
         {#if cloudDefault}
           <Button variant="secondary" block disabled={!createReady || busy} on:click={() => onCreate(true)}>{$t("auth.create.localOnly")}</Button>
         {/if}
-        <Button variant="ghost" block disabled={busy} on:click={() => setupMode = "choose"}>{$t("auth.setup.back")}</Button>
+        <Button variant="ghost" block disabled={busy} on:click={cancelCreate}>{$t("auth.setup.back")}</Button>
       </form>
     {:else if showRecover}
       <form class="form" on:submit|preventDefault={() => onRecover()}>
@@ -141,6 +149,7 @@
           />
         </label>
         <PasswordField
+          id="recover-password"
           label={$t("auth.newPassword")}
           autocomplete="new-password"
           bind:value={recoveryPassword}
@@ -151,6 +160,7 @@
         <PasswordStrengthMeter strength={recoveryPasswordStrength} />
 
         <PasswordField
+          id="confirm-recover-password"
           label={$t("auth.confirmNewPassword")}
           autocomplete="new-password"
           withToggle={false}
@@ -218,6 +228,7 @@
         </div>
 
         <PasswordField
+          id="unlock-password"
           label={$t("auth.masterPassword")}
           autocomplete="current-password"
           bind:value={password}

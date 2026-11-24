@@ -30,7 +30,6 @@
   let usageAccessToken = "";
   let usageUserId = "";
   let usageSecretId = "";
-  let usagePreview: UsageProbeResult | undefined;
   let usageProbeError: MessageValue = "";
   let usageApplying = false;
   let previousOpen = false;
@@ -49,8 +48,7 @@
     { value: "sub_api" as UsageProbeMode, label: $t("providerDetail.usageProbeSubApi") },
     { value: "new_api_advanced" as UsageProbeMode, label: $t("providerDetail.usageProbeNewApiAdvanced") }
   ];
-  $: activeUsageResult = usagePreview ?? usageProbeResult;
-  $: usageCanApply = canApplyUsageResult(activeUsageResult);
+  $: usageCanApply = canApplyUsageResult(usageProbeResult);
 
   $: {
     const selectedId = selected?.id ?? "";
@@ -60,7 +58,6 @@
       usageAccessToken = "";
       usageUserId = "";
       usageSecretId = selected?.secretRefs[0]?.id ?? "";
-      usagePreview = usageProbeResult;
       usageProbeError = "";
       usageApplying = false;
     }
@@ -93,18 +90,18 @@
       userId: usageUserId.trim() || undefined
     };
     try {
-      usagePreview = await onUsageProbe(request);
+      await onUsageProbe(request);
     } catch (err) {
       usageProbeError = isLocalizedMessage(err) ? err : String(err);
     }
   }
 
   async function applyUsageProbe() {
-    if (!activeUsageResult || !canApplyUsageResult(activeUsageResult)) return;
+    if (!usageProbeResult || !canApplyUsageResult(usageProbeResult)) return;
     usageProbeError = "";
     usageApplying = true;
     try {
-      await onApplyUsageProbe(activeUsageResult);
+      await onApplyUsageProbe(usageProbeResult);
       handleOpenChange(false);
     } catch (err) {
       usageProbeError = isLocalizedMessage(err) ? err : String(err);
@@ -188,70 +185,70 @@
             <Banner tone="danger">{resolveMessage($t, usageProbeError)}</Banner>
           {/if}
 
-          {#if activeUsageResult}
-            <div class="usage-preview" class:failed={!activeUsageResult.ok}>
+          {#if usageProbeResult}
+            <div class="usage-preview" class:failed={!usageProbeResult.ok}>
               <div class="usage-preview-head">
-                <span class={`probe-dot ${activeUsageResult.ok ? "ok" : "fail"}`}></span>
+                <span class={`probe-dot ${usageProbeResult.ok ? "ok" : "fail"}`}></span>
                 <strong>
-                  {activeUsageResult.ok ? $t(usageSourceLabelKey(activeUsageResult.source)) : $t("providerDetail.checkFailed")}
+                  {usageProbeResult.ok ? $t(usageSourceLabelKey(usageProbeResult.source)) : $t("providerDetail.checkFailed")}
                 </strong>
-                {#if activeUsageResult.status !== undefined}
-                  <code>HTTP {activeUsageResult.status}</code>
+                {#if usageProbeResult.status !== undefined}
+                  <code>HTTP {usageProbeResult.status}</code>
                 {/if}
               </div>
 
-              {#if activeUsageResult.endpoint}
-                <code class="usage-endpoint">{activeUsageResult.endpoint}</code>
+              {#if usageProbeResult.endpoint}
+                <code class="usage-endpoint">{usageProbeResult.endpoint}</code>
               {/if}
 
-              {#if activeUsageResult.error}
-                <p class="usage-error">{activeUsageResult.error}</p>
+              {#if usageProbeResult.error}
+                <p class="usage-error">{usageProbeResult.error}</p>
               {/if}
 
-              {#if activeUsageResult.quota}
+              {#if usageProbeResult.quota}
                 <div class="usage-preview-grid">
                   <div>
                     <span>{$t("providerDetail.quota")}</span>
-                    <strong>{activeUsageResult.quota.label ?? activeUsageResult.planName ?? "—"}</strong>
+                    <strong>{usageProbeResult.quota.label ?? usageProbeResult.planName ?? "—"}</strong>
                   </div>
                   <div>
                     <span>{$t("providerDetail.remaining")}</span>
-                    <strong>{activeUsageResult.quota.remaining ?? "—"}</strong>
+                    <strong>{usageProbeResult.quota.remaining ?? "—"}</strong>
                   </div>
                   <div>
                     <span>{$t("providerDetail.limit")}</span>
-                    <strong>{activeUsageResult.quota.limit ?? "—"}</strong>
+                    <strong>{usageProbeResult.quota.limit ?? "—"}</strong>
                   </div>
-                  {#if activeUsageResult.quota.used != null}
+                  {#if usageProbeResult.quota.used != null}
                     <div>
                       <span>{$t("providerDetail.used")}</span>
-                      <strong>{activeUsageResult.quota.used}</strong>
+                      <strong>{usageProbeResult.quota.used}</strong>
                     </div>
                   {/if}
                 </div>
-                {#if activeUsageResult.quota.resetAt || activeUsageResult.quota.unit}
+                {#if usageProbeResult.quota.resetAt || usageProbeResult.quota.unit}
                   <div class="usage-meta-line">
-                    {#if activeUsageResult.quota.unit}<span>{$t("providerDetail.unit")}: {activeUsageResult.quota.unit}</span>{/if}
-                    {#if activeUsageResult.quota.resetAt}<span>{$t("providerDetail.resets")}: {activeUsageResult.quota.resetAt}</span>{/if}
+                    {#if usageProbeResult.quota.unit}<span>{$t("providerDetail.unit")}: {usageProbeResult.quota.unit}</span>{/if}
+                    {#if usageProbeResult.quota.resetAt}<span>{$t("providerDetail.resets")}: {usageProbeResult.quota.resetAt}</span>{/if}
                   </div>
                 {/if}
               {/if}
 
-              {#if activeUsageResult.gateway}
+              {#if usageProbeResult.gateway}
                 <div class="usage-gateway">
                   <span class="usage-label">{$t("providerDetail.gateway")}</span>
                   <div class="chips">
-                    {#if activeUsageResult.gateway.group}
-                      <span class="chip">{$t("providerDetail.gatewayGroup")}: {activeUsageResult.gateway.group}</span>
+                    {#if usageProbeResult.gateway.group}
+                      <span class="chip">{$t("providerDetail.gatewayGroup")}: {usageProbeResult.gateway.group}</span>
                     {/if}
-                    {#if activeUsageResult.gateway.rate}
-                      <span class="chip mono">{$t("providerDetail.gatewayRate")}: {activeUsageResult.gateway.rate}</span>
+                    {#if usageProbeResult.gateway.rate}
+                      <span class="chip mono">{$t("providerDetail.gatewayRate")}: {usageProbeResult.gateway.rate}</span>
                     {/if}
                   </div>
                 </div>
               {/if}
 
-              {#if activeUsageResult.ok && !usageCanApply}
+              {#if usageProbeResult.ok && !usageCanApply}
                 <p class="usage-empty">{$t("providerDetail.noUsageData")}</p>
               {/if}
             </div>

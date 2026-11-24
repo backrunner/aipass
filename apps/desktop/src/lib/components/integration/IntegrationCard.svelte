@@ -185,7 +185,7 @@
     </IconButton>
   </svelte:fragment>
   <div class="integrate-body">
-    {#if sortedTools.length && showContext && $$slots.default}
+    {#if (localProxy || sortedTools.length) && showContext && $$slots.default}
       <div class="integration-context"><slot /></div>
     {/if}
 

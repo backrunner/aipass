@@ -33,6 +33,7 @@
   import { ProxyRouteList as RouteListPane } from "@aipass/ui";
   import ServerDetailPane from "./lib/components/server/ServerDetailPane.svelte";
   import SettingsPanel from "./lib/components/settings/SettingsPanel.svelte";
+  import { fetchUsageProbe } from "./lib/services/usageProbe";
   import AppTitleBar from "./lib/components/shared/AppTitleBar.svelte";
   import ErrorToast from "./lib/components/shared/ErrorToast.svelte";
   import { copyCredential, copySensitive, clearSensitiveClipboard } from "./lib/services/secretClipboard";
@@ -109,16 +110,6 @@
     if (hasTauriRuntime()) {
       void invokeTauri<void>("desktop_startup_stage", { stage }).catch(() => {});
     }
-  }
-
-  function nextFrame() {
-    return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  }
-
-  async function flushUiBeforeBlockingWork() {
-    await tick();
-    await nextFrame();
-    await nextFrame();
   }
 
   function cloudSyncProviderForMode(mode: SyncMode): "icloud" | "onedrive" | undefined {
@@ -325,6 +316,7 @@
   let devices: DeviceRecord[] = [];
   let devicesLoading = false;
   let activeDetailId = "";
+  let detailProbeGeneration = 0;
   let newSecretLabel = "";
   let newSecretKey = "";
   let secretBusy = "";
@@ -465,8 +457,7 @@
   $: if ((selected?.id ?? "") !== activeDetailId) {
     activeDetailId = selected?.id ?? "";
     revealedSecrets = {};
-    probeResult = undefined;
-    usageProbeResult = undefined;
+    resetDetailProbes();
   }
   $: createPasswordStrength = passwordStrength(createPassword, $t);
   $: recoveryPasswordStrength = passwordStrength(recoveryPassword, $t);
@@ -896,7 +887,7 @@
       return;
     }
     authBusy = "create";
-    await flushUiBeforeBlockingWork();
+    await tick();
     try {
       const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_create", {
         request: { password: createPassword, localOnly }
@@ -934,7 +925,7 @@
     if (authBusy) return;
     clearError();
     authBusy = "unlock";
-    await flushUiBeforeBlockingWork();
+    await tick();
     try {
       const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_unlock", {
         request: { password }
@@ -976,7 +967,7 @@
       return;
     }
     authBusy = "recover";
-    await flushUiBeforeBlockingWork();
+    await tick();
     try {
       const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_recover", {
         request: {
@@ -1028,7 +1019,7 @@
     if (resetBusy || resetConfirm.trim() !== "RESET") return;
     clearError();
     resetBusy = true;
-    await flushUiBeforeBlockingWork();
+    await tick();
     try {
       const started = await invokeTauri<VaultAuthTaskStartResponse>("vault_reset");
       const response = await waitForVaultAuthTask(started.taskId);
@@ -1138,8 +1129,7 @@
     activeDetailId = "";
     pricingConfig = { groups: [], assignments: [] };
     revealedSecrets = {};
-    probeResult = undefined;
-    usageProbeResult = undefined;
+    resetDetailProbes();
     showSettings = false;
     showServer = false;
     showAgents = false;
@@ -1776,12 +1766,17 @@
     }, 1800);
   }
 
-  async function archiveSelected() {
+  async function changeProviderLocation(command: "provider_archive" | "provider_trash" | "provider_restore") {
     if (!selected) return;
-    await invokeTauri("provider_archive", { id: selected.id });
-    await loadEntries();
-    void loadServer();
-    void loadArchivedEntries();
+    clearError();
+    try {
+      await invokeTauri(command, { id: selected.id });
+      await loadEntries();
+      void loadServer();
+      if (command !== "provider_trash") void loadArchivedEntries();
+    } catch (err) {
+      if (!status.locked) reportError(String(err));
+    }
   }
 
   async function toggleFavoriteSelected(favorite: boolean) {
@@ -1793,21 +1788,6 @@
     } catch (err) {
       reportError(String(err));
     }
-  }
-
-  async function trashSelected() {
-    if (!selected) return;
-    await invokeTauri("provider_trash", { id: selected.id });
-    await loadEntries();
-    void loadServer();
-  }
-
-  async function restoreSelected() {
-    if (!selected) return;
-    await invokeTauri("provider_restore", { id: selected.id });
-    await loadEntries();
-    void loadServer();
-    void loadArchivedEntries();
   }
 
   let trashConfirmation: TrashConfirmModal | undefined;
@@ -2006,24 +1986,9 @@
     }
   }
 
-  async function upsertPricingGroup(
-    group: PricingGroup,
-    applyScope: PricingApplyScope,
-    assign?: { entryId: string; secretId: string }
-  ) {
+  async function upsertPricingGroup(group: PricingGroup, applyScope: PricingApplyScope) {
     try {
       pricingConfig = await invokeTauri<PricingConfig>("pricing_group_upsert", { group, applyScope });
-      if (assign) {
-        const current = pricingConfig.assignments.find(
-          (assignment) => assignment.entryId === assign.entryId && assignment.secretId === assign.secretId
-        );
-        pricingConfig = await invokeTauri<PricingConfig>("pricing_assignment_set", {
-          entryId: assign.entryId,
-          secretId: assign.secretId,
-          groupId: group.id,
-          multiplier: current?.multiplier ?? 1
-        });
-      }
     } catch (err) {
       reportError(String(err));
       throw err;
@@ -2556,17 +2521,26 @@
     }
   }
 
+  function resetDetailProbes() {
+    detailProbeGeneration++;
+    probing = false;
+    usageProbing = false;
+    probeResult = undefined;
+    usageProbeResult = undefined;
+  }
+
   async function probeSelected() {
     if (!selected) return;
     const entry = selected;
+    const generation = detailProbeGeneration;
     probing = true;
     probeResult = undefined;
     clearError();
     try {
       const result = await invokeTauri<ProbeResult>("provider_probe", { id: entry.id, timeoutSeconds: 15 });
-      if (selected?.id === entry.id) probeResult = result;
+      if (generation === detailProbeGeneration) probeResult = result;
     } catch (err) {
-      if (selected?.id === entry.id) {
+      if (generation === detailProbeGeneration) {
         probeResult = {
           ok: false,
           providerId: entry.providerId,
@@ -2575,7 +2549,7 @@
         };
       }
     } finally {
-      probing = false;
+      if (generation === detailProbeGeneration) probing = false;
     }
   }
 
@@ -2583,37 +2557,20 @@
     if (!selected) {
       throw new Error($t("providerDetail.noneSelected"));
     }
+    const generation = detailProbeGeneration;
     usageProbing = true;
     usageProbeResult = undefined;
     clearError();
-    try {
-      const result = await invokeTauri<UsageProbeResult>("provider_usage_probe", {
-        id: selected.id,
-        secretId: request.secretId?.trim() || undefined,
-        mode: request.mode,
-        timeoutSeconds: 15,
-        baseUrl: request.baseUrl?.trim() || undefined,
-        accessToken: request.accessToken?.trim() || undefined,
-        userId: request.userId?.trim() || undefined
-      });
+    const result = await fetchUsageProbe(invokeTauri, selected, request);
+    if (generation === detailProbeGeneration) {
       usageProbeResult = result;
-      return result;
-    } catch (err) {
-      const result: UsageProbeResult = {
-        ok: false,
-        providerId: selected.providerId,
-        source: "unknown",
-        error: String(err)
-      };
-      usageProbeResult = result;
-      return result;
-    } finally {
       usageProbing = false;
     }
+    return result;
   }
 
   async function applyUsageProbe(result: UsageProbeResult) {
-    if (!selected) return;
+    if (!selected || result !== usageProbeResult) return;
     const quota = mergeQuota(
       selected.quota,
       result.quota,
@@ -3345,10 +3302,10 @@
         onEditCancel={cancelDetailEdit}
         onEditSave={saveDetailEdit}
         onFavorite={toggleFavoriteSelected}
-        onRestore={restoreSelected}
+        onRestore={() => changeProviderLocation("provider_restore")}
         onDelete={() => trashConfirmation?.requestDelete(selected)}
-        onArchive={archiveSelected}
-        onTrash={trashSelected}
+        onArchive={() => changeProviderLocation("provider_archive")}
+        onTrash={() => changeProviderLocation("provider_trash")}
         onRevealSecret={revealSecretById}
         onReadSecret={readSecretForEdit}
         onCopySecret={copySecretById}

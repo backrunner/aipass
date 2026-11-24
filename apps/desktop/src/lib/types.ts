@@ -572,7 +572,7 @@ export type PasswordStrength = {
   className: string;
   level: PasswordStrengthLevel;
   score: number;
-  hint?: string;
+  hints?: string[];
 };
 
 export type ToolSwitchRequest = { tool: ToolConfigTarget; mode: ToolConfigMode; id: string; secretId?: string; codexApiKeyMode?: CodexApiKeyMode; previewId?: string };

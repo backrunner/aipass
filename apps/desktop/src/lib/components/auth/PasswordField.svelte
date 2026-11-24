@@ -5,6 +5,7 @@
 
   import { t } from "../../stores/i18n";
 
+  export let id: string;
   export let label = "";
   export let value = "";
   export let show = false;
@@ -23,10 +24,10 @@
   });
 </script>
 
-<label class="field">
-  <span class="label">{label}</span>
+<div class="field">
+  <label class="label" for={id}>{label}</label>
   <div class="control" class:no-toggle={!withToggle}>
-    <input bind:this={inputEl} bind:value type={show ? "text" : "password"} {autocomplete} {placeholder} {disabled} />
+    <input {id} bind:this={inputEl} bind:value type={show ? "text" : "password"} {autocomplete} {placeholder} {disabled} />
     {#if withToggle}
       <button
         type="button"
@@ -39,7 +40,7 @@
       </button>
     {/if}
   </div>
-</label>
+</div>
 
 <style lang="scss">
   .field {

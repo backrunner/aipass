@@ -15,6 +15,7 @@
   export let group: PricingGroup | undefined = undefined;
   export let assignedCount = 0;
   export let onSave: (group: PricingGroup, applyScope: PricingApplyScope) => MaybePromise = () => {};
+  export let onAssign: ((groupId: string) => MaybePromise) | undefined = undefined;
   export let onDeleteGroup: (groupId: string) => MaybePromise = () => {};
   export let onDeleteVersion: (groupId: string, effectiveFrom: number) => MaybePromise = () => {};
   export let onClose: () => MaybePromise = () => {};
@@ -139,6 +140,8 @@
     return latest.rules;
   }
 
+  const draftId = group?.id ?? crypto.randomUUID();
+  let savedDraft = "";
   let nameDraft = group?.name ?? "";
   let rules: RuleForm[] = latestRules(group).map(ruleFromModel);
   if (rules.length === 0) rules = [emptyRule()];
@@ -199,7 +202,7 @@
 
   function buildGroup(): PricingGroup {
     return {
-      id: group?.id ?? crypto.randomUUID(),
+      id: draftId,
       name: nameDraft.trim(),
       versions: [
         {
@@ -215,7 +218,15 @@
     saving = true;
     error = "";
     try {
-      await onSave(buildGroup(), applyScope);
+      const draft = buildGroup();
+      const revision = JSON.stringify([draft, applyScope]);
+      const assign = onAssign;
+      // Assigning the credential can fail after the rule version is committed.
+      if (revision !== savedDraft) {
+        await onSave(draft, applyScope);
+        savedDraft = revision;
+      }
+      await assign?.(draft.id);
       onClose();
     } catch (err) {
       error = String(err);

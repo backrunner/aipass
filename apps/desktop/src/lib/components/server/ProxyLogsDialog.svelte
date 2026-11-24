@@ -14,6 +14,7 @@
   export let providers: ProviderEntry[] = [];
   export let config: ProxyConfig;
   export let open = false;
+  export let returnFocus: HTMLElement | undefined = undefined;
   export let onOpenChange: (open: boolean) => void = () => {};
   export let onLoadLogs: () => Promise<ProxyLogEntry[]> = async () => [];
 
@@ -146,7 +147,12 @@
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Portal>
     <Dialog.Overlay class="proxy-log-overlay" />
-    <Dialog.Content class="proxy-log-content">
+    <Dialog.Content class="proxy-log-content" onCloseAutoFocus={event => {
+      if (returnFocus?.isConnected) {
+        event.preventDefault();
+        returnFocus.focus();
+      }
+    }}>
       <header class="proxy-log-header">
         <div>
           <Dialog.Title class="proxy-log-title">{$t("server.proxyLogs")}</Dialog.Title>

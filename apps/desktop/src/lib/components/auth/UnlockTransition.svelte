@@ -28,16 +28,16 @@
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     if (reduced) {
-      requestAnimationFrame(() => {
-        dispatch("covered");
-        dispatch("done");
-      });
+      queueMicrotask(onAnimationEnd);
       return;
     }
 
     const coverTimer = setTimeout(onCovered, COVERED_AT_MS);
+    // A hidden WebView or a change to reduced motion can suppress animationend.
+    const finishTimer = setTimeout(onAnimationEnd, 1250);
     return () => {
       clearTimeout(coverTimer);
+      clearTimeout(finishTimer);
     };
   });
 </script>

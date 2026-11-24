@@ -65,30 +65,29 @@ export function passwordStrength(value: string, translate: Translate = fallbackT
     label = translate("password.strong");
   }
 
-  const hint = buildHint(length, hasLower, hasUpper, hasDigit, hasSymbol, translate);
+  const hints = buildHints(length, hasLower, hasUpper, hasDigit, hasSymbol, translate);
 
   return {
     label,
     className: `strength-${level}`,
     level,
     score,
-    hint
+    hints
   };
 }
 
-function buildHint(
+function buildHints(
   length: number,
   hasLower: boolean,
   hasUpper: boolean,
   hasDigit: boolean,
   hasSymbol: boolean,
   translate: Translate
-): string | undefined {
+): string[] {
   const tips: string[] = [];
   if (length < 12) tips.push(translate("password.moreChars", { count: Math.max(0, 12 - length) }));
   if (!hasUpper || !hasLower) tips.push(translate("password.mixCase"));
   if (!hasDigit) tips.push(translate("password.addDigit"));
   if (!hasSymbol) tips.push(translate("password.addSymbol"));
-  if (tips.length === 0) return undefined;
-  return tips.slice(0, 2).join(" · ");
+  return tips.slice(0, 2);
 }
