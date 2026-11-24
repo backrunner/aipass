@@ -140,10 +140,19 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
-      - name: Exercise subscription plugin interfaces
+      - name: Exercise browser interfaces and native tray
         run: |
           pnpm exec playwright install chromium webkit
           pnpm test:e2e
+          swift test --package-path apps/desktop/src-tauri/swift-tray
+      - name: Upload UI interaction report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-interaction-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify desktop and macOS process lifecycle
         run: |
           cargo test -p aipass-desktop --lib
@@ -171,6 +180,13 @@ jobs:
           test -x "${app_path}/Contents/MacOS/aipass-desktop"
           test -x "${app_path}/Contents/Resources/aipass-agent"
           test -x "${app_path}/Contents/Resources/aipass-native-host"
+          node scripts/ui-e2e/packaged-extension.mjs "$app_path" runtime-check-reports
+          gui_input="$(swift -e 'import ApplicationServices; print(AXIsProcessTrusted() && CGSessionCopyCurrentDictionary() != nil)')"
+          if [[ "$gui_input" == "true" ]]; then
+            node scripts/ui-e2e/native-desktop.mjs "$app_path" runtime-check-reports/native-desktop
+          else
+            echo "::notice::Native keyboard test requires a logged-in WindowServer session with Accessibility permission."
+          fi
       - name: Verify DMG integrity
         run: |
           node --test scripts/verify-macos-dmg.test.mjs
@@ -219,6 +235,10 @@ jobs:
       - run: cargo test --workspace --no-fail-fast
         timeout-minutes: 20
       - run: cargo build --workspace
+      - name: Run release binaries in the Windows Agent sandbox
+        run: |
+          python examples/subscription-provider/release.py native --output "$env:RUNNER_TEMP/plugin-native" --agent target/debug/aipass-agent.exe --verify-install
+          python examples/subscription-provider/release.py wasi --output "$env:RUNNER_TEMP/plugin-wasi" --agent target/debug/aipass-agent.exe --verify-install
       - name: Verify unpackaged Windows CLI and Agent runtime
         run: node scripts/verify-cli-runtime.mjs target/debug windows-runtime-check-reports/cli-debug
       - name: Verify isolated proxy uninstall recovery
@@ -239,8 +259,4 @@ jobs:
           name: windows-runtime-checks
           path: windows-runtime-check-reports/
           if-no-files-found: ignore
-      - name: Run release binaries in the Windows Agent sandbox
-        run: |
-          python examples/subscription-provider/release.py native --output "$env:RUNNER_TEMP/plugin-native" --agent target/debug/aipass-agent.exe --verify-install
-          python examples/subscription-provider/release.py wasi --output "$env:RUNNER_TEMP/plugin-wasi" --agent target/debug/aipass-agent.exe --verify-install
           retention-days: 14

@@ -286,7 +286,7 @@ Newest entries last within each section.
 - **Symptom**: extension provider editing could patch only the first key, change its format on a site-only save, and omit endpoint/model overrides supported by desktop.
 - **Root cause**: `popup/Popup.svelte::draftFromEntry` hydrated first-key fields and native `ProviderUpdate` always patched that key; summary types and worker routing exposed no full per-key mutation.
 - **Fix**: edit/add/remove by credential ID through existing Agent requests, mark site-only updates explicitly, preserve empty key arrays and share `CredentialBillingFields` with desktop. Refresh caches only from Rust's masked summary; invalidate stale entries when a successful mutation cannot return its summary.
-- **Guardrail**: verify mixed-key edit/clear/rotation, provider-only saves, last-key deletion and lock rejection in native-host, worker and popup regressions. Never construct cached summaries from plaintext mutation requests. Keep credential sections from flex-shrinking inside popup scroll containers.
+- **Guardrail**: verify mixed-key edit/clear/rotation, provider-only saves, last-key deletion and lock rejection in native-host, worker and popup regressions. Never construct cached summaries from plaintext mutation requests. Keep credential sections from flex-shrinking inside popup scroll containers. In the unpacked extension, fill a secondary key with a distinct mask and endpoint, check its actual destination fields, and retry after clipboard denial.
 - **Watch points**: `CredentialList.svelte`, `Popup.svelte`, `native-client.ts`, `service-worker.ts`, native-host protocol/request adapters, and desktop `ProviderDetailPane`.
 
 ## Proxy credential snapshot (proxy_service / handlers)
@@ -734,8 +734,15 @@ Newest entries last within each section.
 - **Symptom**: OAuth accounts stayed over the lock screen, settings errors appeared behind the drawer, a failed close hid unsaved settings, and save retries left an empty editor or duplicated providers.
 - **Root cause**: `App.svelte:1098` omitted OAuth from lock cleanup; settings closed before awaiting persistence; provider saves inferred success from a shared stale error and had no operation-level exclusion.
 - **Fix**: gate OAuth on the unlocked workspace; keep settings open until save succeeds with feedback inside the drawer; return explicit provider save results and guard in-flight writes. Preserve drafts from late settings reloads.
-- **Guardrail**: unmount every sensitive dialog on lock. Keep failed mutations visible with their draft, close on explicit success, and distinguish committed writes from refresh failures. Test actual App-to-dialog paths, including late list responses, close-save failure and repeated submits at 960×640.
+- **Guardrail**: unmount every sensitive dialog on lock. Keep failed mutations visible with their draft, close on explicit success, and distinguish committed writes from refresh failures. Test actual App-to-dialog paths, including late list responses, close-save failure and repeated submits at 960×640. On popup lock or disconnect, clear local editors and menus, invalidate outstanding refreshes, and preserve worker-owned pending saves. Exercise relock and a delayed batch submission in `scripts/ui-e2e/extension.spec.mjs`.
 - **Watch points**: `App.operations.test.ts`, `IntegrationCard.test.ts`, inline/provider-modal saves, settings close/Escape/outside events, OAuth account loading and login cancellation.
+
+### Closing the sign-in dialog after success cancelled the completed ticket
+- **Symptom**: successful Claude and community sign-ins sent a cancellation command when their dialogs closed.
+- **Root cause**: the teardown callbacks read the last rendered pending login at `ClaudeConnectPane.svelte:28` and `CommunityConnectDialog.svelte:58`. The parent closed the dialog in the same update as the terminal poll response.
+- **Fix**: track the ticket that still requires cancellation separately from the displayed login. Release it before notifying the parent of authorization.
+- **Guardrail**: exercise completed and cancelled tickets through the desktop entry point, asserting both the final selection and exact cancellation behavior.
+- **Watch points**: pending sign-in cleanup, completion callbacks and component teardown for both CLI and community sign-in.
 
 ## Shared language settings
 
@@ -775,6 +782,20 @@ Newest entries last within each section.
 - **Fix**: remove the detail page's generic error prop, route ordinary failures into a dismissible, expiring toast, and scope inline auth, provider-form and settings feedback to their own surfaces. Dialogs that already handle rejected callbacks own their errors without a duplicate host notification.
 - **Guardrail**: report operation errors through `reportError`; never pass app-wide errors to an entity detail page. Test unrelated errors during editing, repeated identical failures, auto-dismiss and closing a failed settings surface in `App.operations.test.ts`. Preserve drafts on failure and clear workspace toasts on lock.
 - **Watch points**: App operation handlers, provider inline/modal saves, settings feedback, integration/usage dialogs, and `ErrorToast.svelte` at 960×640.
+
+### Delayed quota probes followed the selection to another provider
+- **Symptom**: probing A, closing the dialog and selecting B enabled applying A's observed quota to B.
+- **Root cause**: `App.svelte:2599` published the result after selection changed and `ProviderUsageProbeDialog.svelte:98` retained a second unscoped preview.
+- **Fix**: invalidate in-flight probe generations on selection changes and lock. Render and apply the same current result.
+- **Guardrail**: delay A's response while switching to B. Verify that B can only apply its own probe in `desktop-providers.spec.mjs`.
+- **Watch points**: endpoint and quota probes, the detail summary, dialog preview and apply, and vault lock.
+
+### Retrying a credential assignment created a second pricing group
+- **Symptom**: a rule save succeeded, binding its credential failed, and retry created an additional group with the same name.
+- **Root cause**: `PricingGroupDialog.svelte:202` allocated a fresh ID per submission. `App.svelte:2015` repeated both writes after partial success.
+- **Fix**: keep the draft ID and the last committed rules and scope in the dialog. Retry only the remaining assignment when those values match.
+- **Guardrail**: fail the first assignment after a successful version write. Require one rule write and two assignments targeting the same group in `desktop-runtime.spec.mjs`.
+- **Watch points**: new group creation, version updates and historical price scope.
 
 ## Desktop settings layout
 
@@ -831,6 +852,13 @@ Newest entries last within each section.
 - **Watch points**: `.gitattributes`, panel stamp inputs, Agent build inputs, `scripts/repo-health.mjs`, and Windows CLI release builds.
 
 ## LAN control panel
+
+### Closing overlays must release input under the Agent's actual CSP
+- **Symptom**: Closing logs or configuration previews left the whole panel unclickable in Chromium. WebKit also lost keyboard focus after clicking the log trigger and dismissing the dialog.
+- **Root cause**: Bits UI restored the body's pre-dialog style with `setAttribute("style", ...)`. The Agent's `style-src 'self'` rejected the write, leaving the computed pointer lock active. WebKit pointer clicks do not always focus the opening button.
+- **Fix**: Patch the pinned Bits UI scroll-lock cleanup to restore via CSSOM. Return focus to the connected log trigger explicitly.
+- **Guardrail**: Run `scripts/ui-e2e/panel.spec.mjs` through the isolated Rust listener with its production headers. Close and reopen the dialog, verify original body style, scrolling and clickability, and check keyboard focus in both browser engines.
+- **Watch points**: Bits UI upgrades, upstream body-scroll-lock, panel overlay triggers, embedded bundle source stamp.
 
 ### Credential navigation must share desktop categories and scope selection
 - **Symptom**: The panel flattened providers under one Credentials entry, ignored desktop favorites/recent/provider kinds, and kept details selected outside the active category.
@@ -1390,7 +1418,7 @@ Newest entries last within each section.
 - **Root cause**: NSIS pre-uninstall originally only stopped processes/login entries, while manual replacement can invoke an old uninstaller without the updater's `/UPDATE`. Vault-encrypted history alone cannot support locked-vault uninstall and its latest backup can already be another proxy.
 - **Fix**: device-protected, installation-owned reversal receipts in `proxy_recovery`; protocol 21 replaces older resident writers. Preserve interrupted chains and compact only verified completed writes, preflight all resources, resume encrypted recovery, preserve unrelated fields and validate current native archives. Pass `/AIPASS_REPLACE` from the pinned NSIS template. macOS uses an explicit packaged uninstaller; file disappearance is not intent.
 - **Guardrail**: exercise repeated route writes, partial failure and interrupted restoration, user conflicts, native renewal/account changes, locked recovery, manual upgrade/downgrade, reinstall and failed replacement. Keep verified default-vault registrations for uninstall retries. Preserve encrypted retired history for ordinary rollback and decrypt the full backup group before writes. Retire only replaced proxy fields; clean dormant entries using recorded route markers while preserving direct selections, including an unchanged model. Keep legacy blockers when shared files still contain known proxy entries. Normalize line endings before vendor-template checks. Reject unknown legacy baselines and inaccessible device keys. Never restore account archives/Vault references or treat arbitrary localhost settings as owned. Run fixtures with temporary HOME/vendor directories and an explicit disposable keychain; do not use the developer's login Keychain or Agent configuration.
-- **Watch points**: native `tool_switch/apply.rs` and pending-transaction recovery, generic tool handlers/rollback, proxy receipt history/markers and platform key storage, NSIS template/hooks, macOS uninstaller and both packaged-runtime scripts. Apply the same recovery file lock to startup transaction replay. Stop owned services and reject every surviving Agent on the affected vault IPC, including another executable, before capturing native originals. Never share a `target` directory with a different source worktree when validating artifacts or Clippy metadata.
+- **Watch points**: native `tool_switch/apply.rs` and pending-transaction recovery, generic tool handlers/rollback, proxy receipt history/markers and platform key storage, NSIS template/hooks, macOS uninstaller and both packaged-runtime scripts. Apply the same recovery file lock to startup transaction replay. Explicitly unlock the recovery file at the end of each operation. A concurrent fork can retain its open file description after the owner closes it. Exercise immediate reacquisition with a duplicated descriptor still open, and check that a second live owner still excludes a third. Stop owned services and reject every surviving Agent on the affected vault IPC, including another executable, before capturing native originals. Never share a `target` directory with a different source worktree when validating artifacts or Clippy metadata.
 
 ### Bare TCP acceptance is not evidence of a replayed generation
 - **Symptom**: the WebSocket disconnect regression intermittently reported a fallback after output had already arrived.
@@ -1412,6 +1440,20 @@ Newest entries last within each section.
 - **Fix**: replace TOML parse failures with a fixed diagnostic, preserving the configuration and encrypted recovery data.
 - **Guardrail**: malformed configuration containing a synthetic credential must fail without including that credential in the formatted error chain. Keep native platform fixture imports explicit; macOS Clippy cannot compile Windows-only test modules.
 - **Watch points**: `proxy_recovery/merge.rs`, the uninstall entry point and native Windows CI.
+
+### macOS menu validation and repeated tray status updates
+- **Symptom**: Opening the right-click tray menu enabled actions the latest Agent status had disabled. Refreshing the locked panel during unlock also enabled a second submission.
+- **Root cause**: AppKit menu validation replaced explicit item enablement, and `TrayViewModel.apply(status:)` cleared the pending unlock for every snapshot.
+- **Fix**: Use snapshot-owned enablement on the main menu and both submenus. Keep unlock pending until the Rust result arrives and clear the password draft on dismissal or external unlock.
+- **Guardrail**: Exercise the built menu after `NSMenu.update()` and refresh the locked SwiftUI panel before delivering the unlock result. See `TrayInteractionTests.swift`.
+- **Watch points**: Left-click panel, right-click submenus, desktop lock events and the Rust unlock result callback.
+
+### Vault authentication must progress without animation frames
+- **Symptom**: Submitting the unlock form in an occluded macOS WebView disabled its controls indefinitely. The Agent received no unlock request.
+- **Root cause**: The frontend waited for two animation frames before invoking its asynchronous Tauri command. WebKit can suspend painting for a covered window or locked screen.
+- **Fix**: Flush the pending form state with Svelte's `tick()` and send the authentication task to Rust immediately.
+- **Guardrail**: Suspend animation callbacks after entering a synthetic password, submit by keyboard, and verify the Agent command, error message, and enabled retry field.
+- **Watch points**: Create, unlock, recover, and reset paths in desktop `App.svelte`.
 
 ### Plugin sign-in forms and provider replacement
 
