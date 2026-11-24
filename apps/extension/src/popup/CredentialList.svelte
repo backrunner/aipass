@@ -14,6 +14,7 @@
   import type { CredentialWriteRequest } from "../native-client";
   import { parseHttpEndpoint } from "../provider-endpoint";
   import type { Entry } from "./types";
+  import { entrySecrets } from "./entry-secrets";
 
   export let entry: Entry;
   export let busy = false;
@@ -23,9 +24,7 @@
   export let onSave: (request: CredentialWriteRequest) => Promise<void>;
   export let onRemove: (secretId: string) => Promise<void>;
 
-  $: secrets = entry.secretRefs ?? [
-    { id: "primary", label: "primary", masked: entry.maskedSecret, fingerprint: entry.fingerprint },
-  ];
+  $: secrets = entrySecrets(entry);
   $: siteEndpoint = entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url ?? "";
   const formats: InterfaceType[] = [
     "openai_compatible",

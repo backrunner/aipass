@@ -25,6 +25,7 @@
 
   export let visibleDraftItems: DraftItem[] = [];
   export let selectedDraftCount = 0;
+  export let saving = false;
   export let onDismissAll: () => void | Promise<void> = () => {};
   export let onDismissDraft: (draftId: string) => void | Promise<void> = () => {};
   export let onIgnoreOrigin: () => void | Promise<void> = () => {};
@@ -64,7 +65,7 @@
 </script>
 
 {#if visibleDraftItems.length > 0}
-  <section class="draft">
+  <fieldset class="draft" disabled={saving} aria-label={$t("ext.detectedKeys")}>
     <div class="draft-head">
       <div class="draft-title">
         <small>{$t("ext.detectedKeys")}</small>
@@ -166,11 +167,11 @@
         <Ban size={15} />
         {$t("ext.ignoreSite")}
       </Button>
-      <Button size="sm" variant="primary" on:click={onSaveSelected} disabled={selectedDraftCount === 0}>
+      <Button size="sm" variant="primary" loading={saving} on:click={onSaveSelected} disabled={selectedDraftCount === 0}>
         {$t("ext.saveSelected")}
       </Button>
     </div>
-  </section>
+  </fieldset>
 {/if}
 
 <style lang="scss">
@@ -178,6 +179,8 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    margin: 0;
+    min-width: 0;
     padding: 12px;
     background: var(--surface-2);
     border: 1px solid var(--divider);

@@ -141,7 +141,6 @@ export type DraftItem = {
   selected: boolean;
   preview?: DraftPreview | null;
   previewLoading: boolean;
-  saving: boolean;
   saved: boolean;
   protocolTouched: ProtocolTouched;
 };

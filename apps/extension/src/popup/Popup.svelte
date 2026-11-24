@@ -38,6 +38,7 @@
   import { desktopDeepLink, friendlyNativeError, isNativeLaunchFailure } from "../native-error";
   import { endpointForProvider, parseHttpEndpoint, providerForEndpoint } from "../provider-endpoint";
   import CredentialList from "./CredentialList.svelte";
+  import { entrySecrets, matchesMaskedSecret } from "./entry-secrets";
   import type { CredentialWriteRequest } from "../native-client";
   import DetectedDraftBatch from "./DetectedDraftBatch.svelte";
   import {
@@ -64,6 +65,7 @@
   };
 
   let connection: Connection = "checking";
+  let refreshGeneration = 0;
   let currentUrl = "";
   let currentOrigin = "";
   let currentTitle = "";
@@ -79,6 +81,7 @@
   let searchGrants: Grant[] = [];
   let pendingDrafts: SafeDraft[] = [];
   let draftItems: DraftItem[] = [];
+  let savingDraftBatch = false;
   let faviconBackfillBusy = false;
   const faviconBackfillAttemptedIds = new Set<string>();
   let statusText = "";
@@ -168,34 +171,26 @@
   });
 
   async function refresh(options: RefreshOptions = {}) {
+    const generation = ++refreshGeneration;
     const scanActiveTab = options.scanActiveTab ?? false;
     const assumeUnlocked = options.assumeUnlocked ?? false;
     statusText = "";
     statusError = false;
     if (!assumeUnlocked) {
       const ping = await sendToWorker<NativeSessionStatus>({ type: "aipass.ping" });
-      if (!ping?.ok) {
-        entriesLoading = false;
-        connection = "missing";
-        return;
-      }
-      applyLanguageSettings(ping.data?.language);
-      connection = ping.data?.locked ? "locked" : "connected";
+      if (generation !== refreshGeneration) return;
+      if (ping?.ok) applyLanguageSettings(ping.data?.language);
+      connection = !ping?.ok ? "missing" : ping.data?.locked ? "locked" : "connected";
     } else {
       connection = "connected";
     }
     if (connection !== "connected") {
-      entriesLoading = false;
-      entriesStale = false;
-      entries = [];
-      siteEntries = [];
-      siteEntryIds = new Set();
-      grants = [];
-      clearPendingDraftUi();
+      clearVaultView();
       return;
     }
     entriesLoading = true;
-    await hydrateCachedEntries();
+    await hydrateCachedEntries(generation);
+    if (generation !== refreshGeneration) return;
     if (scanActiveTab && tabId && currentUrl) {
       await sendToWorker<{ scanned: boolean }>({ type: "aipass.scanActiveTab", tabId });
       await delay(120);
@@ -207,6 +202,7 @@
         : Promise.resolve(undefined);
     const draftRequest = sendToWorker<{ drafts: SafeDraft[] }>({ type: "aipass.pendingDrafts" });
     const [list, lookup, draftResponse] = await Promise.all([listRequest, lookupRequest, draftRequest]);
+    if (generation !== refreshGeneration) return;
     // On a list failure keep the previous entries but flag them as stale and
     // surface the error instead of silently presenting old data as fresh.
     const listFailed = !list?.ok;
@@ -305,8 +301,9 @@
     }
   }
 
-  async function hydrateCachedEntries() {
+  async function hydrateCachedEntries(generation: number) {
     const cached = await sendToWorker<CachedEntriesData>({ type: "aipass.cachedEntriesList" });
+    if (generation !== refreshGeneration) return;
     const cachedEntries = cached?.ok ? cached.data?.entries ?? [] : [];
     if (!cachedEntries.length) return;
     entries = mergeEntries(cachedEntries, entries);
@@ -384,7 +381,10 @@
 
   async function useEntry(entry: Entry, requestedSecretId?: string) {
     if (usingEntryId) return;
-    const secretId = requestedSecretId ?? entrySecrets(entry)[0]?.id;
+    const secrets = entrySecrets(entry);
+    const selected = requestedSecretId ? secrets.find((item) => item.id === requestedSecretId) : secrets[0];
+    if (!selected) return;
+    const secretId = selected.id;
     const useKey = `${entry.id}:${secretId ?? "primary"}`;
     usingEntryId = useKey;
     statusText = "";
@@ -409,10 +409,10 @@
       return;
     }
     const secret = fill.data.secret;
-    if (!secretMatchesEntry(secret, entry)) {
+    if (!matchesMaskedSecret(secret, selected.masked)) {
+      await refresh({ scanActiveTab: false });
       statusText = $t("ext.fillMismatch");
       statusError = true;
-      await refresh({ scanActiveTab: false });
       usingEntryId = "";
       return;
     }
@@ -422,15 +422,12 @@
         {
           type: "aipass.fillSecret",
           secret,
-          endpoint: entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url
+          endpoint: selected.endpoint || entry.endpoints.find((endpoint) => endpoint.kind === "api")?.url
         },
         () => undefined
       );
     }
-    await navigator.clipboard?.writeText(secret);
-    copied = useKey;
-    statusError = false;
-    setTimeout(() => (copied = ""), 1400);
+    await copyValue(secret, useKey);
     usingEntryId = "";
   }
 
@@ -487,38 +484,39 @@
   }
 
   async function saveSelectedDrafts() {
+    if (savingDraftBatch) return;
     const selected = visibleDraftItems.filter((item) => item.selected);
     if (!selected.length) {
       statusText = $t("ext.saveFailed");
       return;
     }
-    draftItems = draftItems.map((item) =>
-      selected.some((selectedItem) => selectedItem.draftId === item.draftId)
-        ? { ...item, saving: true }
-        : item
-    );
-    const response = await sendToWorker<SavePendingData>({
-      type: "aipass.savePendingDrafts",
-      draftPatches: selected.map((item) => ({
-        draftId: item.draftId,
-        draft: draftPatch(item)
-      }))
-    });
-    if (response?.data?.requiresUnlock) {
-      handleSaveRequiresUnlock(response.data);
-      return;
-    }
-    if (!response?.ok) {
-      if ((response?.data?.saved?.length ?? 0) > 0) {
-        await refresh();
+    savingDraftBatch = true;
+    try {
+      const response = await sendToWorker<SavePendingData>({
+        type: "aipass.savePendingDrafts",
+        draftPatches: selected.map((item) => ({
+          draftId: item.draftId,
+          draft: draftPatch(item)
+        }))
+      });
+      if (response?.data?.requiresUnlock) {
+        handleSaveRequiresUnlock(response.data);
+        return;
       }
-      statusText = friendlyNativeError(response?.error, $t) || $t("ext.saveFailed");
-      draftItems = draftItems.map((item) => ({ ...item, saving: false }));
-      return;
+      if (!response?.ok) {
+        if ((response?.data?.saved?.length ?? 0) > 0) {
+          await refresh();
+        }
+        statusText = friendlyNativeError(response?.error, $t) || $t("ext.saveFailed");
+        statusError = true;
+        return;
+      }
+      clearPendingDraftUi();
+      await refresh();
+      statusText = $t("ext.savedCount", { count: response.data?.saved?.length ?? selected.length });
+    } finally {
+      savingDraftBatch = false;
     }
-    clearPendingDraftUi();
-    await refresh();
-    statusText = $t("ext.savedCount", { count: response.data?.saved?.length ?? selected.length });
   }
 
   async function finishUnlockAndResumeSaves() {
@@ -547,19 +545,7 @@
   }
 
   function handleSaveRequiresUnlock(data: SavePendingData) {
-    // Drafts the worker already saved before hitting the lock are cleared
-    // server-side; drop them locally too so a re-save can't fail with
-    // "No pending API key draft".
-    const savedIds = new Set(
-      (data.saved ?? [])
-        .map((item) => item.draftId)
-        .filter((draftId): draftId is string => Boolean(draftId))
-    );
-    if (savedIds.size) {
-      draftItems = draftItems.filter((item) => !savedIds.has(item.draftId));
-      pendingDrafts = pendingDrafts.filter((item) => !savedIds.has(item.draftId));
-    }
-    draftItems = draftItems.map((item) => ({ ...item, saving: false }));
+    clearVaultView();
     addBusy = false;
     connection = "locked";
     statusText = data.opened ? $t("ext.unlockToFinishSave") : $t("ext.unlockToFinishSaveManual");
@@ -634,7 +620,6 @@
         selected: true,
         preview: null,
         previewLoading: false,
-        saving: false,
         saved: false,
         protocolTouched: untouchedProtocol()
       };
@@ -854,6 +839,25 @@
       headers: pairsFromCsv(draft.header),
       notes: draft.notes.trim() || undefined
     };
+  }
+
+  function clearVaultView() {
+    refreshGeneration++;
+    entriesLoading = false;
+    entriesStale = false;
+    entries = [];
+    siteEntries = [];
+    siteEntryIds = new Set();
+    grants = [];
+    searchQuery = "";
+    searchResults = [];
+    searchGrants = [];
+    selectedEntryId = "";
+    entryMenu = null;
+    unlockPassword = "";
+    showPassword = false;
+    clearPendingDraftUi();
+    clearProviderEditor();
   }
 
   function clearPendingDraftUi() {
@@ -1083,17 +1087,6 @@
     }
   }
 
-  function entrySecrets(entry: Entry) {
-    return entry.secretRefs ?? [
-      {
-        id: "primary",
-        label: "",
-        masked: entry.maskedSecret,
-        fingerprint: entry.fingerprint
-      }
-    ];
-  }
-
   function mergeEntries(primary: Entry[], secondary: Entry[]): Entry[] {
     const byId = new Map<string, Entry>();
     for (const entry of primary) byId.set(entry.id, entry);
@@ -1171,7 +1164,13 @@
 
   async function copyValue(value: string | undefined, label: string) {
     if (!value) return;
-    await navigator.clipboard?.writeText(value);
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      statusText = $t("notice.clipboardUnavailable");
+      statusError = true;
+      return;
+    }
     copied = label;
     setTimeout(() => (copied = ""), 1400);
   }
@@ -1283,6 +1282,7 @@
 
   function openEditEntry(entry: Entry) {
     closeEntryMenu();
+    selectedEntryId = entry.id;
     addDraft = draftFromEntry(entry);
     // A stored entry's protocol is already an explicit choice; never let
     // domain/endpoint inference silently rewrite it while editing.
@@ -1379,13 +1379,16 @@
   }
 
   function closeAddForm() {
-    const draftId = editingDraftId;
+    if (editingDraftId) void sendToWorker({ type: "aipass.dismissPendingDraft", draftId: editingDraftId });
+    clearProviderEditor();
+  }
+
+  function clearProviderEditor() {
     showAddForm = false;
     detailEditMode = false;
     editingDraftId = "";
     editingEntryId = "";
     addDraft = emptyDraft();
-    if (draftId) void sendToWorker({ type: "aipass.dismissPendingDraft", draftId });
   }
 
   function addProviderChanged() {
@@ -1675,17 +1678,6 @@
 
   function supportsUsageRefresh(entry: Entry): boolean {
     return entry.providerId === "new_api" || entry.providerId === "one_api" || entry.providerId === "sub2api" || entry.providerId === "veloera";
-  }
-
-  function secretMatchesEntry(secret: string, entry: Entry): boolean {
-    const masked = entry.maskedSecret.trim();
-    if (!masked || masked === "****") return true;
-    if (masked.includes("...")) {
-      const [head, tail] = masked.split("...");
-      return (!head || secret.startsWith(head)) && (!tail || secret.endsWith(tail));
-    }
-    const suffix = masked.replace(/^••••\s*/, "").trim();
-    return !suffix || secret.endsWith(suffix);
   }
 
   function clamp(value: number, min: number, max: number) {
@@ -2080,6 +2072,7 @@
     <DetectedDraftBatch
       {visibleDraftItems}
       {selectedDraftCount}
+      saving={savingDraftBatch}
       onDismissAll={dismissPendingDrafts}
       onDismissDraft={dismissDraft}
       onIgnoreOrigin={ignoreCurrentOrigin}
@@ -2129,8 +2122,8 @@
     flex-direction: column;
     gap: 12px;
     padding: 14px;
-    max-height: 620px;
-    overflow: hidden;
+    max-height: 600px;
+    overflow-y: auto;
   }
 
   .popup-header {
