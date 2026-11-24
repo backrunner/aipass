@@ -37,7 +37,7 @@ EVENTS
 while [ ! -f .wake ]; do sleep 0.01; done
 printf '%s\n' '{"type":"control_request","request_id":"background-permission","request":{"subtype":"can_use_tool","tool_name":"Read","input":{"file_path":"fixture"}}}'
 read -r input
-printf '%s\n' "$input" > next.json
+printf '%s\n' "$input" > next.tmp && mv next.tmp next.json
 read -r permission
 printf '%s\n' "$permission" > permission.json
 cat <<'EVENTS'
@@ -134,7 +134,7 @@ async fn plan_approval_waits_for_the_native_permission_mode_acknowledgement() {
         let script = r#"read -r input
 printf '%s\n' '{"type":"control_request","request_id":"plan","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"write test"}}}'
 read -r mode
-printf '%s\n' "$mode" > mode.json
+printf '%s\n' "$mode" > mode.tmp && mv mode.tmp mode.json
 mode_id=$(printf '%s' "$mode" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 while [ ! -f .ack ]; do sleep 0.01; done
 status=$(cat .ack)
@@ -168,10 +168,11 @@ while read -r input; do :; done
         );
         assert!(!dir.path().join("reply.json").exists());
         std::fs::write(
-            dir.path().join(".ack"),
+            dir.path().join(".ack.tmp"),
             if accepted { "success" } else { "error" },
         )
         .unwrap();
+        std::fs::rename(dir.path().join(".ack.tmp"), dir.path().join(".ack")).unwrap();
         if accepted {
             let final_response = collect(stream).await;
             assert!(final_response["content"]
