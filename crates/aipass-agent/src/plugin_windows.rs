@@ -17,7 +17,9 @@ use windows_sys::Win32::{
         INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     },
     Security::{
-        Authorization::*, FreeSid, Isolation::DeriveAppContainerSidFromAppContainerName,
+        Authorization::*,
+        FreeSid,
+        Isolation::{CreateAppContainerProfile, DeleteAppContainerProfile},
         DACL_SECURITY_INFORMATION, PSID, SECURITY_CAPABILITIES,
     },
     Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ},
@@ -34,11 +36,44 @@ fn check(ok: i32) -> Result<()> {
     }
 }
 
-struct Sid(PSID);
-impl Drop for Sid {
+struct Profile {
+    name: Vec<u16>,
+    sid: PSID,
+}
+impl Profile {
+    fn create() -> Result<Self> {
+        let name = wide(OsStr::new(&format!(
+            "AIPass.Plugin.{}",
+            uuid::Uuid::new_v4().simple()
+        )));
+        let mut sid = null_mut();
+        // A derived SID alone does not create the profile Windows needs to
+        // initialize a new AppContainer. Each launch owns a distinct profile.
+        let hr = unsafe {
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                null(),
+                0,
+                &mut sid,
+            )
+        };
+        ensure!(
+            hr == 0 && !sid.is_null(),
+            "Cannot create plugin AppContainer profile ({hr:#x})"
+        );
+        Ok(Self { name, sid })
+    }
+}
+impl Drop for Profile {
     fn drop(&mut self) {
         unsafe {
-            FreeSid(self.0);
+            FreeSid(self.sid);
+            let result = DeleteAppContainerProfile(self.name.as_ptr());
+            if result < 0 {
+                eprintln!("Cannot remove plugin AppContainer profile ({result:#x})");
+            }
         }
     }
 }
@@ -183,26 +218,13 @@ pub(crate) fn run(path: &Path) -> Result<()> {
             Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
         })
         .transpose()?;
-    let name = wide(OsStr::new(&format!(
-        "AIPass.Plugin.{}",
-        uuid::Uuid::new_v4().simple()
-    )));
-    // An ephemeral SID needs no registered profile or persistent writable app data.
-    let mut sid = null_mut();
-    unsafe {
-        ensure!(
-            DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) == 0
-                && !sid.is_null(),
-            "Cannot create plugin identity"
-        );
-    }
-    let sid = Sid(sid);
-    allow_read_execute(parent, sid.0)?;
-    allow_read_execute(path, sid.0)?;
+    let profile = Profile::create()?;
+    allow_read_execute(parent, profile.sid)?;
+    allow_read_execute(path, profile.sid)?;
     let image = wide(path.as_os_str());
     let cwd = wide(parent.as_os_str());
     let caps = SECURITY_CAPABILITIES {
-        AppContainerSid: sid.0,
+        AppContainerSid: profile.sid,
         ..Default::default()
     };
     let handles = [
@@ -262,20 +284,25 @@ pub(crate) fn run(path: &Path) -> Result<()> {
             cwd.as_ptr(),
             &startup.StartupInfo,
             &mut info,
-        ))?;
+        ))
+        .context("Cannot launch the staged plugin inside its AppContainer")?;
         let process = OwnedHandle::from_raw_handle(info.hProcess);
         let _thread = OwnedHandle::from_raw_handle(info.hThread);
         let mut wait = vec![process.as_raw_handle()];
         if let Some(agent) = &agent {
             wait.push(agent.as_raw_handle());
         }
-        ensure!(
-            WaitForMultipleObjects(wait.len() as u32, wait.as_ptr(), 0, 1_200_000) == WAIT_OBJECT_0,
-            "Agent exited or plugin job timed out"
-        );
+        if WaitForMultipleObjects(wait.len() as u32, wait.as_ptr(), 0, 1_200_000) != WAIT_OBJECT_0 {
+            check(TerminateJobObject(job.as_raw_handle(), 1)).context("Cannot stop plugin job")?;
+            ensure!(
+                WaitForSingleObject(process.as_raw_handle(), 5_000) == WAIT_OBJECT_0,
+                "Plugin failed to stop"
+            );
+            anyhow::bail!("Agent exited or plugin job timed out");
+        }
         let mut code = 0;
         check(GetExitCodeProcess(process.as_raw_handle(), &mut code))?;
-        ensure!(code == 0, "Plugin exited");
+        ensure!(code == 0, "Plugin exited with status {code:#x}");
     }
     Ok(())
 }

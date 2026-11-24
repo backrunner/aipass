@@ -70,7 +70,7 @@ With a Rust checkout, add `--verify-install` to either release command to exerci
 | WASI | A separate interpreter process exposes only the framed stdin/stdout protocol. The guest has no preopened directories, environment variables or network sockets. Memory, module size and instruction fuel are limited. |
 | macOS native | Seatbelt via the system's `sandbox-exec`. A deny-by-default profile allows the staged executable and system loader libraries. Direct network, host account files, file writes and child processes are denied. |
 | Linux native | Requires `/usr/bin/bwrap` with unprivileged user namespaces and `--disable-userns` support. The guest receives a private PID and network namespace, an empty environment, a read-only root containing the executable and system libraries, and a syscall allowlist. |
-| Windows native | A fresh less-privileged AppContainer SID has zero capabilities. A single-process Job Object applies CPU, memory and termination limits. Only stdin, stdout and stderr handles are inherited. |
+| Windows native | Each launch creates a private, capability-free less-privileged AppContainer profile. The broker removes it after the worker exits. A single-process Job Object applies CPU, memory and termination limits. Only stdin, stdout and stderr handles are inherited. |
 | Explicit local interpreter | A locally selected script and interpreter run with the user's OS permissions. Only approve a local interpreter and script you already trust. |
 
 A native launch fails if the system cannot establish isolation. Local single-binary manifests also use the sandbox. Each worker handles one account operation and exits on shutdown or EOF.

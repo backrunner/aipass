@@ -1470,3 +1470,4 @@ Newest entries last within each section.
 - Before saving a grant, verify the reviewed bytes in the selected runtime with a nonce-bound handshake and clean shutdown. Keep credentials and the HTTP broker out of this session. Serialize the final digest check and grant with vault lock and disable.
 - Exercise passive preview, package cleanup after rejection, and revocation between verification and grant persistence.
 - Bubblewrap applies the worker's seccomp filter to its PID 1 supervisor too. Preserve `wait4` so the supervisor can reap the worker and forward its exit status. Run `plugin_sandbox` on Linux to check both clean exit and denial of child processes, host files and network access.
+- Windows needs a registered AppContainer profile to launch the worker. Create a unique profile, use its SID for staged-file access and the capability-free LPAC, and release it after the job exits.
