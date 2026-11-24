@@ -3,6 +3,8 @@
   import { faGithub } from '@fortawesome/free-brands-svg-icons/faGithub';
   import { ArrowRight, ArrowUpRight, Download, KeyRound, Lock, MousePointerClick, ShieldCheck, Terminal } from 'lucide-svelte';
   import { ThemeToggle } from 'svedocs/theme';
+  import { createThemeContext } from 'svedocs/theme/headless';
+  import config from 'virtual:svedocs/config';
   import LandingBackground from '#lib/LandingBackground.svelte';
   import ReleaseDownload from '#lib/ReleaseDownload.svelte';
   import {
@@ -102,7 +104,9 @@
   $: quickStartHref = locale === 'zh' ? '/docs/zh/quick-start' : '/docs/quick-start';
   $: canonicalUrl = absoluteSiteUrl(locale === 'zh' ? '/zh/' : '/');
   $: ogImageUrl = absoluteSiteUrl(HOME_SOCIAL_IMAGE[locale]);
-  $: languageTag = locale === 'zh' ? 'zh-CN' : 'en';
+  $: themeContext = createThemeContext({ config, localeCode: locale });
+  $: languageTag = themeContext.languageTag;
+  $: if (typeof document !== 'undefined') document.documentElement.lang = languageTag;
   $: ogLocale = locale === 'zh' ? 'zh_CN' : 'en_US';
   $: alternateOgLocale = locale === 'zh' ? 'en_US' : 'zh_CN';
   $: structuredDataJson = JSON.stringify({
@@ -183,7 +187,7 @@
         <img src="/aipass.png" alt="" width="28" height="28" />
         <span>AIPass</span>
       </a>
-      <nav aria-label="Primary navigation">
+      <nav aria-label={themeContext.t('nav.primary')}>
         <a href={docsHref}>{copy.docs}</a>
         <a href="#download">{copy.download}</a>
       </nav>
@@ -193,7 +197,7 @@
       <a class="icon-link" href="https://github.com/backrunner/aipass" target="_blank" rel="noreferrer" aria-label={copy.githubAria} title="GitHub">
         <FontAwesomeIcon icon={faGithub} fixedWidth style="width: 18px; height: 18px;" />
       </a>
-      <ThemeToggle defaultMode="system" />
+      <ThemeToggle defaultMode="system" context={themeContext} />
     </div>
   </header>
 
@@ -236,7 +240,7 @@
       </div>
     </section>
 
-    <section class="release-band" id="download" aria-label="Download AIPass">
+    <section class="release-band" id="download" aria-label={copy.download}>
       <ReleaseDownload {locale} />
     </section>
 
