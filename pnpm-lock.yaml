@@ -105,6 +105,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  bits-ui@2.18.1: 32f5208180393e5a9fb45ff31337d7032e98046583a5802719462a267ca92176
+
 importers:
 
   .:
@@ -138,7 +141,7 @@ importers:
         version: link:../../packages/ui
       bits-ui:
         specifier: ^2.13.0
-        version: 2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
+        version: 2.18.1(patch_hash=32f5208180393e5a9fb45ff31337d7032e98046583a5802719462a267ca92176)(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
       lucide-svelte:
         specifier: ^0.555.0
         version: 0.555.0(svelte@5.55.9)
@@ -190,7 +193,7 @@ importers:
         version: 0.0.5
       bits-ui:
         specifier: ^2.13.0
-        version: 2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
+        version: 2.18.1(patch_hash=32f5208180393e5a9fb45ff31337d7032e98046583a5802719462a267ca92176)(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
       lucide-svelte:
         specifier: ^0.555.0
         version: 0.555.0(svelte@5.55.9)
@@ -233,7 +236,7 @@ importers:
         version: link:../../packages/ui
       bits-ui:
         specifier: ^2.13.0
-        version: 2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
+        version: 2.18.1(patch_hash=32f5208180393e5a9fb45ff31337d7032e98046583a5802719462a267ca92176)(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
       lucide-svelte:
         specifier: ^0.555.0
         version: 0.555.0(svelte@5.55.9)
@@ -343,7 +346,7 @@ importers:
         version: link:../tsconfig
       bits-ui:
         specifier: ^2.13.0
-        version: 2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
+        version: 2.18.1(patch_hash=32f5208180393e5a9fb45ff31337d7032e98046583a5802719462a267ca92176)(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)
       lucide-svelte:
         specifier: ^0.555.0
         version: 0.555.0(svelte@5.55.9)
@@ -4512,7 +4515,7 @@ snapshots:
 
   base64-js@0.0.8: {}
 
-  bits-ui@2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9):
+  bits-ui@2.18.1(patch_hash=32f5208180393e5a9fb45ff31337d7032e98046583a5802719462a267ca92176)(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9):
     dependencies:
       '@floating-ui/core': 1.7.5
       '@floating-ui/dom': 1.7.6
@@ -4525,7 +4528,7 @@ snapshots:
     transitivePeerDependencies:
       - '@sveltejs/kit'
 
-  bits-ui@2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9):
+  bits-ui@2.18.1(patch_hash=32f5208180393e5a9fb45ff31337d7032e98046583a5802719462a267ca92176)(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.55.9)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9)(typescript@5.9.3)(vite@7.3.3(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(sass@1.100.0)))(svelte@5.55.9):
     dependencies:
       '@floating-ui/core': 1.7.5
       '@floating-ui/dom': 1.7.6

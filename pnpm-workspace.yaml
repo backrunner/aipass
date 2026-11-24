@@ -5,3 +5,5 @@ allowBuilds:
   '@parcel/watcher': true
   esbuild: true
   workerd: true
+patchedDependencies:
+  bits-ui@2.18.1: patches/bits-ui@2.18.1.patch

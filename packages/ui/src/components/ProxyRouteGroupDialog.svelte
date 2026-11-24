@@ -101,6 +101,10 @@
     setTimeout(() => onClose(), 220);
   }
 
+  function preventDismissWhileSaving(event: Event) {
+    if (saving) event.preventDefault();
+  }
+
   function handleClose() {
     handleOpenChange(false);
   }
@@ -275,8 +279,9 @@
 <Dialog.Root open={dialogOpen} onOpenChange={handleOpenChange}>
   <Dialog.Portal>
     <Dialog.Overlay class="route-dialog-overlay" />
-    <Dialog.Content class={`route-dialog-content${bindModels ? " with-member-models" : ""}`}>
-      <form class="modal" novalidate on:submit|preventDefault={save}>
+    <Dialog.Content class={`route-dialog-content${bindModels ? " with-member-models" : ""}`}
+      onEscapeKeydown={preventDismissWhileSaving} onInteractOutside={preventDismissWhileSaving}>
+      <form class="modal" aria-busy={saving} novalidate on:submit|preventDefault={save}>
         <header class="modal-header">
           <Dialog.Title class="route-dialog-title">
             {route ? $t("server.editGroup") : $t("server.addGroup")}
@@ -290,7 +295,7 @@
           </Dialog.Close>
         </header>
 
-        <div use:scrollMask class="modal-body">
+        <div use:scrollMask class="modal-body" inert={saving}>
           <div class="form-block">
             <Field label={$t("server.groupName")}>
               <input bind:value={name} placeholder={$t("server.groupName")} disabled={saving} />
@@ -531,22 +536,22 @@
   @keyframes dialog-content-in {
     from {
       opacity: 0;
-      transform: translate(-50%, -46%) scale(0.96);
+      transform: translate(-50%, -46%);
     }
     to {
       opacity: 1;
-      transform: translate(-50%, -50%) scale(1);
+      transform: translate(-50%, -50%);
     }
   }
 
   @keyframes dialog-content-out {
     from {
       opacity: 1;
-      transform: translate(-50%, -50%) scale(1);
+      transform: translate(-50%, -50%);
     }
     to {
       opacity: 0;
-      transform: translate(-50%, -48%) scale(0.97);
+      transform: translate(-50%, -48%);
     }
   }
 

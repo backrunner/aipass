@@ -1,5 +1,6 @@
 # Embedded panel fingerprints must be identical in Windows and Unix checkouts.
 apps/control-panel/** text eol=lf
+patches/** text eol=lf
 packages/ui/src/** text eol=lf
 packages/ui/package.json text eol=lf
 packages/schemas/src/** text eol=lf

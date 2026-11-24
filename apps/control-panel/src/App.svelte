@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { scrollMask, ProviderIcon, Card, EmptyState, ProxyRouteList, ProxyStatusGrid, VaultSidebar, ProviderListPane, ProviderEmptyState, Button, IconButton, SidebarItem, SelectField, Field, SwitchField, Modal } from "@aipass/ui";
-  import { ArrowRight, Check, CircleHelp, KeyRound, Languages, Layers, LockKeyhole, LogOut, Monitor, Moon, Pencil, Play, Server, ShieldCheck, ShieldAlert, Square, Sun, Terminal, X } from "lucide-svelte";
+  import { ArrowRight, Check, CircleHelp, KeyRound, Languages, Layers, LockKeyhole, LogOut, Menu, Monitor, Moon, Pencil, Play, Server, ShieldCheck, ShieldAlert, Square, Sun, Terminal, X } from "lucide-svelte";
   import logoUrl from "../../desktop/public/aipass-logo.png?inline";
   import { ApiError, request } from "./api";
   import type { Preview, Snapshot, Target } from "./types";
@@ -35,6 +35,13 @@
   let busy = $state("");
   let loading = $state(true);
   let tab = $state<"proxy" | "credentials">("proxy");
+  let navigationOpen = $state(false);
+  let navigationButton = $state<HTMLButtonElement>();
+  function closeNavigation() {
+    if (!navigationOpen) return;
+    navigationOpen = false;
+    if (navigationButton?.getClientRects().length) navigationButton.focus();
+  }
   let search = $state("");
   let providerFilter = $state<ProviderFilter>("all");
   let showFavorites = $state(false);
@@ -84,6 +91,7 @@
     ? $t("providerList.tag", { value: providerFilter.slice(4) })
     : $t(showTrash ? "sidebar.trash" : showArchived ? "sidebar.archive" : showFavorites ? "sidebar.favorites" : filterKeys[providerFilter] ?? "sidebar.allItems"));
   function chooseGroup(filter: ProviderFilter, special: "favorites" | "archive" | "trash" | undefined = undefined) {
+    closeNavigation();
     providerFilter = filter; showFavorites = special === "favorites"; showArchived = special === "archive"; showTrash = special === "trash";
     tab = "credentials"; resetPreview();
   }
@@ -137,6 +145,7 @@
   function clearSession() {
     generation++;
     data = undefined;
+    navigationOpen = false;
     preview = undefined;
     editing = undefined;
     deletingRoute = undefined;
@@ -233,6 +242,11 @@
 <header class="topbar">
   <a class="brand" href="/" aria-label="AIPass"><img src={logoUrl} width="26" height="26" alt="" /><span>AIPass</span><span class="brand-divider"></span><span class="surface-name">{tr("控制面板", "Control Panel")}</span></a>
   <div class="actions">
+    {#if data}
+      <button bind:this={navigationButton} type="button" class="navigation-toggle" aria-expanded={navigationOpen}
+        aria-controls="panel-navigation" aria-label={tr("导航", "Navigation")} title={tr("导航", "Navigation")}
+        onclick={() => navigationOpen = !navigationOpen}><Menu size={17} /></button>
+    {/if}
     <Button variant="ghost" size="sm" on:click={() => chinese = !chinese}><Languages size={15} />{chinese ? "English" : "中文"}</Button>
     <IconButton label={`${tr("切换主题", "Switch theme")} · ${themeLabel}`} title={themeLabel} on:click={cycleTheme}>{#if theme === "system"}<Monitor size={16} />{:else if theme === "light"}<Sun size={16} />{:else}<Moon size={16} />{/if}</IconButton>
   </div>
@@ -240,15 +254,17 @@
 
 <div class="workspace" class:locked={!data} class:proxy-workspace={!!data && tab === "proxy"}>
   {#if data}
+    <div id="panel-navigation" class:expanded={navigationOpen}>
     <VaultSidebar {providerFilter} {providerCounts} {trashCount} {showFavorites} {showArchived} {showTrash} showServer={tab === "proxy"}
       onFilterChange={filter => chooseGroup(filter)} onFavoriteView={() => chooseGroup("all", "favorites")}
-      onArchiveView={() => chooseGroup("all", "archive")} onTrashView={() => chooseGroup("all", "trash")} onServerView={() => { tab = "proxy"; resetPreview(); }}>
+      onArchiveView={() => chooseGroup("all", "archive")} onTrashView={() => chooseGroup("all", "trash")} onServerView={() => { closeNavigation(); tab = "proxy"; resetPreview(); }}>
       <div slot="footer" class="session-controls">
         <div class="host-card" aria-label={tr("已连接主机", "Connected host")}><Monitor size={16} /><code title={location.host}>{location.host}</code><span class="vault-state" title={tr("Vault 已解锁", "Vault unlocked")}><ShieldCheck size={13} /></span></div>
         <SidebarItem label={tr("锁定 Vault", "Lock vault")} disabled={!!busy} aria-busy={busy === "lock"} on:click={() => run("lock", async () => { await request("/api/action", { type: "vault_lock" }, data?.csrf); clearSession(); })}><LockKeyhole size={16} /></SidebarItem>
         <SidebarItem label={tr("退出", "Sign out")} disabled={!!busy} aria-busy={busy === "logout"} on:click={() => run("logout", async () => { await request("/api/logout", {}, data?.csrf); clearSession(); })}><LogOut size={16} /></SidebarItem>
       </div>
     </VaultSidebar>
+    </div>
   {/if}
   {#if data && tab === "proxy"}
     <ProxyRouteList routes={routeViews} entries={routeEntries} status={proxyStatus} bind:selectedRouteId {busy}

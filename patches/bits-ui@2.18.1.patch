@@ -1,0 +1,14 @@
+diff --git a/dist/internal/body-scroll-lock.svelte.js b/dist/internal/body-scroll-lock.svelte.js
+index 04833253a9e04813a458a8e1a7c12b720dd4a15b..407f927487961975269db4efe06c0188eb70c9fe 100644
+--- a/dist/internal/body-scroll-lock.svelte.js
++++ b/dist/internal/body-scroll-lock.svelte.js
+@@ -31,7 +31,8 @@ const bodyLockStackCount = new SharedState(() => {
+     function resetBodyStyle() {
+         if (!BROWSER)
+             return;
+-        document.body.setAttribute("style", initialBodyStyle ?? "");
++        // The LAN panel CSP permits CSSOM writes but blocks inline style attributes.
++        document.body.style.cssText = initialBodyStyle ?? "";
+         document.body.style.removeProperty("--scrollbar-width");
+         isIOS && stopTouchMoveListener?.();
+         // reset initialBodyStyle so next locker captures the correct styles

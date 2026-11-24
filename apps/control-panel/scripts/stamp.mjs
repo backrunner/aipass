@@ -16,6 +16,7 @@ const sources = [
   "vite.config.ts",
   "vitest.config.ts",
   "index.html",
+  ...files("../../patches"),
   ...files("../../packages/ui/src"),
   "../../packages/ui/package.json",
   ...files("../../packages/schemas/src"),

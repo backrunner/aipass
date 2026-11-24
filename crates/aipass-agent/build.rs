@@ -14,6 +14,7 @@ fn main() {
         "vite.config.ts",
         "vitest.config.ts",
         "index.html",
+        "../../patches",
         "../../packages/ui/src",
         "../../packages/ui/package.json",
         "../../packages/schemas/src",

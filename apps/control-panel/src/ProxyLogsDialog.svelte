@@ -7,6 +7,7 @@
 
   let { logs, chinese }: { logs: Snapshot["logs"]; chinese: boolean } = $props();
   let open = $state(false);
+  let trigger = $state<HTMLButtonElement | null>(null);
   let followTail = true;
   const tr = (zh: string, en: string) => chinese ? zh : en;
   const rows = $derived.by(() => {
@@ -34,14 +35,18 @@
 </script>
 
 <Dialog.Root bind:open>
-  <Dialog.Trigger>
+  <Dialog.Trigger bind:ref={trigger}>
     {#snippet child({ props })}
       <Button {...props} class="proxy-log-trigger" size="sm" aria-label={tr("代理日志", "Proxy logs")} title={tr("代理日志", "Proxy logs")}><FileText size={14} />{tr("日志", "Logs")}</Button>
     {/snippet}
   </Dialog.Trigger>
   <Dialog.Portal>
     <Dialog.Overlay class="proxy-log-overlay" />
-    <Dialog.Content class="proxy-log-content">
+    <Dialog.Content class="proxy-log-content" onCloseAutoFocus={event => {
+      if (!trigger?.isConnected) return;
+      event.preventDefault();
+      trigger.focus();
+    }}>
       <header class="proxy-log-header">
         <Dialog.Title class="proxy-log-title">{tr("代理日志", "Proxy logs")}</Dialog.Title>
         <Dialog.Description class="proxy-log-description">{tr("本地代理运行日志", "Local proxy activity logs")}</Dialog.Description>
