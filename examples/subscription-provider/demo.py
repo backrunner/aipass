@@ -9,12 +9,46 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 NAMES = {"rust": "Rust", "go": "Go", "python": "Python", "javascript": "JavaScript"}
+
+
+def run_agent_test(name, **fixture_env):
+    build = subprocess.run(
+        ["cargo", "test", "-p", "aipass-agent", "--lib", "--no-run", "--message-format=json"],
+        cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True,
+    )
+    harness = next(row["executable"] for row in map(json.loads, build.stdout.splitlines())
+                   if row.get("executable") and row["target"]["name"] == "aipass_agent" and row["profile"]["test"])
+    # Both the proxy test client and the Agent resolve grants in the same home.
+    # A short socket path also fits Darwin's sockaddr_un.
+    with tempfile.TemporaryDirectory(prefix="aipass-example-", dir="/tmp" if os.name == "posix" else None) as tmp:
+        root = Path(tmp)
+        home = root / "home"
+        for folder in [home, home / "AppData/Roaming", home / "AppData/Local"]:
+            folder.mkdir(parents=True)
+        tool_paths = {"CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "GROK_HOME",
+                      "GROK_BIN_DIR", "PI_CODING_AGENT_DIR", "KIMI_CODE_HOME", "DSH_HOME"}
+        inherited = {key: value for key, value in os.environ.items()
+                     if not key.startswith("AIPASS_") and key not in tool_paths}
+        env = dict(inherited, HOME=str(home), USERPROFILE=str(home), CFFIXED_USER_HOME=str(home),
+                   APPDATA=str(home / "AppData/Roaming"), LOCALAPPDATA=str(home / "AppData/Local"),
+                   XDG_CONFIG_HOME=str(home / ".config"), XDG_DATA_HOME=str(home / ".local/share"),
+                   XDG_CACHE_HOME=str(home / ".cache"), AIPASS_LOG_DIR=str(root / "logs"),
+                   AIPASS_AGENT_RUNTIME_DIR=str(root / "run"),
+                   AIPASS_PROXY_RECOVERY_KEYCHAIN=str(home / ".aipass/proxy-recovery/fixture.keychain-db"),
+                   **fixture_env)
+        result = subprocess.run([harness, "--exact", name, "--ignored"], cwd=ROOT, env=env,
+                                stdout=subprocess.PIPE, text=True)
+        print(result.stdout, end="")
+        result.check_returncode()
+        if "1 passed;" not in result.stdout:
+            raise SystemExit(f"The Agent test did not run: {name}")
 
 
 def executable(name):
@@ -185,14 +219,8 @@ def main():
         build = subprocess.run(["cargo", "build", "-p", "aipass-agent", "--bin", "aipass-agent", "--message-format=json"],
                                cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True)
         binary = next(event["executable"] for event in map(json.loads, build.stdout.splitlines()) if event.get("executable"))
-        env = dict(os.environ, AIPASS_EXAMPLE_MANIFESTS=json.dumps(paths), AIPASS_EXAMPLE_TEST_AGENT=binary)
         name = "community::device::tests::processes::plugin::prepared_plugins_share_the_desktop_contract"
-        result = subprocess.run(["cargo", "test", "-p", "aipass-agent", "--lib", name, "--", "--exact", "--ignored"],
-                                cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True)
-        print(result.stdout, end="")
-        result.check_returncode()
-        if "1 passed;" not in result.stdout:
-            raise SystemExit("The prepared plugin Agent test did not run.")
+        run_agent_test(name, AIPASS_EXAMPLE_MANIFESTS=json.dumps(paths), AIPASS_EXAMPLE_TEST_AGENT=binary)
 
 
 if __name__ == "__main__":

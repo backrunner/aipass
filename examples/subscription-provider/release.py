@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 
-from demo import HERE, ROOT, executable, prepare, verify_wire
+from demo import HERE, executable, prepare, run_agent_test, verify_wire
 
 
 def main():
@@ -51,12 +51,8 @@ def main():
         if args.agent:
             verify_wire(path, args.language, worker=[str(args.agent.resolve()), f"--plugin-{args.runtime}"])
         if args.verify_install:
-            env = dict(os.environ, AIPASS_EXAMPLE_RELEASE=str(path), AIPASS_EXAMPLE_TEST_AGENT=str(args.agent.resolve()))
             test = "provider_plugins::github::tests::verify_compiled_release_installation"
-            result = subprocess.run(["cargo", "test", "-p", "aipass-agent", "--lib", test, "--", "--exact", "--ignored"],
-                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, text=True, check=True)
-            if "1 passed;" not in result.stdout:
-                raise SystemExit("The release installation test did not run.")
+            run_agent_test(test, AIPASS_EXAMPLE_RELEASE=str(path), AIPASS_EXAMPLE_TEST_AGENT=str(args.agent.resolve()))
             print("Release preview, verified installation and revocation passed.")
         print(path, output / entry, sep="\n")
 

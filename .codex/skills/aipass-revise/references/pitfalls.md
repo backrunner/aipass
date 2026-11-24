@@ -21,6 +21,7 @@ Newest entries last within each section.
 
 ### Agent integration fixtures inherited the host cloud directory
 - Run the native-host fixture Agent in a child process with a disposable home and an explicit fixture keychain. The unlock audit runs in the Agent dependency's production configuration and can otherwise block on the user's login keychain.
+- Give the subscription example harness and its Agent the same disposable home. The proxy resolves the grant recorded by the Agent under the local application-data directory.
 - **Symptom**: native-host tests on macOS stalled in initial sync while reading the host's iCloud files.
 - **Root cause**: `crates/aipass-native-host/src/lib.rs` `RunningAgent::start` created a vault at the temporary root and omitted sync settings; sibling agent settings were shared and macOS selected its real iCloud default.
 - **Fix**: place each fixture vault under its own temporary root and persist a local sync folder before starting the agent.
