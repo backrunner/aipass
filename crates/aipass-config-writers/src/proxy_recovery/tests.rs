@@ -354,7 +354,13 @@ fn global_lock_prevents_a_second_writer_and_uninstaller() {
     let f = Fixture::new();
     let first = f.open();
     assert!(Recovery::open(&f.root, |_| panic!("key access before lock")).is_err());
+    // A child between fork and exec can hold the same open file description.
+    let inherited = first._lock.0.try_clone().unwrap();
     drop(first);
+    let second = f.open();
+    drop(inherited);
+    assert!(Recovery::open(&f.root, |_| panic!("second writer lost its lock")).is_err());
+    drop(second);
     f.open();
 }
 

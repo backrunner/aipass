@@ -16,7 +16,7 @@ use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    fs::File,
+    fs::{File, TryLockError},
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -57,7 +57,29 @@ pub struct Recovery {
     root: PathBuf,
     key: Zeroizing<[u8; 32]>,
     receipt: Receipt,
-    _lock: File,
+    _lock: RecoveryLock,
+}
+
+struct RecoveryLock(File);
+
+impl RecoveryLock {
+    fn acquire(file: File) -> Result<Self> {
+        match file.try_lock() {
+            Ok(()) => Ok(Self(file)),
+            Err(TryLockError::WouldBlock) => {
+                bail!("another configuration or uninstall operation is running")
+            }
+            Err(TryLockError::Error(err)) => Err(err.into()),
+        }
+    }
+}
+
+impl Drop for RecoveryLock {
+    fn drop(&mut self) {
+        // A concurrent fork can retain the open file description until exec.
+        // End the operation's lock even while that descriptor is still open.
+        let _ = self.0.unlock();
+    }
 }
 
 impl Recovery {
@@ -77,9 +99,7 @@ impl Recovery {
             .create(true)
             .truncate(false)
             .open(lock_path)?;
-        lock.try_lock().map_err(|_| {
-            anyhow::anyhow!("another configuration or uninstall operation is running")
-        })?;
+        let lock = RecoveryLock::acquire(lock)?;
         let bytes = Resource::File(path).read()?;
         let key = key(bytes.is_some() || root.join("pending.aiptransaction").exists())?;
         let receipt = if let Some(bytes) = bytes {
