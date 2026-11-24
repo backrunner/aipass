@@ -10,7 +10,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 assert.equal(process.platform, "linux");
@@ -27,7 +27,23 @@ assert.equal(
   false,
   "Refusing an existing credential-store session",
 );
-const deps = resolve(process.argv[2] ?? "target/debug/deps");
+// Cargo 1.100 moved test executables out of target/debug/deps. Ask Cargo
+// for the artifacts of this build before switching to the fixture's HOME.
+function testExecutables(directory) {
+  if (directory) {
+    return readdirSync(directory)
+      .map((file) => resolve(directory, file))
+      .filter((path) => statSync(path).isFile() && (statSync(path).mode & 0o111))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  }
+  const output = execFileSync("cargo", [
+    "test", "--workspace", "--lib", "--no-run", "--message-format=json",
+  ], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  return output.trim().split("\n").map((line) => JSON.parse(line))
+    .filter((row) => row.reason === "compiler-artifact" && row.profile.test && row.executable)
+    .map((row) => row.executable);
+}
+const candidates = testExecutables(process.argv[2]);
 const root = mkdtempSync("/tmp/aipass-native-");
 const env = {
   ...process.env,
@@ -68,11 +84,7 @@ daemon.stderr.on("data", (v) => {
   diagnostics += v;
 });
 const binary = (name, test) =>
-  readdirSync(deps)
-    .filter((p) => p.startsWith(name + "-"))
-    .map((p) => join(deps, p))
-    .filter((p) => statSync(p).isFile() && statSync(p).mode & 0o111)
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  candidates.filter((path) => basename(path).startsWith(name + "-"))
     .find((path) => {
       try {
         return execFileSync(path, ["--list"], {

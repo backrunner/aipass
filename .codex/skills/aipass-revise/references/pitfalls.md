@@ -1273,6 +1273,7 @@ Newest entries last within each section.
 - **Watch points**: `updates::install_verified_update`, Linux `readonly-cached` artifact scenario, macOS manual/cached restart gates.
 
 ### Linux packaging dependencies must be explicit on every architecture
+- Cargo 1.100 added a directory level to `OUT_DIR` and moved test executables out of `debug/deps`. Check a clean release bundle with the CI toolchain after changing `tauri-build`, and discover test executables from Cargo's JSON artifact messages.
 - **Symptom**: aarch64 nightly AppImage packaging failed because `/usr/bin/xdg-mime` was missing while x86_64 CI passed.
 - **Root cause**: desktop jobs relied on `xdg-utils` preinstalled on the x86_64 runner; the ARM64 image did not include it.
 - **Fix**: install `xdg-utils` explicitly in CI and release desktop jobs and check `xdg-mime` before building.

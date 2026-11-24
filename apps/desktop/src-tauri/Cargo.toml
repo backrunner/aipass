@@ -19,7 +19,7 @@ path = "src/main.rs"
 custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 aipass-agent = { path = "../../../crates/aipass-agent" }
