@@ -48,7 +48,19 @@ Browser extension ──┘          ├──> Encrypted sync
 - `apps/web`: this documentation site and update-feed Worker.
 - `packages/ui`: shared UI components and locales.
 
-The frontend is a UI layer. Storage, credential writes, sync, and final configuration changes belong to Rust. Keep subscription adapters in this repository rather than loading third-party provider engines at runtime.
+The frontend is a UI layer. Storage, credential writes, sync, and final configuration changes belong to Rust. Built-in subscription adapters live in this repository. Users can enable local subscription plugins in the desktop provider picker. The Agent runs each approved plugin in a separate process over versioned stdio.
+
+## Develop a subscription plugin
+
+Open **Manage subscription plugins** in the provider toolbar to install from a public GitHub Release. Review the release, SHA-256, runtime and allowed origins before enabling. Authors can publish WASI or platform-native executables. Native workers use macOS Seatbelt, Linux bubblewrap with user namespaces, or Windows AppContainer.
+
+Run the following command from the repository root to prepare and verify the Rust, Go, Python and JavaScript examples. Add `--language python --wire-only` to try a single runtime. The command prints the generated manifest paths.
+
+```sh
+python3 examples/subscription-provider/demo.py verify
+```
+
+Open **Subscription accounts → Subscription plugins → Select manifest**. Review and enable an example, enter a made-up account and key, set eight seats and refresh to see 12.5% seat occupancy. Choose **Team** for a conditional masked field or **Show connection settings** for URL and multiline inputs. The alternate sign-in method accepts the offline code `DEMO`. Each implementation produces its own account panels using the shared example form in `examples/subscription-provider/manifest.json`. The full contract and example sources are in the [subscription plugin guide](https://github.com/backrunner/aipass/blob/main/docs/subscription-plugins.md).
 
 ## Validation
 

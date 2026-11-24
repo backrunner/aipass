@@ -5,6 +5,7 @@ pub use updates::*;
 mod community;
 mod subscription_cli;
 mod subscription_import;
+pub mod subscription_plugin;
 pub use account_results::*;
 pub use subscription_cli::*;
 pub use subscription_import::*;
@@ -57,20 +58,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 // Version 18 requires credential-bound subscription response feedback.
 // Version 19 requires the expanded installed-Agent catalog and native-OS config helpers.
 // Version 20 binds local grants/reconnect; version 21 requires owned proxy-uninstall receipts.
-pub const AGENT_PROTOCOL_VERSION: u32 = 21;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "method", rename_all = "snake_case")]
-pub enum ClaudeBridgeRequest {
-    ListTools,
-    Call {
-        name: String,
-        arguments: serde_json::Value,
-    },
-    Poll {
-        call_id: String,
-    },
-}
+// Version 23 requires plugin logins to match the displayed catalog revision.
+pub const AGENT_PROTOCOL_VERSION: u32 = 25;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -784,6 +773,8 @@ pub enum AgentRequest {
         #[serde(default)]
         subscription: Option<aipass_provider_registry::SubscriptionSnapshot>,
     },
+    #[serde(rename = "subscription.plugin")]
+    SubscriptionPlugin { operation: SubscriptionPluginAction },
     #[serde(rename = "community.catalog")]
     CommunityCatalog,
     #[serde(rename = "community.login.start")]
@@ -1045,6 +1036,7 @@ impl AgentRequest {
             Self::ProviderProbe { .. } => "provider.probe",
             Self::ProviderUsageProbe { .. } => "provider.usage_probe",
             Self::ProviderUsageApply { .. } => "provider.usage_apply",
+            Self::SubscriptionPlugin { .. } => "subscription.plugin",
             Self::CommunityCatalog => "community.catalog",
             Self::CommunityLoginStart { .. } => "community.login.start",
             Self::CommunityLoginPoll { .. } => "community.login.poll",
@@ -1165,6 +1157,7 @@ impl AgentRequest {
             | Self::VaultImport { .. }
             | Self::VaultImportSync { .. }
             | Self::VaultReset
+            | Self::SubscriptionPlugin { operation: SubscriptionPluginAction::InspectGithub { .. } }
             // Network and whole-collection work.
             | Self::SyncLocal { .. }
             | Self::SyncCloud { .. }
@@ -1442,6 +1435,7 @@ mod tests {
             AgentRequest::CommunityCatalog,
             AgentRequest::CommunityLoginStart {
                 input: CommunityLoginInput {
+                    plugin_digest: None,
                     entry_id: None,
                     provider: "factory".into(),
                     method: 0,

@@ -33,6 +33,9 @@ export function readableAccountIdentity(identity: string): string {
 // Presentation only: retain the complete identity for ownership and workspace matching.
 export function subscriptionAccountPresentation(entry: Pick<ProviderEntry, "title" | "providerId" | "accountIdentity">, translate?: (key: string) => string) {
   const identity = entry.accountIdentity ?? "";
+  if (entry.providerId?.startsWith("plugin.")) {
+    return { title: entry.title, subtitle: identity, account: identity, scope: "" };
+  }
   const provider = subscriptionProviderName(entry.providerId ?? "");
   const translated = translate?.(`subscriptionName.${entry.providerId ?? ""}`);
   const displayProvider = translated && !translated.startsWith("subscriptionName.") ? translated : provider;

@@ -1,4 +1,4 @@
-//! Native subscription transports. No downloaded code or interpreter is executed.
+//! Rust subscription transports and explicitly trusted local provider subprocesses.
 //! Wire transformations live in aipass-proxy-conversion; this module owns account
 //! authentication, HTTP, cancellation, and durable credential rotation.
 use aipass_crypto::SecretString;
@@ -30,6 +30,8 @@ mod minimax;
 mod opencode;
 mod plan_quota;
 mod plans;
+mod plugin;
+pub(crate) use plugin::verify_plugin;
 mod trae;
 use allowance::timestamp;
 pub(crate) mod cli_accounts;
@@ -60,8 +62,12 @@ pub(super) struct Operation {
     input: mpsc::Sender<Value>,
     cancel: watch::Sender<bool>,
     pub canceled: AtomicBool,
+    completion: Option<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
 }
 impl Operation {
+    pub(crate) fn running(&self) -> bool {
+        !self.input.is_closed()
+    }
     pub fn send(&self, value: &Value) -> Result<()> {
         // A canceled caller still owes the durable credential ACK. All other
         // messages stop immediately, so no generation starts after cancellation.
@@ -73,6 +79,11 @@ impl Operation {
         self.input
             .try_send(value.clone())
             .map_err(|_| "subscription operation closed or busy".into())
+    }
+    pub(crate) fn wait_for_plugin_exit(&self, deadline: std::time::Instant) {
+        if let Some(rx) = self.completion.as_ref().and_then(|rx| rx.lock().ok()) {
+            let _ = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
     }
     pub fn kill(&self) {
         self.canceled.store(true, Ordering::Release);
@@ -90,6 +101,13 @@ pub(super) struct Adapter {
 }
 impl Adapter {
     pub fn start(proxy: Option<&UpstreamProxyConfig>) -> Result<Self> {
+        Self::start_with_plugin(proxy, None)
+    }
+    pub fn start_with_plugin(
+        proxy: Option<&UpstreamProxyConfig>,
+        plugin: Option<crate::provider_plugins::Launch>,
+    ) -> Result<Self> {
+        let (finished, completion) = plugin.as_ref().map(|_| std::sync::mpsc::channel()).unzip();
         let client = transport(proxy)?;
         let (input, rx) = mpsc::channel(8);
         let (tx, output) = mpsc::channel(8);
@@ -130,10 +148,20 @@ impl Adapter {
                         refreshing,
                         generating,
                     };
-                    if let Err(message) =
-                        run_cancellable(context.run(), cancelled, refresh_phase, generation_phase)
+                    let result = match plugin {
+                        Some(plugin) => plugin::run(&mut context, plugin, cancelled).await,
+                        None => {
+                            run_cancellable(
+                                context.run(),
+                                cancelled,
+                                refresh_phase,
+                                generation_phase,
+                            )
                             .await
-                    {
+                        }
+                    };
+                    drop(finished);
+                    if let Err(message) = result {
                         let _ = tx.send(json!({"type":"error","message":message})).await;
                     }
                 });
@@ -142,6 +170,7 @@ impl Adapter {
         Ok(Self {
             process: Arc::new(Operation {
                 input,
+                completion: completion.map(std::sync::Mutex::new),
                 cancel,
                 canceled: AtomicBool::new(false),
             }),

@@ -271,7 +271,7 @@
   let showForm = false;
   let providerSaving = false;
   let showCommunityConnect = false;
-  let showOAuthConnect = false;
+  let showOAuthConnect: boolean | "plugins" = false;
   let formMode: FormMode = "add";
   let detailEditMode = false;
   let showArchived = false;
@@ -1405,10 +1405,10 @@
     showForm = true;
   }
 
-  function openOAuthConnect() {
+  function openOAuthConnect(mode: true | "plugins" = true) {
     clearError();
     subscriptionLoginProvider = "";
-    showOAuthConnect = true;
+    showOAuthConnect = mode;
   }
 
   async function onSubscriptionConnected(entryId: string) {
@@ -3309,7 +3309,7 @@
         routeGroups={serverConfig.routes.map((route) => ({ id: route.id, name: route.name }))}
         onSearch={runSearch}
         onAdd={openAdd}
-        onConnectOAuth={openOAuthConnect}
+        onConnectOAuth={openOAuthConnect} onManagePlugins={() => openOAuthConnect("plugins")}
         onRefreshAccounts={refreshOfficialAccounts}
         refreshAccountsBusy={officialAccountsBusy}
         officialAccountsImport={true}
@@ -3503,7 +3503,7 @@
     {invokeTauri}
     onClose={() => { showOAuthConnect = false; }}
     onConnected={onSubscriptionConnected}
-    initialProvider={subscriptionLoginProvider === "anthropic" ? "claude" : subscriptionLoginProvider}
+    startInManager={showOAuthConnect === "plugins"} initialProvider={subscriptionLoginProvider === "anthropic" ? "claude" : subscriptionLoginProvider}
     onImportCli={refreshOfficialAccounts}
   />
 {/if}

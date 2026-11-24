@@ -1,3 +1,6 @@
+import type { PluginSection } from "./subscription-plugin-ui.js";
+export * from "./subscription-plugin-ui.js";
+
 export type ProviderKind = "official" | "third_party" | "self_hosted" | "unknown";
 
 export * from "./provider-icons.js";
@@ -108,6 +111,7 @@ export interface SubscriptionWindow {
 }
 
 export interface SubscriptionSnapshot {
+  sections?: PluginSection[];
   consoleUrl?: string;
   quotaUnavailable?: boolean;
   plan?: string;

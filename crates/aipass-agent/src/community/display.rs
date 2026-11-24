@@ -2,6 +2,9 @@
 use super::*;
 
 pub(super) fn account_title(provider: &str, identity: &str, auth: &Value) -> String {
+    if crate::provider_plugins::is_plugin(provider) {
+        return auth["pluginName"].as_str().unwrap_or(provider).to_owned();
+    }
     let catalog: Value =
         serde_json::from_str(include_str!("../subscriptions/catalog.json")).unwrap_or(Value::Null);
     let brand = if provider == "commandcode-plan" {

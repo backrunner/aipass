@@ -2,14 +2,26 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { Dialog } from "bits-ui";
   import { scrollMask, Banner, Button, Field, IconButton, ProviderIcon, SelectField } from "@aipass/ui";
-  import { ArrowLeft, ArrowRight, Check, ExternalLink, Globe, KeyRound, Search, ShieldCheck, Terminal, X } from "lucide-svelte";
-  import { t } from "../../stores/i18n";
-  type Prompt = { retain?: boolean; key: string; type: string; message: string; messageKey?: string; placeholder?: string; options?: { label: string; value: string; labelKey?: string }[] };
-  type Method = { index: number; type: string; label: string; labelKey?: string; hintKey?: string; native: boolean; prompts: Prompt[] };
-  type Provider = { id: string; name: string; nameKey?: string; localAuthorization?: boolean; methods: Method[] };
+  import { ArrowLeft, ArrowRight, Check, ExternalLink, Globe, KeyRound, Puzzle, Search, ShieldCheck, Terminal, X } from "lucide-svelte";
+  import { activeLocaleStore, t } from "../../stores/i18n";
+  import SubscriptionPluginManager from "./SubscriptionPluginManager.svelte";
+  import { pluginIssue } from "./subscription-plugin-errors";
+  import { pluginText, pluginValues, type PluginPrompt, type PluginText } from "@aipass/schemas";
+  import PluginLoginFields from "./PluginLoginFields.svelte";
+  type Choice = NonNullable<PluginPrompt["options"]>[number] & { labelKey?: string };
+  type Prompt = Omit<PluginPrompt, "options"> & { retain?: boolean; messageKey?: string; options?: Choice[] };
+  type Method = { index: number; type: string; label: PluginText; labelKey?: string; hintKey?: string; native: boolean; prompts: Prompt[] };
+  type Provider = { plugin?: boolean; pluginDigest?: string; id: string; name: string; nameKey?: string; localAuthorization?: boolean; methods: Method[] };
   type Login = { ticket: string; status: string; url?: string; instructions?: string; userCode?: string; method?: string; entryId?: string; error?: string };
   export let invokeTauri: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   export let initialProvider = "";
+  export let startInPluginManager = false;
+  let managingPlugin = startInPluginManager;
+  let requestedProvider = initialProvider;
+  let missingPlugin = false;
+  let pluginError = "";
+  let formFooter: HTMLElement;
+  $: singleProvider = Boolean(entryId || initialProvider.startsWith("plugin."));
   export let entryId: string | undefined = undefined;
   export let onBack: (() => void) | undefined = undefined;
   export let onClose: () => void;
@@ -21,6 +33,13 @@
   let providers: Provider[] = [];
   let providerList: HTMLElement;
   let connectionBody: HTMLElement;
+  let dialogContent: HTMLDivElement | null = null;
+  function focusPluginDialog(event: Event) {
+    if (!requestedProvider.startsWith("plugin.")) return;
+    // The form chooses its first field when the catalog arrives.
+    event.preventDefault();
+    if (!dialogContent?.contains(document.activeElement)) dialogContent?.focus();
+  }
   let query = "";
   $: filteredProviders = providers.filter(p => `${providerName(p)} ${p.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   function providerName(p: Provider) { return p.nameKey ? $t(p.nameKey) : p.id.startsWith("minimax-code") ? $t(`subscriptionName.${p.id}`) : p.name; }
@@ -38,6 +57,7 @@
     ? `https://modelstudio.console.alibabacloud.com/ap-southeast-1/subscription/${providerId === "bailian-coding-plan" ? "coding-plan" : "token-plan"}`
     : keyPages[providerId] ?? "";
   async function openKeyPage() { if (!keyPage) return; try { await invokeTauri("oauth_open_verification", { uri: keyPage }); } catch (e) { error = String(e); } }
+  const formId = "subscription-login-" + crypto.randomUUID();
   let providerId = "";
   let methodIndex = 0;
   let inputs: Record<string, string> = {};
@@ -47,6 +67,7 @@
   let loading = true;
   let busy = false;
   let login: Login | null = null;
+  let pendingTicket: string | undefined;
   let destroyed = false;
   let epoch = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -54,13 +75,55 @@
   async function revealError() { await tick(); if (!destroyed && connectionBody) connectionBody.scrollTop = 0; }
   $: provider = providers.find(p => p.id === providerId);
   $: method = provider?.methods.find(m => m.index === methodIndex);
-  onMount(() => { void load(); });
-  onDestroy(() => { destroyed = true; epoch++; apiKey = ""; code = ""; if (timer) clearTimeout(timer); if (login?.status === "pending") void invokeTauri("community_login_cancel", { ticket: login.ticket }).catch(() => {}); for (const key of Object.keys(inputs)) delete inputs[key]; });
+  onMount(() => { if (!managingPlugin) void load(); });
+  function abandonPendingTicket() {
+    if (!pendingTicket) return;
+    const ticket = pendingTicket;
+    pendingTicket = undefined;
+    void invokeTauri("community_login_cancel", { ticket }).catch(() => {});
+  }
+  onDestroy(() => {
+    destroyed = true;
+    epoch++;
+    apiKey = code = "";
+    if (timer) clearTimeout(timer);
+    abandonPendingTicket();
+    for (const key of Object.keys(inputs)) delete inputs[key];
+  });
+  function revealPluginControl(event: FocusEvent) {
+    const target = event.target;
+    if (!provider?.plugin || !(target instanceof HTMLElement)) return;
+    const field = target.closest<HTMLElement>(".plugin-field") ?? target;
+    field.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "instant" });
+  }
   async function load() {
     loading = true; error = "";
-    try { const result = await invokeTauri<Provider[]>("community_catalog"); if (!destroyed) { providers = result.filter(p => !entryId || p.id === initialProvider); providerId = providers.some(p => p.id === initialProvider) ? initialProvider : providers[0]?.id ?? ""; choose(); } }
+    missingPlugin = false;
+    pluginError = "";
+    try {
+      const result = await invokeTauri<Provider[]>("community_catalog");
+      if (destroyed) return;
+      providers = result.filter(p => !singleProvider || p.id === requestedProvider);
+      const chosen = requestedProvider ? providers.find(p => p.id === requestedProvider) : providers[0];
+      providerId = chosen?.id ?? "";
+      if (!chosen) {
+        providers = [];
+        missingPlugin = requestedProvider.startsWith("plugin.");
+        if (!missingPlugin) error = $t("communityConnect.loadFailed");
+      }
+      choose();
+    }
     catch (e) { if (!destroyed) error = String(e); }
-    finally { if (!destroyed) loading = false; }
+    finally {
+      if (!destroyed) {
+        loading = false;
+        await tick();
+        if (provider?.plugin && !managingPlugin && !connectionBody?.contains(document.activeElement) && !formFooter?.contains(document.activeElement)) {
+          const first = connectionBody?.querySelector<HTMLElement>("fieldset input, fieldset select, fieldset textarea, fieldset button");
+          (first ?? formFooter?.querySelector<HTMLElement>('button[type="submit"]'))?.focus();
+        }
+      }
+    }
   }
   function choose() { methodIndex = providers.find(p => p.id === providerId)?.methods[0]?.index ?? 0; apiKey = ""; inputs = {}; void checkCli(); void tick().then(() => { if (!destroyed) providerList?.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView?.({ block: "nearest" }); }); }
   async function checkCli() {
@@ -73,29 +136,55 @@
     catch (e) { if (!destroyed && current === statusEpoch) error = String(e); }
     finally { if (!destroyed && current === statusEpoch) checkingCli = false; }
   }
+  function openManager() {
+    requestedProvider = providerId || requestedProvider;
+    managingPlugin = true;
+  }
+  async function leaveManager() { managingPlugin = false; await load(); }
   async function install() { try { await invokeTauri("subscription_open_install", { provider: providerId }); } catch (e) { error = String(e); } }
+  function loginError(cause: unknown) {
+    if (!provider?.plugin) return String(cause);
+    pluginError = pluginIssue(cause) ?? "";
+    if (pluginError) { apiKey = code = ""; inputs = {}; }
+    return $t(pluginError || "subscriptionPlugin.loginFailed");
+  }
   async function poll(ticket: string, requestEpoch: number) {
     try {
       const result = await invokeTauri<Login>("community_login_poll", { ticket });
       if (destroyed || requestEpoch !== epoch) return;
+      pendingTicket = result.status === "pending" ? ticket : undefined;
       login = result;
       if (result.status === "complete" && result.entryId) { await onConnected(result.entryId); onClose(); return; }
-      if (result.status !== "pending") { error = result.error ?? $t("communityConnect.cancelled"); busy = false; return; }
+      if (result.status !== "pending") { error = result.error ? loginError(result.error) : $t("communityConnect.cancelled"); busy = false; return; }
       timer = setTimeout(() => { void poll(ticket, requestEpoch); }, 1000);
-    } catch (e) { if (!destroyed && requestEpoch === epoch) { error = String(e); busy = false; void invokeTauri("community_login_cancel", { ticket }).catch(() => {}); login = null; } }
+    } catch (e) {
+      if (!destroyed && requestEpoch === epoch) {
+        error = loginError(e);
+        busy = false;
+        abandonPendingTicket();
+        login = null;
+      }
+    }
   }
+  $: canStart = Boolean(method && !busy && !loading && !pluginError && (!cliOwned || (cliStatus?.available && !checkingCli)) && (method.type !== "api" || apiKey.trim()));
   async function start() {
-    if (!method || busy || (cliOwned && (!cliStatus?.available || checkingCli))) return;
+    if (busy || !canStart || !method) return;
     busy = true; error = "";
     const requestEpoch = ++epoch;
-    const values = { ...inputs };
-    for (const prompt of method.prompts) if (prompt.type === "select" && !values[prompt.key]) values[prompt.key] = prompt.options?.[0]?.value ?? "";
+    const values = provider?.plugin ? pluginValues(method.prompts, inputs) : { ...inputs };
+    for (const prompt of method.prompts) if (!provider?.plugin && prompt.type === "select" && !values[prompt.key]) values[prompt.key] = prompt.options?.[0]?.value ?? "";
     try {
-      const result = await invokeTauri<Login>("community_login_start", { input: { provider: providerId, method: methodIndex, inputs: values, apiKey: apiKey || null, ...(entryId ? { entryId } : {}) } });
-      apiKey = ""; inputs = Object.fromEntries(method.prompts.filter(p => p.type === "select" || p.retain === true).map(p => [p.key, values[p.key]]));
+      const result = await invokeTauri<Login>("community_login_start", { input: { provider: providerId, method: methodIndex, inputs: values, apiKey: apiKey || null, ...(provider?.plugin ? { pluginDigest: provider.pluginDigest } : {}), ...(entryId ? { entryId } : {}) } });
+      apiKey = ""; inputs = provider?.plugin ? {} : Object.fromEntries(method.prompts.filter(p => p.type === "select" || p.retain === true).map(p => [p.key, values[p.key]]));
       if (destroyed) { await invokeTauri("community_login_cancel", { ticket: result.ticket }); return; }
+      pendingTicket = result.status === "pending" ? result.ticket : undefined;
       login = result; void poll(result.ticket, requestEpoch);
-    } catch (e) { if (!destroyed) { error = String(e); busy = false; } }
+    } catch (e) {
+      if (!destroyed) {
+        error = loginError(e);
+        busy = false;
+      }
+    }
   }
   async function cancel() {
     if (!login) return;
@@ -104,6 +193,7 @@
     if (timer) clearTimeout(timer);
     try {
       await invokeTauri("community_login_cancel", { ticket });
+      pendingTicket = undefined;
       // A successful account commit can win the race with cancellation.
       const result = await invokeTauri<Login>("community_login_poll", { ticket });
       if (destroyed || requestEpoch !== epoch) return;
@@ -119,22 +209,24 @@
 <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
   <Dialog.Portal>
     <Dialog.Overlay class="provider-dialog-overlay" />
-    <Dialog.Content class="provider-dialog-content community-dialog">
+    <Dialog.Content bind:ref={dialogContent} onOpenAutoFocus={focusPluginDialog} class={`provider-dialog-content community-dialog ${provider?.plugin ? "plugin-dialog" : ""} ${singleProvider ? "single-provider" : ""}`}>
       <header class="modal-header">
         <div class="dialog-heading">
-          <span class="heading-icon"><KeyRound size={18} /></span>
+          <span class="heading-icon">{#if managingPlugin || singleProvider && initialProvider.startsWith("plugin.")}<Puzzle size={18} />{:else}<KeyRound size={18} />{/if}</span>
           <div>
-            <Dialog.Title class="provider-dialog-title">{$t(entryId ? "oauthConnect.reauth" : initialProvider ? "oauthConnect.title" : "communityConnect.title")}</Dialog.Title>
+            <Dialog.Title class="provider-dialog-title">{$t(managingPlugin ? "subscriptionPlugin.title" : entryId ? "oauthConnect.reauth" : initialProvider ? "oauthConnect.title" : "communityConnect.title")}</Dialog.Title>
             <Dialog.Description class="dialog-description">{$t("communityConnect.description")}</Dialog.Description>
           </div>
         </div>
         <IconButton label={$t("oauthConnect.close")} on:click={onClose}><X size={17} /></IconButton>
       </header>
-      {#if loading}
+      {#if managingPlugin}
+        <div class="plugin-manager"><SubscriptionPluginManager {invokeTauri} expectedId={requestedProvider} onBack={leaveManager} onConnect={leaveManager} /></div>
+      {:else if loading}
         <div class="loading-state" aria-busy="true">{$t("common.loading")}</div>
       {:else if providers.length}
-        <div class="connect-layout" class:reconnect-layout={entryId}>
-          {#if !entryId}
+        <div class="connect-layout" class:reconnect-layout={singleProvider}>
+          {#if !singleProvider}
           <aside class="provider-picker">
             <label class="provider-search">
               <Search size={14} aria-hidden="true" />
@@ -144,8 +236,8 @@
               {#each filteredProviders as p}
                 <button type="button" class="provider-option" class:active={providerId === p.id} aria-pressed={providerId === p.id} disabled={busy}
                   on:click={() => { providerId = p.id; error = ""; login = null; choose(); }}>
-                  <ProviderIcon title={p.name} providerId={p.id} kind="official" size="sm" />
-                  <span>{providerName(p)}</span>
+                  <ProviderIcon title={p.name} providerId={p.id} kind={p.plugin ? "third_party" : "official"} size="sm" />
+                  <span>{providerName(p)}</span>{#if p.plugin}<small>{$t("subscriptionPlugin.local")}</small>{/if}
                   {#if providerId === p.id}<Check size={14} />{/if}
                 </button>
               {/each}
@@ -159,8 +251,8 @@
             {#if error}<Banner tone="danger">{error}</Banner>{/if}
             {#if provider}
               <div class="selected-provider">
-                <ProviderIcon title={provider.name} providerId={provider.id} kind="official" size="lg" />
-                <div><h2>{providerName(provider)}</h2></div>
+                <ProviderIcon title={provider.name} providerId={provider.id} kind={provider.plugin ? "third_party" : "official"} size="lg" />
+                <div><h2>{providerName(provider)}</h2>{#if provider.plugin}<code>{provider.id}</code>{/if}</div>
               </div>
             {/if}
             {#if cliOwned}
@@ -170,26 +262,40 @@
                 <div class="cli-actions"><Button on:click={install}><ExternalLink size={14} />{$t("subscriptionCli.install")}</Button><Button on:click={checkCli}>{$t("subscriptionCli.recheck")}</Button></div>
               {:else if !cliStatus}<Button on:click={checkCli}>{$t("subscriptionCli.recheck")}</Button>{/if}
             {/if}
-            <fieldset disabled={busy}>
+            {#if pluginError}
+              {#if pluginError !== "subscriptionPlugin.proxyMode"}<Button on:click={openManager}><Puzzle size={14} />{$t("subscriptionPlugin.title")}</Button>{/if}
+              <Button on:click={load}>{$t("providerRuntime.retry")}</Button>
+            {/if}
+            <form id={formId} on:focusin={revealPluginControl} on:submit|preventDefault={start}><fieldset disabled={busy || Boolean(pluginError)}>
+              {#if !provider?.plugin || provider.methods.length > 1}
               <SelectField label={$t("communityConnect.method")} value={String(methodIndex)} disabled={busy}
-                options={(provider?.methods ?? []).map(m => ({ value: String(m.index), label: cliOwned ? $t(m.index === 0 ? "subscriptionCli.signIn" : "subscriptionCli.existing") : m.labelKey ? $t(m.labelKey) : m.label }))}
+                options={(provider?.methods ?? []).map(m => ({ value: String(m.index), label: cliOwned ? $t(m.index === 0 ? "subscriptionCli.signIn" : "subscriptionCli.existing") : m.labelKey ? $t(m.labelKey) : pluginText(m.label, $activeLocaleStore) }))}
                 onValueChange={(value) => { methodIndex = Number(value); inputs = {}; apiKey = ""; }} />
-              {#if method}
+              {:else if method}
+                <p class="single-method"><span>{$t("communityConnect.method")}</span> {pluginText(method.label, $activeLocaleStore)}</p>
+              {/if}
+              {#if method && !provider?.plugin}
                 <div class="method-note">
                   {#if method.type === "api"}<KeyRound size={16} />{:else if method.native}<Terminal size={16} />{:else}<Globe size={16} />{/if}
                   <p>{$t(method.hintKey ?? (cliOwned ? "subscriptionCli.hint" : method.type === "api" ? "communityConnect.apiHint" : method.native ? "communityConnect.cliHint" : "communityConnect.browserHint"))}</p>
                 </div>
               {/if}
+              {#if provider?.plugin}
+                <PluginLoginFields prompts={method?.prompts ?? []} bind:inputs />
+              {:else}
               {#each method?.prompts ?? [] as prompt}
                 {#if prompt.type === "select"}
-                  <SelectField label={prompt.messageKey ? $t(prompt.messageKey) : prompt.message} disabled={busy} value={inputs[prompt.key] ?? prompt.options?.[0]?.value ?? ""}
-                    options={(prompt.options ?? []).map(o => ({...o, label: o.labelKey ? $t(o.labelKey) : o.label}))} onValueChange={(value) => { inputs = { ...inputs, [prompt.key]: value }; }} />
+                  <SelectField label={prompt.messageKey ? $t(prompt.messageKey) : pluginText(prompt.message, $activeLocaleStore)} disabled={busy} value={inputs[prompt.key] ?? prompt.options?.[0]?.value ?? ""}
+                    options={(prompt.options ?? []).map(o => ({...o, label: o.labelKey ? $t(o.labelKey) : pluginText(o.label, $activeLocaleStore)}))} onValueChange={(value) => { inputs = { ...inputs, [prompt.key]: value }; }} />
+                {:else if prompt.type === "secret"}
+                  <Field label={pluginText(prompt.message, $activeLocaleStore)}><input type="password" bind:value={inputs[prompt.key]} autocomplete="new-password" /></Field>
                 {:else}
-                  <Field label={prompt.messageKey ? $t(prompt.messageKey) : prompt.message}><input bind:value={inputs[prompt.key]} placeholder={prompt.placeholder ?? ""} autocomplete="off" /></Field>
+                  <Field label={prompt.messageKey ? $t(prompt.messageKey) : pluginText(prompt.message, $activeLocaleStore)}><input bind:value={inputs[prompt.key]} placeholder={pluginText(prompt.placeholder ?? "", $activeLocaleStore)} autocomplete="off" /></Field>
                 {/if}
               {/each}
-              {#if method?.type === "api"}<Field label="API key"><input type="password" bind:value={apiKey} autocomplete="new-password" placeholder={$t("communityConnect.apiPlaceholder")} /></Field>{#if keyPage}<Button variant="secondary" on:click={openKeyPage}><ExternalLink size={14} />{$t("communityConnect.getKey")}</Button>{/if}{/if}
-            </fieldset>
+              {/if}
+              {#if method?.type === "api"}<Field label={$t("providerForm.apiKey")}><input type="password" bind:value={apiKey} autocomplete="new-password" placeholder={$t("communityConnect.apiPlaceholder")} /></Field>{#if keyPage}<Button variant="secondary" on:click={openKeyPage}><ExternalLink size={14} />{$t("communityConnect.getKey")}</Button>{/if}{/if}
+            </fieldset></form>
             {#if login?.status === "pending"}
               <section class="login-status" aria-live="polite">
                 <span class="status-label"><span class="status-dot"></span>{$t("communityConnect.authorizing")}</span>
@@ -201,20 +307,29 @@
           </div>
         </div>
       {:else}
-        <div class="loading-state">{#if error}<Banner tone="danger">{error}</Banner>{/if}<Button on:click={load}>{$t("providerRuntime.retry")}</Button></div>
+        <div class="loading-state">
+          {#if missingPlugin}<p>{$t("subscriptionPlugin.missing", { id: requestedProvider })}</p>
+            <Button variant="primary" on:click={openManager}><Puzzle size={14} />{$t("subscriptionPlugin.title")}</Button>
+          {:else}{#if error}<Banner tone="danger">{error}</Banner>{/if}<Button on:click={load}>{$t("providerRuntime.retry")}</Button>{/if}
+          {#if onBack}<Button variant="ghost" on:click={onBack}><ArrowLeft size={14} />{$t("oauthConnect.changeProvider")}</Button>{/if}
+        </div>
       {/if}
-      <footer class="modal-footer">
-        <span class="security-note"><ShieldCheck size={14} />{$t(cliOwned ? "subscriptionCli.localNote" : provider?.localAuthorization && method?.type !== "api" ? "communityConnect.deviceNote" : "communityConnect.localNote")}</span>
+      {#if !managingPlugin && provider}<footer class="modal-footer" bind:this={formFooter}>
+        <span class="security-note"><ShieldCheck size={14} />{$t(provider?.plugin ? "subscriptionPlugin.accountNote" : cliOwned ? "subscriptionCli.localNote" : provider?.localAuthorization && method?.type !== "api" ? "communityConnect.deviceNote" : "communityConnect.localNote")}</span>
         {#if busy && !login}<Button variant="primary" loading>{$t("communityConnect.waiting")}</Button>
         {:else if busy}<Button variant="secondary" on:click={cancel}>{$t("common.cancel")}</Button>
-        {:else}<Button variant="primary" disabled={loading || !method || (cliOwned && (checkingCli || !cliStatus?.available)) || (method.type === "api" && !apiKey.trim())} on:click={start}>{$t("oauthConnect.continue")}<ArrowRight size={14} /></Button>{/if}
-      </footer>
+        {:else}<Button variant="primary" disabled={!canStart} type="submit" form={formId}>{$t("oauthConnect.continue")}<ArrowRight size={14} /></Button>{/if}
+      </footer>{/if}
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>
 
 <style lang="scss">
   :global(.provider-dialog-content.community-dialog) { width: 720px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+  :global(.provider-dialog-content.community-dialog.single-provider) { width: 560px; }
+  .plugin-manager { padding: 16px 20px; min-height: 0; overflow-y: auto; }
+  .selected-provider > div { min-width: 0; overflow-wrap: anywhere; }
+  .selected-provider code { font-size: 11px; color: var(--text-secondary); }
   .modal-header, .modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-shrink: 0; padding: 20px 24px; }
   .modal-header { border-bottom: 1px solid var(--divider); }
   .modal-header :global(.icon-btn) { flex-shrink: 0; }
@@ -222,7 +337,11 @@
   .heading-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 10px; color: var(--text-secondary); }
   :global(.community-dialog .dialog-description) { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .connect-layout { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 0; height: 374px; }
-  .reconnect-layout { grid-template-columns: minmax(0, 1fr); height: auto; max-height: 374px; }
+  .reconnect-layout { display: flex; flex-direction: column; height: auto; max-height: 374px; }
+  :global(.plugin-dialog) .reconnect-layout, :global(.plugin-dialog) .reconnect-layout .connection-body { max-height: min(510px, calc(100vh - 196px)); }
+  .reconnect-layout .connection-body { min-height: 0; max-height: 374px; }
+  :global(.plugin-dialog) .connection-body { scroll-padding-block: 8px; }
+  .connection-body > :global(*) { flex-shrink: 0; }
   .provider-picker { min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px 12px 12px; border-right: 1px solid var(--divider); background: var(--surface-2); }
   .provider-search { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text-tertiary); }
   .provider-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
@@ -234,6 +353,7 @@
   .provider-option:hover:not(:disabled) { background: var(--surface); color: var(--text); }
   .provider-option.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .provider-option:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+  .provider-option small { color: var(--text-secondary); font-size: 10px; flex-shrink: 0; }
   .provider-option:disabled { opacity: .55; cursor: not-allowed; }
   .catalog-count { padding: 0 8px; color: var(--text-tertiary); font-size: 10px; }
   .connection-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; overflow-y: auto; padding: 20px; }
@@ -241,6 +361,8 @@
   h2 { margin: 0 0 4px; font-size: 18px; font-weight: 600; letter-spacing: -.025em; }
   p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-tertiary); overflow-wrap: anywhere; }
   fieldset { display: grid; gap: 12px; border: 0; padding: 0; margin: 0; min-width: 0; }
+  .single-method { color: var(--text); }
+  .single-method span { color: var(--text-secondary); margin-inline-end: 6px; }
   .method-note { display: flex; align-items: flex-start; gap: 9px; padding: 12px; background: var(--surface-2); border-radius: var(--radius); color: var(--text-secondary); }
   .method-note :global(svg) { flex-shrink: 0; margin-top: 2px; }
   .method-note p { color: var(--text-secondary); font-size: 11px; }

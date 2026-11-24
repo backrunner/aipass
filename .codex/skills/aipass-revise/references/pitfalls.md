@@ -1412,3 +1412,16 @@ Newest entries last within each section.
 - **Fix**: replace TOML parse failures with a fixed diagnostic, preserving the configuration and encrypted recovery data.
 - **Guardrail**: malformed configuration containing a synthetic credential must fail without including that credential in the formatted error chain. Keep native platform fixture imports explicit; macOS Clippy cannot compile Windows-only test modules.
 - **Watch points**: `proxy_recovery/merge.rs`, the uninstall entry point and native Windows CI.
+
+### Plugin sign-in forms and provider replacement
+
+- A plugin can be disabled or replaced between catalog display and submission. Match the requested provider ID again when loading its form and check its displayed digest in the Agent before starting the subprocess. Keep unavailable accounts bound to their original provider during recovery.
+- The OAuth picker regressions and the Agent plugin process test cover missing providers, stale form revisions and reconnecting a different account.
+- For a plugin dialog, give initial focus to one owner. Suppress the dialog library’s deferred autofocus when the loaded form chooses its first field, and preserve a field the user has already focused. The long-form WebKit test checks the active field and submit action.
+
+
+### Subscription plugin installation verification
+
+- A valid release checksum and executable header could grant a program that never spoke the subscription protocol. Both local and GitHub enable paths in `provider_plugins/mod.rs` used to persist after passive inspection.
+- Before saving a grant, verify the reviewed bytes in the selected runtime with a nonce-bound handshake and clean shutdown. Keep credentials and the HTTP broker out of this session. Serialize the final digest check and grant with vault lock and disable.
+- Exercise passive preview, package cleanup after rejection, and revocation between verification and grant persistence.

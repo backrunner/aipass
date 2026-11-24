@@ -7,30 +7,32 @@ pub(super) const RECONNECT: &str =
     "Subscription requires local authorization; reconnect this account on this device";
 
 pub(crate) fn supports_local_authorization(provider: &str) -> bool {
-    matches!(
-        provider,
-        "factory"
-            | "antigravity"
-            | "minimax-code"
-            | "minimax-code-global"
-            | "cline"
-            | "trae-cn"
-            | "trae-global"
-            | "qoder"
-            | "qoder-cn"
-            | "kiro"
-            | "workbuddy"
-            | "workbuddy-ai"
-            | "cursor"
-    )
+    crate::provider_plugins::is_plugin(provider)
+        || matches!(
+            provider,
+            "factory"
+                | "antigravity"
+                | "minimax-code"
+                | "minimax-code-global"
+                | "cline"
+                | "trae-cn"
+                | "trae-global"
+                | "qoder"
+                | "qoder-cn"
+                | "kiro"
+                | "workbuddy"
+                | "workbuddy-ai"
+                | "cursor"
+        )
 }
 pub(super) fn managed(provider: &str, auth: &Value) -> bool {
-    supports_local_authorization(provider)
-        && ["refresh", "deviceRefresh"].iter().any(|key| {
-            auth[*key]
-                .as_str()
-                .is_some_and(|v| !v.is_empty() && v != "cursor-agent")
-        })
+    crate::provider_plugins::is_plugin(provider)
+        || supports_local_authorization(provider)
+            && ["refresh", "deviceRefresh"].iter().any(|key| {
+                auth[*key]
+                    .as_str()
+                    .is_some_and(|v| !v.is_empty() && v != "cursor-agent")
+            })
 }
 
 fn auth(account: &Account) -> ServiceResult<PrivateAuth> {

@@ -473,6 +473,7 @@ impl ProxyService {
     }
 
     pub fn lock_for_session(&mut self) {
+        self.community_bridge.cancel_plugins();
         // ProxyHandle owns a separate runtime snapshot containing the resolved
         // route credentials. Keep that snapshot alive so an already-running
         // proxy remains available while the vault session is locked, but wipe
@@ -483,6 +484,7 @@ impl ProxyService {
     }
 
     pub fn reset(&mut self) -> ServiceResult<()> {
+        self.community_bridge.cancel_plugins();
         self.pending_ws_events.clear();
         self.pending_ws_refresh.clear();
         self.handle.take();

@@ -82,45 +82,12 @@ fn dispatch_request(
             bundle.expose(),
         )
         .map(|()| AgentResponse::empty()),
-        request @ (AgentRequest::CommunityCatalog
+        request @ (AgentRequest::SubscriptionPlugin { .. }
+        | AgentRequest::CommunityCatalog
         | AgentRequest::CommunityLoginStart { .. }
         | AgentRequest::CommunityLoginPoll { .. }
         | AgentRequest::CommunityLoginCode { .. }
-        | AgentRequest::CommunityLoginCancel { .. }) => {
-            let (bridge, proxy) = with_vault(state, false, |vault| {
-                let mut proxy = state
-                    .proxy
-                    .lock()
-                    .map_err(|_| ServiceError::internal(anyhow::anyhow!("proxy unavailable")))?;
-                Ok((
-                    proxy.community_bridge(),
-                    proxy.load_config(vault)?.upstream_proxy,
-                ))
-            })?;
-            let error = |e| ServiceError::new(AgentErrorCode::ValidationFailed, e);
-            match request {
-                AgentRequest::CommunityCatalog => {
-                    bridge.catalog().map(AgentResponse::success).map_err(error)
-                }
-                AgentRequest::CommunityLoginStart { input } => bridge
-                    .login_start(state, input, proxy)
-                    .map(AgentResponse::success)
-                    .map_err(error),
-                AgentRequest::CommunityLoginPoll { ticket } => bridge
-                    .login_poll(ticket)
-                    .map(AgentResponse::success)
-                    .map_err(error),
-                AgentRequest::CommunityLoginCode { ticket, code } => bridge
-                    .login_code(ticket, code.expose())
-                    .map(|()| AgentResponse::empty())
-                    .map_err(error),
-                AgentRequest::CommunityLoginCancel { ticket } => bridge
-                    .login_cancel(ticket)
-                    .map(|()| AgentResponse::empty())
-                    .map_err(error),
-                _ => unreachable!(),
-            }
-        }
+        | AgentRequest::CommunityLoginCancel { .. }) => subscriptions::community(state, request),
         AgentRequest::ClaudeBridgeMcp {
             capability,
             request,

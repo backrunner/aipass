@@ -189,6 +189,7 @@ fn start(
             .login_start_bound(
                 state,
                 CommunityLoginInput {
+                    plugin_digest: None,
                     entry_id: None,
                     provider: "codex".into(),
                     // Method 0 starts an isolated official login; method 1 imports

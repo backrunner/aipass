@@ -8,10 +8,12 @@
   export let entryId: string;
   export let providerId: string;
   export let onConnected: () => void | Promise<void>;
+  export let managePlugin = false;
   let supported = false;
   let open = false;
   let alive = true;
   onMount(() => {
+    if (providerId.startsWith("plugin.")) { supported = true; return; }
     void invokeTauri<{ id: string; localAuthorization?: boolean }[]>("community_catalog")
       .then(items => { if (alive) supported = items.some(p => p.id === providerId && p.localAuthorization); })
       .catch(() => {});
@@ -19,7 +21,7 @@
   onDestroy(() => { alive = false; });
 </script>
 
-{#if supported}<Button variant="secondary" size="sm" on:click={() => { open = true; }}><KeyRound size={13} />{$t("oauthConnect.reauth")}</Button>{/if}
+{#if supported}<Button variant="secondary" size="sm" on:click={() => { open = true; }}><KeyRound size={13} />{$t(managePlugin ? "subscriptionPlugin.title" : "oauthConnect.reauth")}</Button>{/if}
 {#if open}
-  <CommunityConnectDialog {invokeTauri} {entryId} initialProvider={providerId} onClose={() => { open = false; }} onConnected={async () => { open = false; await onConnected(); }} />
+  <CommunityConnectDialog {invokeTauri} {entryId} initialProvider={providerId} startInPluginManager={managePlugin} onClose={() => { open = false; }} onConnected={async () => { open = false; await onConnected(); }} />
 {/if}

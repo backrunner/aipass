@@ -1,0 +1,18 @@
+(version 1)
+(deny default)
+(import "dyld-support.sb")
+(allow process-exec (literal (param "PLUGIN")))
+(allow file-read* file-map-executable
+    (literal (param "PLUGIN"))
+    (subpath "/usr/lib")
+    (subpath "/System/Library"))
+(allow file-read-metadata (literal "/") (literal "/usr") (literal "/System"))
+(allow file-read-data (literal "/dev/urandom") (literal "/dev/random"))
+(allow sysctl-read
+    (sysctl-name-prefix "hw.")
+    (sysctl-name "kern.ostype")
+    (sysctl-name "kern.osrelease")
+    (sysctl-name "kern.osversion")
+    (sysctl-name "kern.osproductversion")
+    (sysctl-name "vm.pagesize"))
+(allow signal (target self))

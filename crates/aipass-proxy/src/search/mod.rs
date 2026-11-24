@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 mod api;
 mod config;
 mod fetch;
+pub use fetch::public_fetch_address;
 mod gateway;
 mod history;
 pub(crate) use history::History;

@@ -1,7 +1,7 @@
 //! Untrusted URLs may only reach public addresses. Resolve and pin each hop.
 use super::*;
 use std::net::{IpAddr, SocketAddr};
-fn public(ip: IpAddr) -> bool {
+pub fn public_fetch_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => {
             let [a, b, c, _] = v.octets();
@@ -19,7 +19,7 @@ fn public(ip: IpAddr) -> bool {
         }
         IpAddr::V6(v) => v
             .to_ipv4_mapped()
-            .map(|v| public(v.into()))
+            .map(|v| public_fetch_address(v.into()))
             .unwrap_or_else(|| {
                 let s = v.segments();
                 !v.is_loopback()
@@ -60,7 +60,7 @@ async fn fetch_inner(input: &str) -> Result<Value, String> {
             .await
             .map_err(|_| "page DNS lookup failed")?
             .collect();
-        if addresses.is_empty() || addresses.iter().any(|a| !public(a.ip())) {
+        if addresses.is_empty() || addresses.iter().any(|a| !public_fetch_address(a.ip())) {
             return Err("web fetch cannot access local or private addresses".into());
         }
         // Proxy-side DNS would bypass the pinned-address restriction.
@@ -181,9 +181,9 @@ mod tests {
             "2002:7f00:1::1",
             "2001::ffff:80ff:fffe",
         ] {
-            assert!(!public(s.parse().unwrap()), "{s}");
+            assert!(!public_fetch_address(s.parse().unwrap()), "{s}");
         }
-        assert!(public("1.1.1.1".parse().unwrap()));
+        assert!(public_fetch_address("1.1.1.1".parse().unwrap()));
     }
     #[test]
     fn strips_active_html() {

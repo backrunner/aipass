@@ -30,12 +30,22 @@ impl Process {
         )
         .unwrap();
         let log = std::fs::File::create(path.join("test-agent.log")).unwrap();
-        let child = Command::new(std::env::current_exe().unwrap())
-            .args([
+        let mut command = if let Some(binary) = std::env::var_os("AIPASS_EXAMPLE_TEST_AGENT") {
+            let mut cmd = Command::new(binary);
+            cmd.arg("--vault")
+                .arg(path)
+                .env(crate::desktop::SUPPRESS_TRAY_ENV, "1");
+            cmd
+        } else {
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args([
                 "--exact",
                 "community::device::tests::processes::agent_child",
                 "--nocapture",
-            ])
+            ]);
+            cmd
+        };
+        let child = command
             .env("AIPASS_LOCAL_GRANT_TEST_VAULT", path)
             .env("AIPASS_LOG_DIR", path.join("test-logs"))
             .stdout(Stdio::from(log.try_clone().unwrap()))
@@ -157,3 +167,5 @@ fn two_actual_agents_use_only_their_local_grants_over_authenticated_ipc() {
         .expose()
         .contains("device-a-new-refresh"));
 }
+
+mod plugin;

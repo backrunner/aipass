@@ -16,8 +16,13 @@ pub(crate) mod oauth;
 pub(crate) mod official_accounts;
 pub(crate) mod operation_log;
 pub mod paths;
+mod plugin_wasi;
 mod power;
 pub mod pricing;
+mod provider_plugins;
+pub use plugin_wasi::run as run_wasi_plugin;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub use provider_plugins::sandbox::run_native_plugin;
 mod provider_runtime;
 pub mod proxy_service;
 pub mod server;

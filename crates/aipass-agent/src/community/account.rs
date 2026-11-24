@@ -26,7 +26,7 @@ pub(super) fn decode(raw: &str) -> ServiceResult<Account> {
     let account: Account =
         serde_json::from_str(raw).map_err(|_| invalid("invalid community account"))?;
     if !account.feedback.valid()
-        || !PROVIDERS.contains(&account.provider.as_str())
+        || !known_provider(&account.provider)
         || !account.models.is_object()
         || account.models.as_object().is_some_and(|m| m.len() > 4096)
     {
@@ -41,9 +41,10 @@ pub(super) fn decode(raw: &str) -> ServiceResult<Account> {
 }
 pub(crate) fn read(vault: &Vault, id: Uuid, marker: &str) -> ServiceResult<SensitiveString> {
     let entry = vault.get_provider_summary(id).map_err(map_vault_error)?;
-    if entry.provider_kind != ProviderKind::Official
+    let provider = entry.provider_id.as_deref().unwrap_or("");
+    if entry.provider_kind != provider_kind(provider)
         || entry.credential_kind != CredentialKind::OAuth
-        || !PROVIDERS.contains(&entry.provider_id.as_deref().unwrap_or(""))
+        || !known_provider(provider)
         || entry.deleted_at.is_some()
         || entry.archived_at.is_some()
         || !marker.starts_with("aipass:community:")
@@ -218,6 +219,14 @@ pub(crate) fn is_account(vault: &Vault, id: Uuid) -> bool {
     stored(vault, id).ok().flatten().is_some()
 }
 
+fn provider_kind(id: &str) -> ProviderKind {
+    if crate::provider_plugins::is_plugin(id) {
+        ProviderKind::ThirdParty
+    } else {
+        ProviderKind::Official
+    }
+}
+
 pub(super) fn persist(vault: &Vault, mut account: Account) -> ServiceResult<Uuid> {
     let local = super::device::requires_local(&account)?;
     if local {
@@ -247,7 +256,7 @@ pub(super) fn persist(vault: &Vault, mut account: Account) -> ServiceResult<Uuid
                     &serde_json::from_str::<Value>(account.auth.expose())
                         .map_err(ServiceError::internal)?,
                 ),
-                provider_kind: ProviderKind::Official,
+                provider_kind: provider_kind(&account.provider),
                 provider_id: Some(account.provider.clone()),
                 credential_kind: CredentialKind::OAuth,
                 account_identity: (!account.identity.is_empty()).then_some(account.identity),

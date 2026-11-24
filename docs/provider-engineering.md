@@ -2,7 +2,7 @@
 
 ## Runtime and build independence
 
-Provider transports live in `crates/aipass-agent/src/subscriptions`; pure wire
+Built-in provider transports live in `crates/aipass-agent/src/subscriptions`; pure wire
 conversion lives in `crates/aipass-proxy-conversion`. Both are native Rust.
 The catalog is local JSON embedded by Rust `include_str!`. AIPass maintains its
 provider implementation and architecture in this repository, using vendor
@@ -14,6 +14,8 @@ executable source. It rejects external provider-adapter packages/source imports
 and non-Rust subscription implementation files. `pnpm lint` runs it, so the
 existing CI Node job enforces the same policy. Required copyright/license
 notices remain separate from product architecture and operating instructions.
+
+User-developed providers use the [local subscription plugin protocol](subscription-plugins.md). The Rust Agent owns trust, process lifecycle and account storage.
 
 ## Module boundaries
 

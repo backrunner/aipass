@@ -83,6 +83,10 @@ pub(crate) const PROVIDERS: &[&str] = &[
     "tencent-token-plan-enterprise",
 ];
 
+fn known_provider(id: &str) -> bool {
+    PROVIDERS.contains(&id) || crate::provider_plugins::is_plugin(id)
+}
+
 struct Run {
     process: Weak<Operation>,
     target: Option<ResolvedTarget>,
@@ -94,6 +98,9 @@ struct Login {
 }
 struct Inner {
     vault_dir: PathBuf,
+    plugins: Mutex<crate::provider_plugins::Registry>,
+    github_download: Mutex<()>,
+    plugin_epoch: std::sync::atomic::AtomicU64,
     runs: Mutex<Vec<Run>>,
     accounts: Mutex<HashMap<Uuid, Weak<Mutex<()>>>>,
     logins: Mutex<HashMap<Uuid, Login>>,
@@ -131,6 +138,9 @@ impl CommunityBridge {
         Self {
             inner: Arc::new(Inner {
                 vault_dir: path.to_owned(),
+                plugins: Default::default(),
+                github_download: Default::default(),
+                plugin_epoch: Default::default(),
                 runs: Mutex::new(Vec::new()),
                 accounts: Mutex::new(HashMap::new()),
                 logins: Mutex::new(HashMap::new()),
@@ -282,7 +292,103 @@ impl CommunityBridge {
         if frame["type"] != "result" {
             return Err("invalid provider catalog".into());
         }
-        Ok(frame["value"].clone())
+        let mut providers = frame["value"]
+            .as_array()
+            .ok_or("invalid provider catalog")?
+            .clone();
+        let registry = self
+            .inner
+            .plugins
+            .lock()
+            .map_err(|_| "Plugin registry unavailable")?;
+        providers.extend(registry.catalog(&self.inner.vault_dir)?);
+        Ok(Value::Array(providers))
+    }
+    pub(crate) fn plugin_epoch(&self) -> u64 {
+        self.inner.plugin_epoch.load(Ordering::Acquire)
+    }
+    pub(crate) fn manage_plugin(
+        &self,
+        action: aipass_agent_protocol::SubscriptionPluginAction,
+        epoch: u64,
+    ) -> Result<Value, String> {
+        if let aipass_agent_protocol::SubscriptionPluginAction::InspectGithub {
+            repository,
+            native,
+        } = &action
+        {
+            let _download = self
+                .inner
+                .github_download
+                .try_lock()
+                .map_err(|_| "GitHub inspection already in progress")?;
+            let preview = crate::provider_plugins::github::inspect(repository, *native)?;
+            let mut registry = self
+                .inner
+                .plugins
+                .lock()
+                .map_err(|_| "Plugin registry unavailable")?;
+            if self.inner.plugin_epoch.load(Ordering::Acquire) != epoch {
+                return Err("Plugin operation revoked".into());
+            }
+            return Ok(registry.preview(preview));
+        }
+        let mut registry = self
+            .inner
+            .plugins
+            .lock()
+            .map_err(|_| "Plugin registry unavailable")?;
+        if self.plugin_epoch() != epoch {
+            return Err("Plugin operation revoked".into());
+        }
+        use aipass_agent_protocol::SubscriptionPluginAction::{Enable, EnableGithub};
+        if matches!(action, Enable { .. } | EnableGithub { .. }) {
+            let installation = registry.prepare_install(&self.inner.vault_dir, action)?;
+            drop(registry);
+            let verified = installation.verify()?;
+            let mut registry = self
+                .inner
+                .plugins
+                .lock()
+                .map_err(|_| "Plugin registry unavailable")?;
+            if self.plugin_epoch() != epoch {
+                return Err("Plugin operation revoked".into());
+            }
+            return registry.commit_install(verified);
+        }
+        registry.manage(&self.inner.vault_dir, action)
+    }
+    pub(crate) fn cancel_plugins(&self) {
+        if let Ok(mut registry) = self.inner.plugins.lock() {
+            self.inner.plugin_epoch.fetch_add(1, Ordering::AcqRel);
+            registry.cancel(None);
+        }
+    }
+    fn worker(
+        &self,
+        provider: &str,
+        proxy: Option<&UpstreamProxyConfig>,
+        epoch: u64,
+        login_digest: Option<&str>,
+    ) -> Result<Adapter, String> {
+        if !crate::provider_plugins::is_plugin(provider) {
+            return Adapter::start(proxy);
+        }
+        let mut registry = self
+            .inner
+            .plugins
+            .lock()
+            .map_err(|_| "Plugin registry unavailable")?;
+        if self.inner.plugin_epoch.load(Ordering::Acquire) != epoch {
+            return Err("Plugin operation revoked".into());
+        }
+        let launch = registry.launch(&self.inner.vault_dir, provider)?;
+        if login_digest.is_some_and(|digest| digest != launch.digest) {
+            return Err("Plugin login form changed; reopen it before signing in".into());
+        }
+        let worker = Adapter::start_with_plugin(proxy, Some(launch))?;
+        registry.track(provider, &worker.process);
+        Ok(worker)
     }
     pub(crate) fn login_start(
         &self,
@@ -299,11 +405,15 @@ impl CommunityBridge {
         proxy: UpstreamProxyConfig,
         target: Option<Uuid>,
     ) -> Result<CommunityLoginStatus, String> {
-        if !PROVIDERS.contains(&input.provider.as_str()) {
+        if !known_provider(&input.provider) {
             return Err("unknown community provider".into());
         }
         if target.is_some() && input.entry_id.is_some() {
             return Err("conflicting sign-in targets".into());
+        }
+        let plugin_epoch = self.inner.plugin_epoch.load(Ordering::Acquire);
+        if crate::provider_plugins::is_plugin(&input.provider) {
+            with_vault(state, false, |_| Ok(())).map_err(|e| e.message)?;
         }
         let reconnect = input
             .entry_id
@@ -324,7 +434,12 @@ impl CommunityBridge {
         {
             return Err("too many pending sign-ins".into());
         }
-        let worker = Adapter::start(Some(&proxy))?;
+        let worker = self.worker(
+            &input.provider,
+            Some(&proxy),
+            plugin_epoch,
+            Some(input.plugin_digest.as_deref().unwrap_or_default()),
+        )?;
         self.register(&worker.process, None)?;
         let ticket = Uuid::new_v4();
         let status = CommunityLoginStatus {
@@ -608,6 +723,7 @@ impl CommunityBridge {
     ) -> Result<Value, String> {
         let lock = self.account_lock(id)?;
         let _guard = lock.try_lock().map_err(|_| ACCOUNT_BUSY)?;
+        let plugin_epoch = self.inner.plugin_epoch.load(Ordering::Acquire);
         let mut account = self.load(id, marker)?;
         let marker = format!("aipass:community:{}", account.generation);
         let epoch = self
@@ -616,7 +732,7 @@ impl CommunityBridge {
             .lock()
             .map_err(|_| "account recovery unavailable")?
             .epoch;
-        let mut worker = Adapter::start(Some(proxy))?;
+        let mut worker = self.worker(&account.provider, Some(proxy), plugin_epoch, None)?;
         self.register(&worker.process, None)?;
         let mut initial = self.initial_operation(op, &account, id)?;
         initial["reset"] = json!(reset);
@@ -661,6 +777,7 @@ impl CommunityBridge {
             if cancel.canceled.load(Ordering::Acquire) {
                 return Err("request cancelled".into());
             }
+            let plugin_epoch = self.inner.plugin_epoch.load(Ordering::Acquire);
             let mut account = self.load(id, &target.api_key)?;
             target.api_key = format!("aipass:community:{}", account.generation);
             let epoch = self
@@ -674,7 +791,12 @@ impl CommunityBridge {
                 .lock()
                 .map_err(|_| "session coordinator unavailable")?
                 .insert(target.config.id, account.generation);
-            let mut worker = Adapter::start(target.upstream_proxy.as_ref())?;
+            let mut worker = self.worker(
+                &account.provider,
+                target.upstream_proxy.as_ref(),
+                plugin_epoch,
+                None,
+            )?;
             cancel.attach(&worker.process);
             self.register(&worker.process, Some(target.clone()))?;
             let mut initial = self.initial_operation("request", &account, id)?;

@@ -39,6 +39,7 @@ mod model_routes;
 mod routing;
 mod runtime;
 mod search;
+pub use search::public_fetch_address;
 mod selection;
 pub use search::{
     ResolvedSearchApi, SearchApiConfig, SearchConfig, SearchModelConfig, SearchVendor,

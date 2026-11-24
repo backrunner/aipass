@@ -70,3 +70,15 @@ test("console-only accounts open the bound regional console without a futile ref
   expect(invokeTauri).toHaveBeenCalledWith("oauth_open_verification",{uri:"https://modelstudio.console.alibabacloud.com/ap-southeast-1/subscription/coding-plan"});
   expect(document.querySelectorAll(".usage-footer button")).toHaveLength(1);
 });
+
+test("offers plugin management for a disabled provider even with no active catalog entry", async () => {
+  const invokeTauri = vi.fn().mockResolvedValue([]);
+  render({ subscription: { ...snapshot, source: "community:plugin.demo" }, error: "Subscription plugin is disabled on this device",
+    entryId: "entry", providerId: "plugin.demo", invokeTauri, refreshable: true });
+  await vi.waitFor(() => expect(document.body.textContent).toContain("订阅插件"));
+  const manage = [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === "订阅插件");
+  expect(manage).toBeDefined();
+  manage!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("plugin.demo"));
+  expect(invokeTauri).toHaveBeenCalledWith("subscription_plugin", { operation: { action: "list" } });
+});

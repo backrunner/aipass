@@ -3,7 +3,10 @@
   import { Badge, Button, Card } from "@aipass/ui";
   import { AlertCircle, Gauge, RefreshCw, ExternalLink } from "lucide-svelte";
   import { t } from "../../stores/i18n";
+  import { pluginIssue } from "./subscription-plugin-errors";
   import SubscriptionReconnect from "./SubscriptionReconnect.svelte";
+
+  import PluginAccountSections from "./PluginAccountSections.svelte";
 
   export let subscription: SubscriptionSnapshot | undefined = undefined;
   export let entryId: string | undefined = undefined;
@@ -22,11 +25,14 @@
   $: failure = error || subscription?.error || consoleError || "";
   $: stale = Boolean(subscription?.stale || failure);
   $: windows = subscription?.windows ?? [];
+  $: sections = subscription?.source?.startsWith("community:plugin.") ? subscription.sections ?? [] : [];
   $: hasUsage = windows.length > 0 || Boolean(subscription?.creditsRemaining?.trim());
   $: consoleOnly = subscription?.quotaUnavailable ?? /^community:(opencode-zen|mimo-plan|stepfun-plan(-cn)?|qwen-token-plan|bailian-(token|coding)-plan|volcengine-(coding|agent)-plan|tencent-token-plan(-enterprise)?)$/.test(subscription?.source ?? "");
   $: planNameKey = `subscriptionName.${subscription?.source?.replace("community:", "") ?? ""}`;
   $: translatedPlan = $t(planNameKey);
   $: planLabel = consoleOnly && translatedPlan !== planNameKey ? translatedPlan : subscription?.plan;
+  $: issue = providerId?.startsWith("plugin.") ? pluginIssue(failure) : undefined;
+  $: managePlugin = Boolean(issue && issue !== "subscriptionPlugin.proxyMode");
   $: reconnect = /account.*chang|ownership|reconnect|reauth|needs.login|login.required|unauthorized|expired.*(token|credential)/i.test(failure);
   function label(window: SubscriptionWindow) {
     const raw = window.label;
@@ -62,10 +68,10 @@
     {#if subscription?.plan || subscription?.status}
       <div class="plan"><strong>{planLabel}</strong>{#if subscription?.status}<Badge>{subscription.status}</Badge>{/if}</div>
     {/if}
-    {#if failure || (stale && hasUsage)}
-      <div class="notice" role="status"><AlertCircle size={16} /><div><strong>{$t(reconnect ? "subscriptionUsage.reconnectTitle" : failure ? "subscriptionUsage.failedTitle" : "providerDetail.snapshotStale")}</strong><p>{$t(reconnect ? "subscriptionUsage.reconnectHint" : hasUsage ? "subscriptionUsage.cachedHint" : "subscriptionUsage.failedHint")}</p></div></div>
+    {#if failure || (stale && (hasUsage || sections.length))}
+      <div class="notice" role="status"><AlertCircle size={16} /><div><strong>{$t(reconnect ? "subscriptionUsage.reconnectTitle" : failure ? "subscriptionUsage.failedTitle" : "providerDetail.snapshotStale")}</strong><p>{$t(issue ?? (reconnect ? "subscriptionUsage.reconnectHint" : hasUsage || sections.length ? "subscriptionUsage.cachedHint" : "subscriptionUsage.failedHint"))}</p></div></div>
     {/if}
-    {#if !hasUsage && !failure}
+    {#if !hasUsage && !sections.length && !failure}
       <div class="empty-state" role="status"><Gauge size={22} /><strong>{$t(refreshing ? "subscriptionUsage.loadingTitle" : consoleOnly ? "subscriptionUsage.consoleTitle" : "subscriptionUsage.emptyTitle")}</strong><p>{$t(refreshing ? "subscriptionUsage.loadingHint" : consoleOnly ? "subscriptionUsage.consoleHint" : "subscriptionUsage.emptyHint")}</p></div>
     {/if}
     {#if hasUsage}
@@ -85,10 +91,11 @@
         <div class="credits"><span>{$t("subscriptionUsage.credits")}</span><strong>{subscription.creditsRemaining}{subscription.creditsCurrency ? ` ${subscription.creditsCurrency}` : ""}</strong></div>
       {/if}
     {/if}
+    <PluginAccountSections {sections} />
     {#if dates.length}<div class="dates">{#each dates as [key, value]}<span>{$t(key)}: {date(value)}</span>{/each}</div>{/if}
     <div class="usage-footer">
-      {#if reconnect && entryId && providerId && invokeTauri}{#key entryId}<SubscriptionReconnect {invokeTauri} {entryId} {providerId} onConnected={onRefresh} />{/key}{/if}
-      {#if hasUsage && date(subscription?.observedAt)}<small>{$t("subscriptionUsage.updatedAt", { time: date(subscription?.observedAt) })}</small>{/if}
+      {#if (reconnect || managePlugin) && entryId && providerId && invokeTauri}{#key entryId}<SubscriptionReconnect {managePlugin} {invokeTauri} {entryId} {providerId} onConnected={onRefresh} />{/key}{/if}
+      {#if (hasUsage || sections.length) && date(subscription?.observedAt)}<small>{$t("subscriptionUsage.updatedAt", { time: date(subscription?.observedAt) })}</small>{/if}
       {#if subscription?.consoleUrl && invokeTauri}<Button variant="secondary" size="sm" on:click={openConsole}><ExternalLink size={13} />{$t("subscriptionUsage.openConsole")}</Button>{/if}
       {#if refreshable && !consoleOnly}<Button variant="secondary" size="sm" loading={refreshing} disabled={refreshing} on:click={() => { void onRefresh(); }}><RefreshCw size={13} />{$t(failure ? "subscriptionUsage.retry" : "subscriptionUsage.refresh")}</Button>{/if}
     </div>

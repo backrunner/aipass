@@ -8,6 +8,14 @@ pub(super) fn now() -> String {
 }
 pub(super) fn snapshot(provider: &str, value: &Value) -> SubscriptionSnapshot {
     SubscriptionSnapshot {
+        sections: if crate::provider_plugins::is_plugin(provider) {
+            value
+                .get("sections")
+                .and_then(|s| serde_json::from_value(s.clone()).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
         billing_period_ends_at: value["until"]
             .as_str()
             .and_then(|s| {

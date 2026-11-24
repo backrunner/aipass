@@ -260,6 +260,7 @@ async fn cancellation_stops_work_outside_rotation_but_allows_the_credential_ack(
     let (refreshing, phase) = watch::channel(false);
     let (input, mut receiver) = mpsc::channel(8);
     let operation = Operation {
+        completion: None,
         input,
         cancel,
         canceled: AtomicBool::new(false),

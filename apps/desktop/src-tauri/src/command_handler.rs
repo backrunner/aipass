@@ -52,6 +52,7 @@ pub(crate) fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + '
         subscription_import_cancel,
         subscription_import_open_location,
         oauth_browser::oauth_open_verification,
+        subscription_plugin,
         community_catalog,
         community_login_start,
         community_login_poll,

@@ -48,7 +48,19 @@ Browser extension ──┘          ├──> Encrypted sync
 - `apps/web`：文档站与更新订阅源 Worker。
 - `packages/ui`：共享界面组件与语言文件。
 
-前端只负责界面，存储、凭据写入、同步和最终工具配置变更均由 Rust 负责。订阅适配器在本仓库维护，不在运行时加载第三方服务商引擎。
+前端只负责界面，存储、凭据写入、同步和最终工具配置变更均由 Rust 负责。内置订阅适配器在本仓库维护。用户可从桌面订阅账号选择器启用本机插件。Agent 通过带版本的标准输入输出协议调用已信任的独立进程。
+
+## 开发订阅插件
+
+在提供商列表工具栏打开「管理订阅插件」，输入公开 GitHub 仓库地址，查看发行版本、SHA-256、运行方式和允许访问的域名，再启用。作者可发布 WASI 或按系统编译的原生二进制；macOS 使用 Seatbelt，Linux 使用 bubblewrap，Windows 使用 AppContainer。Linux 主机需要支持非特权用户命名空间。
+
+在仓库根目录运行以下命令，生成 Rust、Go、Python 和 JavaScript 四份离线示例并验证。只尝试一种语言时，可添加 `--language python --wire-only`。脚本会打印适用于本机的插件清单路径。
+
+```sh
+python3 examples/subscription-provider/demo.py verify
+```
+
+在桌面端打开「订阅账号 → 订阅插件 → 选择插件清单」，检查后信任并启用。填写演示账号和虚构密钥，将席位数设为 8，刷新后可以看到 12.5% 的席位使用率。切换「团队」可试用条件密码框，勾选「显示连接设置」可试用网址和多行输入框。另一种登录方式支持输入 `DEMO` 完成离线验证。四份示例共用 `examples/subscription-provider/manifest.json`，账号面板由各语言的插件独立生成。完整接口和示例见[订阅插件开发指南](https://github.com/backrunner/aipass/blob/main/docs/subscription-plugins.md)。
 
 ## 验证
 

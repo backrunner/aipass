@@ -8,7 +8,7 @@
   import SearchField from "./SearchField.svelte";
   import ProviderIcon from "./ProviderIcon.svelte";
   import { ContextMenu, DropdownMenu } from "bits-ui";
-  import { ChevronRight, KeyRound, Plug, Plus, RefreshCw, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
+  import { ChevronRight, KeyRound, Plug, Plus, Puzzle, RefreshCw, SlidersHorizontal, Star, Trash2 } from "lucide-svelte";
 
   import ProviderEmptyState from "./ProviderEmptyState.svelte";
   import { t } from "../i18n";
@@ -28,6 +28,7 @@
   export let routeGroups: Array<{ id: string; name: string }> = [];
   export let onSearch: () => MaybePromise = () => {};
   export let onAdd: () => MaybePromise = () => {};
+  export let onManagePlugins: (() => void) | undefined = undefined;
   export let onConnectOAuth: () => MaybePromise = () => {};
   export let onRefreshAccounts: () => MaybePromise = () => {};
   export let refreshAccountsBusy = false;
@@ -119,6 +120,7 @@
           <RefreshCw size={14} />
         </IconButton>
       {/if}
+      {#if onManagePlugins}<IconButton on:click={onManagePlugins} label={$t("subscriptionPlugin.manage")}><Puzzle size={14} /></IconButton>{/if}
       <IconButton on:click={() => onConnectOAuth()} label={$t("oauthConnect.title")}>
         <Plug size={14} />
       </IconButton>

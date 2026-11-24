@@ -1,0 +1,173 @@
+{
+  "protocol": 1,
+  "id": "plugin.example.offline",
+  "name": "Offline example",
+  "version": "1.1.0",
+  "entry": "provider.py",
+  "interpreter": "/usr/bin/python3",
+  "methods": [
+    {
+      "type": "api",
+      "label": {
+        "en": "Demo API key",
+        "zh-CN": "演示 API 密钥"
+      },
+      "prompts": [
+        {
+          "type": "text",
+          "key": "account",
+          "message": {
+            "en": "Account name",
+            "zh-CN": "账号名称"
+          },
+          "required": true,
+          "maxLength": 48,
+          "placeholder": {
+            "en": "e.g. Studio",
+            "zh-CN": "例如，设计团队"
+          }
+        },
+        {
+          "type": "radio",
+          "key": "plan",
+          "message": {
+            "en": "Account type",
+            "zh-CN": "账号类型"
+          },
+          "default": "personal",
+          "options": [
+            {
+              "value": "personal",
+              "label": {
+                "en": "Personal",
+                "zh-CN": "个人"
+              }
+            },
+            {
+              "value": "team",
+              "label": {
+                "en": "Team",
+                "zh-CN": "团队"
+              }
+            }
+          ]
+        },
+        {
+          "type": "secret",
+          "key": "teamCode",
+          "message": {
+            "en": "Team access code",
+            "zh-CN": "团队访问码"
+          },
+          "when": {
+            "field": "plan",
+            "equals": "team"
+          },
+          "help": {
+            "en": "Use a made-up code for this offline example.",
+            "zh-CN": "离线演示请填写虚构的访问码。"
+          }
+        },
+        {
+          "type": "select",
+          "key": "region",
+          "message": {
+            "en": "Region",
+            "zh-CN": "区域"
+          },
+          "options": [
+            {
+              "value": "local",
+              "label": {
+                "en": "Local",
+                "zh-CN": "本地"
+              }
+            },
+            {
+              "value": "eu",
+              "label": {
+                "en": "Europe",
+                "zh-CN": "欧洲"
+              }
+            },
+            {
+              "value": "ap",
+              "label": {
+                "en": "Asia Pacific",
+                "zh-CN": "亚太"
+              }
+            }
+          ]
+        },
+        {
+          "type": "integer",
+          "key": "seats",
+          "message": {
+            "en": "Seats",
+            "zh-CN": "席位数"
+          },
+          "min": 1,
+          "max": 100,
+          "default": "5"
+        },
+        {
+          "type": "checkbox",
+          "key": "advanced",
+          "message": {
+            "en": "Show connection settings",
+            "zh-CN": "显示连接设置"
+          }
+        },
+        {
+          "type": "url",
+          "key": "endpoint",
+          "message": {
+            "en": "Service URL",
+            "zh-CN": "服务地址"
+          },
+          "placeholder": "https://example.test",
+          "when": {
+            "field": "advanced",
+            "equals": "true"
+          },
+          "help": {
+            "en": "Use HTTP or HTTPS. This example stays offline.",
+            "zh-CN": "请填写 HTTP 或 HTTPS 地址。示例在本机离线运行。"
+          }
+        },
+        {
+          "type": "textarea",
+          "key": "notes",
+          "message": {
+            "en": "Connection notes",
+            "zh-CN": "连接备注"
+          },
+          "maxLength": 240,
+          "when": {
+            "field": "advanced",
+            "equals": "true"
+          }
+        }
+      ]
+    },
+    {
+      "type": "oauth",
+      "label": {
+        "en": "Offline verification code",
+        "zh-CN": "离线验证码"
+      },
+      "prompts": [
+        {
+          "type": "text",
+          "key": "account",
+          "message": {
+            "en": "Account name",
+            "zh-CN": "账号名称"
+          },
+          "required": true,
+          "maxLength": 48
+        }
+      ]
+    }
+  ]
+}

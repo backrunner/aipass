@@ -23,6 +23,10 @@ aipass-provider-registry = { path = "../aipass-provider-registry" }
 aipass-storage = { path = "../aipass-storage" }
 aipass-sync = { path = "../aipass-sync" }
 aipass-vault = { path = "../aipass-vault" }
+wasmi = { version = "2.0.2", default-features = false, features = ["std", "stable", "validate", "portable-dispatch"] }
+wasmi_wasi = "2.0.2"
+wasmparser = { version = "0.228", default-features = false, features = ["validate"] }
+object = { version = "0.40", default-features = false, features = ["read_core", "elf", "macho", "pe", "unaligned"] }
 anyhow.workspace = true
 base64.workspace = true
 clap.workspace = true
@@ -73,15 +77,18 @@ sha2.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-service.workspace = true
 widestring = "1"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_UI_Shell", "Win32_Security", "Win32_Security_Cryptography", "Win32_Security_Authorization", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_RemoteDesktop", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security_Isolation", "Win32_System_Console", "Win32_System_JobObjects", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_Security", "Win32_Security_Cryptography", "Win32_Security_Authorization", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_RemoteDesktop", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["event", "process", "system"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = "0.5"
+libc = "0.2"
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "objc2", "CGEventSource", "CGEventTypes"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSString", "NSNotification", "NSDistributedNotificationCenter", "NSOperation"] }

@@ -17,6 +17,7 @@
   let error = "";
   let feedback = "";
   let generation = 0;
+  let pendingTicket: string | undefined;
   let destroyed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -27,7 +28,8 @@
     generation += 1;
     if (timer) clearTimeout(timer);
     timer = undefined;
-    if (login) void cancel(login.ticket);
+    if (pendingTicket) void cancel(pendingTicket);
+    pendingTicket = undefined;
     login = null;
     code = "";
     checking = starting = submitting = false;
@@ -58,6 +60,7 @@
     try {
       const result = await invokeTauri<ClaudeLoginStatus>("claude_login_start");
       if (destroyed || current !== generation) { void cancel(result.ticket); return; }
+      pendingTicket = result.ticket;
       login = result;
       timer = setTimeout(poll, 500);
     } catch { if (current === generation) error = $t("claudeConnect.startFailed"); }
@@ -72,6 +75,7 @@
       const result = await invokeTauri<ClaudeLoginStatus>("claude_login_poll", { ticket: login.ticket });
       if (destroyed || current !== generation) return;
       if (result.status === "authorized" && result.entryId) {
+        pendingTicket = undefined;
         login = null;
         generation += 1;
         void onConnected(result.entryId);

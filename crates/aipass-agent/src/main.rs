@@ -1,5 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+#[cfg(windows)]
+mod plugin_windows;
+
 use aipass_agent::{
     agent_service_name, default_vault_dir,
     logging::{init_component_logging, install_panic_logger, write_component_log, AGENT_LOG},
@@ -14,6 +17,10 @@ use std::path::PathBuf;
 struct Cli {
     #[arg(long, default_value_t = false, hide = true)]
     login_start: bool,
+    #[arg(long, hide = true)]
+    plugin_wasi: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    plugin_native: Option<PathBuf>,
     #[arg(long, default_value_t = false, hide = true)]
     claude_mcp_helper: bool,
     #[arg(long)]
@@ -35,6 +42,24 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let cli = Cli::parse();
+    if let Some(path) = cli.plugin_wasi {
+        return aipass_agent::run_wasi_plugin(&path);
+    }
+    if let Some(path) = cli.plugin_native {
+        #[cfg(windows)]
+        {
+            return plugin_windows::run(&path);
+        }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            return aipass_agent::run_native_plugin(&path);
+        }
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+        {
+            let _ = path;
+            anyhow::bail!("System sandbox unavailable");
+        }
+    }
     if cli.prepare_uninstall {
         return aipass_agent::proxy_recovery::prepare_uninstall(&std::env::current_exe()?);
     }

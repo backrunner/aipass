@@ -891,11 +891,11 @@
     background: transparent;
   }
 
-  .detail .detail-header { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 8px; align-items: center; }
+  .detail .detail-header { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px; align-items: center; }
   .detail .identity, .detail .identity-text { display: contents; }
   .detail .identity :global(.provider-icon) { grid-column: 1; grid-row: 1 / 3; }
-  .detail .identity-text h1 { grid-column: 2; grid-row: 1; min-width: 0; font-size: 18px; }
-  .detail .meta { grid-column: 2 / -1; grid-row: 2; flex-wrap: nowrap; overflow: hidden; }
+  .detail .identity-text h1 { grid-column: 2; grid-row: 1; align-self: end; min-width: 0; font-size: 18px; }
+  .detail .meta { grid-column: 2 / -1; grid-row: 2; align-self: start; flex-wrap: nowrap; overflow: hidden; }
   .detail .actions { grid-column: 3; grid-row: 1; }
 
   .title-input { width: 100%; min-width: 0; height: 28px; padding: 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text); font: inherit; }

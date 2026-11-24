@@ -262,7 +262,7 @@ pub struct QuotaInfo {
 }
 
 mod subscription;
-pub use subscription::{SubscriptionSnapshot, SubscriptionWindow};
+pub use subscription::{plugin_ui, SubscriptionSnapshot, SubscriptionWindow};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

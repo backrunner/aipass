@@ -1,3 +1,4 @@
+pub mod plugin_ui;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -29,6 +30,8 @@ pub struct SubscriptionSnapshot {
     pub credits_currency: Option<String>,
     #[serde(default)]
     pub windows: Vec<SubscriptionWindow>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<plugin_ui::Section>,
     pub observed_at: String,
     pub source: String,
     #[serde(default)]
